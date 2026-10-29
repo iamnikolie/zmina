@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>zmina</title>
+<link rel="icon" id="favicon" href="assets/mark.svg">
+<link rel="stylesheet" href="app.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<header id="top">
+  <div class="bar">
+    <span class="mark" id="mark" aria-hidden="true"></span>
+    <h1>zmina</h1>
+    <span class="live" id="live"></span>
+    <span class="tick mono" id="tick"></span>
+  </div>
+  <p class="summary" id="summary"></p>
+  <p class="danger-bar" id="alarm" hidden></p>
+</header>
+<nav class="chips" id="chips" aria-label="Filter by crew" hidden></nav>
+<main>
+  <section id="todo-sec" class="a-todo" aria-labelledby="todo-h">
+    <h2 id="todo-h">Waiting on you</h2>
+    <ol id="todo" class="rows"></ol>
+    <div id="empty" class="empty" hidden>
+      <span class="cup" id="cup" aria-hidden="true"></span>
+      <p>Nothing waits on you.</p>
+      <p class="mono muted" id="last-answer"></p>
+    </div>
+    <button class="fold" id="later-toggle" type="button" aria-expanded="false" hidden></button>
+    <ol id="later" class="rows later" hidden></ol>
+  </section>
+  <div id="crews" class="a-crews"></div>
+  <section id="tasks-sec" class="a-tasks" aria-labelledby="tasks-h">
+    <h2 id="tasks-h"><button class="fold-h" type="button" aria-expanded="true" data-label="Tasks">Tasks</button></h2>
+    <ol id="tasks" class="rows"></ol>
+  </section>
+  <section id="log-sec" class="a-log" aria-labelledby="log-h">
+    <h2 id="log-h"><button class="fold-h" type="button" aria-expanded="true" data-label="Log">Log</button></h2>
+    <ol id="log" class="rows log"></ol>
+  </section>
+</main>
+<footer><span id="version" class="mono"></span></footer>
+</body>
+</html>

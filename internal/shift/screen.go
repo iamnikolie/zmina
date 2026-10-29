@@ -35,6 +35,13 @@ func (s *Shift) watchScreen(name string, now time.Time) []string {
 		return nil
 	}
 
+	// What the role says it is doing, also while it boots.
+	if text, err := s.Tmux.Capture(name, nowLines); err == nil {
+		if line := NowLine(text); line != rs.Now {
+			rs.Now, rs.NowAt = line, now
+		}
+	}
+
 	if now.Sub(rs.Started) < s.Crew.BootGraceD() {
 		return nil
 	}
@@ -84,6 +91,45 @@ func (s *Shift) watchScreen(name string, now time.Time) []string {
 	}
 
 	return notes
+}
+
+// nowLines is how much of the screen NowLine reads.
+const nowLines = 80
+
+var (
+	// toolRe matches a ⏺ line that is a tool call rather than words: Bash(…), Update(…), mcp__x__y (MCP)(…),
+	// "Read 3 files (ctrl+o to expand)", "Searched for 2 patterns", a subagent's "main ◯ …" line, "Stop Task".
+	toolRe = regexp.MustCompile(`^([\w.:-]+\(|.*\(MCP\)|.*ctrl\+o to expand|(Read|Reading|Searched|Searching|Listed|` +
+		`Wrote|Writing|Fetched|Ran|Running|Called|Found|Updated|Updating|Making|Editing|Edited) .*(\d|…)|.*◯|` +
+		`.*↑ [\d.]+k? tokens|(Stop Task|Task Output)\b|Agent ")`)
+	spaceRe = regexp.MustCompile(`\s+`)
+)
+
+// NowLine is the last thing the role said in words on its screen: the last "⏺ …" line that is not a tool call,
+// with the lines it wraps onto, on one line and clipped. Empty when the screen has none.
+func NowLine(screen string) string {
+	lines := strings.Split(screen, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		rest, ok := strings.CutPrefix(strings.TrimSpace(lines[i]), "⏺")
+		rest = strings.TrimSpace(rest)
+
+		if !ok || rest == "" || toolRe.MatchString(rest) {
+			continue
+		}
+
+		// A long line wraps onto lines indented under it.
+		for _, l := range lines[i+1:] {
+			if !strings.HasPrefix(l, "  ") || strings.TrimSpace(l) == "" || strings.HasPrefix(strings.TrimSpace(l), "⎿") {
+				break
+			}
+
+			rest += " " + strings.TrimSpace(l)
+		}
+
+		return clip(spaceRe.ReplaceAllString(rest, " "))
+	}
+
+	return ""
 }
 
 // trust answers Claude Code's "trust this folder" for a role zmina started in a task worktree it made itself

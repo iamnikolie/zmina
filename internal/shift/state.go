@@ -99,6 +99,10 @@ type RoleState struct {
 	BlockedNoted bool      `json:"blocked_noted,omitempty"`
 	ErrorNoted   string    `json:"error_noted,omitempty"`
 	LimitNoted   string    `json:"limit_noted,omitempty"`
+	// Now is the role's last status line on its screen (see NowLine) as the ticker last read it, NowAt since when it
+	// has read that line.
+	Now   string    `json:"now,omitempty"`
+	NowAt time.Time `json:"now_at,omitzero"`
 	// Sent is the last line typed into the role, until the role shows it took it.
 	Sent *Sent `json:"sent,omitempty"`
 	// Dir is where the role was started when not its crew dir (zmina up --task: the task's worktree); Trusted

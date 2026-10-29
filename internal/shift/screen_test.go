@@ -168,3 +168,63 @@ func TestTrustAnsweredOnlyInItsOwnWorktree(t *testing.T) {
 	f.s.Tick()
 	assert.Len(t, f.tm.keys["designer#2"], 2, "once per start")
 }
+
+func TestNowLine(t *testing.T) {
+	screen := strings.Join([]string{
+		"⏺ Reading the crew file first.",
+		"⏺ Bash(go test ./...)",
+		"  ⎿  ok  github.com/x/y",
+		"⏺ Tests pass. Now the page: rows, the todo first, then the crew, with the",
+		"  stale rule from the decision.",
+		"",
+		"⏺ Update(cmd/ui.go)",
+		"  ⎿  Added 4 lines",
+		"⏺ Read 3 files (ctrl+o to expand)",
+		"⏺ Running 4 shell commands…",
+		"⏺ Making 1 edit +38, running 1 shell command…",
+		"⏺ Agent \"renderer: play mode\"",
+		"⏺ main ◯ general-purpose renderer: play mode · ↑ 950 tokens",
+		"⏺ mcp__oko__shot (MCP)(path: \"x\")",
+		"· Pondering… (3m 26s · ↓ 15.6k tokens)",
+		"───",
+		"❯ ",
+	}, "\n")
+	assert.Equal(t, "Tests pass. Now the page: rows, the todo first, then the crew, with the stale rule from the decision.",
+		NowLine(screen), "the last words, joined across the wrap; tool calls skipped")
+	assert.Empty(t, NowLine("⏺ Bash(ls)\n❯ "))
+	assert.Empty(t, NowLine(""))
+}
+
+func TestViewsShowPromptAndNow(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	require.NoError(t, f.s.Up("designer"))
+	f.status("designer", "busy", *f.now)
+	f.tm.screen = "⏺ Checking the contrast of the new tokens.\n───\n❯ "
+
+	f.s.Tick()
+
+	started := *f.now
+	*f.now = f.now.Add(5 * time.Minute)
+
+	v := viewOf(f, "designer")
+	assert.False(t, v.Prompt)
+	assert.Equal(t, "Checking the contrast of the new tokens.", v.Now)
+	assert.Equal(t, started, v.NowAt, "since the beat that first read it")
+
+	f.tm.screen = "⏺ Contrast passes; writing DECISIONS.md.\n───\n❯ "
+	assert.Equal(t, *f.now, viewOf(f, "designer").NowAt, "a line newer than the last beat: now")
+
+	f.tm.drafts["designer"] = "-"
+	f.tm.screen = " Do you want to proceed?\n ❯ 1. Yes\n   2. No"
+	assert.True(t, viewOf(f, "designer").Prompt, "a dialog instead of the input line")
+}
+
+func viewOf(f fix, role string) View {
+	for _, v := range f.s.Views() {
+		if v.Role == role {
+			return v
+		}
+	}
+
+	return View{}
+}

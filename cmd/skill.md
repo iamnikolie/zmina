@@ -77,7 +77,7 @@ the role's add up.
 
 | Command | Does |
 |---|---|
-| `zmina ls [--json]` | first line: when the ticker last beat (and `STOPPED` while the shift is stopped). Then every role: `up` / `down` / `dead` (its process ended, the ticker collects it within a minute) / `outside` (a claude with that name runs, not under zmina) / `unknown` (tmux did not answer), `idle`/`busy` (`unknown` when its registry entry does not read), for how long, how many tokens its conversation fills (`362k/150k` with its `context_max`), the active tasks it holds, keep (+ next scheduled run, expiry), about. `*` marks the dispatcher; `(broken)` a role that dies on boot; `(bad dir)` a role whose dir is gone — it does not start, the rest of the crew runs on; `(N failed lines)` see `zmina queue`. Last line `later: N parked` while the parked list is not empty. |
+| `zmina ls [--json]` | first line: when the ticker last beat (and `STOPPED` while the shift is stopped). Then every role: `up` / `down` / `dead` (its process ended, the ticker collects it within a minute) / `outside` (a claude with that name runs, not under zmina) / `unknown` (tmux did not answer), `idle`/`busy` (`unknown` when its registry entry does not read), for how long, how many tokens its conversation fills (`362k/150k` with its `context_max`), the active tasks it holds, keep (+ next scheduled run, expiry), about. `--json` also has `prompt: true` while an up role's screen shows a dialog or a question instead of its input line, and `now` / `now_at`: the role's last status line in words (its screen's last `⏺ …` line that is not a tool call) and since when it says so. `*` marks the dispatcher; `(broken)` a role that dies on boot; `(bad dir)` a role whose dir is gone — it does not start, the rest of the crew runs on; `(N failed lines)` see `zmina queue`. Last line `later: N parked` while the parked list is not empty. |
 | `zmina up <role...>` / `--all` | start roles. Refuses a role already up, and a name a claude outside zmina already holds. Clears a hold and a broken mark. |
 | `zmina up <role> --as N` | a copy of the role, `<role>#N` (2–9) under `<session>-N`, same dir/boot/model/args; never kept up, gone once it is down. `zmina down dev#2`. |
 | `zmina up <role> [--as N] --task T-14` | a seat for a recorded task: started in the task's worktree when it has one, the task names this role, and its first line is `[zmina T-14] <asked> · you are in its worktree <path> on branch <b>`. Claude Code's "trust this folder" is answered for a worktree zmina made itself (`<crew>/worktrees/`), nowhere else. Refuses a task that is not active. |
@@ -244,6 +244,49 @@ directory, readable or not, and never replaces a file; `task ls` and `doctor` na
 A role reads its own name from `$ZMINA_ROLE`; when it runs `zmina task …` the event log records
 it as the actor.
 
+**Milestones.** A role posts one line at each milestone of its task — a step done, a deploy, waiting on someone:
+`zmina task set <id> --note "<what is done> · left: <what is left>"`. The latest note is the task's last milestone:
+the ui page shows it under the role's `now` line, and `task show` keeps every one in the log.
+
+## Todo — what waits on the owner
+
+One list of what only the owner can answer: the dispatcher's **asks** — a `decision` (a question with its
+recommendation and a one-line reason) or a `check` (something only the owner can do: "sign in and publish the test
+board") — and every task in state `waiting`, with its note. One file per ask in `~/.zmina/asks/A-<n>.json`, written
+alone like tasks. Order: items that block a role first (a waiting task blocks its own role), then the overdue ones
+(older than 24 h), then the rest; oldest first in each group.
+
+| Command | Does |
+|---|---|
+| `zmina todo add <text...> [--rec "<answer>" --reason "<why>"] [--kind decision\|check] [--from <role>] [--task T-n] [--blocks <role>]` | ask the owner; prints `A-3`. With `--rec` it is a decision, else a check. `--from` defaults to `$ZMINA_ROLE`. |
+| `zmina todo ls [--json]` | what waits, in that order; the parked list's count last. `--json`: `{items, later}`. |
+| `zmina todo yes <id>` | take a decision's recommendation. |
+| `zmina todo done <id>` | a check (or a decision) is dealt with. |
+| `zmina todo answer <id> <text...>` | answer an ask or a waiting task (`T-62`) in the owner's words. |
+| `zmina todo park <id>` | put it on the parked list (an ask becomes `L-n`, "from A-3"); for a waiting task the dispatcher hears `T-62 · later`. |
+
+Every answer — from these commands or the ui page — closes the ask (a waiting task keeps its state) and queues a
+note for the dispatcher like `zmina note`: `hand: A-3 · yes: <rec> — <text>`, `ui: T-62 · <words>`,
+`ui: A-4 · later (L-5) — <text>`. **The dispatcher acts on it**: does what was decided, hands the answer to the
+role that asked, moves a waiting task on. Event `answered` in the log.
+
+## The ui page
+
+`zmina ui [--addr 127.0.0.1:7517] [--no-open]` serves one live page for **every crew** under `~/.zmina`
+(`crew.yaml` and each `<name>/crew.yaml`, looked up again on every refresh, so a new crew shows without a restart)
+and opens it in the browser. A second `zmina ui` opens the one already running. Per crew: the ticker beat, a
+summary (working · waiting on you · idle), each up role with its state, time, context, tasks, its `now` line and
+its task's last milestone; down roles fold into one line. Above the crews, the todo of every crew as one list,
+each item tagged with its crew; Yes / Done / Answer… / Later on an item go, after a 5 s Undo, to that crew's
+dispatcher only. Below: open and waiting tasks, recent events, the parked list (Bring back: a note to the
+dispatcher; Drop: `later drop`). A role's screen opens on click (the last 30 lines, refreshed every 2 s). The page
+never types into a role.
+
+Bound to 127.0.0.1 by default and only answers requests that name it (`Host`), so another web page cannot read or
+write through the browser. Writes need the page's own header. A non-loopback `--addr` is refused unless
+`--token <secret>` (or `$ZMINA_UI_TOKEN`) is set: the page then needs `?token=` once (it is kept in a cookie).
+Live over server-sent events; the files are inside the binary.
+
 ## Later — the parked list
 
 Decisions and ideas the owner put aside to come back to, held by no role. One file per item in
@@ -367,6 +410,10 @@ and exists nowhere else. It is written whole (rename) and never over a file zmin
 - The owner parks a decision or an idea for later ("later", "park it", not for any role now):
   `zmina later add "<their words>"`, not a task. When they come back to one: `zmina later take
   L-3 <role> [--repo r --worktree]`.
+- A question only the owner can answer, which the owner should not have to dig out of a conversation: `zmina todo
+  add "<question>" --rec "<your answer>" --reason "<why>" [--task T-n] [--blocks <role>]`, or a check without
+  `--rec`. A note `<source>: A-3 · …` / `T-62 · …` is the owner's answer from `zmina todo` or the ui page: act on
+  it (do it, hand it to the role that asked, move the task on).
 - Something odd (a role that never goes idle, notes that never come): `zmina doctor`.
 - Route by `about`; record the task (`zmina task new <role> …`, `--repo r --worktree` for code),
   start a role that is down (`zmina up <role>`, wait until `ls` shows it `idle`), then

@@ -187,6 +187,10 @@ func (s *Store) Remove(id string) error {
 // Get reads one task; the id is matched case-insensitively and "14" means T-14.
 func (s *Store) Get(id string) (Task, error) {
 	id = Normalize(id)
+	if !idRe.MatchString(id) {
+		// Only T-<n>: an id never names a path outside the ledger.
+		return Task{}, fmt.Errorf("no task %s", id)
+	}
 
 	t, err := readTask(filepath.Join(s.Dir, id+".json"))
 	if errors.Is(err, os.ErrNotExist) {

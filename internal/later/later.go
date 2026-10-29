@@ -122,6 +122,9 @@ func (s *Store) write(it Item, fresh bool) error {
 // Get reads one item; "3", "l-3" and "L-3" are L-3.
 func (s *Store) Get(id string) (Item, error) {
 	id = Normalize(id)
+	if !idRe.MatchString(id) {
+		return Item{}, fmt.Errorf("no item %s", id)
+	}
 
 	it, err := read(filepath.Join(s.Dir, id+".json"))
 	if errors.Is(err, os.ErrNotExist) {

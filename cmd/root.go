@@ -66,9 +66,9 @@ Run 'zmina skill' for the full agent reference.`,
 	root.MarkFlagsMutuallyExclusive("config", "crew")
 
 	root.AddCommand(a.roleCommands()...)
-	root.AddCommand(a.taskCommand(), a.laterCommand(), a.seatCommand(), a.logCommand(), a.noteCommand(), a.watchCommand(),
+	root.AddCommand(a.taskCommand(), a.todoCommand(), a.laterCommand(), a.seatCommand(), a.logCommand(), a.noteCommand(), a.watchCommand(),
 		a.stopCommand(), a.startCommand(), a.queueCommand(), a.stateCommand(), a.tickerCommand(),
-		a.launchdCommand(), a.doctorCommand(), a.usageCommand(), a.skillCommand(), a.versionCommand())
+		a.launchdCommand(), a.doctorCommand(), a.usageCommand(), a.skillCommand(), a.versionCommand(), a.uiCommand())
 
 	return root
 }

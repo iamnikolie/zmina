@@ -139,6 +139,12 @@ type View struct {
 	Broken  bool      `json:"broken,omitempty"`
 	// Problem says why the role cannot start (its dir is gone) or cannot be seen, empty when all is well.
 	Problem string `json:"problem,omitempty"`
+	// Prompt is true while an up role's screen shows a dialog or a question instead of its input line.
+	Prompt bool `json:"prompt,omitempty"`
+	// Now is what the role last said it is doing: its screen's last status line (NowLine), NowAt since when it
+	// says so (when the ticker first read it; the time of this read when the line is newer than the last beat).
+	Now   string    `json:"now,omitempty"`
+	NowAt time.Time `json:"now_at,omitzero"`
 }
 
 // SplitInstance parses an instance name: dev#2 is copy 2 of dev. ok is false for a plain role name.
@@ -276,6 +282,21 @@ func (s *Shift) Views() []View {
 			v.Status, v.SessionID, v.Since = sess.Status, sess.SessionID, sess.StatusSince()
 			turn, _ := s.Reg.Last(sess.SessionID)
 			v.Context = turn.Context
+		}
+
+		if v.State == PresenceUp {
+			if _, ok, err := s.Tmux.Prompt(name); err == nil && !ok {
+				v.Prompt = true
+			}
+
+			if text, err := s.Tmux.Capture(name, nowLines); err == nil {
+				if v.Now = NowLine(text); v.Now != "" {
+					v.NowAt = rs.NowAt
+					if v.Now != rs.Now || v.NowAt.IsZero() {
+						v.NowAt = s.Now()
+					}
+				}
+			}
 		}
 
 		out = append(out, v)
