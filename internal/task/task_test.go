@@ -3,6 +3,7 @@ package task
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -101,4 +102,16 @@ func TestDamagedFileIsNeverWrittenOver(t *testing.T) {
 	assert.Len(t, s.Active(), 4, "an unknown state holds its role")
 
 	require.ErrorIs(t, s.write(Task{ID: "T-6"}, true), ErrExists)
+}
+
+func TestHeadlineAndWhere(t *testing.T) {
+	tk := Task{Asked: strings.Repeat("rework the landing page ", 10), Repo: "/src/kreida"}
+	assert.Len(t, []rune(tk.Headline()), titleMax, "the asked text, cut")
+	assert.True(t, strings.HasSuffix(tk.Headline(), "…"))
+	assert.Equal(t, "kreida", tk.Where(), "the repo's directory name")
+
+	tk.Title, tk.Project = "Лендинг kreida — переделка", "kreida-cloud"
+	assert.Equal(t, "Лендинг kreida — переделка", tk.Headline())
+	assert.Equal(t, "kreida-cloud", tk.Where())
+	assert.Empty(t, Task{}.Where())
 }

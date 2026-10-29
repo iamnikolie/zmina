@@ -75,13 +75,62 @@ type Task struct {
 	// Repo is the repository the work is in, when there is one.
 	Repo string `json:"repo,omitempty"`
 	// Worktree, Branch and Base are set when the task works in its own git worktree.
-	Worktree string    `json:"worktree,omitempty"`
-	Branch   string    `json:"branch,omitempty"`
-	Base     string    `json:"base,omitempty"`
-	Note     string    `json:"note,omitempty"`
-	By       string    `json:"by,omitempty"`
-	Created  time.Time `json:"created"`
-	Updated  time.Time `json:"updated"`
+	Worktree string `json:"worktree,omitempty"`
+	Branch   string `json:"branch,omitempty"`
+	Base     string `json:"base,omitempty"`
+	Note     string `json:"note,omitempty"`
+	// On is who a waiting task waits on when it is not the owner: a role of the crew or a person; it is off the
+	// owner's todo then.
+	On string `json:"on,omitempty"`
+	// Title is the work in one short plain sentence, in the owner's language; Project the project or product it is
+	// for (default: the repo's directory name); URL the live thing to look at.
+	Title   string    `json:"title,omitempty"`
+	Project string    `json:"project,omitempty"`
+	URL     string    `json:"url,omitempty"`
+	By      string    `json:"by,omitempty"`
+	Created time.Time `json:"created"`
+	Updated time.Time `json:"updated"`
+	// Answered is when the owner last answered the task from the todo (zmina todo, the ui page); a waiting task
+	// answered since its last change waits on the dispatcher, not on the owner.
+	Answered time.Time `json:"answered,omitzero"`
+	// Ignored is when the owner set the waiting task aside on the todo; it stays off the todo until the task
+	// changes, and the task itself is left as it is.
+	Ignored time.Time `json:"ignored,omitzero"`
+}
+
+// titleMax is how much of the asked text stands in for a missing title.
+const titleMax = 80
+
+// Headline is the task's title, else the start of what was asked.
+func (t Task) Headline() string {
+	if t.Title != "" {
+		return t.Title
+	}
+
+	r := []rune(strings.Join(strings.Fields(t.Asked), " "))
+	if len(r) <= titleMax {
+		return string(r)
+	}
+
+	return string(r[:titleMax-1]) + "…"
+}
+
+// Status is the task's state, with whom a waiting task waits on when not the owner: "waiting on dev2".
+func (t Task) Status() string {
+	if t.State == Waiting && t.On != "" {
+		return string(t.State) + " on " + t.On
+	}
+
+	return string(t.State)
+}
+
+// Where is the task's project, else its repository's directory name.
+func (t Task) Where() string {
+	if t.Project != "" || t.Repo == "" {
+		return t.Project
+	}
+
+	return filepath.Base(t.Repo)
 }
 
 var (

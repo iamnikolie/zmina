@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
@@ -42,8 +43,8 @@ const (
 
 func (a *app) uiCommand() *cobra.Command {
 	var (
-		addr, token string
-		noOpen      bool
+		addr, token, lang string
+		noOpen            bool
 	)
 
 	c := &cobra.Command{
@@ -60,6 +61,7 @@ func (a *app) uiCommand() *cobra.Command {
 				return fmt.Errorf("--addr %s: %w", addr, err)
 			}
 
+			a.lang = uiLang(lang)
 			loopback := isLoopback(host)
 			if !loopback && token == "" {
 				return fmt.Errorf("--addr %s is not a loopback address: the page writes notes to the dispatcher, so "+
@@ -120,8 +122,27 @@ func (a *app) uiCommand() *cobra.Command {
 	c.Flags().StringVar(&token, "token", "", "secret the page needs (?token= once, then a cookie); default "+
 		"$ZMINA_UI_TOKEN")
 	c.Flags().BoolVar(&noOpen, "no-open", false, "print the address, do not open a browser")
+	c.Flags().StringVar(&lang, "lang", "", "the page's language, ru or en; default from $LC_ALL, $LC_MESSAGES or $LANG "+
+		"(ru, uk and be read ru), else en; the page's ?lang= overrides it")
 
 	return c
+}
+
+// uiLang is the page's language: the flag's, else the locale's — Russian for ru, uk and be, English otherwise.
+func uiLang(flag string) string {
+	loc := flag
+	for _, env := range []string{"LC_ALL", "LC_MESSAGES", "LANG"} {
+		if loc == "" {
+			loc = os.Getenv(env)
+		}
+	}
+
+	switch strings.ToLower(loc[:min(2, len(loc))]) {
+	case "ru", "uk", "be":
+		return "ru"
+	}
+
+	return "en"
 }
 
 func isLoopback(host string) bool {
@@ -301,8 +322,9 @@ func (a *app) uiHandler(bound string, loopback bool, token string) http.Handler 
 			return
 		}
 
-		if !map[string]bool{"yes": true, "done": true, "answer": true, "park": true, "back": true, "drop": true}[in.Action] {
-			http.Error(w, "action: yes, done, answer, park, back or drop", http.StatusBadRequest)
+		if !map[string]bool{"yes": true, "done": true, "answer": true, "park": true, "ignore": true, "back": true,
+			"drop": true}[in.Action] {
+			http.Error(w, "action: yes, done, answer, park, ignore, back or drop", http.StatusBadRequest)
 
 			return
 		}
@@ -406,8 +428,8 @@ func (a *app) uiStream(w http.ResponseWriter, r *http.Request) {
 	send := func() {
 		raw, _ := json.Marshal(a.uiSnapshot())
 		// The clock moves every poll; compare without it.
-		if cmp := withoutNow(raw); !bytes.Equal(cmp, last) {
-			last = cmp
+		if body := withoutNow(raw); !bytes.Equal(body, last) {
+			last = body
 			fmt.Fprintf(w, "event: state\ndata: %s\n\n", raw)
 			flusher.Flush()
 		}
@@ -462,9 +484,11 @@ type uiCrewView struct {
 	Stopped  time.Time `json:"stopped,omitzero"`
 	Stuck    int       `json:"stuck_minutes"`
 	Roles    []uiRole  `json:"roles"`
-	// Waiting is how many todo items the crew has; Error why it could not be read.
-	Waiting int    `json:"waiting"`
-	Error   string `json:"error,omitempty"`
+	// Waiting is how many todo items the crew has; DoneToday how many tasks it closed as done today; Error why it
+	// could not be read.
+	Waiting   int    `json:"waiting"`
+	DoneToday int    `json:"done_today"`
+	Error     string `json:"error,omitempty"`
 }
 
 // Each list across crews carries the crew's key.
@@ -480,17 +504,73 @@ type (
 	uiEvent struct {
 		Crew string `json:"crew"`
 		events.Event
+		// Project and Title are the event's task's, when it has one.
+		Project string `json:"project,omitempty"`
+		Title   string `json:"title,omitempty"`
 	}
 )
 
+// Where the page shows a piece of work: it waits on the owner (its todo item stands for it), it goes (in work, or
+// waiting on a role of the crew), or it waits on someone outside the crew (or the owner set it aside).
+const (
+	laneYou    = "you"
+	laneGo     = "go"
+	laneOthers = "others"
+)
+
+// feedEvents are the events the page's feed tells; the rest (beats, keys, roles going up and down, a watch's notes
+// to the dispatcher) stay in zmina log.
+var feedEvents = map[string]bool{"task": true, "asked": true, "answered": true, "later": true, "blocked": true,
+	"watch-failed": true, "start": true, "stop": true}
+
+// feedMax is how many events the feed gets across crews.
+const feedMax = 80
+
+// uiWork is one active piece of work as the page leads with it: what, now, where, why, and what it needs from the
+// owner.
+type uiWork struct {
+	Crew    string `json:"crew"`
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Project string `json:"project,omitempty"`
+	URL     string `json:"url,omitempty"`
+	// Why is what was asked, in the owner's words.
+	Why   string     `json:"why"`
+	State task.State `json:"state"`
+	Role  string     `json:"role"`
+	// RoleState, Status and Since are the role's (up/down/…, busy/idle); Now and NowAt what it last said it does.
+	RoleState shift.Presence `json:"role_state"`
+	Status    string         `json:"status,omitempty"`
+	Since     time.Time      `json:"since,omitzero"`
+	Now       string         `json:"now,omitempty"`
+	NowAt     time.Time      `json:"now_at,omitzero"`
+	Prompt    bool           `json:"prompt,omitempty"`
+	Milestone *milestone     `json:"milestone,omitempty"`
+	// Needs is the todo item about this work, when it waits on the owner.
+	Needs    *todoItem `json:"needs,omitempty"`
+	Worktree string    `json:"worktree,omitempty"`
+	Created  time.Time `json:"created"`
+	Updated  time.Time `json:"updated"`
+	// Answered and Ignored are when the owner last answered the task or set it aside on the todo.
+	Answered time.Time `json:"answered,omitzero"`
+	Ignored  time.Time `json:"ignored,omitzero"`
+	// Lane is where the page shows it: you, go or others; On who it waits on (a role, a person, or empty).
+	Lane string `json:"lane"`
+	On   string `json:"on,omitempty"`
+}
+
 type uiSnapshot struct {
 	Version string       `json:"version"`
+	Lang    string       `json:"lang"`
 	Now     time.Time    `json:"now"`
+	Work    []uiWork     `json:"work"`
 	Crews   []uiCrewView `json:"crews"`
 	Todo    []todoItem   `json:"todo"`
 	Later   []uiLater    `json:"later"`
 	Tasks   []uiTask     `json:"tasks"`
 	Log     []uiEvent    `json:"log"`
+	// Tints is every project the page names, with its tint (p1 … p5).
+	Tints map[string]string `json:"tints"`
 }
 
 // tickerDead is how long a crew's ticker may be silent before the page shows it stopped.
@@ -499,8 +579,9 @@ const tickerDead = 2 * time.Minute
 // uiSnapshot reads every crew as `zmina ls`, `todo ls`, `task ls` and `log` would, without the lock. The todo is
 // one list across crews in the todo order; tasks, the parked list and the log are merged, newest first.
 func (a *app) uiSnapshot() uiSnapshot {
-	snap := uiSnapshot{Version: version, Now: time.Now(), Crews: []uiCrewView{}, Todo: []todoItem{},
-		Later: []uiLater{}, Tasks: []uiTask{}, Log: []uiEvent{}}
+	snap := uiSnapshot{Version: version, Lang: cmp.Or(a.lang, "en"), Now: time.Now(), Work: []uiWork{}, Crews: []uiCrewView{}, Todo: []todoItem{},
+		Later: []uiLater{}, Tasks: []uiTask{}, Log: []uiEvent{}, Tints: map[string]string{}}
+	pinned := map[string]string{}
 
 	for _, uc := range uiCrews(a.extraCrew()) {
 		cv := uiCrewView{Key: uc.Key, Name: uc.Key, Roles: []uiRole{}}
@@ -511,6 +592,14 @@ func (a *app) uiSnapshot() uiSnapshot {
 			}
 
 			cv.LastTick, cv.Stopped, cv.Stuck = s.State.LastTick, s.State.Stopped, s.Crew.StuckMinutes
+
+			// The first crew to pin a project's tint has it.
+			for p, tint := range s.Crew.Tints() {
+				if _, ok := pinned[p]; !ok {
+					pinned[p] = tint
+				}
+			}
+
 			a.readCrew(s, uc.Key, &cv, &snap)
 
 			return nil
@@ -523,12 +612,34 @@ func (a *app) uiSnapshot() uiSnapshot {
 	}
 
 	sortTodo(snap.Todo)
+	// Work that needs the owner first, then what moves (busy), then the rest; newest change first.
+	rank := func(w uiWork) int {
+		switch {
+		case w.Needs != nil:
+			return 0
+		case w.Status == "busy":
+			return 1
+		}
+
+		return 2
+	}
+	sort.SliceStable(snap.Work, func(i, j int) bool {
+		if ri, rj := rank(snap.Work[i]), rank(snap.Work[j]); ri != rj {
+			return ri < rj
+		}
+
+		return snap.Work[i].Updated.After(snap.Work[j].Updated)
+	})
 	sort.SliceStable(snap.Tasks, func(i, j int) bool { return snap.Tasks[i].Created.After(snap.Tasks[j].Created) })
 	sort.SliceStable(snap.Later, func(i, j int) bool { return snap.Later[i].Created.Before(snap.Later[j].Created) })
 	sort.SliceStable(snap.Log, func(i, j int) bool { return snap.Log[i].TS.After(snap.Log[j].TS) })
 
-	if len(snap.Log) > 30 {
-		snap.Log = snap.Log[:30]
+	if len(snap.Log) > feedMax {
+		snap.Log = snap.Log[:feedMax]
+	}
+
+	for _, p := range snap.projects() {
+		snap.Tints[p] = ui.Tint(p, pinned)
 	}
 
 	// A crew whose ticker stopped first, then the one with the most waiting on the owner, then by name.
@@ -555,8 +666,11 @@ func (a *app) readCrew(s *shift.Shift, key string, cv *uiCrewView, snap *uiSnaps
 
 	tasks, _, _ := taskStore(s.Crew).Scan()
 	byID := map[string]task.Task{}
+	byAny := map[string]task.Task{}
 
 	for _, t := range tasks {
+		byAny[t.ID] = t
+
 		if t.State.Active() {
 			snap.Tasks = append(snap.Tasks, uiTask{Crew: key, Task: t})
 			byID[t.ID] = t
@@ -582,24 +696,130 @@ func (a *app) readCrew(s *shift.Shift, key string, cv *uiCrewView, snap *uiSnaps
 	}
 
 	items, _ := todo(s.Crew, now, views)
+	needs := map[string]todoItem{}
+
 	for _, it := range items {
 		it.Crew = key
 		snap.Todo = append(snap.Todo, it)
+
+		if it.Task != "" {
+			needs[it.Task] = it
+		}
+	}
+
+	byRole := map[string]shift.View{}
+	for _, v := range views {
+		byRole[v.Role] = v
+	}
+
+	y, m, d := now.Date()
+	today := time.Date(y, m, d, 0, 0, 0, 0, now.Location())
+
+	for _, t := range tasks {
+		if t.State == task.Done && !t.Updated.Before(today) {
+			cv.DoneToday++
+		}
+
+		if !t.State.Active() {
+			continue
+		}
+
+		v := byRole[t.Role]
+		w := uiWork{Crew: key, ID: t.ID, Title: t.Headline(), Project: t.Where(), URL: t.URL, Why: t.Asked,
+			State: t.State, Role: t.Role, RoleState: v.State, Status: v.Status, Since: v.Since, Now: v.Now,
+			NowAt: v.NowAt, Prompt: v.Prompt, Worktree: t.Worktree, Created: t.Created, Updated: t.Updated,
+			Answered: t.Answered, Ignored: t.Ignored}
+		if t.Note != "" {
+			w.Milestone = &milestone{Text: t.Note, At: t.Updated}
+		}
+
+		if it, ok := needs[t.ID]; ok {
+			w.Needs = &it
+		}
+
+		w.Lane, w.On = lane(t, w.Needs != nil, s.Crew)
+		snap.Work = append(snap.Work, w)
 	}
 
 	cv.Waiting = len(items)
+
+	// The owner holds what a waiting task stands on, and an ask that holds up a role.
+	for i := range snap.Todo {
+		if it := &snap.Todo[i]; it.Crew == key {
+			it.Holds = it.Blocks != "" || (it.Task != "" && byID[it.Task].State == task.Waiting && byID[it.Task].On == "")
+		}
+	}
+
+	evs, _ := eventLog(s.Crew).Read(events.Filter{})
 
 	for _, it := range laterStore(s.Crew).Parked() {
 		snap.Later = append(snap.Later, uiLater{Crew: key, Item: it})
 	}
 
-	// A watch's every run is a beat, not news: the page leaves it to zmina log.
-	evs, _ := eventLog(s.Crew).Read(events.Filter{Last: 200})
-	for _, e := range evs {
-		if e.Event != "watch-run" {
-			snap.Log = append(snap.Log, uiEvent{Crew: key, Event: e})
+	// The newest of what the feed tells; a watch's every run, keys and roles going up and down stay in zmina log.
+	for i, n := len(evs)-1, 0; i >= 0 && n < feedMax; i-- {
+		if e := evs[i]; feedEvents[e.Event] {
+			ev := uiEvent{Crew: key, Event: e}
+			if t, ok := byAny[e.Task]; ok {
+				ev.Project, ev.Title = t.Where(), t.Headline()
+			}
+
+			snap.Log = append(snap.Log, ev)
+			n++
 		}
 	}
+}
+
+// lane is where the page shows an active task, and who it waits on: a waiting task on the owner's todo is the
+// todo item's; one the owner answered waits on the dispatcher; one set aside or waiting on a person outside the
+// crew waits on others; open work, and work waiting on a role of the crew, goes.
+func lane(t task.Task, onTodo bool, c *crew.Crew) (string, string) {
+	if t.State != task.Waiting {
+		return laneGo, ""
+	}
+
+	switch {
+	case t.On != "":
+		if _, ok := c.Roles[t.On]; ok {
+			return laneGo, t.On
+		}
+
+		return laneOthers, t.On
+	case onTodo:
+		return laneYou, ""
+	case t.Ignored.After(t.Updated):
+		return laneOthers, ""
+	}
+
+	return laneGo, c.Dispatcher
+}
+
+// projects are the project names the page shows: the work's, the todo's and the feed's.
+func (s *uiSnapshot) projects() []string {
+	seen := map[string]bool{}
+
+	var out []string
+
+	add := func(p string) {
+		if p != "" && !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+
+	for _, w := range s.Work {
+		add(w.Project)
+	}
+
+	for _, it := range s.Todo {
+		add(it.Project)
+	}
+
+	for _, e := range s.Log {
+		add(e.Project)
+	}
+
+	return out
 }
 
 // roleIcon maps a role name to one of the page's line icons; crew files name roles freely, the rest are generic.

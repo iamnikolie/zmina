@@ -56,6 +56,8 @@ const (
 	Answered State = "answered"
 	// Parked: put on the parked list for later.
 	Parked State = "parked"
+	// Ignored: the owner set it aside for good, no parked entry.
+	Ignored State = "ignored"
 )
 
 // Ask is one thing waiting on the owner.
@@ -63,6 +65,10 @@ type Ask struct {
 	ID   string `json:"id"`
 	Kind Kind   `json:"kind"`
 	Text string `json:"text"`
+	// Title is the ask in a few plain words; the page shows it, the text on expand.
+	Title string `json:"title,omitempty"`
+	// Project is the project it is for (default: its task's).
+	Project string `json:"project,omitempty"`
 	// Rec is the recommended answer, Reason why in one line.
 	Rec    string `json:"rec,omitempty"`
 	Reason string `json:"reason,omitempty"`
@@ -80,7 +86,7 @@ type Ask struct {
 
 // Open reports whether the ask still waits on the owner.
 func (a Ask) Open() bool {
-	return a.State != Done && a.State != Yes && a.State != Answered && a.State != Parked
+	return a.State != Done && a.State != Yes && a.State != Answered && a.State != Parked && a.State != Ignored
 }
 
 var (

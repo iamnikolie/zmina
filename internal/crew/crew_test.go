@@ -389,3 +389,14 @@ func TestDropTools(t *testing.T) {
 	assert.Nil(t, c.ToolsOff(c.Roles["dispatcher"]), "its own flag stands alone")
 	assert.Contains(t, strings.Join(c.Warnings, "\n"), "args has --disallowedTools")
 }
+
+func TestProjectTints(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "crew.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("dir: "+t.TempDir()+"\nprojects:\n  site:\n    tint: p2\n  app:\n"+
+		"    tint: red\nroles:\n  dispatcher:\n"), 0o600))
+
+	c, err := Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"site": "p2"}, c.Tints())
+	assert.Contains(t, strings.Join(c.Warnings, "\n"), `project app: tint "red" is not one of p1 … p5, ignored`)
+}

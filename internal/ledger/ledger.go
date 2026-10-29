@@ -71,6 +71,8 @@ type Ledger struct {
 // NewTask is what a new task is made of.
 type NewTask struct {
 	Role, Asked, Note, By string
+	// Title, Project and URL say what the work is, what it is for and where to see it.
+	Title, Project, URL string
 	// Repo is a directory under the crew's dir or a path; Worktree gives the task its own worktree of it, from Base
 	// (default: the repo's current branch).
 	Repo     string
@@ -85,7 +87,7 @@ func (l *Ledger) New(n NewTask) (task.Task, error) {
 		return task.Task{}, errors.New("a worktree needs a repo")
 	}
 
-	t := task.Task{Role: n.Role, Asked: n.Asked, Note: n.Note, By: n.By}
+	t := task.Task{Role: n.Role, Asked: n.Asked, Note: n.Note, By: n.By, Title: n.Title, Project: n.Project, URL: n.URL}
 
 	if n.Repo != "" {
 		repo, err := l.repo(n.Repo)
@@ -154,8 +156,12 @@ func (l *Ledger) repo(repo string) (string, error) {
 // Change is what Set may change; empty fields stay.
 type Change struct {
 	State task.State
-	Note  string
-	Role  string
+	// On is who a waiting task waits on, when not the owner ("-": the owner again). It goes with waiting.
+	On   string
+	Note string
+	Role string
+	// Title, Project and URL replace the task's; "-" clears one.
+	Title, Project, URL string
 	// Force closes a task although its worktree has uncommitted changes.
 	Force bool
 }
@@ -188,6 +194,25 @@ func (l *Ledger) Set(id string, c Change) (task.Task, error) {
 
 		t.State = c.State
 		changes = append(changes, string(c.State))
+
+		if t.State != task.Waiting {
+			t.On = ""
+		}
+	}
+
+	switch {
+	case c.On == "":
+		if c.State == task.Waiting {
+			t.On = ""
+		}
+	case t.State != task.Waiting:
+		return t, fmt.Errorf("%s: --on goes with waiting (it is %s)", t.ID, t.State)
+	case c.On == "-":
+		t.On = ""
+		changes = append(changes, "on the owner")
+	default:
+		t.On = c.On
+		changes = append(changes, "on "+c.On)
 	}
 
 	if c.Role != "" {
@@ -200,8 +225,23 @@ func (l *Ledger) Set(id string, c Change) (task.Task, error) {
 		changes = append(changes, "note: "+c.Note)
 	}
 
+	for _, f := range []struct {
+		name, value string
+		field       *string
+	}{{"title", c.Title, &t.Title}, {"project", c.Project, &t.Project}, {"url", c.URL, &t.URL}} {
+		switch f.value {
+		case "":
+		case "-":
+			*f.field = ""
+			changes = append(changes, f.name+" cleared")
+		default:
+			*f.field = f.value
+			changes = append(changes, f.name+": "+f.value)
+		}
+	}
+
 	if len(changes) == 0 {
-		return t, errors.New("nothing to change: give a state, --note or --role")
+		return t, errors.New("nothing to change: give a state, --note, --role, --title, --project or --url")
 	}
 
 	t.Updated = l.Now()

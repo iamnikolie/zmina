@@ -190,7 +190,30 @@ type Crew struct {
 	Roles map[string]*Role `yaml:"roles"`
 	// Watches are periodic detectors the ticker runs, keyed by name; each queues notes for the dispatcher.
 	Watches map[string]*Watch `yaml:"watch"`
+	// Projects holds what `zmina ui` shows per project, keyed by the tasks' project name.
+	Projects map[string]*Project `yaml:"projects"`
 }
+
+// Project is one project's look on the ui page.
+type Project struct {
+	// Tint pins the project's colour, p1 … p5, when the one picked from its name collides with another's.
+	Tint string `yaml:"tint"`
+}
+
+// Tints are the projects' pinned tints, keyed by project name; a tint the page does not have is left out.
+func (c *Crew) Tints() map[string]string {
+	out := map[string]string{}
+
+	for name, p := range c.Projects {
+		if p != nil && tintRe.MatchString(p.Tint) {
+			out[name] = p.Tint
+		}
+	}
+
+	return out
+}
+
+var tintRe = regexp.MustCompile(`^p[1-5]$`)
 
 // DefaultPath is $ZMINA_CREW, else ~/.zmina/crew.yaml.
 func DefaultPath() string {
@@ -231,6 +254,12 @@ func load(path string, strict bool) (*Crew, error) {
 	c, warnings, err := decode(raw)
 	if err != nil {
 		return nil, fmt.Errorf("crew: %s: %w", path, err)
+	}
+
+	for name, p := range c.Projects {
+		if p != nil && p.Tint != "" && !tintRe.MatchString(p.Tint) {
+			warnings = append(warnings, fmt.Sprintf("project %s: tint %q is not one of p1 … p5, ignored", name, p.Tint))
+		}
 	}
 
 	for _, w := range warnings {

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="ru">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -8,40 +8,49 @@
 <link rel="stylesheet" href="app.css">
 <script src="app.js" defer></script>
 </head>
-<body>
-<header id="top">
-  <div class="bar">
+<body class="sk">
+<header class="top">
+  <div class="say" id="say" aria-live="polite"><i class="ph" style="width:min(560px,80%)"></i></div>
+  <div class="tools">
     <span class="mark" id="mark" aria-hidden="true"></span>
-    <h1>zmina</h1>
-    <span class="live" id="live"></span>
-    <span class="tick mono" id="tick"></span>
+    <nav class="chips" id="chips" aria-label="Crew"></nav>
+    <div class="clock" id="clock"><i></i><span></span></div>
   </div>
-  <p class="summary" id="summary"></p>
-  <p class="danger-bar" id="alarm" hidden></p>
 </header>
-<nav class="chips" id="chips" aria-label="Filter by crew" hidden></nav>
-<main>
-  <section id="todo-sec" class="a-todo" aria-labelledby="todo-h">
-    <h2 id="todo-h">Waiting on you</h2>
-    <ol id="todo" class="rows"></ol>
-    <div id="empty" class="empty" hidden>
-      <span class="cup" id="cup" aria-hidden="true"></span>
-      <p>Nothing waits on you.</p>
-      <p class="mono muted" id="last-answer"></p>
-    </div>
-    <button class="fold" id="later-toggle" type="button" aria-expanded="false" hidden></button>
-    <ol id="later" class="rows later" hidden></ol>
-  </section>
-  <div id="crews" class="a-crews"></div>
-  <section id="tasks-sec" class="a-tasks" aria-labelledby="tasks-h">
-    <h2 id="tasks-h"><button class="fold-h" type="button" aria-expanded="true" data-label="Tasks">Tasks</button></h2>
-    <ol id="tasks" class="rows"></ol>
-  </section>
-  <section id="log-sec" class="a-log" aria-labelledby="log-h">
-    <h2 id="log-h"><button class="fold-h" type="button" aria-expanded="true" data-label="Log">Log</button></h2>
-    <ol id="log" class="rows log"></ol>
-  </section>
+
+<main class="page">
+  <div class="col">
+    <section id="hold" aria-labelledby="hold-h">
+      <h2 class="lab" id="hold-h"><i class="ph" style="width:120px"></i></h2>
+      <div class="rows" id="hold-rows"><div class="row ph-row"><i class="ph"></i></div></div>
+    </section>
+    <section id="ask" aria-labelledby="ask-h">
+      <h2 class="lab" id="ask-h"><i class="ph" style="width:100px"></i></h2>
+      <div class="rows" id="ask-rows"><div class="row ph-row"><i class="ph"></i></div><div class="row ph-row"><i class="ph"></i></div></div>
+      <div class="hands" id="hands" hidden></div>
+    </section>
+  </div>
+  <div class="col">
+    <section id="go" aria-labelledby="go-h">
+      <h2 class="lab" id="go-h"><i class="ph" style="width:80px"></i></h2>
+      <div class="rows" id="go-rows"><div class="row ph-row"><i class="ph"></i></div></div>
+    </section>
+    <section id="later" aria-labelledby="later-h" hidden>
+      <h2 class="lab" id="later-h"></h2>
+      <div class="rows" id="later-rows"></div>
+    </section>
+    <section id="others" aria-labelledby="others-h" hidden>
+      <h2 class="lab" id="others-h"></h2>
+      <div class="rows" id="others-rows"></div>
+    </section>
+  </div>
+  <footer class="foot" id="foot"></footer>
 </main>
-<footer><span id="version" class="mono"></span></footer>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<aside class="drawer" id="history" aria-labelledby="history-h" hidden>
+  <div class="drawer-h"><h2 id="history-h"></h2><button type="button" class="q" id="history-close" aria-label="Close">✕</button></div>
+  <div class="feed" id="feed"></div>
+</aside>
 </body>
 </html>

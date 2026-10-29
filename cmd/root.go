@@ -29,6 +29,8 @@ type app struct {
 	out, err io.Writer
 	config   string
 	crew     string
+	// lang is the language `zmina ui` speaks: ru or en.
+	lang string
 }
 
 // NewRoot builds the whole command tree writing to out and errw.

@@ -74,6 +74,9 @@ func (a *app) taskNewCommand() *cobra.Command {
 	c.Flags().StringVar(&n.Base, "base", "", "branch or commit the worktree starts from (default: the repo's "+
 		"current branch)")
 	c.Flags().StringVar(&n.Note, "note", "", "a note")
+	c.Flags().StringVar(&n.Title, "title", "", "the work in one short plain sentence, in the owner's language")
+	c.Flags().StringVar(&n.Project, "project", "", "the project or product it is for (default: the repo's dir name)")
+	c.Flags().StringVar(&n.URL, "url", "", "the live thing to look at")
 	c.Flags().BoolVar(&asJSON, "json", false, "JSON output")
 
 	return c
@@ -120,11 +123,11 @@ func (a *app) taskLsCommand() *cobra.Command {
 				}
 
 				w := tabwriter.NewWriter(a.out, 0, 0, 2, ' ', 0)
-				fmt.Fprintln(w, "ID\tROLE\tSTATE\tAGE\tWHERE\tASKED")
+				fmt.Fprintln(w, "ID\tROLE\tSTATE\tAGE\tPROJECT\tWORK")
 
 				for _, t := range out {
-					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", t.ID, t.Role, t.State, age(s.Now().Sub(t.Created)),
-						dash(where(t)), clip(t.Asked, 70))
+					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", t.ID, t.Role, t.Status(), age(s.Now().Sub(t.Created)),
+						dash(t.Where()), clip(t.Headline(), 70))
 				}
 
 				return w.Flush()
@@ -157,9 +160,21 @@ func (a *app) taskShowCommand() *cobra.Command {
 					return a.printJSON(t)
 				}
 
-				fmt.Fprintf(a.out, "%s · %s · %s · by %s · %s\n", t.ID, t.Role, t.State, dash(t.By),
+				fmt.Fprintf(a.out, "%s · %s · %s · by %s · %s\n", t.ID, t.Role, t.Status(), dash(t.By),
 					t.Created.Format(time.DateTime))
+				if t.Title != "" {
+					fmt.Fprintln(a.out, "title:", t.Title)
+				}
+
 				fmt.Fprintln(a.out, "asked:", t.Asked)
+
+				if p := t.Where(); p != "" {
+					fmt.Fprintln(a.out, "project:", p)
+				}
+
+				if t.URL != "" {
+					fmt.Fprintln(a.out, "url:", t.URL)
+				}
 
 				if t.Repo != "" {
 					fmt.Fprintln(a.out, "repo:", t.Repo)
@@ -190,8 +205,9 @@ func (a *app) taskShowCommand() *cobra.Command {
 
 // taskChange is the flags of set, done and drop.
 type taskChange struct {
-	note, role string
-	force      bool
+	note, role, on      string
+	title, project, url string
+	force               bool
 }
 
 func (o *taskChange) flags(c *cobra.Command, withRole bool) {
@@ -200,6 +216,11 @@ func (o *taskChange) flags(c *cobra.Command, withRole bool) {
 
 	if withRole {
 		c.Flags().StringVar(&o.role, "role", "", "hand the task to another role")
+		c.Flags().StringVar(&o.title, "title", "", "the work in one short plain sentence (- clears it)")
+		c.Flags().StringVar(&o.project, "project", "", "the project or product it is for (- clears it)")
+		c.Flags().StringVar(&o.url, "url", "", "the live thing to look at (- clears it)")
+		c.Flags().StringVar(&o.on, "on", "", "with waiting: who it waits on when not the owner — a role or a person "+
+			"(- the owner again); it stays off the owner's todo")
 	}
 }
 
@@ -208,7 +229,7 @@ func (a *app) taskSetCommand() *cobra.Command {
 
 	c := &cobra.Command{
 		Use:   "set <id> [state]",
-		Short: "Change a task: state (open, waiting, done, dropped), --note, --role",
+		Short: "Change a task: state (open, waiting [--on who], done, dropped), --note, --role, --title, --project, --url",
 		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var st task.State
@@ -252,12 +273,13 @@ func (a *app) setTask(id string, st task.State, o taskChange) error {
 			}
 		}
 
-		t, err := a.ledger(s).Set(id, ledger.Change{State: st, Note: o.note, Role: o.role, Force: o.force})
+		t, err := a.ledger(s).Set(id, ledger.Change{State: st, On: o.on, Note: o.note, Role: o.role, Force: o.force,
+			Title: o.title, Project: o.project, URL: o.url})
 		if err != nil {
 			return err
 		}
 
-		fmt.Fprintf(a.out, "%s · %s · %s\n", t.ID, t.Role, t.State)
+		fmt.Fprintf(a.out, "%s · %s · %s\n", t.ID, t.Role, t.Status())
 
 		return nil
 	})
@@ -301,14 +323,6 @@ func (a *app) taskGCCommand() *cobra.Command {
 	c.Flags().BoolVar(&force, "force", false, "also remove dropped tasks' unmerged branches and changes")
 
 	return c
-}
-
-func where(t task.Task) string {
-	if t.Worktree != "" {
-		return t.Worktree
-	}
-
-	return t.Repo
 }
 
 func (a *app) printJSON(v any) error {

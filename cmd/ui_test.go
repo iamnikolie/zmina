@@ -75,6 +75,59 @@ func TestUISnapshotShowsEveryCrew(t *testing.T) {
 	assert.Len(t, snap.Crews[0].Roles, 2)
 }
 
+func TestUIWorkLeadsWithWhatNeedsTheOwner(t *testing.T) {
+	uiHome(t)
+
+	ops := crewPathOf(t, "ops")
+	f, err := os.OpenFile(ops, os.O_APPEND|os.O_WRONLY, 0o600)
+	require.NoError(t, err)
+	_, err = f.WriteString("projects:\n  site:\n    tint: p4\n")
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	_, _, err = zm(t, ops, "task", "new", "dev", "--title", "Landing — rework", "--project", "site", "--url",
+		"https://example.com", "rework the landing for clients")
+	require.NoError(t, err)
+	_, _, err = zm(t, ops, "task", "new", "dev", "fix the login")
+	require.NoError(t, err)
+	_, _, err = zm(t, ops, "task", "set", "T-1", "--note", "hero and pricing done · left: copy")
+	require.NoError(t, err)
+	_, _, err = zm(t, ops, "todo", "add", "--task", "T-1", "--rec", "EN first", "which language first?")
+	require.NoError(t, err)
+
+	srv, _ := uiServer(t, true, "")
+
+	resp, err := http.Get(srv.URL + "/api/state")
+	require.NoError(t, err)
+
+	defer func() { _ = resp.Body.Close() }()
+
+	var snap uiSnapshot
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&snap))
+	require.Len(t, snap.Work, 2)
+
+	w := snap.Work[0]
+	assert.Equal(t, "T-1", w.ID, "the work that needs the owner first")
+	assert.Equal(t, "Landing — rework", w.Title)
+	assert.Equal(t, "site", w.Project)
+	assert.Equal(t, "https://example.com", w.URL)
+	assert.Equal(t, "rework the landing for clients", w.Why)
+	require.NotNil(t, w.Milestone)
+	assert.Equal(t, "hero and pricing done · left: copy", w.Milestone.Text)
+	require.NotNil(t, w.Needs)
+	assert.Equal(t, "A-1", w.Needs.ID)
+	assert.Equal(t, "fix the login", snap.Work[1].Title, "no title: the asked text")
+
+	assert.Equal(t, laneGo, w.Lane, "open work goes, though an ask is about it")
+	assert.Equal(t, "site", w.Needs.Project, "the ask takes its task's project")
+	assert.False(t, w.Needs.Holds, "an ask about open work holds nothing")
+	assert.Equal(t, map[string]string{"site": "p4"}, snap.Tints, "the crew file pins the tint")
+
+	require.NotEmpty(t, snap.Log)
+	assert.Equal(t, "asked", snap.Log[0].Event.Event, "newest first")
+	assert.Equal(t, "site", snap.Log[0].Project, "the event's task's project")
+}
+
 func crewPathOf(t *testing.T, key string) string {
 	t.Helper()
 
@@ -212,4 +265,67 @@ func TestUITaskIDIsNeverAPath(t *testing.T) {
 	require.NoError(t, err)
 	_ = resp.Body.Close()
 	assert.Equal(t, http.StatusConflict, resp.StatusCode)
+}
+
+func TestUILang(t *testing.T) {
+	t.Setenv("LC_ALL", "")
+	t.Setenv("LC_MESSAGES", "")
+	t.Setenv("LANG", "uk_UA.UTF-8")
+	assert.Equal(t, "ru", uiLang(""), "uk reads ru")
+	assert.Equal(t, "en", uiLang("en"), "the flag wins")
+	t.Setenv("LANG", "de_DE.UTF-8")
+	assert.Equal(t, "en", uiLang(""))
+	t.Setenv("LANG", "")
+	assert.Equal(t, "en", uiLang(""))
+}
+
+func TestUILanes(t *testing.T) {
+	uiHome(t)
+
+	ops := crewPathOf(t, "ops")
+	for _, args := range [][]string{
+		{"task", "new", "dev", "--title", "close the month", "month close"},
+		{"task", "set", "T-1", "waiting", "--on", "alex", "--note", "asked about the spec"},
+		{"task", "new", "dev", "--title", "landing", "build the landing"},
+		{"task", "set", "T-2", "waiting", "--on", "dispatcher"},
+		{"task", "new", "dev", "--title", "pick a name", "name the product"},
+		{"task", "set", "T-3", "waiting", "--note", "three names ready"},
+		{"todo", "add", "--project", "infra", "--blocks", "dev", "--rec", "yes", "rotate the key?"},
+	} {
+		_, _, err := zm(t, ops, args...)
+		require.NoError(t, err, args)
+	}
+
+	_, _, err := zm(t, ops, "task", "set", "T-1", "open", "--on", "x")
+	require.Error(t, err, "--on goes with waiting")
+
+	srv, _ := uiServer(t, true, "")
+
+	resp, err := http.Get(srv.URL + "/api/state")
+	require.NoError(t, err)
+
+	defer func() { _ = resp.Body.Close() }()
+
+	var snap uiSnapshot
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&snap))
+
+	lanes := map[string]string{}
+	for _, w := range snap.Work {
+		lanes[w.ID] = w.Lane + " " + w.On
+	}
+
+	assert.Equal(t, map[string]string{"T-1": "others alex", "T-2": "go dispatcher", "T-3": "you "}, lanes)
+
+	holds := map[string]bool{}
+	for _, it := range snap.Todo {
+		holds[it.ID] = it.Holds
+	}
+
+	assert.Equal(t, map[string]bool{"T-3": true, "A-1": true}, holds, "only the owner's: T-1 and T-2 wait on others")
+
+	for _, it := range snap.Todo {
+		if it.ID == "A-1" {
+			assert.Equal(t, "infra", it.Project)
+		}
+	}
 }

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"sort"
@@ -27,13 +28,20 @@ type todoItem struct {
 	ID   string `json:"id"`
 	Kind string `json:"kind"` // decision | check | waiting
 	Text string `json:"text"`
+	// Title is the item in a few words: the ask's title, the waiting task's headline.
+	Title string `json:"title,omitempty"`
+	// Project and URL are the task's, when the item is about one.
+	Project string `json:"project,omitempty"`
+	URL     string `json:"url,omitempty"`
 	// Rec and Reason are a decision's recommendation; Note is a waiting task's note.
-	Rec     string    `json:"rec,omitempty"`
-	Reason  string    `json:"reason,omitempty"`
-	Note    string    `json:"note,omitempty"`
-	Role    string    `json:"role,omitempty"`
-	Task    string    `json:"task,omitempty"`
-	Blocks  string    `json:"blocks,omitempty"`
+	Rec    string `json:"rec,omitempty"`
+	Reason string `json:"reason,omitempty"`
+	Note   string `json:"note,omitempty"`
+	Role   string `json:"role,omitempty"`
+	Task   string `json:"task,omitempty"`
+	Blocks string `json:"blocks,omitempty"`
+	// Holds is set on the ui page: something stands until the owner answers (a waiting task, a blocking ask).
+	Holds   bool      `json:"holds,omitempty"`
 	Created time.Time `json:"created"`
 	Overdue bool      `json:"overdue,omitempty"`
 }
@@ -55,10 +63,17 @@ func todo(c *crew.Crew, now time.Time, views []shift.View) ([]todoItem, []string
 	all, p, _ := askStore(c).Scan()
 	problems = append(problems, p...)
 
+	// An ask about a task is that task's question: the task's waiting item folds into it, never shows twice.
+	asked := map[string]int{}
+
 	for _, a := range all {
 		if a.Open() {
-			items = append(items, todoItem{ID: a.ID, Kind: string(a.Kind), Text: a.Text, Rec: a.Rec, Reason: a.Reason,
-				Role: a.Role, Task: a.Task, Blocks: a.Blocks, Created: a.Created})
+			if a.Task != "" {
+				asked[a.Task] = len(items)
+			}
+
+			items = append(items, todoItem{ID: a.ID, Kind: string(a.Kind), Text: a.Text, Title: a.Title, Rec: a.Rec,
+				Reason: a.Reason, Role: a.Role, Task: a.Task, Blocks: a.Blocks, Project: a.Project, Created: a.Created})
 		}
 	}
 
@@ -66,15 +81,35 @@ func todo(c *crew.Crew, now time.Time, views []shift.View) ([]todoItem, []string
 	problems = append(problems, p...)
 
 	for _, t := range tasks {
-		if t.State == task.Waiting {
-			it := todoItem{ID: t.ID, Kind: "waiting", Text: t.Asked, Note: t.Note, Role: t.Role, Task: t.ID,
-				Created: t.Updated}
-			if idle[t.Role] {
-				it.Blocks = t.Role
+		if i, ok := asked[t.ID]; ok {
+			items[i].Project, items[i].URL = cmp.Or(items[i].Project, t.Where()), t.URL
+		}
+
+		// A task that waits on someone else is not the owner's to answer.
+		if t.State != task.Waiting || t.On != "" || t.Answered.After(t.Updated) || t.Ignored.After(t.Updated) {
+			continue
+		}
+
+		if i, ok := asked[t.ID]; ok {
+			// The ask carries the question; the task adds its note and holds its role up the same way.
+			if items[i].Note == "" {
+				items[i].Note = t.Note
 			}
 
-			items = append(items, it)
+			if items[i].Blocks == "" && idle[t.Role] {
+				items[i].Blocks = t.Role
+			}
+
+			continue
 		}
+
+		it := todoItem{ID: t.ID, Kind: "waiting", Text: t.Asked, Title: t.Headline(), Note: t.Note, Role: t.Role,
+			Task: t.ID, Project: t.Where(), URL: t.URL, Created: t.Updated}
+		if idle[t.Role] {
+			it.Blocks = t.Role
+		}
+
+		items = append(items, it)
 	}
 
 	for i := range items {
@@ -118,8 +153,9 @@ func (a *app) todoCommand() *cobra.Command {
 		Short: "What waits on the owner: the dispatcher's asks (decisions, checks) and tasks in state waiting",
 	}
 
-	c.AddCommand(a.todoAddCommand(), a.todoLsCommand(), a.todoAnswerCommand("yes"), a.todoAnswerCommand("done"),
-		a.todoAnswerCommand("answer"), a.todoAnswerCommand("park"))
+	c.AddCommand(a.todoAddCommand(), a.todoLsCommand(), a.todoEditCommand(), a.todoAnswerCommand("yes"),
+		a.todoAnswerCommand("done"), a.todoAnswerCommand("answer"), a.todoAnswerCommand("park"),
+		a.todoAnswerCommand("ignore"))
 
 	return c
 }
@@ -168,6 +204,85 @@ func (a *app) todoAddCommand() *cobra.Command {
 	c.Flags().StringVar(&ask.Rec, "rec", "", "the recommended answer: yes takes it")
 	c.Flags().StringVar(&ask.Reason, "reason", "", "why, in one line")
 	c.Flags().StringVar(&ask.Blocks, "blocks", "", "the role it holds up until answered")
+	c.Flags().StringVar(&ask.Title, "title", "", "the ask in a few plain words (the page shows it, the text on expand)")
+	c.Flags().StringVar(&ask.Project, "project", "", "the project it is for (default: its --task's)")
+
+	return c
+}
+
+func (a *app) todoEditCommand() *cobra.Command {
+	var e struct{ text, title, rec, reason, blocks, project string }
+
+	c := &cobra.Command{
+		Use:   "edit <id> [--title …] [--text …] [--rec …] [--reason …] [--blocks …] [--project …]",
+		Short: "Change an open ask's words (- clears a field)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return a.withState(func(s *shift.Shift) error {
+				store := askStore(s.Crew)
+
+				ask, err := store.Get(args[0])
+				if err != nil {
+					return err
+				}
+
+				if !ask.Open() {
+					return fmt.Errorf("%s is already %s", ask.ID, ask.State)
+				}
+
+				var changed []string
+
+				for _, f := range []struct {
+					name, value string
+					field       *string
+				}{{"text", e.text, &ask.Text}, {"title", e.title, &ask.Title}, {"rec", e.rec, &ask.Rec},
+					{"reason", e.reason, &ask.Reason}, {"blocks", e.blocks, &ask.Blocks},
+					{"project", e.project, &ask.Project}} {
+					switch f.value {
+					case "":
+					case "-":
+						if f.name == "text" {
+							return errors.New("an ask keeps its text")
+						}
+
+						*f.field = ""
+						changed = append(changed, f.name+" cleared")
+					default:
+						*f.field = f.value
+						changed = append(changed, f.name)
+					}
+				}
+
+				if len(changed) == 0 {
+					return errors.New("nothing to change: give --title, --text, --rec, --reason, --blocks or --project")
+				}
+
+				// A recommendation makes it a decision; without one it is a check.
+				if ask.Rec != "" {
+					ask.Kind = asks.Decision
+				} else {
+					ask.Kind = asks.Check
+				}
+
+				ask.Updated = s.Now()
+				if err := store.Put(ask); err != nil {
+					return err
+				}
+
+				s.Log(by(), "asked", ask.Task, ask.ID+" edited: "+strings.Join(changed, ", "))
+				fmt.Fprintf(a.out, "%s · %s\n", ask.ID, strings.Join(changed, ", "))
+
+				return nil
+			})
+		},
+	}
+
+	c.Flags().StringVar(&e.title, "title", "", "the ask in a few plain words")
+	c.Flags().StringVar(&e.text, "text", "", "the question or the check")
+	c.Flags().StringVar(&e.rec, "rec", "", "the recommended answer (a decision; - makes it a check)")
+	c.Flags().StringVar(&e.reason, "reason", "", "why, in one line")
+	c.Flags().StringVar(&e.blocks, "blocks", "", "the role it holds up")
+	c.Flags().StringVar(&e.project, "project", "", "the project it is for")
 
 	return c
 }
@@ -257,6 +372,7 @@ func (a *app) todoAnswerCommand(action string) *cobra.Command {
 		"done":   "Say a check (or a decision) is dealt with",
 		"answer": "Answer an ask or a waiting task in your own words",
 		"park":   "Put it on the parked list for later",
+		"ignore": "Set it aside for good (no parked entry; a waiting task only leaves the todo)",
 	}[action]
 
 	use, args := action+" <id>", cobra.ExactArgs(1)
@@ -314,7 +430,7 @@ func answerTodo(s *shift.Shift, from, action, id, words string) (string, error) 
 		}
 
 		st := map[string]asks.State{"yes": asks.Yes, "done": asks.Done, "answer": asks.Answered,
-			"park": asks.Parked}[action]
+			"park": asks.Parked, "ignore": asks.Ignored}[action]
 		if action == "yes" && ask.Rec == "" {
 			return "", fmt.Errorf("%s has no recommendation to say yes to: answer it", ask.ID)
 		}
@@ -330,6 +446,8 @@ func answerTodo(s *shift.Shift, from, action, id, words string) (string, error) 
 			note = ask.ID + " · done"
 		case "answer":
 			note = ask.ID + " · " + words
+		case "ignore":
+			note = ask.ID + " · ignored"
 		case "park":
 			it, err := laterStore(s.Crew).Add(later.Item{Text: ask.Text, Note: "from " + ask.ID, By: from}, s.Now())
 			if err != nil {
@@ -352,8 +470,16 @@ func answerTodo(s *shift.Shift, from, action, id, words string) (string, error) 
 			note = t.ID + " · " + words
 		case "park":
 			note = t.ID + " · later"
+		case "ignore":
+			// Off the todo only: the task itself stays as it is.
+			t.Ignored = s.Now()
+			if err := taskStore(s.Crew).Put(t); err != nil {
+				return "", err
+			}
+
+			note = t.ID + " · ignored"
 		default:
-			return "", fmt.Errorf("%s is a task: answer it or park it", t.ID)
+			return "", fmt.Errorf("%s is a task: answer, park or ignore it", t.ID)
 		}
 
 		id = t.ID
@@ -390,6 +516,17 @@ func answerTodo(s *shift.Shift, from, action, id, words string) (string, error) 
 
 	if _, err := s.Note(from, note, false); err != nil {
 		return "", err
+	}
+
+	// The task's turn is the dispatcher's now: it leaves the todo until the task changes.
+	if tid := taskOf(s, id); tid != "" {
+		store := taskStore(s.Crew)
+		if t, err := store.Get(tid); err == nil && t.State == task.Waiting {
+			t.Answered = s.Now()
+			if err := store.Put(t); err != nil {
+				return "", err
+			}
+		}
 	}
 
 	s.Log(from, "answered", taskOf(s, id), note)

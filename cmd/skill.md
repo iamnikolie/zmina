@@ -34,6 +34,8 @@ context_max: 400k                        # every role's, unless it sets its own 
 context_action: compact                  # every role's, unless it sets its own (default compact)
 # name: ops                              # a second crew: tmux -L zmina-ops, its own ticker
 # prefix: ops-                           # default session names (default zm-)
+# projects:                              # the ui page's colour per task project (default: one of five, by name)
+#   site: {tint: p3}                     # p1 … p5: pin one when two projects collide
 roles:
   designer:
     keep: manual                         # manual | always
@@ -233,37 +235,48 @@ directory, readable or not, and never replaces a file; `task ls` and `doctor` na
 
 | Command | Does |
 |---|---|
-| `zmina task new <role> <asked...>` | record a task; prints `T-14 · dev`. `--repo <name or path>` (a name is a directory under the crew's dir), `--note`, `--json`. |
+| `zmina task new <role> <asked...>` | record a task; prints `T-14 · dev`. `--repo <name or path>` (a name is a directory under the crew's dir), `--note`, `--title "<short plain sentence>"`, `--project <name>`, `--url <live thing>`, `--json`. |
 | `zmina task new <role> --repo r --worktree <asked...>` | also gives it its own git worktree `~/.zmina/worktrees/<repo>-T-14` on a new branch `zmina/t-14` (`zmina/<crew>-t-14` for a named crew) from the repo's current branch (`--base` another). The role works there, never in the repo's checkout. The task is written before the worktree is made: if git fails, it stays as `dropped` with the error in its note. |
 | `zmina task ls [--all] [--role r] [--json]` | active tasks (`--all`: closed too). |
 | `zmina task show <id>` | one task with its history from the event log. Ids: `T-14`, `t-14` or `14`. |
-| `zmina task set <id> [state] [--note …] [--role r]` | change state, note, or hand it to another role. |
+| `zmina task set <id> [state] [--on <who>] [--note …] [--role r] [--title …] [--project …] [--url …]` | change state, note, title, project or url (`-` clears one), or hand it to another role. `waiting --on <who>`: it waits on someone other than the owner — a role of the crew or a person (`--on -`: the owner again); it stays off the owner's todo. Any other state clears it. |
 | `zmina task done <id>` / `task drop <id>` | close it. Refuses while its worktree has uncommitted changes (`--force` closes anyway; the worktree stays). |
 | `zmina task gc [--dry-run]` | remove worktrees and branches of closed tasks once clean and merged into their base. `--force` also removes dropped tasks' unmerged branches. |
+
+**What the work is.** `--title` is the work in one short plain sentence in the owner's language ("Landing page —
+rework"), `--project` the project or product it is for (default: the repo's directory name), `--url` the live thing
+to look at. The ui page is built around them; without a title it shows the start of the asked text. The dispatcher
+gives every task a title when it records it.
 
 A role reads its own name from `$ZMINA_ROLE`; when it runs `zmina task …` the event log records
 it as the actor.
 
 **Milestones.** A role posts one line at each milestone of its task — a step done, a deploy, waiting on someone:
 `zmina task set <id> --note "<what is done> · left: <what is left>"`. The latest note is the task's last milestone:
-the ui page shows it under the role's `now` line, and `task show` keeps every one in the log.
+the ui page shows it as the work's «now» line, and `task show` keeps every one in the log. Waiting on someone
+else: `task set <id> waiting --on <who>`.
 
 ## Todo — what waits on the owner
 
 One list of what only the owner can answer: the dispatcher's **asks** — a `decision` (a question with its
 recommendation and a one-line reason) or a `check` (something only the owner can do: "sign in and publish the test
 board") — and every task in state `waiting`, with its note. One file per ask in `~/.zmina/asks/A-<n>.json`, written
-alone like tasks. Order: items that block a role first (a waiting task blocks its own role), then the overdue ones
-(older than 24 h), then the rest; oldest first in each group.
+alone like tasks. An ask with `--task T-n` about a waiting task is that task's question: the two show as one item
+(the ask's question and recommendation, the task's note). Order: items that block a role first (a waiting task
+blocks its role while that role is up and idle; an ask with `--blocks`), then the overdue ones (older than 24 h),
+then the rest; oldest first in each group. Once the owner answers a waiting task (or its ask), it leaves the todo
+until the task changes again (`task set`): the turn is the dispatcher's.
 
 | Command | Does |
 |---|---|
-| `zmina todo add <text...> [--rec "<answer>" --reason "<why>"] [--kind decision\|check] [--from <role>] [--task T-n] [--blocks <role>]` | ask the owner; prints `A-3`. With `--rec` it is a decision, else a check. `--from` defaults to `$ZMINA_ROLE`. |
+| `zmina todo add <text...> [--title "<few words>"] [--rec "<answer>" --reason "<why>"] [--kind decision\|check] [--from <role>] [--task T-n] [--blocks <role>] [--project <p>]` | ask the owner; prints `A-3`. With `--rec` it is a decision, else a check. `--from` defaults to `$ZMINA_ROLE`; `--project` to the `--task`'s. The page shows the title, the text on expand. |
+| `zmina todo edit <id> [--title …] [--text …] [--rec …] [--reason …] [--blocks …] [--project …]` | change an open ask's words (`-` clears one; clearing `--rec` makes it a check). |
 | `zmina todo ls [--json]` | what waits, in that order; the parked list's count last. `--json`: `{items, later}`. |
 | `zmina todo yes <id>` | take a decision's recommendation. |
 | `zmina todo done <id>` | a check (or a decision) is dealt with. |
 | `zmina todo answer <id> <text...>` | answer an ask or a waiting task (`T-62`) in the owner's words. |
 | `zmina todo park <id>` | put it on the parked list (an ask becomes `L-n`, "from A-3"); for a waiting task the dispatcher hears `T-62 · later`. |
+| `zmina todo ignore <id>` | set it aside for good: an ask closes with no parked entry; a waiting task only leaves the todo (until it changes), the task stays as it is. The dispatcher hears `A-3 · ignored`. |
 
 Every answer — from these commands or the ui page — closes the ask (a waiting task keeps its state) and queues a
 note for the dispatcher like `zmina note`: `hand: A-3 · yes: <rec> — <text>`, `ui: T-62 · <words>`,
@@ -272,15 +285,30 @@ role that asked, moves a waiting task on. Event `answered` in the log.
 
 ## The ui page
 
-`zmina ui [--addr 127.0.0.1:7517] [--no-open]` serves one live page for **every crew** under `~/.zmina`
-(`crew.yaml` and each `<name>/crew.yaml`, looked up again on every refresh, so a new crew shows without a restart)
-and opens it in the browser. A second `zmina ui` opens the one already running. Per crew: the ticker beat, a
-summary (working · waiting on you · idle), each up role with its state, time, context, tasks, its `now` line and
-its task's last milestone; down roles fold into one line. Above the crews, the todo of every crew as one list,
-each item tagged with its crew; Yes / Done / Answer… / Later on an item go, after a 5 s Undo, to that crew's
-dispatcher only. Below: open and waiting tasks, recent events, the parked list (Bring back: a note to the
-dispatcher; Drop: `later drop`). A role's screen opens on click (the last 30 lines, refreshed every 2 s). The page
-never types into a role.
+`zmina ui [--addr 127.0.0.1:7517] [--no-open] [--lang ru|en]` serves one live page for **every crew** under
+`~/.zmina` (`crew.yaml` and each `<name>/crew.yaml`, looked up again on every refresh, so a new crew shows without a
+restart) and opens it in the browser. A second `zmina ui` opens the one already running. One screen, top to bottom
+by what a delay costs:
+
+- one sentence on top: «you hold N · answer N · going N · parked N» (red once anyone has waited on you an hour), a
+  crew switch, and a ticker that stopped in any crew;
+- **you hold** — what stands until the owner answers: tasks `waiting` on the owner and asks with `--blocks`, the
+  longest first, each with who waits; a tap on the row opens the reply;
+- **answer** — the other asks, one row each (title, age, the recommendation as a chip that takes it), six then
+  «more»; checks as one line «by hand: …», each opening its row;
+- **going** — open tasks, and tasks waiting on a role of the crew (`--on <role>`, or answered and back with the
+  dispatcher): the role, the title, the latest `--note`, how long, whom it waits on;
+- **parked** — the whole later list (Bring back: a note to the dispatcher; Drop: `later drop`), older than a week
+  marked;
+- **waiting on others** — tasks waiting `--on` a person, one line per person, open on click;
+- a bottom line with how many tasks were done today and «history», the event log in words, in a drawer.
+
+Rows carry no buttons: a tap (Enter, Space) opens a row's actions under it — the reply field, Later, No; Bring back
+and Drop on a parked one — one row at a time, Esc closes it; from 860 px hovering a row shows them in place. Every
+answer goes, after a 5 s undo, to that item's crew's dispatcher only. Every project gets one of five tints (by
+its name, or `projects: <name>: tint: pN` in the crew file), a rule at the row's left; hovering a row raises its
+project across the page. The page speaks `--lang`, else the locale's language (`ru`, `uk`, `be` → Russian, otherwise
+English); `?lang=ru|en` overrides it in one browser. The page never types into a role.
 
 Bound to 127.0.0.1 by default and only answers requests that name it (`Host`), so another web page cannot read or
 write through the browser. Writes need the page's own header. A non-loopback `--addr` is refused unless
