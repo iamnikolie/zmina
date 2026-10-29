@@ -1,0 +1,66 @@
+# An example crew: a dispatcher that never sleeps, a developer seat, a designer, a reviewer, and a
+# scribe that runs every evening. Copy examples/ to ~/.zmina/example/ and run it as a crew of its
+# own, next to any other: zmina --config example ls. 'zmina skill' has the reference.
+name: example                            # own tmux server (zmina-example) and ticker
+prefix: ex-                              # sessions are ex-dispatcher, ex-dev, ...
+namespace: ~/.claude                     # CLAUDE_CONFIG_DIR every role runs with
+dir: ~/work                              # default working directory: where your repos live
+agents: ~/.zmina/example/agents          # <role>/AGENT.md is each role's boot document
+dispatcher: dispatcher
+stuck_minutes: 90                        # busy longer -> the dispatcher hears of it
+idle_minutes: 30                         # idle with no active task longer -> the dispatcher hears of it
+drop_tools: [Artifact, ArtifactData, ArtifactComments, Workflow, SendFeedback, ScheduleWakeup]  # ~18k tokens a turn no role here uses
+
+roles:
+  dispatcher:
+    about: routes tasks to roles, starts and stops them, watches their health
+    model: sonnet                        # routing is cheap; the seats carry the work
+    context_max: 150k                    # a long shift: /compact once it sits idle past this
+    drop_tools: [Agent]                  # hands work to seats, never to subagents
+
+  dev:
+    about: code in any repo under ~/work — features, bugs, refactors, infra
+    model: opus
+    boot: "read ~/.zmina/example/agents/dev/AGENT.md and boot, then wait for a task from ex-dispatcher"
+    context_max: 200k                    # between tasks: /clear and boot again past this
+    context_action: clear
+    # A second piece of code work at the same time: zmina --config example up dev --as 2
+
+  designer:
+    about: design decisions and reviews — palette, type, layout, components, "this looks off"
+    args: [--chrome]                     # needs a browser to look at pages
+
+  reviewer:
+    about: reviews a branch or a worktree before it merges — correctness, tests, security
+    model: opus
+
+  scribe:
+    about: writes the day's summary from the task ledger and the event log
+    model: haiku
+    schedule: "0 19 * * 1-5"             # weekdays at 19:00 the ticker starts it and types the prompt
+    prompt: write today's summary to ~/work/notes/days/ from 'zmina task ls --all' and 'zmina log --since 12h'
+
+  # A temporary seat for one piece of work; past the date it is reported for removal once down.
+  # Add it with: zmina --config example seat add migration --about "the v2 data migration" --expires 5d
+  # migration:
+  #   about: the v2 data migration, one repo, until it ships
+  #   dir: ~/work/billing
+  #   resume: always                     # keep one conversation across ups
+  #   expires: 2026-12-01
+
+# Watches: detectors the ticker runs; each finds work and queues a note for the dispatcher.
+# watch:
+#   mrs:
+#     kind: gitlab-mr                    # review threads and conflicts on your open MRs, through gl
+#     every: 10m
+#     quiet: 10m                         # wait until the reviewer stopped typing
+#     gl_config: work                    # gl profile
+#   reviews:
+#     kind: gitlab-mr                    # requests, answers and pushes on MRs you review
+#     every: 10m
+#     gl_config: work
+#     reviewer: me
+#   ci-red:
+#     kind: exec                         # any command printing {"key","fingerprint","text"} lines
+#     every: 5m
+#     run: [~/bin/ci-red, --json]

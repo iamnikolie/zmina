@@ -1,0 +1,30 @@
+name: Bug report
+description: Something zmina does wrong
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The command you ran, what you expected, and what you got instead.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `zmina version`, plus your OS, `tmux -V` and `claude --version`.
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: zmina doctor
+      description: >
+        Output of `zmina doctor`, and the crew file or the part of it that matters. Redact paths,
+        prompts and anything private — this is a public issue tracker.
+      render: text
+    validations:
+      required: false

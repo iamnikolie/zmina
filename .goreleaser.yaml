@@ -1,0 +1,72 @@
+version: 2
+
+project_name: zmina
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: zmina
+    binary: zmina
+    main: .
+    env:
+      - CGO_ENABLED=0
+    # tmux plus launchd or systemd: no Windows build.
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+      - -X github.com/iamnikolie/zmina/cmd.version={{ .Version }}
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - README.md
+      - LICENSE
+      - examples/**/*
+      - contrib/*
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - Merge pull request
+
+release:
+  draft: false
+  prerelease: auto
+
+# Formula in iamnikolie/homebrew-tap, rewritten on every tag. Needs the
+# HOMEBREW_TAP_TOKEN secret (fine-grained, contents:write on homebrew-tap only).
+brews:
+  - name: zmina
+    repository:
+      owner: iamnikolie
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    commit_author:
+      name: Mykola Klitovchenko
+      email: mykola.klitovchenko@gmail.com
+    commit_msg_template: "{{ .ProjectName }} {{ .Version }}"
+    homepage: https://github.com/iamnikolie/zmina
+    description: "Long-lived Claude Code role sessions in tmux, kept up by a ticker, with one dispatcher that never sleeps"
+    license: MIT
+    skip_upload: auto
+    dependencies:
+      - name: tmux
+    install: |
+      bin.install "zmina"
+    test: |
+      assert_match(/^zmina version /, shell_output("#{bin}/zmina version"))
