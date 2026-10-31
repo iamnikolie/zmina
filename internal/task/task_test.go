@@ -52,7 +52,7 @@ func TestLegacyWaitingIsWaiting(t *testing.T) {
 	a, err := s.Add(Task{Role: "dev", Asked: "x"}, now)
 	require.NoError(t, err)
 
-	a.State = "waiting-mako"
+	a.State = "waiting-alex"
 	require.NoError(t, s.Put(a))
 
 	got, err := s.Get(a.ID)
@@ -60,7 +60,7 @@ func TestLegacyWaitingIsWaiting(t *testing.T) {
 	assert.Equal(t, Waiting, got.State, "a file written under the old name reads as waiting")
 	assert.Len(t, s.Active(), 1)
 
-	st, err := ParseState("waiting-mako")
+	st, err := ParseState("waiting-alex")
 	require.NoError(t, err)
 	assert.Equal(t, Waiting, st)
 }

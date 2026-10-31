@@ -58,7 +58,7 @@ brews:
     directory: Formula
     commit_author:
       name: Mykola Klitovchenko
-      email: mykola.klitovchenko@gmail.com
+      email: 15090845+iamnikolie@users.noreply.github.com
     commit_msg_template: "{{ .ProjectName }} {{ .Version }}"
     homepage: https://github.com/iamnikolie/zmina
     description: "Long-lived Claude Code role sessions in tmux, kept up by a ticker, with one dispatcher that never sleeps"

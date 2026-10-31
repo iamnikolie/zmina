@@ -24,8 +24,6 @@ const (
 	Open State = "open"
 	// Waiting tasks wait for the owner's answer; the role stays up.
 	Waiting State = "waiting"
-	// legacyWaiting is the name Waiting had first; it is still read and accepted.
-	legacyWaiting State = "waiting-mako"
 	// Done tasks are finished.
 	Done State = "done"
 	// Dropped tasks were given up.
@@ -36,14 +34,19 @@ const (
 var States = []State{Open, Waiting, Done, Dropped}
 
 // Known reports whether the state is one zmina knows.
-func (s State) Known() bool { return slices.Contains(States, s) || s == legacyWaiting }
+func (s State) Known() bool { return slices.Contains(States, s) || s.legacyWaiting() }
+
+// legacyWaiting reports the first name Waiting had, waiting-<owner>: it is still read and accepted as Waiting.
+func (s State) legacyWaiting() bool {
+	return strings.HasPrefix(string(s), string(Waiting)+"-") && len(s) > 8
+}
 
 // Active reports whether the task still holds its role: open, waiting for the owner, or a state this zmina does not
 // know — an unknown state is taken as active, so a scheduled run never starts over work it cannot read.
 func (s State) Active() bool { return s != Done && s != Dropped }
 
 func (s State) normalize() State {
-	if s == legacyWaiting {
+	if s.legacyWaiting() {
 		return Waiting
 	}
 
@@ -52,7 +55,7 @@ func (s State) normalize() State {
 
 // ParseState checks a state name.
 func ParseState(s string) (State, error) {
-	if State(s) == legacyWaiting {
+	if State(s).legacyWaiting() {
 		return Waiting, nil
 	}
 

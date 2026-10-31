@@ -1171,7 +1171,9 @@ function taskChange(detail) {
   for (;;) {
     const i = rest.indexOf(", ");
     const head = i < 0 ? rest : rest.slice(0, i);
-    if (["open", "waiting", "waiting-mako", "done", "dropped"].includes(head)) state = head;
+    // waiting-<owner> is the first name of waiting, still in old logs.
+    if (["open", "waiting", "done", "dropped"].includes(head)) state = head;
+    else if (head.startsWith("waiting-")) state = "waiting";
     else if (head.startsWith("on ")) on = head.slice(3);
     else if (!head.startsWith("role ")) {
       if (rest.startsWith("note: ")) {
@@ -1199,7 +1201,7 @@ function feedLine(e, answered) {
     case "task": {
       if (d.startsWith("new: ")) { text = W.ev.new + (title || d.slice(5)); break; }
       const { state, note, on } = taskChange(d);
-      if (state === "waiting" || state === "waiting-mako") text = (on ? W.ev.waitingWho(on) : W.ev.waitingOn) + (note || title);
+      if (state === "waiting") text = (on ? W.ev.waitingWho(on) : W.ev.waitingOn) + (note || title);
       else if (state === "done") text = W.ev.done + ": " + (note || title);
       else if (state === "dropped") text = W.ev.dropped + ": " + (note || title);
       else if (note) text = note;

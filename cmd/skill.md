@@ -272,7 +272,7 @@ Watches are edited by hand in the crew file. Log events: `watch-run`, `watch-not
 One file per task in `~/.zmina/tasks/T-<n>.json`. States: `open` (handed, in work), `waiting`
 (the role waits for the owner; it stays up), `done`, `dropped`. "Active" = open or waiting (and a
 state this zmina does not know, so nothing runs over it). The first name of `waiting`,
-`waiting-mako`, is still read and accepted. A new task is numbered above every `T-<n>.json` in the
+`waiting-<owner>`, is still read and accepted. A new task is numbered above every `T-<n>.json` in the
 directory, readable or not, and never replaces a file; `task ls` and `doctor` name damaged files.
 
 | Command | Does |
