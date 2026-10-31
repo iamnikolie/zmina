@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -49,6 +50,18 @@ func TestTellOnThisNode(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "node laptop · owner · crews: default, ops\n", out)
 
-	_, _, err = zm(t, def, "node", "peer", "add", "box", "--ssh", "-oProxyCommand=x")
+	// A node with one crew and no default crew file signs with that crew, no --config needed.
+	require.NoError(t, os.Remove(def))
+
+	root := NewRoot(io.Discard, io.Discard)
+	root.SetArgs([]string{"tell", "laptop/ops", "from the only crew"})
+	t.Setenv("ZMINA_CREW", "")
+	require.NoError(t, root.Execute())
+
+	st, err = shift.Read(filepath.Dir(ops))
+	require.NoError(t, err)
+	assert.Contains(t, st.Signals, "laptop/ops: from the only crew")
+
+	_, _, err = zm(t, ops, "node", "peer", "add", "box", "--ssh", "-oProxyCommand=x")
 	require.Error(t, err, "an ssh address is never an option")
 }

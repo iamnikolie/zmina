@@ -616,10 +616,16 @@ func (a *app) crewKey() string {
 		path = abs
 	}
 
-	for _, c := range uiCrews("") {
+	crews := uiCrews("")
+	for _, c := range crews {
 		if c.Path == path {
 			return c.Key
 		}
+	}
+
+	// No crew named and no default crew here: the node's only crew.
+	if a.crew == "" && a.config == "" && os.Getenv("ZMINA_CREW") == "" && len(crews) == 1 {
+		return crews[0].Key
 	}
 
 	return strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
