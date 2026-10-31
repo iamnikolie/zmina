@@ -515,8 +515,8 @@ func (n *Node) receive(envs []Envelope, deliver Deliver, now time.Time) ([]strin
 	return ids, errors.Join(append(errs, err)...)
 }
 
-// ErrRefused is a delivery this node will never take (the sender may not reach that crew): the giver drops the
-// envelope instead of trying again.
+// ErrRefused is a delivery this node will never take (no such crew here): the giver drops the envelope instead of
+// trying again.
 var ErrRefused = errors.New("refused")
 
 // admit checks an envelope before it is taken: the writer's signature, its size, its age, and that its

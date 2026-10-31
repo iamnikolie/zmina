@@ -253,8 +253,8 @@ func (s *Shift) trim(name string, r *crew.Role, now time.Time, tasks []string) s
 		return fmt.Sprintf("%s: /%s (%s): %s", name, do, detail, err)
 	}
 
-	if do == crew.ContextClear && r.Boot != "" {
-		rs.Inbox = append(rs.Inbox, r.Boot)
+	if boot := s.BootText(r); do == crew.ContextClear && boot != "" {
+		rs.Inbox = append(rs.Inbox, boot)
 	}
 
 	event := "compacted"
