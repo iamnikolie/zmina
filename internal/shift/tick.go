@@ -537,7 +537,23 @@ func (s *Shift) ready(name string, now time.Time) bool {
 func (s *Shift) deliver(now time.Time) string {
 	d := s.Crew.Dispatcher
 
-	parts := append(slices.Clone(s.State.Signals), s.State.Notes...)
+	// A line from another crew goes as a line of its own, never joined with this crew's signals and notes: one
+	// per beat, after them.
+	var local, remote []string
+
+	for _, sig := range s.State.Signals {
+		if IsRemote(sig) {
+			remote = append(remote, sig)
+		} else {
+			local = append(local, sig)
+		}
+	}
+
+	parts := append(local, s.State.Notes...)
+	if len(parts) == 0 && len(remote) > 0 {
+		parts = remote[:1]
+	}
+
 	// A line queued for the dispatcher itself goes first: after a clear it is the boot line, and the signals
 	// belong to a dispatcher that knows its job.
 	if len(parts) == 0 || len(s.State.Role(d).Inbox) > 0 || !s.ready(d, now) || !s.landed(d, now) {
@@ -551,12 +567,19 @@ func (s *Shift) deliver(now time.Time) string {
 
 	s.State.Role(d).Sent = &Sent{Line: line, At: now}
 
-	s.State.Signals, s.State.Notes = nil, nil
+	if len(local)+len(s.State.Notes) > 0 {
+		s.State.Signals, s.State.Notes = remote, nil
+	} else {
+		s.State.Signals = slices.Clone(remote[1:])
+	}
 	s.Told = true
 	s.log(d, "told", "", line)
 
 	return line
 }
+
+// IsRemote reports a signal from another crew (zmina tell): its source starts with "remote ".
+func IsRemote(signal string) bool { return strings.HasPrefix(signal, "remote ") }
 
 // Deliver types the waiting queue into the dispatcher when it is up, booted and idle, and returns the line.
 func (s *Shift) Deliver() string { return s.deliver(s.Now()) }

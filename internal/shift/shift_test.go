@@ -821,6 +821,33 @@ func TestNoteDropsControlCharacters(t *testing.T) {
 	assert.Len(t, []rune(f.s.State.Signals[1]), len("w: ")+noteMax, "a note is capped")
 }
 
+// A line from another crew is typed as a line of its own, never joined with this crew's signals and notes.
+func TestRemoteSignalsGoAlone(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	f.s.Tick()
+	f.status("dispatcher", "idle", *f.now)
+
+	for _, n := range [][2]string{{"remote a/x", "«one»"}, {"mr-watch", "!35"}, {"remote b/y", "«two»"}} {
+		_, err := f.s.Note(n[0], n[1], false)
+		require.NoError(t, err)
+	}
+
+	*f.now = f.now.Add(bootPause)
+
+	for range 3 {
+		f.s.Tick()
+		*f.now = f.now.Add(time.Minute)
+		f.status("dispatcher", "idle", *f.now)
+	}
+
+	typed := f.tm.typed["dispatcher"]
+	require.Len(t, typed, 3)
+	assert.NotContains(t, typed[0], "remote")
+	assert.Equal(t, "[zmina] remote a/x: «one»", typed[1])
+	assert.Equal(t, "[zmina] remote b/y: «two»", typed[2])
+	assert.Empty(t, f.s.State.Signals)
+}
+
 func TestNoteIfUp(t *testing.T) {
 	f := fixtureWith(t, crewYAML)
 
