@@ -560,6 +560,11 @@ func (s *Shift) deliver(now time.Time) string {
 		return ""
 	}
 
+	// Never into a draft: the owner's half-typed words would go out joined with the line.
+	if draft, ok, err := s.Tmux.Prompt(d); err == nil && ok && draft != "" {
+		return ""
+	}
+
 	line := "[zmina] " + strings.Join(parts, " · ")
 	if err := s.Tmux.Type(d, line); err != nil {
 		return ""

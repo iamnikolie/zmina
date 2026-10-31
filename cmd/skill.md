@@ -87,7 +87,7 @@ the role's add up.
 | `zmina down <role...>` / `--all` | types `/exit` (session-end hooks run), kills after 15 s; the wait happens outside the lock, so other commands and the ticker are not held up. `/exit` goes only into an empty input line: a draft there (it would be sent with `/exit`) or a dialog (its Enter would pick the highlighted answer) refuses the down, exit 1, nothing pressed. `--clear` drops the draft (C-c; BSpace and End do not clear it) or closes the dialog (Escape) first, then `/exit`; a screen Escape leaves without an input line gets C-c C-c in one call. Claude Code's "Background work is running" question on exit is answered "Exit and stop tasks". The dispatcher needs `--force`. |
 | `zmina restart <role>` | down + up: a new session under the same name. A draft or a dialog refuses it as with `down`; `--clear` too. |
 | `zmina send <role> <text>` | type one line into a role's prompt and press Enter. Text that starts with `-` goes after `--`: `zmina send dev -- '- item'`. `--when-idle` queues it instead: the ticker types it the first time the role is up, booted and idle (one queued line per minute). For a message between sessions prefer `SendMessage({to: "<prefix><role>"})`. |
-| `zmina peek <role> [-n 40]` | the last lines of a role's screen, as text — works from an agent, no terminal; also on a `dead` role. |
+| `zmina peek <role> [-n 40]` | the last lines of a role's screen, as text — works from an agent, no terminal; also on a `dead` role. Claude Code's suggested next prompt, dim in an empty input line, shows as `❯ (suggestion) …`: nobody typed it. |
 | `zmina keys <role> <key...>` | press named keys: `Enter Escape Up Down Left Right Tab BTab Space BSpace PageUp PageDown Home End C-c y n 1`–`9`. Text goes with `send`. The keys of one call go in one tmux call: `zmina keys <role> C-c C-c` ends a claude, two separate calls are too slow for its double C-c. |
 | `zmina attach <role>` | attach a terminal (detach: your tmux prefix, then `d`). Needs a TTY; from an agent it prints the command instead. |
 
@@ -115,7 +115,8 @@ line; control characters are dropped and the text is cut at 1000 characters — 
 them, since a control byte typed into a pane is a key). Notes from `zmina note` and the watches are **signals**: a queue of their own, refused at
 intake when 20 wait and never dropped once accepted. The ticker's health notes are a second queue,
 deduplicated and capped at 20 on their own. Once the dispatcher is idle and has been up
-`boot_grace`, everything waiting goes as one line, signals first —
+`boot_grace`, with nothing typed in its input line (a dim suggestion of Claude Code's counts as empty; a draft
+holds the queue until it is sent or cleared), everything waiting goes as one line, signals first —
 `[zmina] mr-watch: !35 — 4 new threads (reviewer X) · dev: ended`. A note still waiting with the
 same source and text is not queued twice; once told, the same note is news again. Event `noted`
 in the log.
@@ -146,10 +147,13 @@ network under it is a transport and an address: today ssh, or any command line t
 | `zmina node sync [--peer <n>]` | one round now. Exit 1 when a peer failed. |
 | `zmina tell <node>[/<crew>] <text>` | one line for that crew's dispatcher (no crew: the node's default crew, or its only one). On this node it is queued at once; for another it is signed, queued in `outbox/`, and handed over now if that peer answers, else by the next round. |
 
-A round (the ticker runs one every minute, whichever crew's ticker comes first; `zmina node sync` by hand): this
-node meets every peer it has an address for — both prove their keys, tell each other the nodes they know (with
+A round (the ticker runs one every minute, whichever crew's ticker comes first, and holds each session open 40 s;
+`zmina node sync` by hand, one exchange): this node meets every peer it has an address for — both prove their keys, tell each other the nodes they know (with
 ssh addresses only: a command line is never told, so a peer cannot make this node run anything), hand over what
-is for the other, and take what the other has. So a laptop that sleeps still gets its lines: it takes them from
+is for the other, and take what the other has. In a held session each pull waits at the peer up to 10 s for
+something for this node, so a line on either side moves within seconds, and nothing moves while there is nothing:
+one ssh session per peer a minute. A line that arrives is typed into the dispatcher at once when it is idle with an
+empty input line, not at the next tick. So a laptop that sleeps still gets its lines: it takes them from
 the server once it wakes. A node with no way to a destination hands the line to a peer that told it reaches
 that node; the destination checks the writer's signature, not the carrier (up to 4 carriers). A line arrives
 as a note for that crew's **dispatcher only** — an address names a node and a crew, never a role, so nothing

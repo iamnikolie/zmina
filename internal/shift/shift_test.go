@@ -33,7 +33,9 @@ type fakeTmux struct {
 	exitSlow bool
 	attached map[string]bool
 	drafts   map[string]string
-	dirs     map[string]string
+	// suggestions are Claude Code's dim suggested prompts in an empty input line.
+	suggestions map[string]string
+	dirs        map[string]string
 	// onType runs for every typed line: a claude that takes a line changes its status.
 	onType func(name string)
 	// draftStays keeps a draft on C-c; dialogStays keeps a dialog on Escape.
@@ -51,6 +53,16 @@ func (f *fakeTmux) Prompt(n string) (string, bool, error) {
 	} else {
 		return d, true, nil
 	}
+}
+
+// Input is Prompt with suggestions["role"] as the dim suggestion of an empty line.
+func (f *fakeTmux) Input(n string) (string, string, bool, error) {
+	d, ok, err := f.Prompt(n)
+	if d != "" || !ok {
+		return d, "", ok, err
+	}
+
+	return "", f.suggestions[n], true, err
 }
 
 func (f *fakeTmux) Has(n string) bool { _, ok := f.up[n]; return ok }
@@ -247,7 +259,7 @@ func fixtureWith(t *testing.T, body string) fix {
 	s := load(t, body)
 	f := fix{
 		s:   s,
-		tm:  &fakeTmux{attached: map[string]bool{}, drafts: map[string]string{}, up: map[string]int{}, dead: map[string]bool{}, typed: map[string][]string{}, keys: map[string][]string{}, argv: map[string][]string{}, probeErr: map[string]error{}},
+		tm:  &fakeTmux{attached: map[string]bool{}, drafts: map[string]string{}, suggestions: map[string]string{}, up: map[string]int{}, dead: map[string]bool{}, typed: map[string][]string{}, keys: map[string][]string{}, argv: map[string][]string{}, probeErr: map[string]error{}},
 		rg:  &fakeReg{byPID: map[int]*registry.Session{}, outside: map[string]*registry.Session{}, context: map[string]int{}, errors: map[string]string{}},
 		tk:  &fakeTasks{},
 		ev:  &fakeEvents{},
@@ -846,6 +858,34 @@ func TestRemoteSignalsGoAlone(t *testing.T) {
 	assert.Equal(t, "[zmina] remote a/x: «one»", typed[1])
 	assert.Equal(t, "[zmina] remote b/y: «two»", typed[2])
 	assert.Empty(t, f.s.State.Signals)
+}
+
+// The queue never goes into a draft: the owner's half-typed words would be sent joined with it.
+func TestDeliverWaitsForAnEmptyInputLine(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	f.s.Tick()
+	*f.now = f.now.Add(bootPause)
+	f.status("dispatcher", "idle", *f.now)
+	f.s.State.Notes = nil
+
+	_, err := f.s.Note("remote a/x", "«one»", false)
+	require.NoError(t, err)
+
+	f.tm.drafts["dispatcher"] = "1. yes 2. no"
+	assert.Empty(t, f.s.Deliver())
+	assert.Len(t, f.s.State.Signals, 1)
+
+	f.tm.drafts["dispatcher"] = ""
+	assert.Equal(t, "[zmina] remote a/x: «one»", f.s.Deliver())
+	assert.Empty(t, f.s.State.Signals)
+}
+
+// peek marks Claude Code's suggested next prompt: without its dim styling it reads like the owner's draft.
+func TestMarkSuggestion(t *testing.T) {
+	screen := "⏺ done\n───\n❯ start the dev server\n───\n  ? for shortcuts"
+	assert.Equal(t, "⏺ done\n───\n❯ (suggestion) start the dev server\n───\n  ? for shortcuts",
+		markSuggestion(screen, "start the dev server"))
+	assert.Equal(t, screen, markSuggestion(screen, "something else"), "only the input line that holds it")
 }
 
 func TestNoteIfUp(t *testing.T) {

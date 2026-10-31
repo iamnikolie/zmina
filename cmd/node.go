@@ -28,8 +28,11 @@ func meshDir() string { return crew.ExpandHome("~/.zmina/mesh") }
 const (
 	// syncEvery is how often the ticker syncs the node; every crew's ticker tries, the first one in a round wins.
 	syncEvery = 50 * time.Second
-	// peerTimeout bounds one session with one peer.
-	peerTimeout = 40 * time.Second
+	// peerTimeout bounds one session with one peer, on top of its hold.
+	peerTimeout = 30 * time.Second
+	// syncHold is how long the ticker's round keeps each session open, its pulls waiting at the peer, so lines move
+	// within seconds: one ssh session per peer per minute, idle while nothing moves, done before the next tick.
+	syncHold = 40 * time.Second
 )
 
 func (a *app) nodeCommand() *cobra.Command {
@@ -473,7 +476,7 @@ func (a *app) nodeSync() *cobra.Command {
 			me.MarkSync()
 
 			ss := me.Sync(cmd.Context(), mesh.Exec{}, []mesh.Discovery{mesh.Book{Node: me}}, a.deliverFrom(), only,
-				peerTimeout, time.Now)
+				peerTimeout, 0, time.Now)
 			if len(ss) == 0 {
 				fmt.Fprintln(a.out, "no peer with an address")
 			}
@@ -587,18 +590,16 @@ func (a *app) tellCommand() *cobra.Command {
 				return err
 			}
 
-			// Try to hand it over now; the ticker tries again every minute.
-			if release, ok := me.TrySync(); ok {
-				ss := me.Sync(cmd.Context(), mesh.Exec{}, []mesh.Discovery{mesh.Book{Node: me}}, a.deliverFrom(),
-					to.Node, peerTimeout, time.Now)
-				release()
+			// Hand it over now, beside a round the ticker may hold open (a second copy is taken once); the ticker
+			// tries again within seconds otherwise.
+			ss := me.Sync(cmd.Context(), mesh.Exec{}, []mesh.Discovery{mesh.Book{Node: me}}, a.deliverFrom(),
+				to.Node, peerTimeout, 0, time.Now)
 
-				for _, s := range ss {
-					if s.Err == nil && !queued(me, e.ID) {
-						fmt.Fprintf(a.out, "delivered to %s\n", to)
+			for _, s := range ss {
+				if s.Err == nil && !queued(me, e.ID) {
+					fmt.Fprintf(a.out, "delivered to %s\n", to)
 
-						return nil
-					}
+					return nil
 				}
 			}
 
@@ -677,11 +678,17 @@ func (a *app) deliverHere(key string, from mesh.Address, body string) error {
 	return a.noteFor(c.Path, remoteSource(from), remoteText(body))
 }
 
+// noteFor queues a line for the crew's dispatcher and types the queue at once when it is idle with an empty input
+// line, instead of at the next tick.
 func (a *app) noteFor(path, from, body string) error {
 	return a.forCrew(path).withState(func(s *shift.Shift) error {
-		_, err := s.Note(from, body, false)
+		if _, err := s.Note(from, body, false); err != nil {
+			return err
+		}
 
-		return err
+		s.Deliver()
+
+		return nil
 	})
 }
 
@@ -764,13 +771,13 @@ func (a *app) meshTick() {
 
 	before, _ := me.Peers()
 
-	ctx, cancel := context.WithTimeout(context.Background(), peerTimeout+5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), peerTimeout+syncHold+5*time.Second)
 	defer cancel()
 
 	var lines []string
 
 	for _, s := range me.Sync(ctx, mesh.Exec{}, []mesh.Discovery{mesh.Book{Node: me}}, a.deliverFrom(), "",
-		peerTimeout, time.Now) {
+		peerTimeout, syncHold, time.Now) {
 		was := slices.IndexFunc(before, func(p mesh.Peer) bool { return p.Name == s.Peer })
 
 		switch {

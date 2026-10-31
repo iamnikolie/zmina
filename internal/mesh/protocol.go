@@ -31,6 +31,8 @@ type wire struct {
 	Envs  []Envelope `json:"envs,omitempty"`
 	IDs   []string   `json:"ids,omitempty"`
 	Err   string     `json:"err,omitempty"`
+	// Wait, on a pull, is how many seconds the peer may hold it for something to arrive.
+	Wait int `json:"wait,omitempty"`
 }
 
 type conn struct {
@@ -180,6 +182,18 @@ func (n *Node) Serve(rw io.ReadWriter, deliver Deliver, now func() time.Time) er
 			}
 
 			out := n.handFor(caller, book)
+
+			// A held pull waits here, looking every half second, until something is for the caller.
+			for end := now().Add(time.Duration(min(w.Wait, 60)) * time.Second); len(out) == 0 && now().Before(end); {
+				time.Sleep(pollEvery)
+
+				if book, err = n.Peers(); err != nil {
+					return fail(err)
+				}
+
+				out = n.handFor(caller, book)
+			}
+
 			if err := c.send(wire{Op: "envs", Envs: out}); err != nil {
 				return err
 			}
@@ -200,6 +214,9 @@ func (n *Node) Serve(rw io.ReadWriter, deliver Deliver, now func() time.Time) er
 	}
 }
 
+// pollEvery is how often a held pull looks at the outbox.
+const pollEvery = 500 * time.Millisecond
+
 // sent is the ids acked that were sent: a peer cannot make this node drop an envelope it was not handed.
 func sent(out []Envelope, ids []string) []string {
 	var ok []string
@@ -217,56 +234,102 @@ func sent(out []Envelope, ids []string) []string {
 // node. It returns how many envelopes went each way, and why some were not taken (on either side): those do
 // not fail the session.
 func (n *Node) Call(rw io.ReadWriter, want string, deliver Deliver, now func() time.Time) (out, in int, problems []string, err error) {
+	return n.Hold(rw, want, deliver, now, time.Time{})
+}
+
+// pullWait is how long one pull of a held session waits for something to arrive at the peer.
+const pullWait = 10 * time.Second
+
+// Hold is Call kept open until the time given: it hands over and takes in rounds, each pull waiting up to pullWait
+// at the peer for something for this node, so a line on either side moves within seconds while nothing moves when
+// there is nothing. A zero until is one round.
+func (n *Node) Hold(rw io.ReadWriter, want string, deliver Deliver, now func() time.Time, until time.Time) (out, in int,
+	problems []string, err error,
+) {
 	c := newConn(rw)
 
-	mine, err := nonce()
+	peer, err := n.open(c, want, now)
 	if err != nil {
 		return 0, 0, nil, err
+	}
+
+	for {
+		wait := time.Duration(0)
+		if left := until.Sub(now()); left > time.Second {
+			wait = min(pullWait, left)
+		}
+
+		o, i, p, err := n.round(c, peer, deliver, now, wait)
+		out, in, problems = out+o, in+i, append(problems, p...)
+
+		if err != nil {
+			return out, in, problems, err
+		}
+
+		if wait == 0 {
+			break
+		}
+	}
+
+	_ = c.send(wire{Op: "bye"})
+
+	return out, in, problems, nil
+}
+
+// open is the hello: both sides prove their keys and tell each other the nodes they know. It returns the peer's
+// name.
+func (n *Node) open(c *conn, want string, now func() time.Time) (string, error) {
+	mine, err := nonce()
+	if err != nil {
+		return "", err
 	}
 
 	told, err := n.told()
 	if err != nil {
-		return 0, 0, nil, err
+		return "", err
 	}
 
 	if err := c.send(wire{Op: "hello", V: protocolVersion, Cert: &n.Cert, Nonce: mine, Peers: told}); err != nil {
-		return 0, 0, nil, err
+		return "", err
 	}
 
 	hi, err := c.expect("hello")
 	if err != nil {
-		return 0, 0, nil, err
+		return "", err
 	}
 
 	if hi.Cert == nil {
-		return 0, 0, nil, errors.New("the peer sent no certificate")
+		return "", errors.New("the peer sent no certificate")
 	}
 
 	if err := hi.Cert.Verify(n.Owner); err != nil {
-		return 0, 0, nil, err
+		return "", err
 	}
 
 	if !ed25519.Verify(hi.Cert.Key, helloMessage("server", mine), hi.Sig) {
-		return 0, 0, nil, errors.New("the peer did not prove its key")
+		return "", errors.New("the peer did not prove its key")
 	}
 
 	if want != "" && hi.Cert.Name != want {
-		return 0, 0, nil, fmt.Errorf("this address reaches %s, not %s", hi.Cert.Name, want)
+		return "", fmt.Errorf("this address reaches %s, not %s", hi.Cert.Name, want)
 	}
 
 	if err := c.send(wire{Op: "auth", Sig: ed25519.Sign(n.Key, helloMessage("client", hi.Nonce))}); err != nil {
-		return 0, 0, nil, err
+		return "", err
 	}
 
 	if _, err := c.expect("ok"); err != nil {
-		return 0, 0, nil, err
+		return "", err
 	}
 
-	peer := hi.Cert.Name
-	if err := n.met(*hi.Cert, hi.Peers, now()); err != nil {
-		return 0, 0, nil, err
-	}
+	return hi.Cert.Name, n.met(*hi.Cert, hi.Peers, now())
+}
 
+// round hands the peer what is for it, then takes what it has for this node, the pull waiting up to wait at the
+// peer for something to come.
+func (n *Node) round(c *conn, peer string, deliver Deliver, now func() time.Time, wait time.Duration) (out, in int,
+	problems []string, err error,
+) {
 	book, err := n.Peers()
 	if err != nil {
 		return 0, 0, nil, err
@@ -291,7 +354,9 @@ func (n *Node) Call(rw io.ReadWriter, want string, deliver Deliver, now func() t
 		}
 	}
 
-	if err := c.send(wire{Op: "pull"}); err != nil {
+	start := now()
+
+	if err := c.send(wire{Op: "pull", Wait: int(wait / time.Second)}); err != nil {
 		return out, 0, problems, err
 	}
 
@@ -313,7 +378,12 @@ func (n *Node) Call(rw io.ReadWriter, want string, deliver Deliver, now func() t
 		return out, len(ids), problems, err
 	}
 
-	_ = c.send(wire{Op: "bye"})
+	// A peer that does not wait (an older zmina) answers at once: wait here instead of asking again at once.
+	if len(got.Envs) == 0 && wait > 0 {
+		if left := wait - now().Sub(start); left > 0 {
+			time.Sleep(left)
+		}
+	}
 
 	return out, len(ids), problems, nil
 }
@@ -551,9 +621,10 @@ type Book struct{ Node *Node }
 func (b Book) Peers(context.Context) ([]Peer, error) { return b.Node.Peers() }
 
 // Sync runs one session with every peer the discoveries name that has an address, side by side, each within
-// timeout, and records how each went in the book. only, when set, limits it to that peer.
+// timeout (plus hold), and records how each went in the book. only, when set, limits it to that peer. hold keeps
+// each session open that long (Hold), so what comes on either side meanwhile moves within seconds.
 func (n *Node) Sync(ctx context.Context, t Transport, ds []Discovery, deliver Deliver, only string,
-	timeout time.Duration, now func() time.Time,
+	timeout, hold time.Duration, now func() time.Time,
 ) []Session {
 	var peers []Peer
 
@@ -586,7 +657,7 @@ func (n *Node) Sync(ctx context.Context, t Transport, ds []Discovery, deliver De
 		go func() {
 			defer wg.Done()
 
-			out[i] = n.session(ctx, t, p, deliver, timeout, now)
+			out[i] = n.session(ctx, t, p, deliver, timeout, hold, now)
 		}()
 	}
 
@@ -596,7 +667,7 @@ func (n *Node) Sync(ctx context.Context, t Transport, ds []Discovery, deliver De
 }
 
 // session tries the peer's addresses in turn until one holds a whole session.
-func (n *Node) session(ctx context.Context, t Transport, p Peer, deliver Deliver, timeout time.Duration,
+func (n *Node) session(ctx context.Context, t Transport, p Peer, deliver Deliver, timeout, hold time.Duration,
 	now func() time.Time,
 ) Session {
 	s := Session{Peer: p.Name}
@@ -604,7 +675,7 @@ func (n *Node) session(ctx context.Context, t Transport, p Peer, deliver Deliver
 	for _, a := range p.Addrs {
 		s.Addr = a.String()
 
-		s.Out, s.In, s.Problems, s.Err = n.callAt(ctx, t, a, p.Name, deliver, timeout, now)
+		s.Out, s.In, s.Problems, s.Err = n.callAt(ctx, t, a, p.Name, deliver, timeout, hold, now)
 		if s.Err == nil {
 			break
 		}
@@ -630,9 +701,9 @@ func (n *Node) session(ctx context.Context, t Transport, p Peer, deliver Deliver
 }
 
 func (n *Node) callAt(ctx context.Context, t Transport, a Addr, want string, deliver Deliver,
-	timeout time.Duration, now func() time.Time,
+	timeout, hold time.Duration, now func() time.Time,
 ) (int, int, []string, error) {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout+hold)
 	defer cancel()
 
 	rw, err := t.Dial(ctx, a)
@@ -640,7 +711,12 @@ func (n *Node) callAt(ctx context.Context, t Transport, a Addr, want string, del
 		return 0, 0, nil, err
 	}
 
-	out, in, problems, err := n.Call(rw, want, deliver, now)
+	until := time.Time{}
+	if hold > 0 {
+		until = now().Add(hold)
+	}
+
+	out, in, problems, err := n.Hold(rw, want, deliver, now, until)
 	// The command's own last word (ssh's, the peer's zmina's) says more than a broken stream.
 	if cerr := rw.Close(); err != nil && cerr != nil {
 		err = cerr

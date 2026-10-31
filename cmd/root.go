@@ -322,6 +322,15 @@ func (l *lazyTmux) Prompt(name string) (string, bool, error) {
 	return c.Prompt(name)
 }
 
+func (l *lazyTmux) Input(name string) (string, string, bool, error) {
+	c, err := l.client()
+	if err != nil {
+		return "", "", false, err
+	}
+
+	return c.Input(name)
+}
+
 func (l *lazyTmux) KeepScreens(name string) error {
 	c, err := l.client()
 	if err != nil {

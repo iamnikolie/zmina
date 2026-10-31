@@ -264,14 +264,23 @@ var sgr = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 // selected answer and has none above it. A dimmed placeholder counts as empty; a draft that starts with an empty
 // line is read from its first line that is not.
 func (c *Client) Prompt(name string) (draft string, ok bool, err error) {
+	draft, _, ok, err = c.Input(name)
+
+	return draft, ok, err
+}
+
+// Input reads the role's input line: what is typed there (draft) and Claude Code's suggested next prompt, which it
+// shows dim in an empty line (suggestion). Only text that is neither dim nor reversed (the drawn cursor) is typed
+// text; a line that holds a suggestion alone is empty. ok is false when no input line shows.
+func (c *Client) Input(name string) (draft, suggestion string, ok bool, err error) {
 	id, err := c.target(name)
 	if err != nil {
-		return "", false, err
+		return "", "", false, err
 	}
 
 	out, err := c.run("capture-pane", "-p", "-e", "-t", id)
 	if err != nil {
-		return "", false, err
+		return "", "", false, err
 	}
 
 	lines := strings.Split(out, "\n")
@@ -282,13 +291,10 @@ func (c *Client) Prompt(name string) (draft string, ok bool, err error) {
 		}
 
 		rest := lines[i][strings.Index(lines[i], "❯")+len("❯"):]
-		// Claude Code puts a no-break space after the ❯.
-		if strings.HasPrefix(strings.TrimLeftFunc(rest, unicode.IsSpace), "\x1b[2m") {
-			return "", true, nil
-		}
+		suggestion = strings.TrimSpace(sgr.ReplaceAllString(rest, ""))
 
-		if draft := strings.TrimSpace(sgr.ReplaceAllString(rest, "")); draft != "" {
-			return draft, true, nil
+		if draft := ownText(rest); draft != "" {
+			return draft, "", true, nil
 		}
 
 		for _, l := range lines[i+1:] {
@@ -297,15 +303,56 @@ func (c *Client) Prompt(name string) (draft string, ok bool, err error) {
 				break
 			}
 
-			if plain != "" {
-				return plain, true, nil
+			if own := ownText(l); own != "" {
+				return own, "", true, nil
 			}
 		}
 
-		return "", true, nil
+		return "", suggestion, true, nil
 	}
 
-	return "", false, nil
+	return "", "", false, nil
+}
+
+// ownText is the text of a captured line that is neither dim (SGR 2, a suggestion or a placeholder) nor reversed
+// (SGR 7, the cursor Claude Code draws), trimmed.
+func ownText(line string) string {
+	var (
+		b        strings.Builder
+		dim, rev bool
+		last     int
+	)
+
+	keep := func(seg string) {
+		if !dim && !rev {
+			b.WriteString(seg)
+		}
+	}
+
+	for _, m := range sgr.FindAllStringIndex(line, -1) {
+		keep(line[last:m[0]])
+
+		for _, p := range strings.Split(line[m[0]+2:m[1]-1], ";") {
+			switch p {
+			case "", "0":
+				dim, rev = false, false
+			case "2":
+				dim = true
+			case "22":
+				dim = false
+			case "7":
+				rev = true
+			case "27":
+				rev = false
+			}
+		}
+
+		last = m[1]
+	}
+
+	keep(line[last:])
+
+	return strings.TrimSpace(b.String())
 }
 
 // underRule reports whether the nearest non-empty line at the end of above is a rule.

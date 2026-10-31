@@ -171,6 +171,8 @@ func TestPrompt(t *testing.T) {
 		"placeholder": `printf '───\n❯ \033[2mTry "fix lint errors"\033[0m\n───\n'`,
 		"multiline":   `printf '───\n❯ \n  second line\n───\n'`,
 		"nbsp":        `printf '───\n\033[39m❯\302\240\033[2mTry "how does <filepath> work?"\033[0m\n───\n'`,
+		"cursor":      `printf '───\n\033[39m❯\302\240\033[7mп\033[27m\033[2mодними dev-сервер\033[0m\n───\n'`,
+		"typed":       `printf '───\n\033[39m❯\302\240закрывай\033[7m \033[27m\n───\n'`,
 		"dialog":      `printf 'Do you trust this folder?\n 1. Yes\n 2. No\n'`,
 		"trust":       `printf '───\n Accessing workspace:\n\n ❯ No, exit\n   Yes, I trust this folder\n\n Enter to confirm\n'`,
 	}
@@ -183,7 +185,8 @@ func TestPrompt(t *testing.T) {
 		draft string
 		ok    bool
 	}{"empty": {"", true}, "draft": {"half a thought", true}, "placeholder": {"", true},
-		"multiline": {"second line", true}, "nbsp": {"", true}, "dialog": {"", false}, "trust": {"", false}}
+		"multiline": {"second line", true}, "nbsp": {"", true}, "cursor": {"", true}, "typed": {"закрывай", true},
+		"dialog": {"", false}, "trust": {"", false}}
 
 	for name, w := range want {
 		eventually(t, func() bool {

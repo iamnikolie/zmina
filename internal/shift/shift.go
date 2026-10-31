@@ -56,6 +56,8 @@ type Tmux interface {
 	Attached(name string) (bool, error)
 	// Prompt reads the role's input line: what is typed into it, and whether it is on screen at all.
 	Prompt(name string) (draft string, ok bool, err error)
+	// Input is Prompt with Claude Code's suggested next prompt, which shows dim in an empty input line.
+	Input(name string) (draft, suggestion string, ok bool, err error)
 }
 
 // Registry is Claude Code's session registry of the crew's namespace.
@@ -920,7 +922,32 @@ func (s *Shift) Peek(name string, lines int) (string, error) {
 		return "", fmt.Errorf("%s: %w", name, ErrNotUp)
 	}
 
-	return s.Tmux.Capture(name, lines)
+	text, err := s.Tmux.Capture(name, lines)
+	if err != nil {
+		return "", err
+	}
+
+	if _, sug, ok, err := s.Tmux.Input(name); err == nil && ok && sug != "" {
+		text = markSuggestion(text, sug)
+	}
+
+	return text, nil
+}
+
+// markSuggestion marks Claude Code's suggested next prompt on a captured screen (`❯ (suggestion) …`): once the
+// styling is gone it reads like typed text, and nobody typed it.
+func markSuggestion(text, sug string) string {
+	lines := strings.Split(text, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		before, after, found := strings.Cut(lines[i], "❯")
+		if found && strings.TrimSpace(before) == "" && strings.TrimSpace(after) == sug {
+			lines[i] = before + "❯ (suggestion) " + sug
+
+			break
+		}
+	}
+
+	return strings.Join(lines, "\n")
 }
 
 // Stop stops the shift: from now on the ticker starts nothing — no keep: always role, no scheduled run — until Start.

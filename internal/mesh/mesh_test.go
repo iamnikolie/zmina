@@ -140,7 +140,7 @@ func trio(t *testing.T) (*pipes, *Node, *Node, *Node) {
 }
 
 func sync1(n *Node, p *pipes) []Session {
-	return n.Sync(context.Background(), p, []Discovery{Book{n}}, p.inboxes[n.Name].deliver, "", 5*time.Second, time.Now)
+	return n.Sync(context.Background(), p, []Discovery{Book{n}}, p.inboxes[n.Name].deliver, "", 5*time.Second, 0, time.Now)
 }
 
 func TestDirectBothWays(t *testing.T) {
@@ -332,4 +332,35 @@ func TestOldOrHugeEnvelopesAreDropped(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, []string{old.ID}, ids)
 	assert.Empty(t, p.inboxes["box-ops"].list())
+}
+
+// A held session takes a line the peer queues meanwhile within a second, without a second session.
+func TestHeldSessionTakesALineWithinSeconds(t *testing.T) {
+	p, laptop, ops, _ := trio(t)
+
+	done := make(chan []Session)
+	start := time.Now()
+
+	go func() {
+		done <- laptop.Sync(context.Background(), p, []Discovery{Book{laptop}}, p.inboxes["laptop"].deliver,
+			"box-ops", 5*time.Second, 3*time.Second, time.Now)
+	}()
+
+	time.Sleep(700 * time.Millisecond)
+	tell(t, ops, "ops", "laptop", "answer")
+
+	var got time.Duration
+
+	require.Eventually(t, func() bool {
+		got = time.Since(start)
+
+		return len(p.inboxes["laptop"].list()) == 1
+	}, 3*time.Second, 50*time.Millisecond)
+
+	assert.Less(t, got, 2*time.Second, "taken while the session waited, not at the next round")
+
+	ss := <-done
+	require.Len(t, ss, 1)
+	require.NoError(t, ss[0].Err)
+	assert.Equal(t, 1, ss[0].In)
 }
