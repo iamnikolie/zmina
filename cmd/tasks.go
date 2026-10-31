@@ -22,7 +22,8 @@ func (a *app) taskCommand() *cobra.Command {
 	}
 
 	c.AddCommand(a.taskNewCommand(), a.taskLsCommand(), a.taskShowCommand(), a.taskSetCommand(),
-		a.taskCloseCommand("done", task.Done), a.taskCloseCommand("drop", task.Dropped), a.taskGCCommand())
+		a.taskCloseCommand("done", task.Done), a.taskCloseCommand("drop", task.Dropped), a.taskParkCommand(),
+		a.taskGCCommand())
 
 	return c
 }
@@ -91,7 +92,7 @@ func (a *app) taskLsCommand() *cobra.Command {
 
 	c := &cobra.Command{
 		Use:   "ls",
-		Short: "Active tasks (open, waiting); --all also the closed ones",
+		Short: "Active tasks (open, waiting); --all also the closed ones (done, dropped, parked)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.readState(func(s *shift.Shift) error {
@@ -135,7 +136,7 @@ func (a *app) taskLsCommand() *cobra.Command {
 		},
 	}
 
-	c.Flags().BoolVar(&all, "all", false, "also done and dropped tasks")
+	c.Flags().BoolVar(&all, "all", false, "also done, dropped and parked tasks")
 	c.Flags().StringVar(&role, "role", "", "only this role's tasks")
 	c.Flags().BoolVar(&asJSON, "json", false, "JSON output")
 
@@ -261,6 +262,37 @@ func (a *app) taskCloseCommand(use string, st task.State) *cobra.Command {
 	}
 
 	o.flags(c, false)
+
+	return c
+}
+
+func (a *app) taskParkCommand() *cobra.Command {
+	var note string
+
+	c := &cobra.Command{
+		Use:   "park <id>",
+		Short: "Move an active task to the later list with what remains (--note); it closes as parked L-n",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return a.withState(func(s *shift.Shift) error {
+				t, err := taskStore(s.Crew).Get(args[0])
+				if err != nil {
+					return err
+				}
+
+				it, err := s.Park(t, note)
+				if err != nil {
+					return err
+				}
+
+				fmt.Fprintf(a.out, "%s · %s · parked %s\n", t.ID, t.Role, it.ID)
+
+				return nil
+			})
+		},
+	}
+
+	c.Flags().StringVar(&note, "note", "", "what remains, in one or two lines (default: the task's title)")
 
 	return c
 }

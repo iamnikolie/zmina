@@ -28,10 +28,12 @@ const (
 	Done State = "done"
 	// Dropped tasks were given up.
 	Dropped State = "dropped"
+	// Parked tasks were moved to the later list when their role was released; Task.Later names the item.
+	Parked State = "parked"
 )
 
 // States lists every state, in order.
-var States = []State{Open, Waiting, Done, Dropped}
+var States = []State{Open, Waiting, Done, Dropped, Parked}
 
 // Known reports whether the state is one zmina knows.
 func (s State) Known() bool { return slices.Contains(States, s) || s.legacyWaiting() }
@@ -43,7 +45,7 @@ func (s State) legacyWaiting() bool {
 
 // Active reports whether the task still holds its role: open, waiting for the owner, or a state this zmina does not
 // know — an unknown state is taken as active, so a scheduled run never starts over work it cannot read.
-func (s State) Active() bool { return s != Done && s != Dropped }
+func (s State) Active() bool { return s != Done && s != Dropped && s != Parked }
 
 func (s State) normalize() State {
 	if s.legacyWaiting() {
@@ -57,6 +59,10 @@ func (s State) normalize() State {
 func ParseState(s string) (State, error) {
 	if State(s).legacyWaiting() {
 		return Waiting, nil
+	}
+
+	if State(s) == Parked {
+		return "", errors.New("a task is parked with zmina task park, which also puts it on the later list")
 	}
 
 	for _, st := range States {
@@ -99,6 +105,8 @@ type Task struct {
 	// Ignored is when the owner set the waiting task aside on the todo; it stays off the todo until the task
 	// changes, and the task itself is left as it is.
 	Ignored time.Time `json:"ignored,omitzero"`
+	// Later is the later item a parked task became.
+	Later string `json:"later,omitempty"`
 }
 
 // titleMax is how much of the asked text stands in for a missing title.
@@ -118,10 +126,15 @@ func (t Task) Headline() string {
 	return string(r[:titleMax-1]) + "…"
 }
 
-// Status is the task's state, with whom a waiting task waits on when not the owner: "waiting on dev2".
+// Status is the task's state, with whom a waiting task waits on when not the owner ("waiting on dev2") and the
+// item a parked one became ("parked L-15").
 func (t Task) Status() string {
 	if t.State == Waiting && t.On != "" {
 		return string(t.State) + " on " + t.On
+	}
+
+	if t.State == Parked && t.Later != "" {
+		return string(t.State) + " " + t.Later
 	}
 
 	return string(t.State)

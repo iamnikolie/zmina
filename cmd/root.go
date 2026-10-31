@@ -147,6 +147,7 @@ func (a *app) newShift() (*shift.Shift, error) {
 		Reg:    &registry.Registry{Namespace: c.Namespace},
 		State:  shift.NewState(),
 		Tasks:  taskStore(c),
+		Later:  laterStore(c),
 		Events: eventLog(c),
 		Now:    time.Now,
 		Path:   os.Getenv("PATH"),

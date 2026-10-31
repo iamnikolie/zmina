@@ -90,11 +90,14 @@ type Role struct {
 	// (/clear, then
 	// the boot line again: a fresh conversation).
 	ContextAction string `yaml:"context_action"`
+	// ReleaseIdleMinutes overrides the crew's release_idle_minutes for this role: minutes, or off.
+	ReleaseIdleMinutes string `yaml:"release_idle_minutes"`
 
-	schedule   *cron.Schedule
-	expiresAt  time.Time
-	contextMax int
-	dirErr     error
+	schedule    *cron.Schedule
+	expiresAt   time.Time
+	contextMax  int
+	releaseIdle time.Duration
+	dirErr      error
 }
 
 // The values of context_action.
@@ -115,6 +118,13 @@ func (r *Role) ContextDo() string { return or(r.ContextAction, ContextCompact) }
 
 // ContextOff is the context_max value that keeps a role out of the crew's context_max.
 const ContextOff = "off"
+
+// ReleaseOff is the release_idle_minutes value that keeps a role up however long it sits idle.
+const ReleaseOff = "off"
+
+// ReleaseAfter is how long the role may sit idle before the ticker releases it (parks what it holds and puts it
+// down); 0: never. Only a keep: manual role other than the dispatcher is ever released.
+func (r *Role) ReleaseAfter() time.Duration { return r.releaseIdle }
 
 // DirErr says why the role's dir cannot be used (gone, not a directory), nil when it can. The crew still loads
 // with such a role, so one stale seat never stops the ticker; the role itself does not start.
@@ -172,6 +182,9 @@ type Crew struct {
 	StuckMinutes int `yaml:"stuck_minutes"`
 	// IdleMinutes is how long a role may sit idle without an active task before the dispatcher hears of it.
 	IdleMinutes int `yaml:"idle_minutes"`
+	// ReleaseIdleMinutes is how long a keep: manual role may sit idle before the ticker parks what it holds on the
+	// later list and puts it down: minutes, or off (the default).
+	ReleaseIdleMinutes string `yaml:"release_idle_minutes"`
 	// RemoteControl opens every role to Remote Control (claude --remote-control); default true.
 	RemoteControl *bool `yaml:"remote_control"`
 	// BootGrace is how long a started role is left to boot before lines are typed into it (default 2m).
@@ -464,6 +477,20 @@ func (c *Crew) complete() {
 	}
 }
 
+// parseRelease reads release_idle_minutes: empty or off is never, else a whole number of minutes.
+func parseRelease(v string) (time.Duration, error) {
+	if v == "" || v == ReleaseOff {
+		return 0, nil
+	}
+
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("release_idle_minutes %q: a number of minutes, or %s", v, ReleaseOff)
+	}
+
+	return time.Duration(n) * time.Minute, nil
+}
+
 // ownsTools reports whether the role's args already pass --disallowedTools, as crew files before drop_tools did;
 // zmina then adds no second one.
 func (r *Role) ownsTools() bool {
@@ -583,6 +610,11 @@ func (c *Crew) resolve(strict bool) error {
 		return fmt.Errorf("context_max: %w", err)
 	}
 
+	crewRelease, err := parseRelease(c.ReleaseIdleMinutes)
+	if err != nil {
+		return err
+	}
+
 	for _, name := range c.Names() {
 		r := c.Roles[name]
 
@@ -605,6 +637,14 @@ func (c *Crew) resolve(strict bool) error {
 		} else if r.ContextMax != "" {
 			if r.contextMax, err = ParseTokens(r.ContextMax); err != nil {
 				return fmt.Errorf("role %s: context_max: %w", name, err)
+			}
+		}
+
+		r.releaseIdle = crewRelease
+
+		if r.ReleaseIdleMinutes != "" {
+			if r.releaseIdle, err = parseRelease(r.ReleaseIdleMinutes); err != nil {
+				return fmt.Errorf("role %s: %w", name, err)
 			}
 		}
 

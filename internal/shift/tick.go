@@ -36,7 +36,8 @@ const (
 )
 
 // Tick is one beat of the clock: it collects roles that ended (keeping their last screen), starts the always-roles
-// that are down, runs schedules, notes roles busy or idle too long and seats past their expiry, types waiting
+// that are down, runs schedules, notes roles busy or idle too long and seats past their expiry, releases roles idle
+// past release_idle_minutes (Released: the caller finishes those downs), types waiting
 // lines into idle roles and the queue into the dispatcher, and trims conversations past their context_max. A role tmux cannot be asked about is left alone for the
 // beat. It returns what it did, for the log.
 func (s *Shift) Tick() []string {
@@ -121,8 +122,18 @@ func (s *Shift) Tick() []string {
 			notes = append(notes, note)
 		}
 
-		if note := s.idle(name, now, held[name]); note != "" {
+		if note := s.idle(name, r, now, held[name]); note != "" {
 			notes = append(notes, note)
+		}
+
+		if line, note := s.release(name, r, now); line != "" {
+			did = append(did, line)
+
+			if note != "" {
+				notes = append(notes, note)
+			}
+
+			up = up && rs.Up
 		}
 
 		if note := s.expired(name, r, now, up); note != "" {
@@ -465,10 +476,10 @@ func (s *Shift) stuck(name string, now time.Time, tasks []string) string {
 }
 
 // idle notes a role idle longer than idle_minutes without an active task or a waiting line, once per idle stretch:
-// the dispatcher may put it down.
-func (s *Shift) idle(name string, now time.Time, tasks []string) string {
+// the dispatcher may put it down. A role the ticker releases on its own (release_idle_minutes) is not noted.
+func (s *Shift) idle(name string, r *crew.Role, now time.Time, tasks []string) string {
 	rs := s.State.Role(name)
-	if name == s.Crew.Dispatcher || len(tasks) > 0 || len(rs.Inbox) > 0 {
+	if name == s.Crew.Dispatcher || len(tasks) > 0 || len(rs.Inbox) > 0 || s.releases(r) {
 		return ""
 	}
 

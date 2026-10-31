@@ -400,3 +400,24 @@ func TestProjectTints(t *testing.T) {
 	assert.Equal(t, map[string]string{"site": "p2"}, c.Tints())
 	assert.Contains(t, strings.Join(c.Warnings, "\n"), `project app: tint "red" is not one of p1 … p5, ignored`)
 }
+
+func TestReleaseIdleMinutes(t *testing.T) {
+	c, err := Load(write(t, "dir: "+t.TempDir()+"\nroles:\n  dispatcher:\n  dev:\n"))
+	require.NoError(t, err)
+	assert.Zero(t, c.Roles["dev"].ReleaseAfter(), "off by default")
+
+	c, err = Load(write(t, "dir: "+t.TempDir()+"\nrelease_idle_minutes: 30\nroles:\n  dispatcher:\n  dev:\n"+
+		"  scribe:\n    release_idle_minutes: off\n  ops:\n    release_idle_minutes: 90\n"))
+	require.NoError(t, err)
+	assert.Equal(t, 30*time.Minute, c.Roles["dev"].ReleaseAfter(), "the crew's value")
+	assert.Equal(t, 30*time.Minute, c.Roles["dev"].Instance(2).ReleaseAfter(), "a copy keeps its role's")
+	assert.Zero(t, c.Roles["scribe"].ReleaseAfter(), "off")
+	assert.Equal(t, 90*time.Minute, c.Roles["ops"].ReleaseAfter(), "a role's own value wins")
+
+	for _, body := range []string{"release_idle_minutes: soon\nroles:\n  dispatcher:\n",
+		"release_idle_minutes: 0\nroles:\n  dispatcher:\n", "release_idle_minutes: -5\nroles:\n  dispatcher:\n",
+		"roles:\n  dispatcher:\n  dev:\n    release_idle_minutes: 1h\n"} {
+		_, err := Load(write(t, "dir: "+t.TempDir()+"\n"+body))
+		assert.ErrorContains(t, err, "release_idle_minutes", body)
+	}
+}

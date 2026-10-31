@@ -11,6 +11,7 @@ import (
 	"github.com/iamnikolie/zmina/internal/later"
 	"github.com/iamnikolie/zmina/internal/ledger"
 	"github.com/iamnikolie/zmina/internal/shift"
+	"github.com/iamnikolie/zmina/internal/tmux"
 )
 
 func (a *app) laterCommand() *cobra.Command {
@@ -153,15 +154,20 @@ func (a *app) laterCloseCommand(use string, st later.State) *cobra.Command {
 }
 
 func (a *app) laterTakeCommand() *cobra.Command {
-	var n ledger.NewTask
+	var (
+		n      ledger.NewTask
+		resume bool
+	)
 
 	c := &cobra.Command{
-		Use:   "take <id> <role>",
-		Short: "Turn a parked item into a task for a role (--repo, --worktree as in task new) and close it",
-		Args:  cobra.ExactArgs(2),
+		Use: "take <id> <role>",
+		Short: "Turn a parked item into a task for a role (--repo, --worktree as in task new) and close it; " +
+			"--resume starts the role on the conversation it was parked from",
+		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.withState(func(s *shift.Shift) error {
-				if _, err := s.Role(args[1]); err != nil {
+				role := args[1]
+				if _, err := s.Role(role); err != nil {
 					return err
 				}
 
@@ -174,6 +180,12 @@ func (a *app) laterTakeCommand() *cobra.Command {
 
 				if !it.Open() {
 					return fmt.Errorf("%s is already %s", it.ID, laterState(it))
+				}
+
+				if resume {
+					if err := canResume(s, it, role); err != nil {
+						return err
+					}
 				}
 
 				n.Role, n.Asked, n.By = args[1], it.Text, s.By
@@ -202,7 +214,26 @@ func (a *app) laterTakeCommand() *cobra.Command {
 					fmt.Fprintf(a.out, " · repo %s", t.Repo)
 				}
 
-				fmt.Fprintf(a.out, " · %s taken\n", it.ID)
+				fmt.Fprintf(a.out, " · %s taken", it.ID)
+
+				if resume {
+					if err := s.UpWith(role, shift.UpOptions{Resume: it.Session}); err != nil {
+						fmt.Fprintln(a.out)
+
+						return fmt.Errorf("%s recorded, but %s did not start on its conversation: %w", t.ID, role, err)
+					}
+
+					// The resumed conversation knows the work, not the task's new id.
+					if err := s.Queue(role, "[zmina "+t.ID+"] back from "+it.ID+": "+it.Text); err != nil {
+						fmt.Fprintln(a.out)
+
+						return err
+					}
+
+					fmt.Fprintf(a.out, " · %s up on %s", role, it.Session)
+				}
+
+				fmt.Fprintln(a.out)
 
 				return nil
 			})
@@ -213,8 +244,35 @@ func (a *app) laterTakeCommand() *cobra.Command {
 	c.Flags().BoolVar(&n.Worktree, "worktree", false, "give the task its own git worktree and branch zmina/<id>")
 	c.Flags().StringVar(&n.Base, "base", "", "branch or commit the worktree starts from (default: the repo's "+
 		"current branch)")
+	c.Flags().BoolVar(&resume, "resume", false, "start the role (down) on the conversation the item was parked "+
+		"from, and queue it the new task's id")
 
 	return c
+}
+
+// canResume checks that later take --resume can start the role on the item's conversation: the item was parked
+// from a released role, it goes back to that role (or a copy of it: a conversation belongs to its directory), and
+// the role is down.
+func canResume(s *shift.Shift, it later.Item, role string) error {
+	if it.Session == "" {
+		return fmt.Errorf("%s has no conversation to resume: it was not parked from a role's task", it.ID)
+	}
+
+	base := func(name string) string { b, _, _ := strings.Cut(name, "#"); return b }
+	if base(role) != base(it.Role) {
+		return fmt.Errorf("%s was parked from %s; --resume continues it only there", it.ID, it.Role)
+	}
+
+	p, err := s.Tmux.Probe(role)
+	if err != nil {
+		return fmt.Errorf("%s: %w", role, err)
+	}
+
+	if p.State == tmux.Up {
+		return fmt.Errorf("%s is up; --resume starts a role that is down (zmina down %s first)", role, role)
+	}
+
+	return nil
 }
 
 func laterStore(c *crew.Crew) *later.Store {

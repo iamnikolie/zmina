@@ -12,7 +12,8 @@ import (
 
 // SeatKeys are the role keys 'zmina seat set' may change.
 var SeatKeys = []string{"session", "dir", "boot", "keep", "model", "args", "about", "remote_control", "resume",
-	"schedule", "prompt", "expires", "context_max", "context_action", "drop_tools", "keep_tools"}
+	"schedule", "prompt", "expires", "context_max", "context_action", "drop_tools", "keep_tools",
+	"release_idle_minutes"}
 
 // listKeys are the seat keys whose value is a YAML list.
 var listKeys = []string{"args", "drop_tools", "keep_tools"}

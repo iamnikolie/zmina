@@ -18,6 +18,8 @@ zmina ticker install      # the ticker, every minute
 zmina doctor              # check the setup
 zmina ls
 zmina task new dev --repo api --worktree "fix the login"
+zmina task park T-14 --note "tests left"   # what remains goes to the later list (an idle role is released so)
+zmina later take L-3 dev --resume          # back to work, in the role's own conversation
 zmina log --since 12h
 zmina --config ops note --from mr-watch --if-up "!35 — 4 new threads"   # a job signals the dispatcher
 zmina watch ls            # detectors the ticker runs (watch: in the crew file), e.g. GitLab MR reviews

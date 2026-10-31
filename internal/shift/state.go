@@ -103,6 +103,12 @@ type RoleState struct {
 	// has read that line.
 	Now   string    `json:"now,omitempty"`
 	NowAt time.Time `json:"now_at,omitzero"`
+	// Releasing is when the ticker queued the release line for the role (release_idle_minutes): it parks what the
+	// role leaves and puts it down. ReleaseTasks are the tasks the role held then, ReleaseIdle how long it had sat
+	// idle.
+	Releasing    time.Time     `json:"releasing,omitzero"`
+	ReleaseTasks []string      `json:"release_tasks,omitempty"`
+	ReleaseIdle  time.Duration `json:"release_idle,omitempty"`
 	// Sent is the last line typed into the role, until the role shows it took it.
 	Sent *Sent `json:"sent,omitempty"`
 	// Dir is where the role was started when not its crew dir (zmina up --task: the task's worktree); Trusted

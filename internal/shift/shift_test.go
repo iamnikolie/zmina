@@ -13,6 +13,7 @@ import (
 
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/events"
+	"github.com/iamnikolie/zmina/internal/later"
 	"github.com/iamnikolie/zmina/internal/registry"
 	"github.com/iamnikolie/zmina/internal/task"
 	"github.com/iamnikolie/zmina/internal/tmux"
@@ -206,6 +207,37 @@ func (f *fakeTasks) Add(t task.Task, now time.Time) (task.Task, error) {
 	return t, nil
 }
 
+func (f *fakeTasks) Get(id string) (task.Task, error) {
+	for _, t := range f.list {
+		if t.ID == id {
+			return t, nil
+		}
+	}
+
+	return task.Task{}, errors.New("no task " + id)
+}
+
+func (f *fakeTasks) Put(t task.Task) error {
+	for i := range f.list {
+		if f.list[i].ID == t.ID {
+			f.list[i] = t
+
+			return nil
+		}
+	}
+
+	return errors.New("no task " + t.ID)
+}
+
+type fakeLater struct{ list []later.Item }
+
+func (f *fakeLater) Add(it later.Item, now time.Time) (later.Item, error) {
+	it.ID, it.State, it.Created = "L-"+string(rune('1'+len(f.list))), later.Parked, now
+	f.list = append(f.list, it)
+
+	return it, nil
+}
+
 type fakeEvents struct{ list []events.Event }
 
 func (f *fakeEvents) Add(e events.Event) error { f.list = append(f.list, e); return nil }
@@ -235,6 +267,7 @@ type fix struct {
 	tm  *fakeTmux
 	rg  *fakeReg
 	tk  *fakeTasks
+	lt  *fakeLater
 	ev  *fakeEvents
 	now *time.Time
 }
@@ -262,10 +295,11 @@ func fixtureWith(t *testing.T, body string) fix {
 		tm:  &fakeTmux{attached: map[string]bool{}, drafts: map[string]string{}, suggestions: map[string]string{}, up: map[string]int{}, dead: map[string]bool{}, typed: map[string][]string{}, keys: map[string][]string{}, argv: map[string][]string{}, probeErr: map[string]error{}},
 		rg:  &fakeReg{byPID: map[int]*registry.Session{}, outside: map[string]*registry.Session{}, context: map[string]int{}, errors: map[string]string{}},
 		tk:  &fakeTasks{},
+		lt:  &fakeLater{},
 		ev:  &fakeEvents{},
 		now: &now,
 	}
-	s.Tmux, s.Reg, s.Tasks, s.Events, s.State, s.Path = f.tm, f.rg, f.tk, f.ev, NewState(), "/bin"
+	s.Tmux, s.Reg, s.Tasks, s.Later, s.Events, s.State, s.Path = f.tm, f.rg, f.tk, f.lt, f.ev, NewState(), "/bin"
 	s.Now = func() time.Time { return *f.now }
 	s.By = "hand"
 	f.tm.onType = func(n string) {

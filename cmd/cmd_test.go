@@ -467,3 +467,63 @@ func TestNoCrewCommands(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "zmina version dev\n", out)
 }
+
+func TestTaskParkAndResume(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("no tmux")
+	}
+
+	crewFile := testCrew(t, "  dev:\n")
+
+	_, _, err := zm(t, crewFile, "task", "new", "dev", "--title", "faster site", "make the site faster")
+	require.NoError(t, err)
+
+	_, _, err = zm(t, crewFile, "task", "set", "1", "parked")
+	require.ErrorContains(t, err, "zmina task park")
+
+	out, _, err := zm(t, crewFile, "task", "park", "T-1", "--note", "images left; the CSS is done")
+	require.NoError(t, err)
+	assert.Equal(t, "T-1 · dev · parked L-1\n", out)
+
+	out, _, err = zm(t, crewFile, "task", "ls")
+	require.NoError(t, err)
+	assert.Equal(t, "no tasks\n", out, "a parked task holds no role")
+
+	out, _, err = zm(t, crewFile, "task", "ls", "--all")
+	require.NoError(t, err)
+	assert.Contains(t, out, "parked L-1")
+
+	out, _, err = zm(t, crewFile, "later", "ls")
+	require.NoError(t, err)
+	assert.Regexp(t, `^L-1\s+0m\s+images left; the CSS is done · from T-1 \(dev\)\n$`, out)
+
+	_, _, err = zm(t, crewFile, "task", "park", "1")
+	require.ErrorContains(t, err, "T-1 is parked L-1")
+
+	_, _, err = zm(t, crewFile, "later", "take", "1", "dev", "--resume")
+	require.ErrorContains(t, err, "no conversation to resume", "dev was never up: no session id")
+
+	// As a released role's item: the conversation it was parked from.
+	path := filepath.Join(filepath.Dir(crewFile), "later", "L-1.json")
+	raw := strings.Replace(string(mustRead(t, path)), `"role": "dev",`, `"role": "dev", "session": "abc-123",`, 1)
+	require.NoError(t, os.WriteFile(path, []byte(raw), 0o600))
+
+	_, _, err = zm(t, crewFile, "later", "take", "1", "dispatcher", "--resume")
+	require.ErrorContains(t, err, "parked from dev")
+
+	out, _, err = zm(t, crewFile, "later", "take", "1", "dev", "--resume")
+	require.NoError(t, err)
+	assert.Equal(t, "T-2 · dev · L-1 taken · dev up on abc-123\n", out)
+
+	screen := ""
+	for i := 0; i < 40 && !strings.Contains(screen, "--resume abc-123"); i++ {
+		time.Sleep(50 * time.Millisecond)
+		screen, _, _ = zm(t, crewFile, "peek", "dev", "-n", "5")
+	}
+
+	assert.Contains(t, screen, "--resume abc-123")
+
+	out, _, err = zm(t, crewFile, "queue", "ls")
+	require.NoError(t, err)
+	assert.Contains(t, out, "[zmina T-2] back from L-1: images left; the CSS is done")
+}

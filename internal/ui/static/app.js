@@ -1174,6 +1174,7 @@ function taskChange(detail) {
     // waiting-<owner> is the first name of waiting, still in old logs.
     if (["open", "waiting", "done", "dropped"].includes(head)) state = head;
     else if (head.startsWith("waiting-")) state = "waiting";
+    else if (head.startsWith("parked ")) state = "parked";
     else if (head.startsWith("on ")) on = head.slice(3);
     else if (!head.startsWith("role ")) {
       if (rest.startsWith("note: ")) {
@@ -1204,6 +1205,7 @@ function feedLine(e, answered) {
       if (state === "waiting") text = (on ? W.ev.waitingWho(on) : W.ev.waitingOn) + (note || title);
       else if (state === "done") text = W.ev.done + ": " + (note || title);
       else if (state === "dropped") text = W.ev.dropped + ": " + (note || title);
+      else if (state === "parked") text = W.ev.parked + (note || title);
       else if (note) text = note;
       else if (state === "open") text = W.ev.reopened;
       break;

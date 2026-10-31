@@ -26,6 +26,7 @@ agents: ~/.zmina/agents                  # <role>/AGENT.md boot documents (defau
 dispatcher: dispatcher                   # this role is always kept up
 stuck_minutes: 90                        # busy longer -> the dispatcher hears of it
 idle_minutes: 30                         # idle longer with no active task -> the dispatcher hears of it
+release_idle_minutes: 30                 # a keep: manual role idle longer is released: tasks to later, down (default off)
 boot_grace: 2m                           # a started role is left this long before lines are typed into it
 remote_control: true                     # open roles to Remote Control (per role too); default true
 drop_env: [MY_TERMINAL_*]                # variables kept from the roles, on top of the built-in list
@@ -52,6 +53,7 @@ roles:
     expires: 2026-11-01                  # a temporary seat: past it, reported for removal once down
     context_max: 200k                    # conversation fuller than this -> trimmed once idle (150k, 1m; 50k at least; off)
     context_action: clear                # compact (default: /compact) | clear (/clear, then the boot line again)
+    release_idle_minutes: 120            # its own (minutes; off: never released)
   scribe:
     schedule: "0 19 * * 1-5"             # cron: minute hour day-of-month month day-of-week
     prompt: write today's summary        # one line typed at each run
@@ -277,7 +279,8 @@ Watches are edited by hand in the crew file. Log events: `watch-run`, `watch-not
 ## Tasks — the work ledger
 
 One file per task in `~/.zmina/tasks/T-<n>.json`. States: `open` (handed, in work), `waiting`
-(the role waits for the owner; it stays up), `done`, `dropped`. "Active" = open or waiting (and a
+(the role waits for the owner; it stays up), `done`, `dropped`, `parked` (moved to the later list,
+`later: "L-15"` in its file, shown `parked L-15`). "Active" = open or waiting (and a
 state this zmina does not know, so nothing runs over it). The first name of `waiting`,
 `waiting-<owner>`, is still read and accepted. A new task is numbered above every `T-<n>.json` in the
 directory, readable or not, and never replaces a file; `task ls` and `doctor` name damaged files.
@@ -290,6 +293,7 @@ directory, readable or not, and never replaces a file; `task ls` and `doctor` na
 | `zmina task show <id>` | one task with its history from the event log. Ids: `T-14`, `t-14` or `14`. |
 | `zmina task set <id> [state] [--on <who>] [--note …] [--role r] [--title …] [--project …] [--url …]` | change state, note, title, project or url (`-` clears one), or hand it to another role. `waiting --on <who>`: it waits on someone other than the owner — a role of the crew or a person (`--on -`: the owner again); it stays off the owner's todo. Any other state clears it. |
 | `zmina task done <id>` / `task drop <id>` | close it. Refuses while its worktree has uncommitted changes (`--force` closes anyway; the worktree stays). |
+| `zmina task park <id> [--note "<what remains>"]` | move an active task to the later list: a new `L-n` with what remains (default: the task's title), note `from T-48 (designer)`, and the role and its conversation (the running one, else its last) for `later take --resume`. The task closes as `parked L-n`; its worktree stays as it is. `task set <id> parked` is refused: parking goes through here. Prints `T-48 · designer · parked L-15`. |
 | `zmina task gc [--dry-run]` | remove worktrees and branches of closed tasks once clean and merged into their base. `--force` also removes dropped tasks' unmerged branches. |
 
 **What the work is.** `--title` is the work in one short plain sentence in the owner's language ("Landing page —
@@ -402,7 +406,9 @@ Live over server-sent events; the files are inside the binary.
 Decisions and ideas the owner put aside to come back to, held by no role. One file per item in
 `~/.zmina/later/L-<n>.json`, written alone under the state lock like tasks (a damaged file loses one
 item; a new one is numbered above every file). A closed item stays on disk with its state —
-`done`, `dropped`, or `taken` with the task it became — so the link survives.
+`done`, `dropped`, or `taken` with the task it became — so the link survives. An item parked from a
+task (`task park`, a released role) also keeps `from`, `role` and `session`: the task, its role
+and that role's conversation.
 
 | Command | Does |
 |---|---|
@@ -410,6 +416,7 @@ item; a new one is numbered above every file). A closed item stays on disk with 
 | `zmina later ls [--all] [--json]` | what is parked, oldest first: id, age, text (` · note`). `--all`: closed too, with their state. |
 | `zmina later done <id>` / `later drop <id>` | take it off the list (`--note` replaces its note). Ids: `L-3`, `l-3` or `3`. |
 | `zmina later take <id> <role> [--repo r --worktree --base b]` | turn it into a task as `task new` would (asked = its text, note `from L-3: <its note>`) and close it as `taken T-n`. If the task's worktree cannot be made, the item stays parked. |
+| `zmina later take <id> <role> --resume` | the same, and start the role on the conversation the item was parked from (`claude --resume <session>`), with `[zmina T-61] back from L-15: <text>` queued for it. Only for an item parked from a role's task, into that role (or a copy, `dev#2`: a conversation belongs to its directory), while the role is down. Prints `… · L-15 taken · dev2 up on <session>`. |
 
 `zmina ls` ends with `later: N parked` while the list is not empty; nothing else reminds.
 `zmina log --task L-3` shows an item's history; `doctor` names damaged files.
@@ -419,7 +426,7 @@ item; a new one is numbered above every file). A closed item stays on disk with 
 | Command | Does |
 |---|---|
 | `zmina seat add <role> [--about … --dir … --boot … --model … --keep … --args=--chrome,--x --resume always --schedule "…" --prompt "…" --expires 3d]` | add a role. `--expires` takes `12h`, `3d`, a date or a date and time. |
-| `zmina seat set <role> key=value …` | change keys; `key=` removes one. Keys: session, dir, boot, keep, model, args (`[--a, --b]` or `--a,--b`), about, remote_control (`true`/`false`), resume, schedule, prompt, expires, context_max, context_action, drop_tools, keep_tools (lists, like args). |
+| `zmina seat set <role> key=value …` | change keys; `key=` removes one. Keys: session, dir, boot, keep, model, args (`[--a, --b]` or `--a,--b`), about, remote_control (`true`/`false`), resume, schedule, prompt, expires, context_max, context_action, drop_tools, keep_tools (lists, like args), release_idle_minutes. |
 | `zmina seat rm <role>` | remove a role that is down and holds no active task (`--force` despite tasks). |
 
 Every edit keeps the file's comments, is checked by loading it before it is written (a crew that
@@ -474,8 +481,20 @@ alone for the beat — never taken as ended; a role being put down is left alone
    stopped.
 4. Notes: busy past `stuck_minutes` → `<role>: busy for N min on T-14` (once per busy stretch);
    idle past `idle_minutes` with no active task and nothing queued → `<role>: idle for N min, no
-   active task` (once per idle stretch; never for the dispatcher); a temporary seat past `expires`
-   and down → `<role>: seat expired …` (once).
+   active task` (once per idle stretch; never for the dispatcher, nor for a role that is released,
+   below); a temporary seat past `expires` and down → `<role>: seat expired …` (once).
+   **Release**: a `keep: manual` role (not the dispatcher, a scheduled one too) with
+   `release_idle_minutes` (its own, else the crew's; `off` or unset: never) that has sat idle that
+   long — booted, nothing queued for it, its input line on screen and empty (Claude Code's dim
+   suggestion is no draft), no terminal attached — is released. Holding no task, it goes down at
+   once. Holding tasks, it first gets `[zmina] idle 45m: you are released and go down in a few
+   minutes. For each task you hold (T-48, T-50) write what remains in one or two lines: zmina task
+   park <id> --note "<what remains>". Then stop.`; a task it has not parked 3 min later (and once
+   it is idle again) is parked with its title and the role's last status line (`<title>; last:
+   <now>`), and the role goes down. A draft in its input line or a new task for it calls the
+   release off (`release-off` in the log; it is released again after another idle stretch); a
+   dialog or an attached terminal makes it wait. The dispatcher hears `released dev2 after 45m idle
+   → L-15, L-16`; the log has `releasing`, `released` and a `down`.
 5. Watches that are due run (their sources outside the lock), and their news joins the notes.
 6. When the dispatcher is idle and has been up `boot_grace`, the waiting signals and notes are typed
    into it as one line: `[zmina] mr-watch: !35 … · designer: ended · director: busy for 95 min on
@@ -520,6 +539,9 @@ and exists nowhere else. It is written whole (rename) and never over a file zmin
 - The owner parks a decision or an idea for later ("later", "park it", not for any role now):
   `zmina later add "<their words>"`, not a task. When they come back to one: `zmina later take
   L-3 <role> [--repo r --worktree]`.
+- `released dev2 after 45m idle → L-15, L-16`: the ticker put an idle role down and parked its
+  tasks (`release_idle_minutes`). Nothing to do; the work waits on the later list. When the owner
+  takes one back: `zmina later take L-15 dev2 --resume` continues the role's own conversation.
 - A question only the owner can answer, which the owner should not have to dig out of a conversation: `zmina todo
   add "<question>" --rec "<your answer>" --reason "<why>" [--task T-n] [--blocks <role>]`, or a check without
   `--rec`. A note `<source>: A-3 · …` / `T-62 · …` is the owner's answer from `zmina todo` or the ui page: act on

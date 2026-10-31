@@ -15,6 +15,7 @@ import (
 
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/events"
+	"github.com/iamnikolie/zmina/internal/later"
 	"github.com/iamnikolie/zmina/internal/registry"
 	"github.com/iamnikolie/zmina/internal/task"
 	"github.com/iamnikolie/zmina/internal/tmux"
@@ -73,6 +74,13 @@ type Registry interface {
 type Tasks interface {
 	Active() []task.Task
 	Add(t task.Task, now time.Time) (task.Task, error)
+	Get(id string) (task.Task, error)
+	Put(t task.Task) error
+}
+
+// Later is the parked list.
+type Later interface {
+	Add(it later.Item, now time.Time) (later.Item, error)
 }
 
 // Events is the shift's history.
@@ -87,6 +95,7 @@ type Shift struct {
 	Reg    Registry
 	State  *State
 	Tasks  Tasks
+	Later  Later
 	Events Events
 	Now    func() time.Time
 	// Path is the PATH roles start with.
@@ -95,6 +104,9 @@ type Shift struct {
 	By string
 	// Told is set once this shift typed the queue into the dispatcher.
 	Told bool
+	// Released are the roles this shift's tick began to put down (BeginDown); the caller waits for them outside
+	// the lock and finishes the downs.
+	Released []string
 	// Warn reports a problem that must not fail the command (the event log cannot be written); nil is quiet.
 	Warn func(error)
 
@@ -466,6 +478,7 @@ func (s *Shift) start(name string, o UpOptions) error {
 	}
 
 	rs.Started, rs.Up, rs.Downing, rs.Dir = s.Now(), true, time.Time{}, o.Dir
+	rs.Releasing, rs.ReleaseTasks, rs.ReleaseIdle = time.Time{}, nil, 0
 	rs.Sent, rs.NoPrompt, rs.BlockedNoted, rs.Trusted = nil, time.Time{}, false, false
 	rs.Instance = isInstance(name)
 

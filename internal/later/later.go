@@ -39,7 +39,12 @@ type Item struct {
 	// State is parked until the item is closed; an unknown state is taken as parked, so nothing is lost.
 	State State `json:"state"`
 	// Task is the task the item became, when it was taken.
-	Task    string    `json:"task,omitempty"`
+	Task string `json:"task,omitempty"`
+	// From is the task the item was parked from when its role was released, Role that role and Session its
+	// conversation, so later take --resume continues it.
+	From    string    `json:"from,omitempty"`
+	Role    string    `json:"role,omitempty"`
+	Session string    `json:"session,omitempty"`
 	By      string    `json:"by,omitempty"`
 	Created time.Time `json:"created"`
 	Updated time.Time `json:"updated"`
