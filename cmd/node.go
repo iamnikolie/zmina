@@ -344,7 +344,56 @@ func (a *app) nodePeer() *cobra.Command {
 		},
 	}
 
-	c.AddCommand(add, rm)
+	allow := &cobra.Command{
+		Use:   "allow <node> <crew...> | allow <node> -",
+		Short: "Which of this node's crews the peer may reach (default, a config name, * for all; - for none)",
+		Args:  cobra.MinimumNArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			me, err := mesh.Open(meshDir())
+			if err != nil {
+				return err
+			}
+
+			crews := args[1:]
+			if len(crews) == 1 && crews[0] == "-" {
+				crews = nil
+			}
+
+			for _, k := range crews {
+				if k != "*" && !slices.Contains(crewKeys(), k) {
+					return fmt.Errorf("no crew %q here (crews: %s)", k, strings.Join(crewKeys(), ", "))
+				}
+			}
+
+			found := false
+			err = me.UpdatePeers(func(ps []mesh.Peer) []mesh.Peer {
+				for i := range ps {
+					if ps[i].Name == args[0] {
+						ps[i].Allow, found = crews, true
+					}
+				}
+
+				return ps
+			})
+			if err != nil {
+				return err
+			}
+
+			if !found {
+				return fmt.Errorf("no peer %s (zmina node ls)", args[0])
+			}
+
+			if len(crews) == 0 {
+				fmt.Fprintf(a.out, "%s may reach no crew here\n", args[0])
+			} else {
+				fmt.Fprintf(a.out, "%s may reach: %s\n", args[0], strings.Join(crews, ", "))
+			}
+
+			return nil
+		},
+	}
+
+	c.AddCommand(add, rm, allow)
 
 	return c
 }
@@ -426,6 +475,12 @@ func peerLine(p mesh.Peer, now time.Time) string {
 		parts = append(parts, "no way there: it calls in")
 	}
 
+	if len(p.Allow) > 0 {
+		parts = append(parts, "may reach "+strings.Join(p.Allow, ", "))
+	} else {
+		parts = append(parts, "may reach no crew")
+	}
+
 	if p.Cert == nil {
 		parts = append(parts, "not met yet")
 	}
@@ -471,7 +526,7 @@ func (a *app) nodeSync() *cobra.Command {
 
 			me.MarkSync()
 
-			ss := me.Sync(cmd.Context(), mesh.Exec{}, []mesh.Discovery{mesh.Book{Node: me}}, a.deliverHere, only,
+			ss := me.Sync(cmd.Context(), mesh.Exec{}, []mesh.Discovery{mesh.Book{Node: me}}, a.deliverFrom(me), only,
 				peerTimeout, time.Now)
 			if len(ss) == 0 {
 				fmt.Fprintln(a.out, "no peer with an address")
@@ -505,7 +560,12 @@ func sessionLine(s mesh.Session) string {
 		return fmt.Sprintf("%s (%s): failed: %v", s.Peer, s.Addr, s.Err)
 	}
 
-	return fmt.Sprintf("%s: ok · %d out, %d in", s.Peer, s.Out, s.In)
+	line := fmt.Sprintf("%s: ok · %d out, %d in", s.Peer, s.Out, s.In)
+	if len(s.Problems) > 0 {
+		line += " · not taken: " + strings.Join(s.Problems, "; ")
+	}
+
+	return line
 }
 
 func (a *app) nodeServe() *cobra.Command {
@@ -529,7 +589,7 @@ func (a *app) nodeServe() *cobra.Command {
 			// stdout is the session: nothing else may write there.
 			quiet := &app{out: io.Discard, err: a.err}
 
-			return me.Serve(stdioRW{cmd.InOrStdin(), cmd.OutOrStdout()}, quiet.deliverHere, time.Now)
+			return me.Serve(stdioRW{cmd.InOrStdin(), cmd.OutOrStdout()}, quiet.deliverFrom(me), time.Now)
 		},
 	}
 
@@ -583,7 +643,7 @@ func (a *app) tellCommand() *cobra.Command {
 
 			// Try to hand it over now; the ticker tries again every minute.
 			if release, ok := me.TrySync(); ok {
-				ss := me.Sync(cmd.Context(), mesh.Exec{}, []mesh.Discovery{mesh.Book{Node: me}}, a.deliverHere,
+				ss := me.Sync(cmd.Context(), mesh.Exec{}, []mesh.Discovery{mesh.Book{Node: me}}, a.deliverFrom(me),
 					to.Node, peerTimeout, time.Now)
 				release()
 
@@ -641,9 +701,8 @@ func crewKeys() []string {
 	return out
 }
 
-// deliverHere queues a line from another crew for one of this node's crews' dispatcher, as `zmina note --from
-// <node>/<crew>` would. An empty crew is the default crew, or the only one.
-func (a *app) deliverHere(key, from, body string) error {
+// localCrew resolves a crew of this node by the name other nodes use; "" is the default crew, or the only one.
+func localCrew(key string) (uiCrew, error) {
 	crews := uiCrews("")
 
 	i := slices.IndexFunc(crews, func(c uiCrew) bool { return c.Key == key })
@@ -655,14 +714,65 @@ func (a *app) deliverHere(key, from, body string) error {
 	}
 
 	if i < 0 {
-		return fmt.Errorf("no crew %q here (crews: %s)", key, strings.Join(crewKeys(), ", "))
+		return uiCrew{}, fmt.Errorf("no crew %q here (crews: %s)", key, strings.Join(crewKeys(), ", "))
 	}
 
-	return a.forCrew(crews[i].Path).withState(func(s *shift.Shift) error {
+	return crews[i], nil
+}
+
+// deliverHere queues a line from another crew of this node for one of its crews' dispatcher, as `zmina note --from
+// <node>/<crew>` would.
+func (a *app) deliverHere(key, from, body string) error {
+	c, err := localCrew(key)
+	if err != nil {
+		return err
+	}
+
+	return a.noteFor(c.Path, from, body)
+}
+
+func (a *app) noteFor(path, from, body string) error {
+	return a.forCrew(path).withState(func(s *shift.Shift) error {
 		_, err := s.Note(from, body, false)
 
 		return err
 	})
+}
+
+// deliverFrom is how lines from other nodes reach this node's crews: only a crew the owner allowed that node
+// (`zmina node peer allow`), and marked so no body passes for a local source — the source is "mesh <node>/<crew>",
+// which no local watch or role is named, and the body is quoted with the separators it could fake taken out.
+func (a *app) deliverFrom(me *mesh.Node) mesh.Deliver {
+	return func(key, from, body string) error {
+		src, err := mesh.ParseAddress(from)
+		if err != nil {
+			return fmt.Errorf("%w: %v", mesh.ErrRefused, err)
+		}
+
+		c, err := localCrew(key)
+		if err != nil {
+			return fmt.Errorf("%w: %v", mesh.ErrRefused, err)
+		}
+
+		book, err := me.Peers()
+		if err != nil {
+			return err
+		}
+
+		i := slices.IndexFunc(book, func(p mesh.Peer) bool { return p.Name == src.Node })
+		if i < 0 || (!slices.Contains(book[i].Allow, c.Key) && !slices.Contains(book[i].Allow, "*")) {
+			return fmt.Errorf("%w: %s may not reach crew %s on %s (there: zmina node peer allow %s %s)",
+				mesh.ErrRefused, src.Node, c.Key, me.Name, src.Node, c.Key)
+		}
+
+		return a.noteFor(c.Path, "mesh "+src.String(), "«"+quoteSafe(body)+"»")
+	}
+}
+
+// quoteSafe takes out of a remote body what would let it pass for more than one quoted note: the separator of the
+// dispatcher's line and the quotes.
+func quoteSafe(body string) string {
+	return strings.NewReplacer("·", "-", "«", "\"", "»", "\"").Replace(body)
 }
 
 // meshTick is the ticker's part: a sync round at most every syncEvery, by whichever crew's ticker gets there first.
@@ -698,14 +808,14 @@ func (a *app) meshTick() {
 
 	var lines []string
 
-	for _, s := range me.Sync(ctx, mesh.Exec{}, []mesh.Discovery{mesh.Book{Node: me}}, a.deliverHere, "",
+	for _, s := range me.Sync(ctx, mesh.Exec{}, []mesh.Discovery{mesh.Book{Node: me}}, a.deliverFrom(me), "",
 		peerTimeout, time.Now) {
 		was := slices.IndexFunc(before, func(p mesh.Peer) bool { return p.Name == s.Peer })
 
 		switch {
 		case s.Err != nil && (was < 0 || before[was].Err != s.Err.Error()):
 			lines = append(lines, "mesh: "+sessionLine(s))
-		case s.Err == nil && (s.In+s.Out > 0 || (was >= 0 && before[was].Err != "")):
+		case s.Err == nil && (s.In+s.Out+len(s.Problems) > 0 || (was >= 0 && before[was].Err != "")):
 			lines = append(lines, "mesh: "+sessionLine(s))
 		}
 	}

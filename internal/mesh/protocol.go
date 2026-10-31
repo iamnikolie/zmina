@@ -79,7 +79,9 @@ type Session struct {
 	Addr string
 	Out  int
 	In   int
-	Err  error
+	// Problems are envelopes not taken, on this side or the peer's: refused, or a crew that cannot take one now.
+	Problems []string
+	Err      error
 }
 
 // Serve answers one session on r/w: the peer side of `zmina node serve --stdio`.
@@ -161,8 +163,14 @@ func (n *Node) Serve(rw io.ReadWriter, deliver Deliver, now func() time.Time) er
 		case "bye":
 			return nil
 		case "push":
-			ids, _ := n.receive(w.Envs, deliver, now())
-			if err := c.send(wire{Op: "ack", IDs: ids}); err != nil {
+			ids, rerr := n.receive(w.Envs, deliver, now())
+
+			ack := wire{Op: "ack", IDs: ids}
+			if rerr != nil {
+				ack.Err = rerr.Error()
+			}
+
+			if err := c.send(ack); err != nil {
 				return err
 			}
 		case "pull":
@@ -206,100 +214,108 @@ func sent(out []Envelope, ids []string) []string {
 }
 
 // Call runs one session with the peer over rw: hello, then hand it what is for it, then take what it has for this
-// node. It returns how many envelopes went each way.
-func (n *Node) Call(rw io.ReadWriter, want string, deliver Deliver, now func() time.Time) (out, in int, err error) {
+// node. It returns how many envelopes went each way, and why some were not taken (on either side): those do
+// not fail the session.
+func (n *Node) Call(rw io.ReadWriter, want string, deliver Deliver, now func() time.Time) (out, in int, problems []string, err error) {
 	c := newConn(rw)
 
 	mine, err := nonce()
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, nil, err
 	}
 
 	told, err := n.told()
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, nil, err
 	}
 
 	if err := c.send(wire{Op: "hello", V: protocolVersion, Cert: &n.Cert, Nonce: mine, Peers: told}); err != nil {
-		return 0, 0, err
+		return 0, 0, nil, err
 	}
 
 	hi, err := c.expect("hello")
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, nil, err
 	}
 
 	if hi.Cert == nil {
-		return 0, 0, errors.New("the peer sent no certificate")
+		return 0, 0, nil, errors.New("the peer sent no certificate")
 	}
 
 	if err := hi.Cert.Verify(n.Owner); err != nil {
-		return 0, 0, err
+		return 0, 0, nil, err
 	}
 
 	if !ed25519.Verify(hi.Cert.Key, helloMessage("server", mine), hi.Sig) {
-		return 0, 0, errors.New("the peer did not prove its key")
+		return 0, 0, nil, errors.New("the peer did not prove its key")
 	}
 
 	if want != "" && hi.Cert.Name != want {
-		return 0, 0, fmt.Errorf("this address reaches %s, not %s", hi.Cert.Name, want)
+		return 0, 0, nil, fmt.Errorf("this address reaches %s, not %s", hi.Cert.Name, want)
 	}
 
 	if err := c.send(wire{Op: "auth", Sig: ed25519.Sign(n.Key, helloMessage("client", hi.Nonce))}); err != nil {
-		return 0, 0, err
+		return 0, 0, nil, err
 	}
 
 	if _, err := c.expect("ok"); err != nil {
-		return 0, 0, err
+		return 0, 0, nil, err
 	}
 
 	peer := hi.Cert.Name
 	if err := n.met(*hi.Cert, hi.Peers, now()); err != nil {
-		return 0, 0, err
+		return 0, 0, nil, err
 	}
 
 	book, err := n.Peers()
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, nil, err
 	}
 
 	if hand := n.handFor(peer, book); len(hand) > 0 {
 		if err := c.send(wire{Op: "push", Envs: hand}); err != nil {
-			return 0, 0, err
+			return 0, 0, nil, err
 		}
 
 		ack, err := c.expect("ack")
 		if err != nil {
-			return 0, 0, err
+			return 0, 0, nil, err
 		}
 
 		acked := sent(hand, ack.IDs)
 		n.Unqueue(acked)
 		out = len(acked)
+
+		if ack.Err != "" {
+			problems = append(problems, peer+": "+ack.Err)
+		}
 	}
 
 	if err := c.send(wire{Op: "pull"}); err != nil {
-		return out, 0, err
+		return out, 0, problems, err
 	}
 
 	got, err := c.expect("envs")
 	if err != nil {
-		return out, 0, err
+		return out, 0, problems, err
 	}
 
 	ids, rerr := n.receive(got.Envs, deliver, now())
+	if rerr != nil {
+		problems = append(problems, rerr.Error())
+	}
 
 	if err := c.send(wire{Op: "ack", IDs: ids}); err != nil {
-		return out, len(ids), err
+		return out, len(ids), problems, err
 	}
 
 	if _, err := c.expect("ok"); err != nil {
-		return out, len(ids), err
+		return out, len(ids), problems, err
 	}
 
 	_ = c.send(wire{Op: "bye"})
 
-	return out, len(ids), rerr
+	return out, len(ids), problems, nil
 }
 
 // told is what this node tells a peer about: itself and every node it has a certificate for, with only the
@@ -340,7 +356,11 @@ func (n *Node) met(cert Cert, told []Peer, now time.Time) error {
 			p.OK, p.Err = now, ""
 		})
 
-		for _, t := range told {
+		for i, t := range told {
+			if i >= toldMax {
+				break
+			}
+
 			if t.Cert == nil || t.Cert.Name != t.Name || t.Name == n.Name || t.Cert.Verify(n.Owner) != nil {
 				continue
 			}
@@ -366,6 +386,9 @@ func (n *Node) met(cert Cert, told []Peer, now time.Time) error {
 		return ps
 	})
 }
+
+// toldMax is how many told nodes one peer may add per session.
+const toldMax = 256
 
 // upsert finds the entry for cert's node (adding it with source when new), takes the newer certificate, and
 // runs fn on the entry.
@@ -428,6 +451,11 @@ func (n *Node) receive(envs []Envelope, deliver Deliver, now time.Time) ([]strin
 			return err
 		}
 
+		book, err := n.Peers()
+		if err != nil {
+			return err
+		}
+
 		for _, e := range envs {
 			if !ValidID(e.ID) {
 				continue
@@ -439,8 +467,8 @@ func (n *Node) receive(envs []Envelope, deliver Deliver, now time.Time) ([]strin
 				continue
 			}
 
-			if err := e.Verify(n.Owner); err != nil {
-				// It will not verify on a second try either: take it off the giver and say why.
+			if err := n.admit(e, book, now); err != nil {
+				// It will not pass on a second try either: take it off the giver and say why.
 				ids = append(ids, e.ID)
 				errs = append(errs, err)
 
@@ -451,7 +479,17 @@ func (n *Node) receive(envs []Envelope, deliver Deliver, now time.Time) ([]strin
 
 			switch {
 			case to.Node == n.Name:
-				if err := deliver(to.Crew, e.From, e.Body); err != nil {
+				err := deliver(to.Crew, e.From, e.Body)
+				if errors.Is(err, ErrRefused) {
+					// Refused for good: the giver drops it, nobody retries.
+					seen[e.ID] = now
+					ids = append(ids, e.ID)
+					errs = append(errs, fmt.Errorf("%s from %s: %w", e.ID, e.From, err))
+
+					continue
+				}
+
+				if err != nil {
 					errs = append(errs, fmt.Errorf("%s: %w", e.ID, err))
 
 					continue
@@ -475,6 +513,35 @@ func (n *Node) receive(envs []Envelope, deliver Deliver, now time.Time) ([]strin
 	})
 
 	return ids, errors.Join(append(errs, err)...)
+}
+
+// ErrRefused is a delivery this node will never take (the sender may not reach that crew): the giver drops the
+// envelope instead of trying again.
+var ErrRefused = errors.New("refused")
+
+// admit checks an envelope before it is taken: the writer's signature, its size, its age, and that its
+// certificate is the newest this node knows for that node (a replaced key no longer writes).
+func (n *Node) admit(e Envelope, book []Peer, now time.Time) error {
+	if err := e.Verify(n.Owner); err != nil {
+		return err
+	}
+
+	if len(e.Body) > BodyMax {
+		return fmt.Errorf("%s: %d bytes, over %d", e.ID, len(e.Body), BodyMax)
+	}
+
+	at, err := time.Parse(time.RFC3339Nano, e.At)
+	if err != nil || now.Sub(at) > seenKeep || at.Sub(now) > time.Hour {
+		return fmt.Errorf("%s: written %s, too old or from the future", e.ID, e.At)
+	}
+
+	for _, p := range book {
+		if p.Name == e.Cert.Name && p.Cert != nil && p.Cert.Newer(e.Cert) && !p.Cert.Key.Equal(e.Cert.Key) {
+			return fmt.Errorf("%s: signed with a replaced key of %s", e.ID, p.Name)
+		}
+	}
+
+	return nil
 }
 
 // Book is the node's address book as a Discovery.
@@ -537,7 +604,7 @@ func (n *Node) session(ctx context.Context, t Transport, p Peer, deliver Deliver
 	for _, a := range p.Addrs {
 		s.Addr = a.String()
 
-		s.Out, s.In, s.Err = n.callAt(ctx, t, a, p.Name, deliver, timeout, now)
+		s.Out, s.In, s.Problems, s.Err = n.callAt(ctx, t, a, p.Name, deliver, timeout, now)
 		if s.Err == nil {
 			break
 		}
@@ -564,20 +631,20 @@ func (n *Node) session(ctx context.Context, t Transport, p Peer, deliver Deliver
 
 func (n *Node) callAt(ctx context.Context, t Transport, a Addr, want string, deliver Deliver,
 	timeout time.Duration, now func() time.Time,
-) (int, int, error) {
+) (int, int, []string, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	rw, err := t.Dial(ctx, a)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, nil, err
 	}
 
-	out, in, err := n.Call(rw, want, deliver, now)
+	out, in, problems, err := n.Call(rw, want, deliver, now)
 	// The command's own last word (ssh's, the peer's zmina's) says more than a broken stream.
 	if cerr := rw.Close(); err != nil && cerr != nil {
 		err = cerr
 	}
 
-	return out, in, err
+	return out, in, problems, err
 }

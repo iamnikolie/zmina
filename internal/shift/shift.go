@@ -744,7 +744,7 @@ func (s *Shift) Queue(name, text string) error {
 // is queued while the dispatcher is not up (ErrNotUp). It reports whether the note was queued: false for a
 // duplicate.
 func (s *Shift) Note(from, text string, ifUp bool) (bool, error) {
-	from, text = oneLine(from), oneLine(text)
+	from, text = clipRunes(oneLine(from), noteMax/10), clipRunes(oneLine(text), noteMax)
 	if from == "" || text == "" {
 		return false, errors.New("a note needs a source and a text")
 	}
@@ -769,8 +769,20 @@ func (s *Shift) Note(from, text string, ifUp bool) (bool, error) {
 	return true, nil
 }
 
-// oneLine folds whitespace, newlines included, to single spaces: a note is typed as one line.
-func oneLine(text string) string { return strings.Join(strings.Fields(text), " ") }
+// oneLine folds whitespace, newlines included, to single spaces and drops control characters: a note is typed as
+// one line, and a control byte typed into a pane is a key (tmux.Printable).
+func oneLine(text string) string { return strings.Join(strings.Fields(tmux.Printable(text)), " ") }
+
+// noteMax is the longest note text, in characters; a longer one is cut with an ellipsis.
+const noteMax = 1000
+
+func clipRunes(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n-1]) + "…"
+	}
+
+	return s
+}
 
 // QueueView is what waits for one role, or for the dispatcher.
 type QueueView struct {

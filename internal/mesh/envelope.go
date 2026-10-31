@@ -14,6 +14,9 @@ import (
 // maxHops is how many nodes may carry one envelope besides the one that wrote it.
 const maxHops = 4
 
+// BodyMax is the longest body, in bytes.
+const BodyMax = 4000
+
 // Envelope is one message from a crew on one node to a crew on another.
 type Envelope struct {
 	ID   string `json:"id"`
@@ -57,6 +60,10 @@ func (a Address) String() string {
 func (n *Node) NewEnvelope(crew string, to Address, body string, now time.Time) (Envelope, error) {
 	if strings.TrimSpace(body) == "" {
 		return Envelope{}, errors.New("nothing to say")
+	}
+
+	if len(body) > BodyMax {
+		return Envelope{}, fmt.Errorf("%d bytes: a line is at most %d", len(body), BodyMax)
 	}
 
 	var b [6]byte

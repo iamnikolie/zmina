@@ -220,6 +220,8 @@ type Peer struct {
 	Err   string    `json:"err,omitempty"`
 	// Through are the peers that told this node they reach it directly: who may carry an envelope for it.
 	Through []string `json:"through,omitempty"`
+	// Allow are this node's crews the peer may reach (default, a config name, or * for all); none by default.
+	Allow []string `json:"allow,omitempty"`
 	// Direct is what a node tells a peer: it reaches this one itself (only on the wire).
 	Direct bool `json:"direct,omitempty"`
 }

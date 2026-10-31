@@ -391,20 +391,37 @@ func (c *Client) Kill(name string) error {
 	return err
 }
 
-// Type types one line into the role's pane and presses Enter. The text goes after -- so a leading dash is text.
+// Type types one line into the role's pane and presses Enter. The text goes after -- so a leading dash is text,
+// and only its printable characters go: send-keys -l passes control bytes as keys (C-u clears the input line, ESC
+// starts a sequence), so a line must never carry one.
 func (c *Client) Type(name, text string) error {
 	id, err := c.target(name)
 	if err != nil {
 		return err
 	}
 
-	if _, err := c.run("send-keys", "-t", id, "-l", "--", escape(text)); err != nil {
+	if _, err := c.run("send-keys", "-t", id, "-l", "--", escape(Printable(text))); err != nil {
 		return err
 	}
 
 	_, err = c.run("send-keys", "-t", id, "Enter")
 
 	return err
+}
+
+// Printable is text with every control or format character gone; tabs, newlines and other white space become
+// spaces.
+func Printable(text string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == ' ' || unicode.IsGraphic(r):
+			return r
+		case unicode.IsSpace(r):
+			return ' '
+		default:
+			return -1
+		}
+	}, text)
 }
 
 // escape keeps a trailing semicolon of an argument: tmux reads an argument ending in ';' as a command separator.

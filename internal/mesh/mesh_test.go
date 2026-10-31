@@ -3,8 +3,10 @@ package mesh
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -286,4 +288,48 @@ func TestAddrCheck(t *testing.T) {
 	assert.Error(t, Addr{SSH: "a b"}.Check())
 	assert.Error(t, Addr{}.Check())
 	assert.Error(t, Addr{SSH: "a", Cmd: "b"}.Check())
+}
+
+func TestRefusedIsDroppedAndReported(t *testing.T) {
+	p, laptop, ops, _ := trio(t)
+
+	p.inboxes["box-ops"].fail = fmt.Errorf("%w: laptop may not reach crew ops", ErrRefused)
+	tell(t, laptop, "default", "box-ops/ops", "rm it all")
+
+	ss := sync1(laptop, p)
+	for _, s := range ss {
+		require.NoError(t, s.Err, "a refusal does not fail the session")
+
+		if s.Peer == "box-ops" {
+			require.Len(t, s.Problems, 1)
+			assert.Contains(t, s.Problems[0], "may not reach crew ops")
+		}
+	}
+
+	out, _ := laptop.Outbox()
+	assert.Empty(t, out, "refused for good: not tried again")
+	assert.Empty(t, p.inboxes["box-ops"].list())
+
+	book, _ := laptop.Peers()
+	for _, b := range book {
+		assert.Empty(t, b.Err, "the peer still counts as reachable")
+	}
+
+	_ = ops
+}
+
+func TestOldOrHugeEnvelopesAreDropped(t *testing.T) {
+	p, laptop, ops, _ := trio(t)
+
+	a, _ := ParseAddress("box-ops")
+	_, err := laptop.NewEnvelope("c", a, strings.Repeat("x", BodyMax+1), time.Now())
+	require.Error(t, err)
+
+	old, err := laptop.NewEnvelope("c", a, "from last year", time.Now().Add(-40*24*time.Hour))
+	require.NoError(t, err)
+
+	ids, err := ops.receive([]Envelope{old}, p.inboxes["box-ops"].deliver, time.Now())
+	require.Error(t, err)
+	assert.Equal(t, []string{old.ID}, ids)
+	assert.Empty(t, p.inboxes["box-ops"].list())
 }

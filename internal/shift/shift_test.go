@@ -789,6 +789,25 @@ func TestNoteReachesIdleDispatcherAsOneLine(t *testing.T) {
 	assert.True(t, queued, "once told, the same note is news again")
 }
 
+// A note carries no control character: typed into a pane, C-u would clear the input line and ESC start a key
+// sequence, so a body could put a "!" (a shell command in Claude Code) at the start of the line.
+func TestNoteDropsControlCharacters(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+
+	_, err := f.s.Note("box/ops\x1b[Z", "ok\x15!rm -rf ~\r\x1b[200~x\x1b[201~\x7f\u202eend\tdone", false)
+	require.NoError(t, err)
+	require.Len(t, f.s.State.Signals, 1)
+	assert.Equal(t, "box/ops[Z: ok!rm -rf ~ [200~x[201~end done", f.s.State.Signals[0])
+
+	for _, r := range f.s.State.Signals[0] {
+		assert.True(t, r >= ' ' && r != 0x7f, "%q", r)
+	}
+
+	_, err = f.s.Note("w", strings.Repeat("я", 5000), false)
+	require.NoError(t, err)
+	assert.Len(t, []rune(f.s.State.Signals[1]), len("w: ")+noteMax, "a note is capped")
+}
+
 func TestNoteIfUp(t *testing.T) {
 	f := fixtureWith(t, crewYAML)
 

@@ -51,6 +51,23 @@ func TestTypeKeepsDashesAndSemicolons(t *testing.T) {
 	})
 }
 
+// Type sends no control byte: cat -v would show a C-u as ^U and an ESC as ^[.
+func TestTypeSendsNoControlBytes(t *testing.T) {
+	c := server(t)
+	require.NoError(t, c.Start("r", t.TempDir(), nil, []string{"cat", "-v"}))
+
+	require.NoError(t, c.Type("r", "a\x15!b\x1b[Zc\rd"))
+
+	eventually(t, func() bool {
+		out, _ := c.Capture("r", 10)
+		return strings.Count(out, "a!b[Zc d") == 2
+	})
+
+	out, _ := c.Capture("r", 10)
+	assert.NotContains(t, out, "^U")
+	assert.NotContains(t, out, "^[")
+}
+
 func TestOnlyTheRolePaneCounts(t *testing.T) {
 	c := server(t)
 	require.NoError(t, c.Start("r", t.TempDir(), nil, []string{"cat"}))
