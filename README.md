@@ -21,6 +21,8 @@ zmina task new dev --repo api --worktree "fix the login"
 zmina log --since 12h
 zmina --config ops note --from mr-watch --if-up "!35 — 4 new threads"   # a job signals the dispatcher
 zmina watch ls            # detectors the ticker runs (watch: in the crew file), e.g. GitLab MR reviews
+zmina ui                  # one live page for every crew: what you hold, what to answer, what goes
+zmina tell box-ops/ops "the dump is ready"   # a crew on another machine or user (zmina node), no hub
 ```
 
 Reference: `zmina skill` (`cmd/skill.md`, embedded in the binary). An example crew with five roles

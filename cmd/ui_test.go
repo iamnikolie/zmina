@@ -239,7 +239,7 @@ func TestUIRefusesAnOpenBindWithoutAToken(t *testing.T) {
 }
 
 func TestRoleIcon(t *testing.T) {
-	for role, want := range map[string]string{"dispatcher": "dispatcher", "dev": "developer", "dev2#3": "developer",
+	for role, want := range map[string]string{"dispatcher": "dispatcher", "dev": "developer", "dev2#3": "developer", "zmina-dev": "developer",
 		"reviewer": "reviewer", "designer": "designer", "scribe": "generic"} {
 		assert.Equal(t, want, roleIcon(role), role)
 	}
@@ -267,16 +267,32 @@ func TestUITaskIDIsNeverAPath(t *testing.T) {
 	assert.Equal(t, http.StatusConflict, resp.StatusCode)
 }
 
-func TestUILang(t *testing.T) {
-	t.Setenv("LC_ALL", "")
-	t.Setenv("LC_MESSAGES", "")
-	t.Setenv("LANG", "uk_UA.UTF-8")
-	assert.Equal(t, "ru", uiLang(""), "uk reads ru")
-	assert.Equal(t, "en", uiLang("en"), "the flag wins")
-	t.Setenv("LANG", "de_DE.UTF-8")
-	assert.Equal(t, "en", uiLang(""))
-	t.Setenv("LANG", "")
-	assert.Equal(t, "en", uiLang(""))
+func TestUISpeaksEnglishOnly(t *testing.T) {
+	uiHome(t)
+
+	srv, _ := uiServer(t, true, "")
+
+	body := func(path string) string {
+		resp, err := http.Get(srv.URL + path)
+		require.NoError(t, err)
+
+		defer func() { _ = resp.Body.Close() }()
+
+		b, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+
+		return string(b)
+	}
+
+	page, js := body("/"), body("/app.js")
+	assert.NotContains(t, page, `id="langs"`, "the header has no language switch")
+	assert.NotContains(t, js, `get("lang")`, "no ?lang= override")
+	assert.NotContains(t, js, `getItem("zmina.lang")`, "a remembered language is not read")
+	assert.NotRegexp(t, `\p{Cyrillic}`, page+js, "the page's words are English")
+	assert.NotContains(t, body("/api/state"), `"lang"`)
+
+	_, _, err := zm(t, "", "ui", "--lang", "ru", "--no-open")
+	require.ErrorContains(t, err, "unknown flag: --lang")
 }
 
 func TestUILanes(t *testing.T) {
@@ -328,4 +344,55 @@ func TestUILanes(t *testing.T) {
 			assert.Equal(t, "infra", it.Project)
 		}
 	}
+}
+
+func TestUITakeBack(t *testing.T) {
+	uiHome(t)
+
+	ops := crewPathOf(t, "ops")
+	for _, args := range [][]string{
+		{"task", "new", "dev", "--title", "close the month", "month close"},
+		{"task", "set", "T-1", "waiting", "--on", "alex"},
+		{"task", "new", "dev", "--title", "landing", "build the landing"},
+		{"task", "new", "dev", "--title", "pick a name", "name the product"},
+		{"task", "set", "T-3", "waiting", "--note", "three names ready"},
+		{"todo", "ignore", "T-3"},
+	} {
+		_, _, err := zm(t, ops, args...)
+		require.NoError(t, err, args)
+	}
+
+	srv, _ := uiServer(t, true, "")
+
+	post := func(id string) int {
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/todo",
+			strings.NewReader(`{"crew":"ops","id":"`+id+`","action":"mine"}`))
+		req.Header.Set("X-Zmina", "1")
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		_ = resp.Body.Close()
+
+		return resp.StatusCode
+	}
+
+	assert.Equal(t, http.StatusConflict, post("T-2"), "an open task is not waiting: nothing to take back")
+	assert.Equal(t, http.StatusConflict, post("T-9"))
+	out, _, err := zm(t, ops, "todo", "ls")
+	require.NoError(t, err)
+	assert.NotContains(t, out, "T-1")
+	assert.NotContains(t, out, "T-3")
+
+	assert.Equal(t, http.StatusOK, post("T-1"), "waiting on a person")
+	assert.Equal(t, http.StatusOK, post("t-3"), "set aside by the owner")
+
+	out, _, err = zm(t, ops, "task", "show", "T-1", "--json")
+	require.NoError(t, err)
+	assert.Contains(t, out, `"state": "waiting"`)
+	assert.NotContains(t, out, `"on":`, "it waits on the owner again")
+
+	out, _, err = zm(t, ops, "todo", "ls")
+	require.NoError(t, err)
+	assert.Contains(t, out, "T-1", "back on the owner's todo")
+	assert.Contains(t, out, "T-3")
 }

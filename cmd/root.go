@@ -29,8 +29,6 @@ type app struct {
 	out, err io.Writer
 	config   string
 	crew     string
-	// lang is the language `zmina ui` speaks: ru or en.
-	lang string
 }
 
 // NewRoot builds the whole command tree writing to out and errw.
@@ -70,7 +68,8 @@ Run 'zmina skill' for the full agent reference.`,
 	root.AddCommand(a.roleCommands()...)
 	root.AddCommand(a.taskCommand(), a.todoCommand(), a.laterCommand(), a.seatCommand(), a.logCommand(), a.noteCommand(), a.watchCommand(),
 		a.stopCommand(), a.startCommand(), a.queueCommand(), a.stateCommand(), a.tickerCommand(),
-		a.launchdCommand(), a.doctorCommand(), a.usageCommand(), a.skillCommand(), a.versionCommand(), a.uiCommand())
+		a.launchdCommand(), a.doctorCommand(), a.usageCommand(), a.skillCommand(), a.versionCommand(), a.uiCommand(),
+		a.nodeCommand(), a.tellCommand())
 
 	return root
 }

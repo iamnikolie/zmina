@@ -473,7 +473,10 @@ func (a *app) tickCommand() *cobra.Command {
 		Short: "One beat of the ticker (zmina ticker runs it every minute)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return shift.RunTick(a.withState, runWatches, a.printTick)
+			err := shift.RunTick(a.withState, runWatches, a.printTick)
+			a.meshTick()
+
+			return err
 		},
 	}
 }

@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
@@ -24,9 +23,11 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/iamnikolie/zmina/internal/asks"
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/events"
 	"github.com/iamnikolie/zmina/internal/later"
+	"github.com/iamnikolie/zmina/internal/ledger"
 	"github.com/iamnikolie/zmina/internal/shift"
 	"github.com/iamnikolie/zmina/internal/task"
 	"github.com/iamnikolie/zmina/internal/ui"
@@ -43,8 +44,8 @@ const (
 
 func (a *app) uiCommand() *cobra.Command {
 	var (
-		addr, token, lang string
-		noOpen            bool
+		addr, token string
+		noOpen      bool
 	)
 
 	c := &cobra.Command{
@@ -61,7 +62,6 @@ func (a *app) uiCommand() *cobra.Command {
 				return fmt.Errorf("--addr %s: %w", addr, err)
 			}
 
-			a.lang = uiLang(lang)
 			loopback := isLoopback(host)
 			if !loopback && token == "" {
 				return fmt.Errorf("--addr %s is not a loopback address: the page writes notes to the dispatcher, so "+
@@ -122,27 +122,8 @@ func (a *app) uiCommand() *cobra.Command {
 	c.Flags().StringVar(&token, "token", "", "secret the page needs (?token= once, then a cookie); default "+
 		"$ZMINA_UI_TOKEN")
 	c.Flags().BoolVar(&noOpen, "no-open", false, "print the address, do not open a browser")
-	c.Flags().StringVar(&lang, "lang", "", "the page's language, ru or en; default from $LC_ALL, $LC_MESSAGES or $LANG "+
-		"(ru, uk and be read ru), else en; the page's ?lang= overrides it")
 
 	return c
-}
-
-// uiLang is the page's language: the flag's, else the locale's — Russian for ru, uk and be, English otherwise.
-func uiLang(flag string) string {
-	loc := flag
-	for _, env := range []string{"LC_ALL", "LC_MESSAGES", "LANG"} {
-		if loc == "" {
-			loc = os.Getenv(env)
-		}
-	}
-
-	switch strings.ToLower(loc[:min(2, len(loc))]) {
-	case "ru", "uk", "be":
-		return "ru"
-	}
-
-	return "en"
 }
 
 func isLoopback(host string) bool {
@@ -323,20 +304,24 @@ func (a *app) uiHandler(bound string, loopback bool, token string) http.Handler 
 		}
 
 		if !map[string]bool{"yes": true, "done": true, "answer": true, "park": true, "ignore": true, "back": true,
-			"drop": true}[in.Action] {
-			http.Error(w, "action: yes, done, answer, park, ignore, back or drop", http.StatusBadRequest)
+			"drop": true, "mine": true}[in.Action] {
+			http.Error(w, "action: yes, done, answer, park, ignore, back, drop or mine", http.StatusBadRequest)
 
 			return
 		}
 
 		var line string
 
-		// The answer goes to the dispatcher of the item's own crew.
+		// The answer goes to the dispatcher of the item's own crew; «mine» changes the task itself.
 		c, err := a.crewApp(in.Crew)
 		if err == nil {
 			err = c.withState(func(s *shift.Shift) error {
 				var err error
-				line, err = answerTodo(s, "ui", in.Action, in.ID, in.Text)
+				if in.Action == "mine" {
+					line, err = c.takeBack(s, in.ID)
+				} else {
+					line, err = answerTodo(s, "ui", in.Action, in.ID, in.Text)
+				}
 
 				return err
 			})
@@ -352,6 +337,25 @@ func (a *app) uiHandler(bound string, loopback bool, token string) http.Handler 
 	})
 
 	return guard(mux, bound, loopback, token)
+}
+
+// takeBack is `task set <id> waiting --on -` from the page: a task waiting on a person, or set aside, waits on the
+// owner again and comes back to the todo.
+func (a *app) takeBack(s *shift.Shift, id string) (string, error) {
+	t, err := taskStore(s.Crew).Get(asks.Normalize(id))
+	if err != nil {
+		return "", err
+	}
+
+	if t.State != task.Waiting {
+		return "", fmt.Errorf("%s is %s, not waiting", t.ID, t.State)
+	}
+
+	if t, err = a.ledger(s).Set(t.ID, ledger.Change{State: task.Waiting, On: "-"}); err != nil {
+		return "", err
+	}
+
+	return t.ID + " · mine · waits on you", nil
 }
 
 // guard keeps the page to its owner. On loopback: the Host header must name this server (a DNS-rebinding page
@@ -561,7 +565,6 @@ type uiWork struct {
 
 type uiSnapshot struct {
 	Version string       `json:"version"`
-	Lang    string       `json:"lang"`
 	Now     time.Time    `json:"now"`
 	Work    []uiWork     `json:"work"`
 	Crews   []uiCrewView `json:"crews"`
@@ -579,7 +582,7 @@ const tickerDead = 2 * time.Minute
 // uiSnapshot reads every crew as `zmina ls`, `todo ls`, `task ls` and `log` would, without the lock. The todo is
 // one list across crews in the todo order; tasks, the parked list and the log are merged, newest first.
 func (a *app) uiSnapshot() uiSnapshot {
-	snap := uiSnapshot{Version: version, Lang: cmp.Or(a.lang, "en"), Now: time.Now(), Work: []uiWork{}, Crews: []uiCrewView{}, Todo: []todoItem{},
+	snap := uiSnapshot{Version: version, Now: time.Now(), Work: []uiWork{}, Crews: []uiCrewView{}, Todo: []todoItem{},
 		Later: []uiLater{}, Tasks: []uiTask{}, Log: []uiEvent{}, Tints: map[string]string{}}
 	pinned := map[string]string{}
 
@@ -822,14 +825,15 @@ func (s *uiSnapshot) projects() []string {
 	return out
 }
 
-// roleIcon maps a role name to one of the page's line icons; crew files name roles freely, the rest are generic.
+// roleIcon maps a role name to one of the page's line icons; crew files name roles freely (zmina-dev is a developer
+// too), the rest are generic.
 func roleIcon(role string) string {
 	base, _, _ := shift.SplitInstance(role)
 
 	switch {
 	case base == "dispatcher", base == "designer", base == "director":
 		return base
-	case strings.HasPrefix(base, "dev"):
+	case strings.Contains(base, "dev"):
 		return "developer"
 	case strings.HasPrefix(base, "review"):
 		return "reviewer"

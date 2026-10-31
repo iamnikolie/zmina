@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -10,6 +10,8 @@
 </head>
 <body class="sk">
 <header class="top">
+  <div class="brand"><b>zmina</b><span id="brand-s"></span></div>
+  <p class="ev" id="ev"></p>
   <div class="say" id="say" aria-live="polite"><i class="ph" style="width:min(560px,80%)"></i></div>
   <div class="tools">
     <span class="mark" id="mark" aria-hidden="true"></span>
@@ -20,6 +22,7 @@
 
 <main class="page">
   <div class="col">
+    <p class="quiet" id="quiet" hidden></p>
     <section id="hold" aria-labelledby="hold-h">
       <h2 class="lab" id="hold-h"><i class="ph" style="width:120px"></i></h2>
       <div class="rows" id="hold-rows"><div class="row ph-row"><i class="ph"></i></div></div>
@@ -47,7 +50,26 @@
   <footer class="foot" id="foot"></footer>
 </main>
 
+<!-- from 1400 px, the cockpit (D-03): the readout strip and three zones that scroll on their own -->
+<div class="strip" id="strip"></div>
+<main class="deck" id="deck">
+  <div class="dcol move">
+    <div class="dh"><span class="dl" id="move-h"></span></div>
+    <div class="rows" id="move-rows"></div>
+    <div class="dsub" id="move-ask-h"></div>
+    <div class="rows" id="move-asks"></div>
+  </div>
+  <div class="dcol mid">
+    <div class="crews" id="crew-col"></div>
+    <section class="kb" aria-labelledby="kb-h">
+      <div class="dh"><span class="dl" id="kb-h"></span></div>
+      <div class="kb-cols" id="kb-cols"></div>
+    </section>
+  </div>
+</main>
+
 <div class="toasts" id="toasts" aria-live="polite"></div>
+<div class="full" id="full" hidden></div>
 <aside class="drawer" id="history" aria-labelledby="history-h" hidden>
   <div class="drawer-h"><h2 id="history-h"></h2><button type="button" class="q" id="history-close" aria-label="Close">✕</button></div>
   <div class="feed" id="feed"></div>
