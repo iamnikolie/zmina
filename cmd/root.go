@@ -13,6 +13,7 @@ import (
 
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/events"
+	"github.com/iamnikolie/zmina/internal/inbox"
 	"github.com/iamnikolie/zmina/internal/ledger"
 	"github.com/iamnikolie/zmina/internal/registry"
 	"github.com/iamnikolie/zmina/internal/shift"
@@ -66,7 +67,7 @@ Run 'zmina skill' for the full agent reference.`,
 	root.MarkFlagsMutuallyExclusive("config", "crew")
 
 	root.AddCommand(a.roleCommands()...)
-	root.AddCommand(a.taskCommand(), a.todoCommand(), a.laterCommand(), a.seatCommand(), a.logCommand(), a.noteCommand(), a.watchCommand(),
+	root.AddCommand(a.taskCommand(), a.todoCommand(), a.laterCommand(), a.seatCommand(), a.logCommand(), a.noteCommand(), a.inboxCommand(), a.watchCommand(),
 		a.stopCommand(), a.startCommand(), a.queueCommand(), a.stateCommand(), a.tickerCommand(),
 		a.launchdCommand(), a.doctorCommand(), a.usageCommand(), a.skillCommand(), a.versionCommand(), a.uiCommand(),
 		a.nodeCommand(), a.tellCommand())
@@ -148,6 +149,7 @@ func (a *app) newShift() (*shift.Shift, error) {
 		State:  shift.NewState(),
 		Tasks:  taskStore(c),
 		Later:  laterStore(c),
+		Inbox:  &inbox.Store{Dir: c.Layout().Inbox()},
 		Events: eventLog(c),
 		Now:    time.Now,
 		Path:   os.Getenv("PATH"),

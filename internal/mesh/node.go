@@ -222,7 +222,22 @@ type Peer struct {
 	Through []string `json:"through,omitempty"`
 	// Direct is what a node tells a peer: it reaches this one itself (only on the wire).
 	Direct bool `json:"direct,omitempty"`
+	// BodyMax is the longest body the peer said it takes in its last hello; 0 for an older zmina, or one not met.
+	BodyMax int `json:"body_max,omitempty"`
 }
+
+// Takes is the longest body the peer takes: what it told, else what an older zmina takes.
+func (p Peer) Takes() int {
+	if p.BodyMax > 0 {
+		return p.BodyMax
+	}
+
+	return OldBodyMax
+}
+
+// StoresLong reports a peer known to store a body too long to type whole (it told its cap): an older one types
+// the first part only.
+func (p Peer) StoresLong() bool { return p.BodyMax > 0 }
 
 // direct reports whether this node reaches the peer itself: it has an address and the last try did not fail.
 func (p Peer) direct() bool { return len(p.Addrs) > 0 && p.Err == "" }

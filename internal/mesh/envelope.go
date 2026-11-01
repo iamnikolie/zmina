@@ -3,6 +3,7 @@ package mesh
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -14,8 +15,20 @@ import (
 // maxHops is how many nodes may carry one envelope besides the one that wrote it.
 const maxHops = 4
 
-// BodyMax is the longest body, in bytes.
-const BodyMax = 4000
+// BodyMax is the longest body this node writes and takes, in bytes, and what it tells its peers in the hello: the
+// receiving node stores a body too long to type whole, so a long line costs a file, not a cut.
+const BodyMax = 16000
+
+// OldBodyMax is what a peer that tells no cap takes: a zmina from before long bodies were stored, which types the
+// first part of a line and drops the rest.
+const OldBodyMax = 4000
+
+// InboxID is the id the receiving node stores a long body under: the sender knows it without being told.
+func InboxID(envelopeID string) string {
+	sum := sha256.Sum256([]byte(envelopeID))
+
+	return "in-" + hex.EncodeToString(sum[:6])
+}
 
 // Envelope is one message from a crew on one node to a crew on another.
 type Envelope struct {

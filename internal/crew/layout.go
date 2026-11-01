@@ -25,6 +25,9 @@ func (l Layout) Later() string { return filepath.Join(l.Dir, "later") }
 // Asks is the directory of what the dispatcher asks the owner (A-<n>.json).
 func (l Layout) Asks() string { return filepath.Join(l.Dir, "asks") }
 
+// Inbox holds the whole text of lines too long to type into the dispatcher (in-<hex>.json).
+func (l Layout) Inbox() string { return filepath.Join(l.Dir, "inbox") }
+
 // Events is the event log.
 func (l Layout) Events() string { return filepath.Join(l.Dir, "events.jsonl") }
 

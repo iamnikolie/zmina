@@ -16,8 +16,8 @@ import (
 // protocolVersion is the version a node speaks; a node refuses a session with a newer one it does not know.
 const protocolVersion = 1
 
-// Deliver hands an envelope addressed to this node to one of its crews ("" for the node's default crew).
-type Deliver func(crew, from, body string) error
+// Deliver hands an envelope addressed to this node to one of its crews ("" for the node's default crew), with its id.
+type Deliver func(crew, from, id, body string) error
 
 // wire is one line of the protocol, JSON over the stream. A session is: hello (both ways), auth, ok, then any of
 // push → ack, pull → envs → ack → ok, and bye.
@@ -33,6 +33,8 @@ type wire struct {
 	Err   string     `json:"err,omitempty"`
 	// Wait, on a pull, is how many seconds the peer may hold it for something to arrive.
 	Wait int `json:"wait,omitempty"`
+	// BodyMax, in a hello, is the longest body the node takes (BodyMax); an older node sends none.
+	BodyMax int `json:"body_max,omitempty"`
 }
 
 type conn struct {
@@ -124,7 +126,7 @@ func (n *Node) Serve(rw io.ReadWriter, deliver Deliver, now func() time.Time) er
 	}
 
 	err = c.send(wire{Op: "hello", V: protocolVersion, Cert: &n.Cert, Nonce: mine,
-		Sig: ed25519.Sign(n.Key, helloMessage("server", hi.Nonce)), Peers: told})
+		Sig: ed25519.Sign(n.Key, helloMessage("server", hi.Nonce)), Peers: told, BodyMax: BodyMax})
 	if err != nil {
 		return err
 	}
@@ -143,7 +145,7 @@ func (n *Node) Serve(rw io.ReadWriter, deliver Deliver, now func() time.Time) er
 		return fail(errors.New("a node does not call itself"))
 	}
 
-	if err := n.met(*hi.Cert, hi.Peers, now()); err != nil {
+	if err := n.met(*hi.Cert, hi.Peers, hi.BodyMax, now()); err != nil {
 		return fail(err)
 	}
 
@@ -289,7 +291,8 @@ func (n *Node) open(c *conn, want string, now func() time.Time) (string, error) 
 		return "", err
 	}
 
-	if err := c.send(wire{Op: "hello", V: protocolVersion, Cert: &n.Cert, Nonce: mine, Peers: told}); err != nil {
+	if err := c.send(wire{Op: "hello", V: protocolVersion, Cert: &n.Cert, Nonce: mine, Peers: told,
+		BodyMax: BodyMax}); err != nil {
 		return "", err
 	}
 
@@ -322,7 +325,7 @@ func (n *Node) open(c *conn, want string, now func() time.Time) (string, error) 
 		return "", err
 	}
 
-	return hi.Cert.Name, n.met(*hi.Cert, hi.Peers, now())
+	return hi.Cert.Name, n.met(*hi.Cert, hi.Peers, hi.BodyMax, now())
 }
 
 // round hands the peer what is for it, then takes what it has for this node, the pull waiting up to wait at the
@@ -417,13 +420,13 @@ func (n *Node) told() ([]Peer, error) {
 	return out, nil
 }
 
-// met records a peer that proved its certificate, and the nodes it told of: a told node is kept only with a
-// certificate this owner signed, and only its ssh addresses. Which told nodes the peer reaches itself decides
-// what this node lets it carry.
-func (n *Node) met(cert Cert, told []Peer, now time.Time) error {
+// met records a peer that proved its certificate, the longest body it takes (0: it told none), and the nodes it told
+// of: a told node is kept only with a certificate this owner signed, and only its ssh addresses. Which told nodes
+// the peer reaches itself decides what this node lets it carry.
+func (n *Node) met(cert Cert, told []Peer, bodyMax int, now time.Time) error {
 	return n.UpdatePeers(func(ps []Peer) []Peer {
 		ps = upsert(ps, cert, "called", func(p *Peer) {
-			p.OK, p.Err = now, ""
+			p.OK, p.Err, p.BodyMax = now, "", bodyMax
 		})
 
 		for i, t := range told {
@@ -549,7 +552,7 @@ func (n *Node) receive(envs []Envelope, deliver Deliver, now time.Time) ([]strin
 
 			switch {
 			case to.Node == n.Name:
-				err := deliver(to.Crew, e.From, e.Body)
+				err := deliver(to.Crew, e.From, e.ID, e.Body)
 				if errors.Is(err, ErrRefused) {
 					// Refused for good: the giver drops it, nobody retries.
 					seen[e.ID] = now

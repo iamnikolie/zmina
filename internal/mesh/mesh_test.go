@@ -19,10 +19,11 @@ import (
 type inbox struct {
 	mu   sync.Mutex
 	got  []string
+	ids  []string
 	fail error
 }
 
-func (b *inbox) deliver(crew, from, body string) error {
+func (b *inbox) deliver(crew, from, id, body string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -31,6 +32,7 @@ func (b *inbox) deliver(crew, from, body string) error {
 	}
 
 	b.got = append(b.got, crew+" ← "+from+": "+body)
+	b.ids = append(b.ids, id)
 
 	return nil
 }
@@ -363,4 +365,45 @@ func TestHeldSessionTakesALineWithinSeconds(t *testing.T) {
 	require.Len(t, ss, 1)
 	require.NoError(t, ss[0].Err)
 	assert.Equal(t, 1, ss[0].In)
+}
+
+// A long body goes through whole, and each side records what the other takes, from its hello.
+func TestLongBodyAndTheCapInTheHello(t *testing.T) {
+	p, laptop, ops, _ := trio(t)
+
+	body := strings.Repeat("a plan step; ", 250) // 3250 bytes: over what an older zmina types, under BodyMax
+	e := tell(t, laptop, "default", "box-ops/ops", body)
+
+	for _, s := range sync1(laptop, p) {
+		require.NoError(t, s.Err, s.Peer)
+	}
+
+	assert.Equal(t, []string{"ops ← laptop/default: " + body}, p.inboxes["box-ops"].list())
+	assert.Equal(t, []string{e.ID}, p.inboxes["box-ops"].ids, "the receiver gets the id the sender knows")
+	assert.Equal(t, InboxID(e.ID), InboxID(p.inboxes["box-ops"].ids[0]))
+	assert.Regexp(t, `^in-[0-9a-f]{12}$`, InboxID(e.ID))
+
+	book, err := laptop.Peers()
+	require.NoError(t, err)
+	assert.Equal(t, BodyMax, book[0].BodyMax, "the caller learns the peer's cap")
+	assert.True(t, book[0].StoresLong())
+
+	book, err = ops.Peers()
+	require.NoError(t, err)
+	assert.Equal(t, BodyMax, book[0].BodyMax, "and the peer learns the caller's")
+
+	// An older zmina's hello carries no cap: it is taken to take OldBodyMax and to type a long line's head only.
+	require.NoError(t, laptop.met(ops.Cert, nil, 0, time.Now()))
+	book, err = laptop.Peers()
+	require.NoError(t, err)
+	assert.Zero(t, book[0].BodyMax)
+	assert.False(t, book[0].StoresLong())
+	assert.Equal(t, OldBodyMax, book[0].Takes())
+
+	// The receiver takes up to its own cap and no more.
+	a, _ := ParseAddress("box-ops")
+	big, err := laptop.NewEnvelope("c", a, strings.Repeat("x", BodyMax), time.Now())
+	require.NoError(t, err)
+	_, err = ops.receive([]Envelope{big}, p.inboxes["box-ops"].deliver, time.Now())
+	require.NoError(t, err)
 }
