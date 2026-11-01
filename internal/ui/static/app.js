@@ -34,6 +34,8 @@ const W = {
   fvDown: "not up", fvNoScreen: "the session is not up", fvLoading: "…", fvNoLog: "nothing in the log yet", ctxOf: (n, max) => n + " of " + max + " before compact", ctxPast: " · compacts when idle", move: "your move", roDone: "done today", oldest: "oldest · ", nobody: "nobody",
   withRec: (n) => n + " with an answer ready", upOf: (u, t) => u + " up of " + t, noDue: "no due date",
   people: (n) => n + " " + (n === 1 ? "person" : "people"),
+  roSpent: "spent today", spentWeek: (v) => "7 days " + v, spentNone: "API-equivalent",
+  spentRole: (v) => v + " today", spentTip: "API-equivalent dollars: what these tokens would cost at API rates; the crews run on a subscription", fvCost: "cost",
   sessions: "sessions", upN: (n) => n + " up", downN: (n) => n + " not started",
   notUp: "not started: ", tick: "tick ", always: "always", working: "working", free: "idle",
   onScreen: "question on screen", stuck: "stuck", check: "check", nobodyUp: "nobody up",
@@ -50,6 +52,7 @@ const W = {
 // ---- state
 
 let snap = null;
+let cost = null; // /api/cost: API-equivalent dollars today and over the week, read every minute
 let got = 0; // when the snapshot came, so ages move between snapshots
 let first = true;
 let filter = localStorage.getItem("zmina.crew") || "all";
@@ -710,9 +713,14 @@ function renderCockpit(hold, asks, others, parked) {
     [W.later, parked.length, W.noDue, "dim"],
     [W.roDone, crews.reduce((n, c) => n + (c.done_today || 0), 0), multi() ? crews.map((c) => c.name + " " + (c.done_today || 0)).join(" · ") : "", "dim"],
   ];
-  $("strip").replaceChildren(...cells.map(([label, n, sub, cls]) => {
+  // Spent today is a readout like the others: dark at nothing, its week and «API-equivalent» under it.
+  const today = spent(crews, "today");
+  const week = spent(crews, "week");
+  cells.push([W.roSpent, today, week ? W.spentWeek(money(week)) : W.spentNone, "dim", money(today), W.spentTip]);
+  $("strip").replaceChildren(...cells.map(([label, n, sub, cls, shown, tip]) => {
     const ro = el("div", "ro " + cls + (n ? " lit" : " dark"));
-    ro.append(el("span", "ro-l", label), el("span", "ro-n", String(n)), el("span", "ro-s", sub));
+    ro.append(el("span", "ro-l", label), el("span", "ro-n", shown || String(n)), el("span", "ro-s", sub));
+    if (tip) ro.title = tip;
     return ro;
   }));
 
@@ -728,6 +736,29 @@ function renderCockpit(hold, asks, others, parked) {
 
   renderBand(crews);
   renderBoard(parked);
+}
+
+// money is API-equivalent dollars the way the page shows them: $4.20, $37, $1.6k.
+function money(v) {
+  if (v >= 1000) return "$" + (v / 1000).toFixed(1).replace(/\.0$/, "") + "k";
+  if (v >= 10) return "$" + Math.round(v);
+  return "$" + v.toFixed(2);
+}
+
+// spent is the shown crews' dollars over a window (today or week), 0 until the first read is in.
+function spent(crews, window) {
+  if (!cost || !cost.ready) return 0;
+  return crews.reduce((n, c) => n + ((cost.crews[c.key] || {})[window] || 0), 0);
+}
+
+// loadCost reads the cost figures; the server reads the transcripts in the background, so the first answer may be
+// empty and is asked again soon.
+async function loadCost() {
+  try {
+    cost = await getJSON("api/cost");
+  } catch (_) { /* the page works without the figures */ }
+  if (snap) render();
+  setTimeout(loadCost, cost && cost.ready ? 60000 : 5000);
 }
 
 // renderEv is the newest event in words, in the header.
@@ -850,7 +881,15 @@ function sessionCard(c, r) {
     }
   }
   const word = r.prompt ? W.onScreen : r.stuck ? W.stuck : busy ? W.working : W.free;
-  card.append(h, el("div", "role-w" + (r.prompt ? " need" : r.stuck ? " bad" : ""), word + (zero(r.since) ? "" : " · " + ago(r.since))));
+  const line = el("div", "role-w" + (r.prompt ? " need" : r.stuck ? " bad" : ""), word + (zero(r.since) ? "" : " · " + ago(r.since)));
+  // What the session spent today, API-equivalent, once it is a cent (copies count with their role).
+  const usd = cost && cost.ready ? cost.roles[c.key + "/" + r.role.split("#")[0]] || 0 : 0;
+  if (usd >= 0.01 && !r.role.includes("#")) {
+    const m = el("span", "role-c", W.spentRole(money(usd)));
+    m.title = W.spentTip;
+    line.append(m);
+  }
+  card.append(h, line);
   const now = nowLine(r) || plain(r.now);
   card.append(el("div", "role-now", now || ""));
   if (tip.length) card.title = tip.join(" · ");
@@ -1112,6 +1151,7 @@ function renderFull() {
   fact(W.fvHolder, [who(full.crew, role), rs].filter(Boolean).join(" · "));
   fact(W.fvWaits, (w && w.on) || (t && t.on));
   fact(W.fvProject, project);
+  fact(W.fvCost, full.data && full.data.cost);
   if (multi()) fact(W.fvCrew, crewName(full.crew));
   if (t) {
     fact(W.fvCreated, when(t.created) + " · " + ago(t.created));
@@ -1326,3 +1366,4 @@ function connect() {
   render();
 })();
 connect();
+loadCost();

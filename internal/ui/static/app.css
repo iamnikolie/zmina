@@ -258,9 +258,10 @@ body.hidden *, body.hidden *::before, body.hidden *::after { animation-play-stat
   .chips button { font-size: .86rem; }
   .clock { font: 500 1.15rem/1 var(--mono); color: var(--ink); }
 
-  /* c2 · six readouts; a zero goes dark, «you hold» lights amber, «going» teal; counts are not repeated below */
-  .strip { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); border-bottom: 1px solid var(--line); }
-  .ro { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "n l" "n s"; column-gap: .9rem; align-items: center; padding: .75rem 2rem; border-left: 1px solid var(--line); }
+  /* c2 · the readouts in one row, however many (seven with «spent today»); a zero goes dark, «you hold» lights amber,
+     «going» teal; counts are not repeated below. The side padding gives way below about 2000 px so seven fit at 1400. */
+  .strip { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); border-bottom: 1px solid var(--line); }
+  .ro { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "n l" "n s"; column-gap: .9rem; align-items: center; padding: .75rem clamp(1rem, 1.6vw, 2rem); border-left: 1px solid var(--line); }
   .ro:first-child { border-left: 0; }
   /* D-04 i1 · labels in sans, sentence case; mono only for machine strings (ids, ages and times, crew and role keys) */
   .ro-l { grid-area: l; align-self: end; font: 600 .86rem/1.2 var(--sans); letter-spacing: 0; text-transform: none; color: var(--ink2); white-space: nowrap; }
@@ -334,6 +335,8 @@ body.hidden *, body.hidden *::before, body.hidden *::after { animation-play-stat
   .dh .kb-st { margin-left: 0; }
   .card.idle:not(.need) { opacity: .5; }
   .card.idle:not(.need):hover { opacity: 1; }
+  .role-c { margin-left: .5rem; font-family: var(--mono); font-size: .92em; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .role-c::before { content: "· "; }
   .role-h { display: flex; align-items: center; gap: .6rem; min-width: 0; }
   .lamp { width: 9px; height: 9px; flex: none; border-radius: 50%; border: 1.5px solid var(--faint); }
   /* D-04 i3 · the role's glyph is its lamp: faint while idle, teal and breathing while it works, amber when it needs you */

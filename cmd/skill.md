@@ -364,12 +364,13 @@ muted line names the empty ones in their place; empty «parked» and «waiting o
 
 From 1400 px the page is a cockpit on one screen, without page scroll: the header carries the z mark, which redraws
 on every tick (faded while the page has lost the stream, red while a shift is stopped or its ticker silent), and the
-newest event; six
-readouts (you hold, answer, working roles, waiting on others, parked, done today; a zero goes dark); then two
+newest event; seven
+readouts (you hold, answer, working roles, waiting on others, parked, done today, and spent today — API-equivalent
+dollars as `zmina usage` counts them, the week under it; a zero goes dark); then two
 zones. Left, **your move** (what you hold, then the asks and checks, each with its recommendation as the chip).
 Right, the **sessions**: one band of equal cards across the crews (its line: how many are up and not started,
 each crew's last tick; per session that is up: its role's glyph as its lamp (faint while idle, teal and breathing while
-it works, amber when it needs you), its role, its crew while every crew shows, its state and since when, its context
+it works, amber when it needs you), its role, its crew while every crew shows, its state and since when with what its role spent today (API-equivalent, once it is a cent), its context
 as a ring once it fills 75 % of its `context_max`, where it compacts (amber, red from 90 %; below that the numbers
 are in the card's tooltip), and what it says it does; a working one is lit, the idle ones lie as one stack after the rest, the last to go idle
 on top, until «+N idle» or «spread» lays them out), and under them the **task board**:
@@ -380,7 +381,7 @@ in one (waiting on you: what it needs from you); who has it. Any other column of
 «stack»; «spread» or «+N more» lays it out again; the browser keeps the choice): the top card, the edges of the rest.
 An empty column folds to a strip, and each column scrolls on its own. A card's corner opens its task on the whole
 screen (Esc closes): the latest note, what was asked, its timeline from the event log, the card's actions, its details
-(holder and its state, project, dates, repo, branch, worktree, link) and the holder's screen as `zmina peek` shows it. Every row opens in place
+(holder and its state, project, its cost line as `task show` prints it, dates, repo, branch, worktree, link) and the holder's screen as `zmina peek` shows it. Every row opens in place
 as above: one primary with an icon and its word, the other actions quiet, each a small icon and its word; when a
 narrow line cannot hold them, the buttons move under the field together, and the quiet ones under the primary
 together. An opened board card puts every button on one small line under the field; in a narrow column the quiet ones

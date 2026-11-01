@@ -15,6 +15,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/iamnikolie/zmina/internal/cost"
 )
 
 // uiHome makes a home with two crews: the default one and ~/.zmina/ops, each with its own tmux server name.
@@ -395,4 +397,55 @@ func TestUITakeBack(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, "T-1", "back on the owner's todo")
 	assert.Contains(t, out, "T-3")
+}
+
+func TestUICost(t *testing.T) {
+	home := uiHome(t)
+	crewFile := crewPathOf(t, "default")
+
+	_, _, err := zm(t, crewFile, "task", "new", "dev", "fix", "the", "login")
+	require.NoError(t, err)
+
+	// A transcript's time is to the second, the task's is not: the reply comes in the next second.
+	time.Sleep(time.Until(time.Now().Truncate(time.Second).Add(time.Second)))
+
+	name := strings.TrimPrefix(strings.SplitN(string(mustRead(t, crewFile)), "\n", 2)[0], "name: ")
+	proj := filepath.Join(home, ".zmina", "ns", "projects", "-work")
+	require.NoError(t, os.MkdirAll(proj, 0o700))
+	body := `{"type":"agent-name","agentName":"` + name + `-dev"}` + "\n" + `{"type":"assistant","timestamp":"` +
+		time.Now().UTC().Format(time.RFC3339) + `","cwd":"/work","message":{"id":"m1","model":"claude-opus-5-5",` +
+		`"usage":{"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,` +
+		`"output_tokens":100000}}}` + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(proj, "s1.jsonl"), []byte(body), 0o600))
+
+	srv, _ := uiServer(t, true, "")
+
+	var got uiCost
+
+	require.Eventually(t, func() bool {
+		resp, err := http.Get(srv.URL + "/api/cost")
+		require.NoError(t, err)
+
+		defer func() { _ = resp.Body.Close() }()
+
+		require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
+
+		return got.Ready
+	}, 5*time.Second, 50*time.Millisecond, "the first read runs in the background")
+
+	assert.InDelta(t, 2, got.Today, 1e-9, "100k output at $20 a million")
+	assert.InDelta(t, 2, got.Week, 1e-9)
+	assert.InDelta(t, 2, got.Crews["default"].Today, 1e-9)
+	assert.InDelta(t, 2, got.Roles["default/dev"], 1e-9)
+	assert.InDelta(t, 2, got.Tasks["default/T-1"], 1e-9, "the role held the one task")
+	assert.Equal(t, cost.Builtin().Date, got.Prices)
+
+	resp, err := http.Get(srv.URL + "/api/task?crew=default&id=T-1")
+	require.NoError(t, err)
+
+	defer func() { _ = resp.Body.Close() }()
+
+	var task struct{ Cost string }
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&task))
+	assert.Equal(t, "$2.00 API-equivalent · 1 turns · opus-5.5 100% · by window", task.Cost)
 }

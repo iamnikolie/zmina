@@ -241,6 +241,9 @@ func (a *app) uiHandler(bound string, loopback bool, token string) http.Handler 
 	mux.HandleFunc("GET /api/ping", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "zmina") })
 	mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, a.uiSnapshot()) })
 	mux.HandleFunc("GET /api/stream", a.uiStream)
+
+	costs := &uiCostCache{read: a.readUICost}
+	mux.HandleFunc("GET /api/cost", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, costs.get()) })
 	mux.HandleFunc("GET /api/peek", func(w http.ResponseWriter, r *http.Request) {
 		var text string
 
@@ -267,6 +270,8 @@ func (a *app) uiHandler(bound string, loopback bool, token string) http.Handler 
 		var out struct {
 			Task task.Task      `json:"task"`
 			Log  []events.Event `json:"log"`
+			// Cost is the task's cost line (task show's, without its word), empty when no turn is found.
+			Cost string `json:"cost"`
 		}
 
 		c, err := a.crewApp(r.URL.Query().Get("crew"))
@@ -279,6 +284,10 @@ func (a *app) uiHandler(bound string, loopback bool, token string) http.Handler 
 
 				out.Task = t
 				out.Log, _ = eventLog(s.Crew).Read(events.Filter{Task: t.ID, Last: 50})
+
+				if line := c.taskCost(t, s); !strings.HasSuffix(line, noTurns) {
+					out.Cost = strings.TrimPrefix(line, "cost: ")
+				}
 
 				return nil
 			})
