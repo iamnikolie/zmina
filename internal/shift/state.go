@@ -46,6 +46,10 @@ type State struct {
 	LastTick time.Time `json:"last_tick,omitzero"`
 	// Stopped is set while the shift is stopped: the ticker starts nothing.
 	Stopped time.Time `json:"stopped,omitzero"`
+	// BudgetAt is when the ticker last checked the budgets; Budgeted the budgets it has told the dispatcher are
+	// crossed (role:<name>:<day>, task:<id>:<budget>), so each is told once.
+	BudgetAt time.Time `json:"budget_at,omitzero"`
+	Budgeted []string  `json:"budgeted,omitempty"`
 
 	// Legacy is set when the file read was in the first format (converted in memory, written as this one on
 	// the next save).

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -328,21 +329,64 @@ func TestUpWithTask(t *testing.T) {
 }
 
 func TestUsage(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
 	crewFile := testCrew(t, "  dev:\n")
 	dir := filepath.Dir(crewFile)
 	proj := filepath.Join(dir, "ns", "projects", "-work")
 	require.NoError(t, os.MkdirAll(proj, 0o700))
 
+	_, _, err := zm(t, crewFile, "task", "new", "dev", "fix", "the", "login")
+	require.NoError(t, err)
+
+	// A transcript's time is to the second, the task's is not: the replies come in the next second.
+	time.Sleep(time.Until(time.Now().Truncate(time.Second).Add(time.Second)))
+
 	name := strings.TrimPrefix(strings.SplitN(string(mustRead(t, crewFile)), "\n", 2)[0], "name: ")
-	ts := time.Now().UTC().Format(time.RFC3339)
-	body := `{"type":"agent-name","agentName":"` + name + `-dev-2"}` + "\n" +
-		`{"type":"assistant","timestamp":"` + ts + `","message":{"id":"m1","usage":{"input_tokens":4,` +
-		`"cache_creation_input_tokens":1000,"cache_read_input_tokens":200000,"output_tokens":500}}}` + "\n"
+	reply := func(id, model, cwd string) string {
+		return `{"type":"assistant","timestamp":"` + time.Now().UTC().Format(time.RFC3339) + `","cwd":"` + cwd +
+			`","message":{"id":"` + id + `","model":"` + model + `","usage":{"input_tokens":4,` +
+			`"cache_creation_input_tokens":1000,"cache_read_input_tokens":200000,"output_tokens":500,` +
+			`"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":1000}}}}` + "\n"
+	}
+	body := `{"type":"agent-name","agentName":"` + name + `-dev-2"}` + "\n" + reply("m1", "claude-opus-5-5", "/work") +
+		reply("m2", "claude-opus-9", "/work")
 	require.NoError(t, os.WriteFile(filepath.Join(proj, "s1.jsonl"), []byte(body), 0o600))
+	body = `{"type":"agent-name","agentName":"` + name + `-dev"}` + "\n" + reply("m3", "claude-opus-5-5", "/work")
+	require.NoError(t, os.WriteFile(filepath.Join(proj, "s2.jsonl"), []byte(body), 0o600))
 
 	out, _, err := zm(t, crewFile, "usage")
 	require.NoError(t, err)
-	assert.Regexp(t, `dev\s+1\s+1\s+4\s+1k\s+200k\s+500\s+201k\s+201k`, out, "a copy counts with its role")
+	// 4 in, 1000 1h writes, 200k reads, 500 out at opus-5.5: $0.000016 + $0.008 + $0.04 + $0.01.
+	assert.Regexp(t, `(?m)^dev\s+3\s+0\s+604k\s+100%\s+\$0\.116\s+\$0\.058\s+201k !\s+opus-5\.5 100% · opus-9 unpriced$`,
+		out, "a copy counts with its role; the unknown model is shown, not priced")
+	assert.Contains(t, out, "API-equivalent")
+	assert.Contains(t, out, "1 turns unpriced, models claude-opus-9")
+
+	out, _, err = zm(t, crewFile, "usage", "--by", "task")
+	require.NoError(t, err)
+	assert.Regexp(t, `(?m)^T-1\s+1\s.*\$0\.058.*window$`, out, "the role held one task: the turn is that task's")
+	assert.Regexp(t, `(?m)^untasked\s+2\s`, out, "the copy held none")
+
+	out, _, err = zm(t, crewFile, "task", "show", "1")
+	require.NoError(t, err)
+	assert.Contains(t, out, "cost: $0.058 API-equivalent · 1 turns · opus-5.5 100% · by window")
+
+	out, _, err = zm(t, crewFile, "usage", "--json", "--by", "model")
+	require.NoError(t, err)
+
+	var rep usageReport
+	require.NoError(t, json.Unmarshal([]byte(out), &rep))
+	require.Len(t, rep.Rows, 2)
+	assert.Equal(t, "claude-opus-5-5", rep.Rows[0].Key)
+	assert.Equal(t, 3, rep.Total.Turns)
+
+	_, _, err = zm(t, crewFile, "usage", "--by", "week")
+	assert.ErrorContains(t, err, "one of role, task")
+
+	out, _, err = zm(t, crewFile, "task", "done", "1")
+	require.NoError(t, err)
+	assert.Contains(t, out, "T-1 · dev · done\ncost: $0.058")
 }
 
 func TestLaterFlow(t *testing.T) {

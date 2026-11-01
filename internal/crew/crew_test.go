@@ -421,3 +421,18 @@ func TestReleaseIdleMinutes(t *testing.T) {
 		assert.ErrorContains(t, err, "release_idle_minutes", body)
 	}
 }
+
+func TestBudget(t *testing.T) {
+	c, err := Load(write(t, "dir: "+t.TempDir()+"\nroles:\n  dispatcher:\n  dev:\n    budget: 20\n  ops:\n"))
+	require.NoError(t, err)
+	assert.InDelta(t, 20, c.Roles["dev"].Budget, 0)
+	assert.Zero(t, c.Roles["ops"].Budget, "none by default")
+	for _, w := range c.Warnings {
+		assert.NotContains(t, w, "budget", "a known key")
+	}
+
+	_, err = Load(write(t, "dir: "+t.TempDir()+"\nroles:\n  dispatcher:\n  dev:\n    budget: -1\n"))
+	assert.ErrorContains(t, err, "budget must be positive")
+
+	assert.Contains(t, SeatKeys, "budget", "zmina seat set dev budget=20")
+}

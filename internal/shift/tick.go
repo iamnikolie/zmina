@@ -290,6 +290,9 @@ func Tokens(n int) string {
 	}
 }
 
+// AddNotes queues health notes for the dispatcher (see addNotes).
+func (s *Shift) AddNotes(notes []string) { s.addNotes(notes) }
+
 // addNotes queues health notes for the dispatcher: a note already waiting is not added twice, and past notesMax the
 // oldest health notes go. Signals (zmina note, watches) are a separate queue and never go this way.
 func (s *Shift) addNotes(notes []string) {

@@ -107,6 +107,8 @@ type Task struct {
 	Ignored time.Time `json:"ignored,omitzero"`
 	// Later is the later item a parked task became.
 	Later string `json:"later,omitempty"`
+	// Budget is what the task may cost, in API-equivalent dollars, before the ticker tells the dispatcher; 0: none.
+	Budget float64 `json:"budget,omitempty"`
 }
 
 // titleMax is how much of the asked text stands in for a missing title.

@@ -92,6 +92,9 @@ type Role struct {
 	ContextAction string `yaml:"context_action"`
 	// ReleaseIdleMinutes overrides the crew's release_idle_minutes for this role: minutes, or off.
 	ReleaseIdleMinutes string `yaml:"release_idle_minutes"`
+	// Budget is what the role (its copies with it) may spend a day, in API-equivalent dollars, before the ticker
+	// tells the dispatcher; 0: no budget.
+	Budget float64 `yaml:"budget"`
 
 	schedule    *cron.Schedule
 	expiresAt   time.Time
@@ -638,6 +641,10 @@ func (c *Crew) resolve(strict bool) error {
 			if r.contextMax, err = ParseTokens(r.ContextMax); err != nil {
 				return fmt.Errorf("role %s: context_max: %w", name, err)
 			}
+		}
+
+		if r.Budget < 0 {
+			return fmt.Errorf("role %s: budget must be positive", name)
 		}
 
 		r.releaseIdle = crewRelease

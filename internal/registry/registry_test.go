@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -128,34 +129,92 @@ func TestLastTurnError(t *testing.T) {
 	assert.Empty(t, got.Error, "a turn after the error: it is over")
 }
 
-func TestUsageSince(t *testing.T) {
+func TestMessages(t *testing.T) {
 	ns := t.TempDir()
 	dir := filepath.Join(ns, "projects", "-work")
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "s1", "subagents"), 0o700))
 
-	at := func(ts, id string, read int) string {
-		return fmt.Sprintf(`{"type":"assistant","timestamp":%q,"message":{"id":%q,"usage":{"input_tokens":2,`+
-			`"cache_creation_input_tokens":100,"cache_read_input_tokens":%d,"output_tokens":10}}}`, ts, id, read)
+	at := func(ts, id, model string, read int, extra string) string {
+		return fmt.Sprintf(`{"type":"assistant","timestamp":%q,"cwd":"/work/t1","message":{"id":%q,"model":%q,`+
+			`"usage":{"input_tokens":2,"cache_creation_input_tokens":100,"cache_read_input_tokens":%d,`+
+			`"output_tokens":10%s}}}`, ts, id, model, read, extra)
+	}
+	user := func(ts, text, extra string) string {
+		return fmt.Sprintf(`{"type":"user","timestamp":%q%s,"message":{"role":"user","content":%q}}`, ts, extra, text)
 	}
 
-	head := `{"type":"custom-title","customTitle":"zm-dev"}` + "\n" + `{"type":"agent-name","agentName":"zm-dev"}` + "\n"
-	main := head + at("2026-10-26T08:00:00Z", "old", 1) + "\n" +
-		at("2026-10-26T12:00:00Z", "m1", 1000) + "\n" + at("2026-10-26T12:00:00Z", "m1", 1000) + "\n" + // one reply, two lines
-		at("2026-10-26T13:00:00Z", "m2", 2000) + "\n"
+	split := `,"cache_creation":{"ephemeral_5m_input_tokens":40,"ephemeral_1h_input_tokens":60},` +
+		`"server_tool_use":{"web_search_requests":2},"speed":"standard"`
+	main := strings.Join([]string{
+		`{"type":"agent-name","agentName":"zm-dev"}`,
+		user("2026-10-26T07:59:00Z", "fix the login", `,"origin":{"kind":"human"}`),
+		at("2026-10-26T08:00:00Z", "old", "claude-opus-5-5", 1, ""),
+		user("2026-10-26T11:59:00Z", "[zmina T-4] fix the login", ""),
+		at("2026-10-26T12:00:00Z", "m1", "claude-opus-5-5", 1000, split),
+		at("2026-10-26T12:00:00Z", "m1", "claude-opus-5-5", 1000, split), // one reply, two lines
+		`{"type":"user","timestamp":"2026-10-26T12:01:00Z","message":{"content":[{"type":"tool_result","content":"ok"}]}}`,
+		user("2026-10-26T12:02:00Z", "<skill text>", `,"isMeta":true`),
+		at("2026-10-26T12:03:00Z", "m2", "claude-opus-5-5", 1500, ""),
+		user("2026-10-26T12:59:00Z", `<cross-session-message from="uds:x" from-name="zm-dispatcher">go on</cross-session-message>`,
+			`,"origin":{"kind":"peer","name":"zm-dispatcher"}`),
+		at("2026-10-26T13:00:00Z", "m3", "claude-sonnet-5-5", 2000, `,"speed":"fast"`),
+		user("2026-10-26T13:10:00Z", "[zmina] dev idle 40m · dev2 stuck", ""),
+		at("2026-10-26T13:11:00Z", "m4", "claude-opus-5-5", 10, ""),
+		user("2026-10-26T13:20:00Z", "summary", `,"isCompactSummary":true`),
+		at("2026-10-26T13:21:00Z", "m5", "claude-opus-5-5", 10, ""),
+	}, "\n") + "\n"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "s1.jsonl"), []byte(main), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "s1", "subagents", "agent-x.jsonl"),
-		[]byte(at("2026-10-26T12:30:00Z", "sub1", 500)+"\n"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "s2.jsonl"),
-		[]byte(`{"type":"agent-name","agentName":"someone-else"}`+"\n"+at("2026-10-26T12:00:00Z", "x", 9)+"\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "s1", "subagents", "agent-x.jsonl"), []byte(
+		user("2026-10-26T12:29:00Z", "look it up", `,"isSidechain":true`)+"\n"+
+			at("2026-10-26T12:30:00Z", "sub1", "claude-haiku-5-5", 500, "")+"\n"+
+			at("2026-10-26T12:30:00Z", "m1", "claude-opus-5-5", 1000, "")+"\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "s2.jsonl"), []byte(at("2026-10-26T12:00:00Z", "x", "m", 9, "")+"\n"),
+		0o600))
+
+	reg := &Registry{Namespace: ns}
+	ts, err := reg.Transcripts(time.Time{})
+	require.NoError(t, err)
+	require.Len(t, ts, 2)
+	assert.Equal(t, Transcript{Path: filepath.Join(dir, "s1.jsonl"), ID: "s1", Name: "zm-dev"}, ts[0])
+	assert.Empty(t, ts[1].Name, "an unnamed session")
 
 	since := time.Date(2026, 10, 26, 10, 0, 0, 0, time.UTC)
-	got, err := (&Registry{Namespace: ns}).UsageSince([]string{"zm-dev"}, since.Add(-48*time.Hour))
+	got, err := Messages(ts[0], since)
 	require.NoError(t, err)
-	require.Len(t, got, 1, "only the crew's sessions")
 
-	got, err = (&Registry{Namespace: ns}).UsageSince([]string{"zm-dev"}, since)
-	require.NoError(t, err)
-	require.Len(t, got, 1)
-	assert.Equal(t, Usage{Session: "zm-dev", ID: "s1", Turns: 3, Input: 6, CacheWrite: 300, CacheRead: 3500, Output: 30,
-		Last: time.Date(2026, 10, 26, 13, 0, 0, 0, time.UTC)}, got[0])
+	var ids, triggers []string
+	for _, m := range got {
+		ids = append(ids, m.ID)
+		triggers = append(triggers, m.Trigger)
+	}
+
+	assert.Equal(t, []string{"m1", "m2", "sub1", "m3", "m4", "m5"}, ids, "since, each reply once, by time")
+	assert.Equal(t, []string{TriggerHandoff, TriggerHandoff, TriggerHandoff, TriggerPeer, TriggerNotice, TriggerCompact},
+		triggers, "a tool result and a skill's text start no turn; a subagent's reply takes its parent's turn")
+
+	assert.Equal(t, Message{ID: "m1", At: time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC), Model: "claude-opus-5-5",
+		Input: 2, Write5m: 40, Write1h: 60, Read: 1000, Output: 10, WebSearch: 2, Cwd: "/work/t1",
+		Trigger: TriggerHandoff}, got[0])
+	assert.Equal(t, 100, got[1].Write5m, "no split: the API's default lifetime")
+	assert.True(t, got[2].Sub)
+	assert.Equal(t, "zm-dispatcher", got[3].From)
+	assert.Equal(t, "fast", got[3].Speed)
+	assert.Equal(t, 2+100+1000, got[0].Prompt())
+}
+
+func TestTriggers(t *testing.T) {
+	for text, want := range map[string]string{
+		"[zmina T-4, scheduled] run the report":       TriggerSchedule,
+		"[zmina] remote mac/acme: \"hi\"":             TriggerRemote,
+		"<task-notification>done</task-notification>": TriggerAgent,
+		"/compact": TriggerOwner,
+	} {
+		got, _ := textTrigger(text)
+		assert.Equal(t, want, got, text)
+	}
+}
+
+func TestProjectDir(t *testing.T) {
+	assert.Equal(t, filepath.Join("/ns", "projects", "-home-alex--zmina-worktrees-acme-T-1"),
+		(&Registry{Namespace: "/ns"}).ProjectDir("/home/alex/.zmina/worktrees/acme-T-1"))
 }

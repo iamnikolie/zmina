@@ -54,6 +54,7 @@ roles:
     context_max: 200k                    # conversation fuller than this -> trimmed once idle (150k, 1m; 50k at least; off)
     context_action: clear                # compact (default: /compact) | clear (/clear, then the boot line again)
     release_idle_minutes: 120            # its own (minutes; off: never released)
+    budget: 20                           # API-equivalent $ a day it (its copies with it) may spend (default none)
   scribe:
     schedule: "0 19 * * 1-5"             # cron: minute hour day-of-month month day-of-week
     prompt: write today's summary        # one line typed at each run
@@ -287,13 +288,13 @@ directory, readable or not, and never replaces a file; `task ls` and `doctor` na
 
 | Command | Does |
 |---|---|
-| `zmina task new <role> <asked...>` | record a task; prints `T-14 · dev`. `--repo <name or path>` (a name is a directory under the crew's dir), `--note`, `--title "<short plain sentence>"`, `--project <name>`, `--url <live thing>`, `--json`. |
+| `zmina task new <role> <asked...>` | record a task; prints `T-14 · dev`. `--repo <name or path>` (a name is a directory under the crew's dir), `--note`, `--title "<short plain sentence>"`, `--project <name>`, `--url <live thing>`, `--budget <dollars>` (what it may cost, see Usage), `--json`. |
 | `zmina task new <role> --repo r --worktree <asked...>` | also gives it its own git worktree `~/.zmina/worktrees/<repo>-T-14` on a new branch `zmina/t-14` (`zmina/<crew>-t-14` for a named crew) from the repo's current branch (`--base` another). The role works there, never in the repo's checkout. The task is written before the worktree is made: if git fails, it stays as `dropped` with the error in its note. |
 | `zmina task ls [--all] [--role r] [--json]` | active tasks (`--all`: closed too). |
-| `zmina task show <id>` | one task with its history from the event log. Ids: `T-14`, `t-14` or `14`. |
-| `zmina task set <id> [state] [--on <who>] [--note …] [--role r] [--title …] [--project …] [--url …]` | change state, note, title, project or url (`-` clears one), or hand it to another role. `waiting --on <who>`: it waits on someone other than the owner — a role of the crew or a person (`--on -`: the owner again); it stays off the owner's todo. Any other state clears it. |
-| `zmina task done <id>` / `task drop <id>` | close it. Refuses while its worktree has uncommitted changes (`--force` closes anyway; the worktree stays). |
-| `zmina task park <id> [--note "<what remains>"]` | move an active task to the later list: a new `L-n` with what remains (default: the task's title), note `from T-48 (designer)`, and the role and its conversation (the running one, else its last) for `later take --resume`. The task closes as `parked L-n`; its worktree stays as it is. `task set <id> parked` is refused: parking goes through here. Prints `T-48 · designer · parked L-15`. |
+| `zmina task show <id>` | one task with its cost line (see Usage) and its history from the event log. Ids: `T-14`, `t-14` or `14`. |
+| `zmina task set <id> [state] [--on <who>] [--note …] [--role r] [--title …] [--project …] [--url …] [--budget …]` | change state, note, title, project, url or budget (`-` clears one), or hand it to another role. `waiting --on <who>`: it waits on someone other than the owner — a role of the crew or a person (`--on -`: the owner again); it stays off the owner's todo. Any other state clears it. |
+| `zmina task done <id>` / `task drop <id>` | close it, and print its cost line when turns are found for it. Refuses while its worktree has uncommitted changes (`--force` closes anyway; the worktree stays). |
+| `zmina task park <id> [--note "<what remains>"]` | move an active task to the later list: a new `L-n` with what remains (default: the task's title), note `from T-48 (designer)`, and the role and its conversation (the running one, else its last) for `later take --resume`. The task closes as `parked L-n`; its worktree stays as it is. `task set <id> parked` is refused: parking goes through here. Prints `T-48 · designer · parked L-15`, then its cost line. |
 | `zmina task gc [--dry-run]` | remove worktrees and branches of closed tasks once clean and merged into their base. `--force` also removes dropped tasks' unmerged branches. |
 
 **What the work is.** `--title` is the work in one short plain sentence in the owner's language ("Landing page —
@@ -426,7 +427,7 @@ and that role's conversation.
 | Command | Does |
 |---|---|
 | `zmina seat add <role> [--about … --dir … --boot … --model … --keep … --args=--chrome,--x --resume always --schedule "…" --prompt "…" --expires 3d]` | add a role. `--expires` takes `12h`, `3d`, a date or a date and time. |
-| `zmina seat set <role> key=value …` | change keys; `key=` removes one. Keys: session, dir, boot, keep, model, args (`[--a, --b]` or `--a,--b`), about, remote_control (`true`/`false`), resume, schedule, prompt, expires, context_max, context_action, drop_tools, keep_tools (lists, like args), release_idle_minutes. |
+| `zmina seat set <role> key=value …` | change keys; `key=` removes one. Keys: session, dir, boot, keep, model, args (`[--a, --b]` or `--a,--b`), about, remote_control (`true`/`false`), resume, schedule, prompt, expires, context_max, context_action, drop_tools, keep_tools (lists, like args), release_idle_minutes, budget. |
 | `zmina seat rm <role>` | remove a role that is down and holds no active task (`--force` despite tasks). |
 
 Every edit keeps the file's comments, is checked by loading it before it is written (a crew that
@@ -434,10 +435,42 @@ would not load is never saved), and leaves the previous file as `crew.yaml.bak`.
 
 ## Usage
 
-`zmina usage [--since 24h|7d] [--json]` — what each role spent, from the transcripts (subagents and
-a role's copies included, one API reply counted once): sessions, turns, input, cache writes, cache
-reads, output, total, and per turn — a turn's total is about the conversation it carries, so a big
-`PER TURN` is a role to compact or to give fewer tools.
+`zmina usage [--since 24h|7d] [--by role|task|model|day|crew|trigger|how] [--role r] [--all] [--json]` — what the
+work cost, from the transcripts: each API reply once, a role's copies (dev#2) with it, a subagent's replies with
+the session that started it (`SUB` counts them). Columns: turns, tokens, `CACHED` (the share of the prompt read
+from cache), `$ API`, `$/TURN`, `CTX` (the context a turn carries on average; `!` past 200k — most of such a
+turn's price is reading the conversation again: compact or restart the role), `MODELS` (the model mix by dollars,
+from each reply's own model), and for `--by task` `HOW`. A totals row `all`.
+
+- **$ API is API-equivalent**: what the same tokens would cost at API rates; the crews run on a subscription. Each
+  reply is priced by its model, its 5-minute and 1-hour cache writes apart, its fast mode and web searches. The
+  price table is built in with its date; `~/.zmina/prices.json` overrides it model by model
+  (`{"date":"2026-12-01","models":{"claude-opus-5-5":{"input":4,"output":20,"read":0.2}}}`, dollars per
+  million tokens; cache writes default to 1.25× and 2× input). A model the table lacks is shown as `unpriced`,
+  never guessed; a dated snapshot (`…-20251001`) is priced as its model. usage says when the table is over 120
+  days old.
+- **Tasks** (`--by task`): a reply belongs to the task whose worktree it ran in (`cwd`), else to the one task its
+  role held at the time — from handed or opened to done, dropped, parked or handed on, from the event log
+  (`window`); a role holding several at once gives `shared T-3+T-5` (to none of them alone), one holding none
+  `untasked` (the dispatcher's coordination is there). A session that is no crew's role but ran in a task's
+  worktree (the owner's own, a headless `claude -p`) counts as `(outside)`. `task show` prints the task's line:
+  `cost: $12.40 API-equivalent · 312 turns · opus-5.5 94% · haiku-5.5 6% · by cwd 80% · window 20%`, with what it
+  shares with other tasks held at once.
+- **Triggers** (`--by trigger`, with `--role dispatcher` the coordination bill): what started the turn —
+  `owner` (typed at the prompt), `dispatcher` (a message from the crew's dispatcher session), `peer` (from any
+  other session), `handoff` (`[zmina T-5] …` typed in), `schedule`, `notice` (zmina's own lines: health notes,
+  idle and release notices), `remote` (another crew, `zmina tell`), `agent` (a background agent finished),
+  `compact`.
+- **`--all`**: every crew under `~/.zmina`, and every mesh peer with an address of its own, asked over ssh for its
+  crews (`zmina usage --all --local --cells`); one table, crews named `<node>/<crew>`. A peer that does not answer
+  (down, or a zmina older than this) is listed under the table as `missing:` with why.
+- **Budgets**, in API-equivalent dollars, none by default: a role's `budget:` in the crew file is per day (its
+  copies with it), a task's `--budget` for its whole life (its own turns, not the ones it shares). Every ten
+  minutes the ticker checks them — and reads nothing while none is set — and tells the dispatcher once per
+  crossing: `budget: dev spent $23.10 today (API-equivalent), over its $20.00 a day`, `budget: T-5 (dev) cost
+  $52.00 so far (API-equivalent), over its $50.00`. A note, never a stop. `task show` says `within` or `over its
+  $50.00 budget`.
+- Not counted: transcripts Claude Code no longer keeps, and headless runs outside every task's worktree.
 
 ## Log
 
@@ -560,6 +593,8 @@ and exists nowhere else. It is written whole (rename) and never over a file zmin
 - `<role>: no input line …` — a stuck prompt (folder trust elsewhere, a question, a login):
   `zmina peek <role>`, then `zmina keys <role> …`, or ask the owner. `stopped by a usage limit` —
   nothing to press; say when it resets and hold its work.
+- `budget: …` — a role or a task went past its budget (API-equivalent dollars). Nothing is stopped: tell the
+  owner in one line with `zmina usage --by task --role <role>` behind it, and act on what they decide.
 - Do not end a role that is `busy` unless the owner asks. Do not touch `outside` sessions — they
   are the owner's own terminals.
 

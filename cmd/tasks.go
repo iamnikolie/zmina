@@ -78,6 +78,8 @@ func (a *app) taskNewCommand() *cobra.Command {
 	c.Flags().StringVar(&n.Title, "title", "", "the work in one short plain sentence, in the owner's language")
 	c.Flags().StringVar(&n.Project, "project", "", "the project or product it is for (default: the repo's dir name)")
 	c.Flags().StringVar(&n.URL, "url", "", "the live thing to look at")
+	c.Flags().Float64Var(&n.Budget, "budget", 0, "what the task may cost, API-equivalent dollars: past it the "+
+		"ticker tells the dispatcher")
 	c.Flags().BoolVar(&asJSON, "json", false, "JSON output")
 
 	return c
@@ -189,6 +191,8 @@ func (a *app) taskShowCommand() *cobra.Command {
 					fmt.Fprintln(a.out, "note:", t.Note)
 				}
 
+				fmt.Fprintln(a.out, a.taskCost(t, s))
+
 				evs, _ := eventLog(s.Crew).Read(events.Filter{Task: t.ID, Last: 20})
 				for _, e := range evs {
 					fmt.Fprintf(a.out, "  %s  %s  %s  %s\n", e.TS.Format(time.DateTime), e.By, e.Event, e.Detail)
@@ -208,6 +212,7 @@ func (a *app) taskShowCommand() *cobra.Command {
 type taskChange struct {
 	note, role, on      string
 	title, project, url string
+	budget              string
 	force               bool
 }
 
@@ -220,6 +225,7 @@ func (o *taskChange) flags(c *cobra.Command, withRole bool) {
 		c.Flags().StringVar(&o.title, "title", "", "the work in one short plain sentence (- clears it)")
 		c.Flags().StringVar(&o.project, "project", "", "the project or product it is for (- clears it)")
 		c.Flags().StringVar(&o.url, "url", "", "the live thing to look at (- clears it)")
+		c.Flags().StringVar(&o.budget, "budget", "", "what the task may cost, API-equivalent dollars (- clears it)")
 		c.Flags().StringVar(&o.on, "on", "", "with waiting: who it waits on when not the owner — a role or a person "+
 			"(- the owner again); it stays off the owner's todo")
 	}
@@ -229,9 +235,10 @@ func (a *app) taskSetCommand() *cobra.Command {
 	var o taskChange
 
 	c := &cobra.Command{
-		Use:   "set <id> [state]",
-		Short: "Change a task: state (open, waiting [--on who], done, dropped), --note, --role, --title, --project, --url",
-		Args:  cobra.RangeArgs(1, 2),
+		Use: "set <id> [state]",
+		Short: "Change a task: state (open, waiting [--on who], done, dropped), --note, --role, --title, --project, " +
+			"--url, --budget",
+		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var st task.State
 
@@ -274,7 +281,9 @@ func (a *app) taskParkCommand() *cobra.Command {
 		Short: "Move an active task to the later list with what remains (--note); it closes as parked L-n",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return a.withState(func(s *shift.Shift) error {
+			var parked task.Task
+
+			err := a.withState(func(s *shift.Shift) error {
 				t, err := taskStore(s.Crew).Get(args[0])
 				if err != nil {
 					return err
@@ -286,9 +295,17 @@ func (a *app) taskParkCommand() *cobra.Command {
 				}
 
 				fmt.Fprintf(a.out, "%s · %s · parked %s\n", t.ID, t.Role, it.ID)
+				parked = t
 
 				return nil
 			})
+			if err != nil {
+				return err
+			}
+
+			a.closedCost(parked)
+
+			return nil
 		},
 	}
 
@@ -298,7 +315,9 @@ func (a *app) taskParkCommand() *cobra.Command {
 }
 
 func (a *app) setTask(id string, st task.State, o taskChange) error {
-	return a.withState(func(s *shift.Shift) error {
+	var closed *task.Task
+
+	err := a.withState(func(s *shift.Shift) error {
 		if o.role != "" {
 			if _, err := s.Role(o.role); err != nil {
 				return err
@@ -306,15 +325,26 @@ func (a *app) setTask(id string, st task.State, o taskChange) error {
 		}
 
 		t, err := a.ledger(s).Set(id, ledger.Change{State: st, On: o.on, Note: o.note, Role: o.role, Force: o.force,
-			Title: o.title, Project: o.project, URL: o.url})
+			Title: o.title, Project: o.project, URL: o.url, Budget: o.budget})
 		if err != nil {
 			return err
 		}
 
 		fmt.Fprintf(a.out, "%s · %s · %s\n", t.ID, t.Role, t.Status())
 
+		if st != "" && !st.Active() {
+			closed = &t
+		}
+
 		return nil
 	})
+
+	// The cost of a closed task is read after the lock: the transcripts take a while, the ticker must not wait.
+	if err == nil && closed != nil {
+		a.closedCost(*closed)
+	}
+
+	return err
 }
 
 func (a *app) taskGCCommand() *cobra.Command {

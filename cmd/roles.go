@@ -475,6 +475,7 @@ func (a *app) tickCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			err := shift.RunTick(a.withState, runWatches, a.printTick)
 			a.meshTick()
+			a.budgetTick(time.Now())
 
 			return err
 		},

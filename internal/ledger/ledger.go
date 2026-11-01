@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -78,6 +79,8 @@ type NewTask struct {
 	Repo     string
 	Worktree bool
 	Base     string
+	// Budget is what the task may cost (see task.Task.Budget).
+	Budget float64
 }
 
 // New records a task. With a worktree, the task is written first — with the worktree's path, branch and base — and
@@ -87,7 +90,12 @@ func (l *Ledger) New(n NewTask) (task.Task, error) {
 		return task.Task{}, errors.New("a worktree needs a repo")
 	}
 
-	t := task.Task{Role: n.Role, Asked: n.Asked, Note: n.Note, By: n.By, Title: n.Title, Project: n.Project, URL: n.URL}
+	if n.Budget < 0 {
+		return task.Task{}, errors.New("a budget is a positive number of dollars")
+	}
+
+	t := task.Task{Role: n.Role, Asked: n.Asked, Note: n.Note, By: n.By, Title: n.Title, Project: n.Project, URL: n.URL,
+		Budget: n.Budget}
 
 	if n.Repo != "" {
 		repo, err := l.repo(n.Repo)
@@ -162,6 +170,8 @@ type Change struct {
 	Role string
 	// Title, Project and URL replace the task's; "-" clears one.
 	Title, Project, URL string
+	// Budget replaces the task's budget, in dollars; "-" or 0 clears it.
+	Budget string
 	// Force closes a task although its worktree has uncommitted changes.
 	Force bool
 }
@@ -240,8 +250,23 @@ func (l *Ledger) Set(id string, c Change) (task.Task, error) {
 		}
 	}
 
+	switch c.Budget {
+	case "":
+	case "-", "0":
+		t.Budget = 0
+		changes = append(changes, "budget cleared")
+	default:
+		v, err := strconv.ParseFloat(strings.TrimPrefix(c.Budget, "$"), 64)
+		if err != nil || v < 0 {
+			return t, fmt.Errorf("budget %q: a number of dollars, or - to clear it", c.Budget)
+		}
+
+		t.Budget = v
+		changes = append(changes, fmt.Sprintf("budget $%g", v))
+	}
+
 	if len(changes) == 0 {
-		return t, errors.New("nothing to change: give a state, --note, --role, --title, --project or --url")
+		return t, errors.New("nothing to change: give a state, --note, --role, --title, --project, --url or --budget")
 	}
 
 	t.Updated = l.Now()
