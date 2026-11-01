@@ -27,6 +27,10 @@ type Turn struct {
 	// ErrorID tells one such error from the next.
 	Error   string
 	ErrorID string
+	// Ended is true when the conversation's newest line closes a turn (an end_turn reply, or the turn's closing
+	// system line): the session waits for its next prompt, even while its status says otherwise because a
+	// background shell or agent runs.
+	Ended bool
 }
 
 // line is the part of a transcript line zmina reads.
@@ -46,10 +50,11 @@ type line struct {
 		Name string `json:"name"`
 	} `json:"origin"`
 	Message struct {
-		ID      string          `json:"id"`
-		Model   string          `json:"model"`
-		Content json.RawMessage `json:"content"`
-		Usage   *struct {
+		ID         string          `json:"id"`
+		Model      string          `json:"model"`
+		StopReason string          `json:"stop_reason"`
+		Content    json.RawMessage `json:"content"`
+		Usage      *struct {
 			Input         int `json:"input_tokens"`
 			CacheCreation int `json:"cache_creation_input_tokens"`
 			CacheRead     int `json:"cache_read_input_tokens"`
@@ -156,12 +161,25 @@ func lastTurn(path string) (Turn, error) {
 
 	var t Turn
 
-	seenTurn := false
+	seenTurn, decided := false, false
 
 	for i := len(lines) - 1; i >= 0; i-- {
 		var l line
 		if len(bytes.TrimSpace(lines[i])) == 0 || json.Unmarshal(lines[i], &l) != nil || l.Sidechain {
 			continue
+		}
+
+		// The newest line of the conversation says whether its turn is over: a prompt or a tool result waits on
+		// a reply, a tool call on its result; an end_turn reply or the turn's closing system lines end it.
+		if !decided {
+			switch {
+			case l.Type == "system" && (l.Subtype == "turn_duration" || l.Subtype == "stop_hook_summary"):
+				t.Ended, decided = true, true
+			case l.Type == "assistant":
+				t.Ended, decided = l.Message.StopReason == "end_turn" || l.Message.StopReason == "stop_sequence", true
+			case l.Type == "user":
+				decided = true
+			}
 		}
 
 		if l.Type == "system" && l.Subtype == "compact_boundary" {

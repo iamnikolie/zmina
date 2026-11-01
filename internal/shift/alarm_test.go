@@ -181,3 +181,34 @@ func TestRemoteAlarmIsATell(t *testing.T) {
 	all, _, _ := as.Scan()
 	assert.Empty(t, all, "not the owner's todo")
 }
+
+// A background shell keeps Claude Code's status off idle while the role waits at its prompt: the alarm's line is
+// typed once the transcript says the turn is over and the input line is empty, and never into a draft or a dialog.
+func TestAlarmLineReachesARoleWithABackgroundShell(t *testing.T) {
+	f, al, _ := alarmed(t)
+	require.NoError(t, f.s.Up("designer"))
+	*f.now = f.now.Add(3 * time.Minute)
+	f.status("designer", "busy", f.now.Add(-time.Minute))
+	set(t, f, al, alarm.Alarm{Kind: alarm.Remind, Role: "designer", At: *f.now, Text: "check the logo"})
+
+	f.s.Tick()
+	assert.Empty(t, f.tm.typed["designer"], "a turn still running: not typed")
+
+	f.rg.ended = map[string]bool{"sid-designer": true}
+	f.tm.drafts["designer"] = "half a thought"
+	f.s.Tick()
+	assert.Empty(t, f.tm.typed["designer"], "never into a draft")
+
+	f.tm.drafts["designer"] = "-"
+	f.s.Tick()
+	assert.Empty(t, f.tm.typed["designer"], "never into a dialog")
+
+	delete(f.tm.drafts, "designer")
+	f.status("designer", "waiting", f.now.Add(-time.Minute))
+	f.s.Tick()
+	assert.Empty(t, f.tm.typed["designer"], "a permission question waits")
+
+	f.status("designer", "busy", f.now.Add(-time.Minute))
+	f.s.Tick()
+	assert.Equal(t, []string{"[zmina alarm] check the logo"}, f.tm.typed["designer"])
+}

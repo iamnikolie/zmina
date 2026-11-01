@@ -167,10 +167,12 @@ type fakeReg struct {
 	outside map[string]*registry.Session
 	context map[string]int
 	errors  map[string]string
+	// ended marks a session whose last turn is over.
+	ended map[string]bool
 }
 
 func (f *fakeReg) Last(id string) (registry.Turn, error) {
-	t := registry.Turn{Context: f.context[id]}
+	t := registry.Turn{Context: f.context[id], Ended: f.ended[id]}
 	if e := f.errors[id]; e != "" {
 		t.Error, t.ErrorID = e, "e-"+e
 	}

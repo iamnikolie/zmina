@@ -218,3 +218,33 @@ func TestProjectDir(t *testing.T) {
 	assert.Equal(t, filepath.Join("/ns", "projects", "-home-alex--zmina-worktrees-acme-T-1"),
 		(&Registry{Namespace: "/ns"}).ProjectDir("/home/alex/.zmina/worktrees/acme-T-1"))
 }
+
+func TestLastTurnEnded(t *testing.T) {
+	ns := t.TempDir()
+	dir := filepath.Join(ns, "projects", "-work")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+
+	prompt := `{"type":"user","message":{"content":"go on"}}`
+	call := `{"type":"assistant","message":{"id":"m1","stop_reason":"tool_use","usage":{"input_tokens":5}}}`
+	result := `{"type":"user","message":{"content":[{"type":"tool_result"}]}}`
+	reply := `{"type":"assistant","message":{"id":"m2","stop_reason":"end_turn","usage":{"input_tokens":9}}}`
+	closing := `{"type":"system","subtype":"turn_duration"}`
+	side := `{"type":"user","isSidechain":true,"message":{"content":"a subagent"}}`
+	snapshot := `{"type":"file-history-snapshot"}`
+
+	for lines, want := range map[string]bool{
+		prompt:                                   false,
+		prompt + "\n" + call:                     false,
+		call + "\n" + result:                     false,
+		result + "\n" + reply:                    true,
+		reply + "\n" + closing + "\n" + side:     true,
+		reply + "\n" + closing + "\n" + snapshot: true,
+		closing + "\n" + prompt:                  false,
+	} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "s1.jsonl"), []byte(lines+"\n"), 0o600))
+
+		got, err := (&Registry{Namespace: ns}).Last("s1")
+		require.NoError(t, err)
+		assert.Equal(t, want, got.Ended, lines)
+	}
+}

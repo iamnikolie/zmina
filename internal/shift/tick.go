@@ -548,6 +548,33 @@ func (s *Shift) ready(name string, now time.Time) bool {
 	return sess != nil && sess.Status == "idle"
 }
 
+// atPrompt reports whether a typed line lands at a role's prompt: it is ready (idle), or its last turn is over and
+// its input line is on screen and empty while its status says otherwise — a background shell or agent it started
+// keeps Claude Code's status off idle for as long as it runs, and a line queued for it would wait as long. A dialog
+// (status waiting) is never typed into.
+func (s *Shift) atPrompt(name string, now time.Time) bool {
+	if s.ready(name, now) {
+		return true
+	}
+
+	if now.Sub(s.State.Role(name).Started) < s.Crew.BootGraceD() {
+		return false
+	}
+
+	sess := s.session(name)
+	if sess == nil || sess.Status == "idle" || sess.Status == "waiting" {
+		return false
+	}
+
+	if turn, err := s.Reg.Last(sess.SessionID); err != nil || !turn.Ended {
+		return false
+	}
+
+	draft, ok, err := s.Tmux.Prompt(name)
+
+	return err == nil && ok && draft == ""
+}
+
 // deliver types the waiting signals and health notes into the dispatcher as one line when it is up, booted and idle.
 // Signals go first: they are work.
 func (s *Shift) deliver(now time.Time) string {
@@ -572,7 +599,7 @@ func (s *Shift) deliver(now time.Time) string {
 
 	// A line queued for the dispatcher itself goes first: after a clear it is the boot line, and the signals
 	// belong to a dispatcher that knows its job.
-	if len(parts) == 0 || len(s.State.Role(d).Inbox) > 0 || !s.ready(d, now) || !s.landed(d, now) {
+	if len(parts) == 0 || len(s.State.Role(d).Inbox) > 0 || !s.atPrompt(d, now) || !s.landed(d, now) {
 		return ""
 	}
 
@@ -610,7 +637,7 @@ func (s *Shift) Deliver() string { return s.deliver(s.Now()) }
 // queue), so it never blocks the lines after it. It returns a line for the log.
 func (s *Shift) deliverInbox(name string, now time.Time) string {
 	rs := s.State.Role(name)
-	if len(rs.Inbox) == 0 || !s.ready(name, now) || !s.landed(name, now) || len(rs.Inbox) == 0 {
+	if len(rs.Inbox) == 0 || !s.atPrompt(name, now) || !s.landed(name, now) {
 		return ""
 	}
 

@@ -597,6 +597,10 @@ alone for the beat — never taken as ended; a role being put down is left alone
    the role's status changes when it takes a line. Until it does, nothing more is typed into that
    role; after 90 s a line still sitting in the input line gets Enter again, one gone from it is
    typed again, and after three tries it is kept as failed (`typed, never taken`).
+   «Idle» here also covers a role at its prompt whose status stays off idle because a background shell or agent it
+   started still runs: its transcript's newest line ends a turn (an end_turn reply, the turn's closing system line)
+   and its input line is on screen and empty. Never a role that shows a dialog. Release and trims still wait for a
+   plain idle, so a role with a background process running is never put down or cleared under it.
 7. Context: a role with `context_max` (its own, else the crew's; `off` opts out) whose
    conversation fills more than that (the last turn's tokens in its transcript,
    `<namespace>/projects/*/<session id>.jsonl`), idle for 5 min, its input line on screen and empty
