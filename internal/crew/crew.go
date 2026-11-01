@@ -200,8 +200,17 @@ type Crew struct {
 	// DropTools are Claude Code tools (Artifact, mcp__server) every role starts without (claude --disallowedTools):
 	// each tool's description fills the context of every turn.
 	DropTools []string `yaml:"drop_tools"`
+	// Notify is the command a reminder for the owner also goes through when it rings (a push, a bot), with its
+	// text as the last argument and in $ZMINA_REMIND; a list is argv, a string runs with /bin/sh -c. Empty: the
+	// reminder only lands on the todo.
+	Notify Command `yaml:"notify"`
+	// DayStart is when a day named without a time rings (morning, tomorrow, thu, a date): HH:MM, default 09:00.
+	DayStart string `yaml:"day_start"`
+	// Timezone is the clock the times of reminders are read on (Europe/Warsaw); default this machine's.
+	Timezone string `yaml:"timezone"`
 
 	bootGrace time.Duration
+	loc       *time.Location
 	// Roles are keyed by role name.
 	Roles map[string]*Role `yaml:"roles"`
 	// Watches are periodic detectors the ticker runs, keyed by name; each queues notes for the dispatcher.
@@ -350,6 +359,15 @@ func (c *Crew) LaunchdLabel() string { return suffixed(launchdLabel, ".", c.Name
 
 // BootGraceD is how long a started role is left to boot before lines are typed into it.
 func (c *Crew) BootGraceD() time.Duration { return c.bootGrace }
+
+// Location is the clock reminders are read and shown on: timezone, else this machine's.
+func (c *Crew) Location() *time.Location {
+	if c.loc == nil {
+		return time.Local
+	}
+
+	return c.loc
+}
 
 // ToolsOff are the tools a role starts without: the crew's drop_tools and its own, less its keep_tools, each once.
 // A role whose args pass --disallowedTools themselves gets none.
@@ -606,6 +624,22 @@ func (c *Crew) resolve(strict bool) error {
 		}
 
 		c.bootGrace = d
+	}
+
+	c.loc = nil
+	if c.Timezone != "" {
+		loc, err := time.LoadLocation(c.Timezone)
+		if err != nil {
+			return fmt.Errorf("timezone %q: an IANA name such as Europe/Warsaw", c.Timezone)
+		}
+
+		c.loc = loc
+	}
+
+	if c.DayStart != "" {
+		if _, err := time.Parse("15:04", c.DayStart); err != nil {
+			return fmt.Errorf("day_start %q: HH:MM", c.DayStart)
+		}
 	}
 
 	crewMax, err := ParseTokens(c.ContextMax)

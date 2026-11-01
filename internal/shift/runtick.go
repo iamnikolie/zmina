@@ -5,13 +5,16 @@ import "github.com/iamnikolie/zmina/internal/watch"
 // WithLock runs fn on a shift holding the state lock and saves after; it is how RunTick takes the lock twice.
 type WithLock func(fn func(s *Shift) error) error
 
-// RunTick is one whole beat: the roles under the lock, the watch sources and the wait for released roles to end
-// outside it (a slow source never blocks another zmina command), their results under the lock again, and the
-// dispatcher's queue typed once. run runs the sources; out receives the lines for the log.
-func RunTick(locked WithLock, run func([]WatchRun) []watch.Result, out func([]string)) error {
+// RunTick is one whole beat: the roles under the lock; the alarms' notify commands and tells, the watch sources
+// and the wait for released roles to end outside it (a slow source never blocks another zmina command); their
+// results under the lock again, and the dispatcher's queue typed once. run runs the sources, rang does what the
+// rung alarms left (it returns lines for the log); out receives the lines for the log.
+func RunTick(locked WithLock, run func([]WatchRun) []watch.Result, rang func([]Rung) []string,
+	out func([]string)) error {
 	var (
 		runs     []WatchRun
 		released []string
+		rung     []Rung
 		tm       Tmux
 		told     bool
 	)
@@ -20,13 +23,21 @@ func RunTick(locked WithLock, run func([]WatchRun) []watch.Result, out func([]st
 		s.By = "ticker"
 		out(s.Tick())
 
-		told, released, tm = s.Told, s.Released, s.Tmux
+		told, released, rung, tm = s.Told, s.Released, s.Rang, s.Tmux
 		runs = s.DueWatches()
 
 		return nil
 	})
-	if err != nil || len(runs)+len(released) == 0 {
+	if err != nil {
 		return err
+	}
+
+	if len(rung) > 0 && rang != nil {
+		out(rang(rung))
+	}
+
+	if len(runs)+len(released) == 0 {
+		return nil
 	}
 
 	if len(released) > 0 {

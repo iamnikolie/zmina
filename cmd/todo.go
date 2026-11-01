@@ -26,7 +26,7 @@ type todoItem struct {
 	// Crew is the crew's key on the ui page, which shows every crew's todo as one list.
 	Crew string `json:"crew,omitempty"`
 	ID   string `json:"id"`
-	Kind string `json:"kind"` // decision | check | waiting
+	Kind string `json:"kind"` // decision | check | waiting | later
 	Text string `json:"text"`
 	// Title is the item in a few words: the ask's title, the waiting task's headline.
 	Title string `json:"title,omitempty"`
@@ -110,6 +110,14 @@ func todo(c *crew.Crew, now time.Time, views []shift.View) ([]todoItem, []string
 		}
 
 		items = append(items, it)
+	}
+
+	// A parked item its alarm brought back (later add --until) is the owner's again until it is dealt with.
+	for _, it := range laterStore(c).Parked() {
+		if !it.Back.IsZero() {
+			items = append(items, todoItem{ID: it.ID, Kind: "later", Text: it.Text, Title: it.Text, Note: it.Note,
+				Created: it.Back})
+		}
 	}
 
 	for i := range items {
@@ -498,15 +506,38 @@ func answerTodo(s *shift.Shift, from, action, id, words string) (string, error) 
 				return "", fmt.Errorf("%s is already %s", it.ID, it.State)
 			}
 
+			// Off the todo: the turn is the dispatcher's.
+			if !it.Back.IsZero() {
+				it.Back = time.Time{}
+				if err := store.Put(it); err != nil {
+					return "", err
+				}
+			}
+
 			note = it.ID + " · bring back — " + clip(it.Text, 120)
-		case "drop":
-			if it, err = store.Close(it.ID, later.Dropped, "", s.Now()); err != nil {
+		case "drop", "done":
+			st := map[string]later.State{"drop": later.Dropped, "done": later.Done}[action]
+			if it, err = store.Close(it.ID, st, "", s.Now()); err != nil {
 				return "", err
 			}
 
-			note = it.ID + " · dropped — " + clip(it.Text, 120)
+			note = it.ID + " · " + string(st) + " — " + clip(it.Text, 120)
+		case "park":
+			// Back on the parked list, off the todo; nothing for the dispatcher to do.
+			if !it.Open() {
+				return "", fmt.Errorf("%s is already %s", it.ID, it.State)
+			}
+
+			it.Back = time.Time{}
+			if err := store.Put(it); err != nil {
+				return "", err
+			}
+
+			s.Log(from, "later", it.ID, "parked again")
+
+			return it.ID + " · parked again", nil
 		default:
-			return "", fmt.Errorf("%s is parked: bring it back or drop it", it.ID)
+			return "", fmt.Errorf("%s is parked: bring it back, park it again, or drop it", it.ID)
 		}
 
 		id = it.ID

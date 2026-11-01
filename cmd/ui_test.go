@@ -449,3 +449,53 @@ func TestUICost(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&task))
 	assert.Equal(t, "$2.00 API-equivalent · 1 turns · opus-5.5 100% · by window", task.Cost)
 }
+
+func TestUIAlarms(t *testing.T) {
+	uiHome(t)
+
+	ops := crewPathOf(t, "ops")
+	_, _, err := zm(t, ops, "later", "add", "the one-pager", "--until", "+3h")
+	require.NoError(t, err)
+
+	srv, a := uiServer(t, true, "")
+
+	post := func(body string) (int, string) {
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/alarm", strings.NewReader(body))
+		req.Header.Set("X-Zmina", "1")
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+
+		raw, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+
+		return resp.StatusCode, string(raw)
+	}
+
+	code, body := post(`{"crew":"ops","action":"set","when":"+2h","text":"call the bank"}`)
+	require.Equal(t, http.StatusOK, code, body)
+	assert.Contains(t, body, "R-2 · you")
+
+	code, _ = post(`{"crew":"ops","action":"set","when":"whenever","text":"x"}`)
+	assert.Equal(t, http.StatusConflict, code)
+
+	snap := a.uiSnapshot()
+	require.Len(t, snap.Alarms, 2)
+	assert.Equal(t, "R-2", snap.Alarms[0].ID, "soonest first")
+	assert.Equal(t, "you", snap.Alarms[0].For)
+	assert.Equal(t, "L-1", snap.Alarms[1].Later)
+
+	code, body = post(`{"crew":"ops","id":"R-2","action":"move","when":"+5h"}`)
+	require.Equal(t, http.StatusOK, code, body)
+	assert.Equal(t, "R-1", a.uiSnapshot().Alarms[0].ID)
+
+	code, _ = post(`{"crew":"ops","id":"R-1","action":"off"}`)
+	require.Equal(t, http.StatusOK, code)
+
+	// A parked item dealt with meanwhile: its alarm is not shown.
+	_, _, err = zm(t, ops, "later", "drop", "L-1")
+	require.NoError(t, err)
+	snap = a.uiSnapshot()
+	require.Len(t, snap.Alarms, 1)
+	assert.Equal(t, "R-2", snap.Alarms[0].ID)
+}

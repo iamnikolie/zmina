@@ -238,6 +238,40 @@ func (f *fakeLater) Add(it later.Item, now time.Time) (later.Item, error) {
 	return it, nil
 }
 
+func (f *fakeLater) Get(id string) (later.Item, error) {
+	for _, it := range f.list {
+		if it.ID == id {
+			return it, nil
+		}
+	}
+
+	return later.Item{}, errors.New("no item " + id)
+}
+
+func (f *fakeLater) Put(it later.Item) error {
+	for i := range f.list {
+		if f.list[i].ID == it.ID {
+			f.list[i] = it
+
+			return nil
+		}
+	}
+
+	return errors.New("no item " + it.ID)
+}
+
+func (f *fakeLater) Parked() []later.Item {
+	var out []later.Item
+
+	for _, it := range f.list {
+		if it.Open() {
+			out = append(out, it)
+		}
+	}
+
+	return out
+}
+
 type fakeEvents struct{ list []events.Event }
 
 func (f *fakeEvents) Add(e events.Event) error { f.list = append(f.list, e); return nil }

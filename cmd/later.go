@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/iamnikolie/zmina/internal/alarm"
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/later"
 	"github.com/iamnikolie/zmina/internal/ledger"
@@ -27,14 +29,23 @@ func (a *app) laterCommand() *cobra.Command {
 }
 
 func (a *app) laterAddCommand() *cobra.Command {
-	var note string
+	var note, until string
 
 	c := &cobra.Command{
 		Use:   "add <text...>",
-		Short: "Park something; prints its id (L-3)",
+		Short: "Park something; prints its id (L-3). --until brings it back to your todo at that time",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.withState(func(s *shift.Shift) error {
+				var when time.Time
+
+				if until != "" {
+					var err error
+					if when, err = alarm.When(until, s.Now(), s.Clock()); err != nil {
+						return err
+					}
+				}
+
 				it, err := laterStore(s.Crew).Add(later.Item{Text: strings.Join(args, " "), Note: note, By: s.By},
 					s.Now())
 				if err != nil {
@@ -42,7 +53,21 @@ func (a *app) laterAddCommand() *cobra.Command {
 				}
 
 				s.Log("", "later", it.ID, "parked: "+it.Text)
-				fmt.Fprintln(a.out, it.ID)
+
+				if until == "" {
+					fmt.Fprintln(a.out, it.ID)
+
+					return nil
+				}
+
+				al, err := s.Alarms.Add(alarm.Alarm{Kind: alarm.Later, At: when, When: until, Text: it.Text,
+					Later: it.ID, By: s.By}, s.Now())
+				if err != nil {
+					return fmt.Errorf("%s is parked, but its alarm is not set: %w", it.ID, err)
+				}
+
+				s.Log("", "alarm", it.ID, al.ID+" set: "+it.ID+" back at "+at(s, al.At))
+				fmt.Fprintf(a.out, "%s · back %s · %s\n", it.ID, at(s, al.At), al.ID)
 
 				return nil
 			})
@@ -50,6 +75,7 @@ func (a *app) laterAddCommand() *cobra.Command {
 	}
 
 	c.Flags().StringVar(&note, "note", "", "a note")
+	c.Flags().StringVar(&until, "until", "", "bring it back to your todo then: "+whenHelp)
 
 	return c
 }

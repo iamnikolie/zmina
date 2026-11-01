@@ -190,7 +190,7 @@ func TestRunTickFinishesTheReleasedDowns(t *testing.T) {
 
 	var lines []string
 
-	require.NoError(t, RunTick(locked, func([]WatchRun) []watch.Result { return nil },
+	require.NoError(t, RunTick(locked, func([]WatchRun) []watch.Result { return nil }, nil,
 		func(l []string) { lines = append(lines, l...) }))
 	assert.Contains(t, lines, "released designer after 31m idle")
 	assert.False(t, f.tm.Has("designer"))

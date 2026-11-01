@@ -22,6 +22,9 @@ func (l Layout) Tasks() string { return filepath.Join(l.Dir, "tasks") }
 // Later is the parked list's directory (L-<n>.json).
 func (l Layout) Later() string { return filepath.Join(l.Dir, "later") }
 
+// Alarms is the directory of reminders and wake-ups (R-<n>.json).
+func (l Layout) Alarms() string { return filepath.Join(l.Dir, "alarms") }
+
 // Asks is the directory of what the dispatcher asks the owner (A-<n>.json).
 func (l Layout) Asks() string { return filepath.Join(l.Dir, "asks") }
 

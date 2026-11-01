@@ -118,6 +118,8 @@ func TestLoadRefuses(t *testing.T) {
 		"shared session": "dir: " + dir + "\nroles:\n  dispatcher:\n  a:\n    session: zm-dispatcher\n",
 		"bad keep":       "dir: " + dir + "\nroles:\n  dispatcher:\n  a:\n    keep: sometimes\n",
 		"bad name":       "dir: " + dir + "\nroles:\n  dispatcher:\n  Designer:\n",
+		"bad timezone":   "dir: " + dir + "\ntimezone: Mars/Base\nroles:\n  dispatcher:\n",
+		"bad day_start":  "dir: " + dir + "\nday_start: 9am\nroles:\n  dispatcher:\n",
 	}
 
 	for name, body := range cases {
@@ -126,6 +128,22 @@ func TestLoadRefuses(t *testing.T) {
 			assert.Error(t, err)
 		})
 	}
+}
+
+func TestReminderClock(t *testing.T) {
+	dir := t.TempDir()
+
+	c, err := Load(write(t, "dir: "+dir+"\ntimezone: Europe/Warsaw\nday_start: \"10:00\"\n"+
+		"notify: [push, send]\nroles:\n  dispatcher:\n"))
+	require.NoError(t, err)
+	assert.Equal(t, "Europe/Warsaw", c.Location().String())
+	assert.Equal(t, "10:00", c.DayStart)
+	assert.Equal(t, []string{"push", "send"}, c.Notify.Line())
+
+	c, err = Load(write(t, "dir: "+dir+"\nroles:\n  dispatcher:\n"))
+	require.NoError(t, err)
+	assert.Equal(t, time.Local, c.Location())
+	assert.True(t, c.Notify.Empty())
 }
 
 func TestMissingDirStopsOnlyThatRole(t *testing.T) {

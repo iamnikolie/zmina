@@ -194,7 +194,7 @@ func TestRunTickRunsSourcesOutsideTheLock(t *testing.T) {
 		require.Len(t, runs, 1)
 
 		return []watch.Result{{Events: []watch.Event{ev("main", "red")}}}
-	}, func(l []string) { lines = append(lines, l...) })
+	}, nil, func(l []string) { lines = append(lines, l...) })
 	require.NoError(t, err)
 
 	assert.Contains(t, strings.Join(lines, "\n"), "told the dispatcher: [zmina] ci-red: pipeline red")

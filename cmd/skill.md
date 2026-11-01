@@ -33,6 +33,9 @@ drop_env: [MY_TERMINAL_*]                # variables kept from the roles, on top
 drop_tools: [Artifact, Workflow]         # Claude Code tools every role starts without (--disallowedTools)
 context_max: 400k                        # every role's, unless it sets its own (default: none)
 context_action: compact                  # every role's, unless it sets its own (default compact)
+notify: [push-cli, send, --title, zmina] # a reminder for you also goes through this (text last; a string: sh -c, $1)
+timezone: Europe/Warsaw                  # the clock reminder times are read on (default: this machine's)
+day_start: "09:00"                       # when morning, tomorrow, thu or a date rings (default 09:00)
 # name: ops                              # a second crew: tmux -L zmina-ops, its own ticker
 # prefix: ops-                           # default session names (default zm-)
 # projects:                              # the ui page's colour per task project (default: one of five, by name)
@@ -82,7 +85,7 @@ the role's add up.
 
 | Command | Does |
 |---|---|
-| `zmina ls [--json]` | first line: when the ticker last beat (and `STOPPED` while the shift is stopped). Then every role: `up` / `down` / `dead` (its process ended, the ticker collects it within a minute) / `outside` (a claude with that name runs, not under zmina) / `unknown` (tmux did not answer), `idle`/`busy` (`unknown` when its registry entry does not read), for how long, how many tokens its conversation fills (`362k/150k` with its `context_max`), the active tasks it holds, keep (+ next scheduled run, expiry), about. `--json` also has `prompt: true` while an up role's screen shows a dialog or a question instead of its input line, and `now` / `now_at`: the role's last status line in words (its screen's last `⏺ …` line that is not a tool call) and since when it says so. `*` marks the dispatcher; `(broken)` a role that dies on boot; `(bad dir)` a role whose dir is gone — it does not start, the rest of the crew runs on; `(N failed lines)` see `zmina queue`. Last line `later: N parked` while the parked list is not empty. |
+| `zmina ls [--json]` | first line: when the ticker last beat (and `STOPPED` while the shift is stopped). Then every role: `up` / `down` / `dead` (its process ended, the ticker collects it within a minute) / `outside` (a claude with that name runs, not under zmina) / `unknown` (tmux did not answer), `idle`/`busy` (`unknown` when its registry entry does not read), for how long, how many tokens its conversation fills (`362k/150k` with its `context_max`), the active tasks it holds, keep (+ next scheduled run, expiry), about. `--json` also has `prompt: true` while an up role's screen shows a dialog or a question instead of its input line, and `now` / `now_at`: the role's last status line in words (its screen's last `⏺ …` line that is not a tool call) and since when it says so. `*` marks the dispatcher; `(broken)` a role that dies on boot; `(bad dir)` a role whose dir is gone — it does not start, the rest of the crew runs on; `(N failed lines)` see `zmina queue`; `(asleep until Mon 09:00)` a role put to sleep (`zmina sleep`). Last line `later: N parked` while the parked list is not empty. |
 | `zmina up <role...>` / `--all` | start roles. Refuses a role already up, and a name a claude outside zmina already holds. Clears a hold and a broken mark. |
 | `zmina up <role> --as N` | a copy of the role, `<role>#N` (2–9) under `<session>-N`, same dir/boot/model/args; never kept up, gone once it is down. `zmina down dev#2`. |
 | `zmina up <role> [--as N] --task T-14` | a seat for a recorded task: started in the task's worktree when it has one, the task names this role, and its first line is `[zmina T-14] <asked> · you are in its worktree <path> on branch <b>`. Claude Code's "trust this folder" is answered for a worktree zmina made itself (`<crew>/worktrees/`), nowhere else. Refuses a task that is not active. |
@@ -92,6 +95,7 @@ the role's add up.
 | `zmina send <role> <text>` | type one line into a role's prompt and press Enter. Text that starts with `-` goes after `--`: `zmina send dev -- '- item'`. `--when-idle` queues it instead: the ticker types it the first time the role is up, booted and idle (one queued line per minute). For a message between sessions prefer `SendMessage({to: "<prefix><role>"})`. |
 | `zmina peek <role> [-n 40]` | the last lines of a role's screen, as text — works from an agent, no terminal; also on a `dead` role. Claude Code's suggested next prompt, dim in an empty input line, shows as `❯ (suggestion) …`: nobody typed it. |
 | `zmina keys <role> <key...>` | press named keys: `Enter Escape Up Down Left Right Tab BTab Space BSpace PageUp PageDown Home End C-c y n 1`–`9`. Text goes with `send`. The keys of one call go in one tmux call: `zmina keys <role> C-c C-c` ends a claude, two separate calls are too slow for its double C-c. |
+| `zmina sleep <role> --until <when> [--note file\|-] [--clear]` | put the role down holding what it holds (its tasks stay its own, active), and wake it at `<when>` (see Alarms): it starts on its last conversation and its queue gets `[zmina alarm] <note>` — without `--note`, `you were put to sleep Sun 14:20; go on with T-5`. Prints `dev asleep until Mon 2 Nov 09:00 (in 19h) · R-4 · holds T-5`. Held while asleep: `keep: always` does not start it early. A role asleep already has its alarm moved. A draft or a dialog refuses it as with `down`, `--clear` too. Not the dispatcher, not a copy (`dev#2`). `zmina up` wakes it early (the alarm still rings: the line is queued); `zmina remind off R-4` keeps it down. |
 | `zmina attach <role>` | attach a terminal (detach: your tmux prefix, then `d`). Needs a TTY; from an agent it prints the command instead. |
 
 ## The shift: stop, start, doctor, queues, state
@@ -327,7 +331,9 @@ board") — and every task in state `waiting`, with its note. One file per ask i
 alone like tasks. An ask with `--task T-n` about a waiting task is that task's question: the two show as one item
 (the ask's question and recommendation, the task's note). Order: items that block a role first (a waiting task
 blocks its role while that role is up and idle; an ask with `--blocks`), then the overdue ones (older than 24 h),
-then the rest; oldest first in each group. Once the owner answers a waiting task (or its ask), it leaves the todo
+then the rest; oldest first in each group. A reminder for the owner (`zmina remind`) lands here as a `check` when it
+rings, from whoever set it; a parked item set to come back (`later add --until`) as kind `later` (Bring back,
+Later, Discard). Once the owner answers a waiting task (or its ask), it leaves the todo
 until the task changes again (`task set`): the turn is the dispatcher's.
 
 | Command | Does |
@@ -339,6 +345,7 @@ until the task changes again (`task set`): the turn is the dispatcher's.
 | `zmina todo done <id>` | a check (or a decision) is dealt with. |
 | `zmina todo answer <id> <text...>` | answer an ask or a waiting task (`T-62`) in the owner's words. |
 | `zmina todo park <id>` | put it on the parked list (an ask becomes `L-n`, "from A-3"); for a waiting task the dispatcher hears `T-62 · later`. |
+| `zmina todo done L-3` / `todo park L-3` | a parked item its alarm brought back (`later add --until`): done closes it (the dispatcher hears `L-3 · done`); park puts it back on the list, off the todo, quietly. |
 | `zmina todo ignore <id>` | set it aside for good: an ask closes with no parked entry; a waiting task only leaves the todo (until it changes), the task stays as it is. The dispatcher hears `A-3 · ignored`. |
 
 Every answer — from these commands or the ui page — closes the ask (a waiting task keeps its state) and queues a
@@ -366,6 +373,11 @@ by what a delay costs:
   marked;
 - **waiting on others** — tasks waiting `--on` a person, one line per person, open on click; a row opens like a
   going one, with Take it back (`task set <id> waiting --on -`: it waits on the owner again);
+- **alarms** — every alarm still to ring, soonest first: the time (the day too when it is not today), what it is
+  (`<role> wakes` for a sleeping role, `back: <text>` for a parked item), whom it is for. A row opens to a field for
+  the new time (`tomorrow 09:00`, `+2h`) with Move, and Off (5 s undo). «Set» on the heading opens a reminder for you:
+  what, when, Set — for the crew the switch shows, else the default crew. An alarm for a parked item dealt with
+  meanwhile is not shown;
 - a bottom line with how many tasks were done today and «history», the event log in words, in a drawer.
 
 Below 1400 px that is one centred column. From 860 px an empty «you hold», «answer» or «going» is not drawn: one
@@ -376,7 +388,8 @@ on every tick (faded while the page has lost the stream, red while a shift is st
 newest event; seven
 readouts (you hold, answer, working roles, waiting on others, parked, done today, and spent today — API-equivalent
 dollars as `zmina usage` counts them, the week under it; a zero goes dark); then two
-zones. Left, **your move** (what you hold, then the asks and checks, each with its recommendation as the chip).
+zones. Left, **your move** (what you hold, then the asks and checks, each with its recommendation as the chip; a
+returned parked item tagged «back»; then the alarms, as above).
 Right, the **sessions**: one band of equal cards across the crews (its line: how many are up and not started,
 each crew's last tick; per session that is up: its role's glyph as its lamp (faint while idle, teal and breathing while
 it works, amber when it needs you), its role, its crew while every crew shows, its state and since when with what its role spent today (API-equivalent, once it is a cent), its context
@@ -423,14 +436,48 @@ and that role's conversation.
 
 | Command | Does |
 |---|---|
-| `zmina later add <text...> [--note …]` | park it; prints `L-3`. |
+| `zmina later add <text...> [--note …] [--until <when>]` | park it; prints `L-3`. With `--until` (see Alarms) it comes back to the owner's todo at that time, through the notify command too: `L-3 · back Mon 2 Nov 09:00 (in 19h) · R-5`. |
 | `zmina later ls [--all] [--json]` | what is parked, oldest first: id, age, text (` · note`). `--all`: closed too, with their state. |
 | `zmina later done <id>` / `later drop <id>` | take it off the list (`--note` replaces its note). Ids: `L-3`, `l-3` or `3`. |
 | `zmina later take <id> <role> [--repo r --worktree --base b]` | turn it into a task as `task new` would (asked = its text, note `from L-3: <its note>`) and close it as `taken T-n`. If the task's worktree cannot be made, the item stays parked. |
 | `zmina later take <id> <role> --resume` | the same, and start the role on the conversation the item was parked from (`claude --resume <session>`), with `[zmina T-61] back from L-15: <text>` queued for it. Only for an item parked from a role's task, into that role (or a copy, `dev#2`: a conversation belongs to its directory), while the role is down. Prints `… · L-15 taken · dev2 up on <session>`. |
 
-`zmina ls` ends with `later: N parked` while the list is not empty; nothing else reminds.
+`zmina ls` ends with `later: N parked` while the list is not empty; nothing else reminds, but `--until`.
 `zmina log --task L-3` shows an item's history; `doctor` names damaged files.
+
+## Alarms — reminders and wake-ups
+
+An alarm rings at a time: a reminder for the owner, a line for a role, a line for another crew, a role asleep, a
+parked item that comes back. One file per alarm in `~/.zmina/alarms/R-<n>.json`, written alone under the state lock
+like tasks; one that rang or was taken off stays with its state. The ticker rings them (step 0 below), so they need
+the ticker: one that came due while the Mac slept or the ticker was down rings **once**, on the first beat after,
+and says when it was due (`(due Sat 7 Nov 09:00)`) once it is more than 5 min late.
+
+`<when>` (every `<when>` and `--until`), on the crew's `timezone` (default this machine's clock):
+
+- `morning` — the start of the next working day (Mon–Fri), today's while it is still ahead;
+- `today`, `tomorrow`, a weekday (`thu`, `thursday`: its next one, a week on for today's name), a date
+  (`2026-11-08`) — each at `day_start` (default 09:00), or at a time after it: `tomorrow 11:30`, `thu 9:00`;
+- a time alone, `17:00` — today, tomorrow once it has passed;
+- a span from now: `+90m`, `+3h`, `+2d`, `+1h30m` (one minute at least).
+
+A time that has passed is refused. Several words are one argument: quote them.
+
+| Command | Does |
+|---|---|
+| `zmina remind <when> <text...> [--note file\|-]` | a reminder for the owner. At its time it lands on the todo as a check (title = text, the note under it; from the role that set it, else `remind`) and goes through the crew's `notify` command. Prints `R-3 · you · Sun 8 Nov 09:00 (in 6d)`. |
+| `zmina remind <when> <text...> --role <role> [--note …]` | for a role: at its time the role is started if it is down — on the conversation its newest parked work came from (a released role, `task park`), else as `zmina up` would — and `[zmina alarm] <text> — <note>` waits in its queue, typed once it is booted and idle. While the shift is stopped it waits for `zmina start`. |
+| `zmina remind <when> <text...> --to <node>[/<crew>]` | another crew's dispatcher: at its time `[zmina alarm] <text> — <note>` goes to it as `zmina tell` sends a line (this node's crew at once, another node's through the outbox and the round after the beat). |
+| `zmina remind ls [--all] [--json]` | the alarms still to ring, soonest first: id, time (and how far), for whom, kind (`remind`, `sleep`, `later`), text. `--all`: rung and taken off too, with their state (`rang → A-7`, `off`) and an error when one could not do its part. |
+| `zmina remind move <id> <when>` | another time for an alarm still to ring — a reminder, a role's wake-up, a parked item's return. Ids: `R-3`, `r-3`, `3`. |
+| `zmina remind off <id>` | take it off. A sleeping role then stays down until started by hand. |
+
+`notify` in the crew file: a list is argv and the reminder's text goes last (`[push-cli, send, --title, zmina]` runs
+`push-cli send --title zmina "<text>"`); a string runs with `/bin/sh -c`, the text as `$1`. Both get `$ZMINA_REMIND`
+(the text), `$ZMINA_ALARM` (the id) and `$ZMINA_CREW`. It runs outside the lock, 30 s at most, for a reminder for the
+owner and for a parked item back (`back from later: <text>`) — never for a role's alarm. A failure is in tick.log and
+the log (`alarm-failed`), and the todo item is there all the same. Without `notify` a reminder only lands on the
+todo. The log has `alarm` (set, moved, off, rang) and `sleep`.
 
 ## Seats — editing the crew file
 
@@ -506,6 +553,10 @@ tick.log. A PATH that changes later (claude moved by an upgrade) needs `ticker i
 30 s for it, then fails naming the pid that holds it). A role tmux does not answer about is left
 alone for the beat — never taken as ended; a role being put down is left alone too.
 
+0. Alarms whose time has come ring, once each (see Alarms): a reminder for the owner becomes a check on the todo,
+   a parked item comes back to it, a role is started if down and gets its line queued, another crew is told.
+   A role's alarm waits while the shift is stopped. The notify commands and the tells run after the beat,
+   outside the lock.
 1. A role that was up and is gone is noted `<role>: ended (held T-12), last screen
    screens/<role>-<time>.txt` — a role's window stays after its process ends (its pane is tagged at
    start, and only that window keeps), so the ticker saves the last 60 lines before it removes it.
@@ -585,6 +636,11 @@ and exists nowhere else. It is written whole (rename) and never over a file zmin
 - `released dev2 after 45m idle → L-15, L-16`: the ticker put an idle role down and parked its
   tasks (`release_idle_minutes`). Nothing to do; the work waits on the later list. When the owner
   takes one back: `zmina later take L-15 dev2 --resume` continues the role's own conversation.
+- The owner asks to be reminded ("remind me Monday", "напомни утром"): `zmina remind <when> "<their words>"
+  [--note file]`; to come back to a parked idea at a time: `zmina later add "<words>" --until <when>`. A role that
+  should pick something up later: `zmina remind <when> "<what>" --role <role> --note <file>` (it is started and
+  told); a role that has nothing to do until then but holds work: `zmina sleep <role> --until <when> --note <file>`.
+  A note `<source>: A-7 · done — <text>` for a reminder is the owner saying it is dealt with; nothing more to do.
 - A question only the owner can answer, which the owner should not have to dig out of a conversation: `zmina todo
   add "<question>" --rec "<your answer>" --reason "<why>" [--task T-n] [--blocks <role>]`, or a check without
   `--rec`. A note `<source>: A-3 · …` / `T-62 · …` is the owner's answer from `zmina todo` or the ui page: act on

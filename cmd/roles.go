@@ -473,7 +473,7 @@ func (a *app) tickCommand() *cobra.Command {
 		Short: "One beat of the ticker (zmina ticker runs it every minute)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			err := shift.RunTick(a.withState, runWatches, a.printTick)
+			err := shift.RunTick(a.withState, runWatches, a.rang, a.printTick)
 			a.meshTick()
 			a.budgetTick(time.Now())
 
@@ -527,6 +527,10 @@ func stateCell(v shift.View) string {
 
 	if v.Failed > 0 {
 		out += fmt.Sprintf(" (%d failed lines)", v.Failed)
+	}
+
+	if !v.Asleep.IsZero() {
+		out += " (asleep until " + v.Asleep.Local().Format("Mon 15:04") + ")"
 	}
 
 	return out

@@ -146,6 +146,18 @@ func (a *app) diagnose() []check {
 		}
 	}
 
+	if _, problems, err := alarmStore(c).Scan(); err != nil {
+		add("alarms", "fail", "%v", err)
+	} else {
+		for _, p := range problems {
+			add("alarms", "warn", "%s", p)
+		}
+
+		if c.Notify.Empty() {
+			add("alarms", "ok", "no notify command: a reminder for you only lands on the todo")
+		}
+	}
+
 	a.checkSockets(c, add)
 
 	return out

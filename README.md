@@ -20,6 +20,8 @@ zmina ls
 zmina task new dev --repo api --worktree "fix the login"
 zmina task park T-14 --note "tests left"   # what remains goes to the later list (an idle role is released so)
 zmina later take L-3 dev --resume          # back to work, in the role's own conversation
+zmina remind morning "the site is still on hold"      # on your todo, and a push, at the work day's start
+zmina sleep dev --until "tomorrow 10:00" --note -     # down holding its tasks; wakes on its conversation, told
 zmina log --since 12h
 zmina --config ops note --from mr-watch --if-up "!35 — 4 new threads"   # a job signals the dispatcher
 zmina watch ls            # detectors the ticker runs (watch: in the crew file), e.g. GitLab MR reviews

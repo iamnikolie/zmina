@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/iamnikolie/zmina/internal/alarm"
+	"github.com/iamnikolie/zmina/internal/asks"
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/events"
 	"github.com/iamnikolie/zmina/internal/inbox"
@@ -82,6 +84,22 @@ type Tasks interface {
 // Later is the parked list.
 type Later interface {
 	Add(it later.Item, now time.Time) (later.Item, error)
+	Get(id string) (later.Item, error)
+	Put(it later.Item) error
+	Parked() []later.Item
+}
+
+// Alarms are the crew's reminders and wake-ups.
+type Alarms interface {
+	Add(a alarm.Alarm, now time.Time) (alarm.Alarm, error)
+	Put(a alarm.Alarm) error
+	Pending() []alarm.Alarm
+	Due(now time.Time) []alarm.Alarm
+}
+
+// Asks are what waits on the owner.
+type Asks interface {
+	Add(a asks.Ask, now time.Time) (asks.Ask, error)
 }
 
 // Events is the shift's history.
@@ -97,6 +115,8 @@ type Shift struct {
 	State  *State
 	Tasks  Tasks
 	Later  Later
+	Alarms Alarms
+	Asks   Asks
 	Events Events
 	// Inbox keeps the whole text of a note too long to type; nil cuts it instead.
 	Inbox *inbox.Store
@@ -110,6 +130,9 @@ type Shift struct {
 	// Released are the roles this shift's tick began to put down (BeginDown); the caller waits for them outside
 	// the lock and finishes the downs.
 	Released []string
+	// Rang are the alarms this shift's tick rang with a part left for the caller outside the lock: a notify
+	// command to run, a crew on another node to tell.
+	Rang []Rung
 	// Warn reports a problem that must not fail the command (the event log cannot be written); nil is quiet.
 	Warn func(error)
 
@@ -154,6 +177,8 @@ type View struct {
 	NextRun time.Time `json:"next_run,omitzero"`
 	Expires time.Time `json:"expires,omitzero"`
 	Broken  bool      `json:"broken,omitempty"`
+	// Asleep is when a role put to sleep (zmina sleep) wakes.
+	Asleep time.Time `json:"asleep,omitzero"`
 	// Problem says why the role cannot start (its dir is gone) or cannot be seen, empty when all is well.
 	Problem string `json:"problem,omitempty"`
 	// Prompt is true while an up role's screen shows a dialog or a question instead of its input line.
@@ -267,7 +292,7 @@ func (s *Shift) Views() []View {
 		rs := s.State.Role(name)
 		v := View{Role: name, Session: r.Session, Keep: r.Keep, About: r.About, Dir: r.Dir, State: PresenceDown,
 			Tasks: held[name], Inbox: len(rs.Inbox), Failed: len(rs.Failed), NextRun: rs.NextRun,
-			Expires: r.ExpiresAt(), Broken: rs.Broken, ContextMax: r.ContextLimit()}
+			Expires: r.ExpiresAt(), Broken: rs.Broken, ContextMax: r.ContextLimit(), Asleep: s.Asleep(name)}
 		if rs.Dir != "" {
 			v.Dir = rs.Dir
 		} else if err := r.DirErr(); err != nil {

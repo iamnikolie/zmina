@@ -35,7 +35,8 @@ const (
 	trimPause = 30 * time.Minute
 )
 
-// Tick is one beat of the clock: it collects roles that ended (keeping their last screen), starts the always-roles
+// Tick is one beat of the clock: it rings the alarms that are due (Rang: the caller runs their notify commands and
+// tells), collects roles that ended (keeping their last screen), starts the always-roles
 // that are down, runs schedules, notes roles busy or idle too long and seats past their expiry, releases roles idle
 // past release_idle_minutes (Released: the caller finishes those downs), types waiting
 // lines into idle roles and the queue into the dispatcher, and trims conversations past their context_max. A role tmux cannot be asked about is left alone for the
@@ -46,7 +47,8 @@ func (s *Shift) Tick() []string {
 	stopped := !s.State.Stopped.IsZero()
 	s.State.LastTick = now
 
-	var did, notes []string
+	// Alarms first: a role an alarm starts is up for the rest of the beat.
+	did, notes := s.ring(now, stopped)
 
 	for _, name := range s.Names() {
 		r, err := s.Role(name)

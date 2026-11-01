@@ -23,6 +23,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/iamnikolie/zmina/internal/alarm"
 	"github.com/iamnikolie/zmina/internal/asks"
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/events"
@@ -345,7 +346,80 @@ func (a *app) uiHandler(bound string, loopback bool, token string) http.Handler 
 		writeJSON(w, map[string]string{"done": line})
 	})
 
+	mux.HandleFunc("POST /api/alarm", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			Crew, ID, Action, When, Text, Role string
+		}
+
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&in); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+
+			return
+		}
+
+		var line string
+
+		c, err := a.crewApp(in.Crew)
+		if err == nil {
+			err = c.withState(func(s *shift.Shift) error {
+				s.By = "ui"
+
+				var err error
+				line, err = alarmAction(s, in.Action, in.ID, in.When, in.Text, in.Role)
+
+				return err
+			})
+		}
+
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+
+			return
+		}
+
+		writeJSON(w, map[string]string{"done": line})
+	})
+
 	return guard(mux, bound, loopback, token)
+}
+
+// alarmAction is the page's set, move and off; the caller holds the lock. set is a reminder for the owner, or for a
+// role when one is named.
+func alarmAction(s *shift.Shift, action, id, when, text, role string) (string, error) {
+	switch action {
+	case "move":
+		return moveAlarm(s, id, when)
+	case "off":
+		return alarmOff(s, id)
+	case "set":
+	default:
+		return "", errors.New("action: set, move or off")
+	}
+
+	text = strings.Join(strings.Fields(text), " ")
+	if text == "" {
+		return "", errors.New("a reminder needs words")
+	}
+
+	if role != "" {
+		if err := alarmRole(s, role); err != nil {
+			return "", err
+		}
+	}
+
+	at, err := alarm.When(when, s.Now(), s.Clock())
+	if err != nil {
+		return "", err
+	}
+
+	al, err := s.Alarms.Add(alarm.Alarm{Kind: alarm.Remind, At: at, When: when, Text: text, Role: role, By: s.By}, s.Now())
+	if err != nil {
+		return "", err
+	}
+
+	s.Log(role, "alarm", "", al.ID+" set for "+al.For()+": "+text)
+
+	return al.ID + " · " + al.For(), nil
 }
 
 // takeBack is `task set <id> waiting --on -` from the page: a task waiting on a person, or set aside, waits on the
@@ -514,6 +588,12 @@ type (
 		Crew string `json:"crew"`
 		task.Task
 	}
+	uiAlarm struct {
+		Crew string `json:"crew"`
+		alarm.Alarm
+		// For is whom it rings for in words: you, a role, another crew.
+		For string `json:"for"`
+	}
 	uiEvent struct {
 		Crew string `json:"crew"`
 		events.Event
@@ -534,7 +614,7 @@ const (
 // feedEvents are the events the page's feed tells; the rest (beats, keys, roles going up and down, a watch's notes
 // to the dispatcher) stay in zmina log.
 var feedEvents = map[string]bool{"task": true, "asked": true, "answered": true, "later": true, "blocked": true,
-	"watch-failed": true, "start": true, "stop": true}
+	"watch-failed": true, "start": true, "stop": true, "alarm": true, "sleep": true}
 
 // feedMax is how many events the feed gets across crews.
 const feedMax = 80
@@ -579,6 +659,7 @@ type uiSnapshot struct {
 	Crews   []uiCrewView `json:"crews"`
 	Todo    []todoItem   `json:"todo"`
 	Later   []uiLater    `json:"later"`
+	Alarms  []uiAlarm    `json:"alarms"`
 	Tasks   []uiTask     `json:"tasks"`
 	Log     []uiEvent    `json:"log"`
 	// Tints is every project the page names, with its tint (p1 … p5).
@@ -592,7 +673,7 @@ const tickerDead = 2 * time.Minute
 // one list across crews in the todo order; tasks, the parked list and the log are merged, newest first.
 func (a *app) uiSnapshot() uiSnapshot {
 	snap := uiSnapshot{Version: version, Now: time.Now(), Work: []uiWork{}, Crews: []uiCrewView{}, Todo: []todoItem{},
-		Later: []uiLater{}, Tasks: []uiTask{}, Log: []uiEvent{}, Tints: map[string]string{}}
+		Later: []uiLater{}, Alarms: []uiAlarm{}, Tasks: []uiTask{}, Log: []uiEvent{}, Tints: map[string]string{}}
 	pinned := map[string]string{}
 
 	for _, uc := range uiCrews(a.extraCrew()) {
@@ -644,6 +725,7 @@ func (a *app) uiSnapshot() uiSnapshot {
 	})
 	sort.SliceStable(snap.Tasks, func(i, j int) bool { return snap.Tasks[i].Created.After(snap.Tasks[j].Created) })
 	sort.SliceStable(snap.Later, func(i, j int) bool { return snap.Later[i].Created.Before(snap.Later[j].Created) })
+	sort.SliceStable(snap.Alarms, func(i, j int) bool { return snap.Alarms[i].At.Before(snap.Alarms[j].At) })
 	sort.SliceStable(snap.Log, func(i, j int) bool { return snap.Log[i].TS.After(snap.Log[j].TS) })
 
 	if len(snap.Log) > feedMax {
@@ -764,8 +846,18 @@ func (a *app) readCrew(s *shift.Shift, key string, cv *uiCrewView, snap *uiSnaps
 
 	evs, _ := eventLog(s.Crew).Read(events.Filter{})
 
+	open := map[string]bool{}
+
 	for _, it := range laterStore(s.Crew).Parked() {
 		snap.Later = append(snap.Later, uiLater{Crew: key, Item: it})
+		open[it.ID] = true
+	}
+
+	// An alarm for a parked item that was dealt with meanwhile rings for nothing: it is not shown.
+	for _, al := range alarmStore(s.Crew).Pending() {
+		if al.Kind != alarm.Later || open[al.Later] {
+			snap.Alarms = append(snap.Alarms, uiAlarm{Crew: key, Alarm: al, For: al.For()})
+		}
 	}
 
 	// The newest of what the feed tells; a watch's every run, keys and roles going up and down stay in zmina log.

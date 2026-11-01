@@ -67,7 +67,7 @@ Run 'zmina skill' for the full agent reference.`,
 	root.MarkFlagsMutuallyExclusive("config", "crew")
 
 	root.AddCommand(a.roleCommands()...)
-	root.AddCommand(a.taskCommand(), a.todoCommand(), a.laterCommand(), a.seatCommand(), a.logCommand(), a.noteCommand(), a.inboxCommand(), a.watchCommand(),
+	root.AddCommand(a.taskCommand(), a.todoCommand(), a.laterCommand(), a.remindCommand(), a.sleepCommand(), a.seatCommand(), a.logCommand(), a.noteCommand(), a.inboxCommand(), a.watchCommand(),
 		a.stopCommand(), a.startCommand(), a.queueCommand(), a.stateCommand(), a.tickerCommand(),
 		a.launchdCommand(), a.doctorCommand(), a.usageCommand(), a.skillCommand(), a.versionCommand(), a.uiCommand(),
 		a.nodeCommand(), a.tellCommand())
@@ -149,6 +149,8 @@ func (a *app) newShift() (*shift.Shift, error) {
 		State:  shift.NewState(),
 		Tasks:  taskStore(c),
 		Later:  laterStore(c),
+		Alarms: alarmStore(c),
+		Asks:   askStore(c),
 		Inbox:  &inbox.Store{Dir: c.Layout().Inbox()},
 		Events: eventLog(c),
 		Now:    time.Now,

@@ -42,10 +42,13 @@ type Item struct {
 	Task string `json:"task,omitempty"`
 	// From is the task the item was parked from when its role was released, Role that role and Session its
 	// conversation, so later take --resume continues it.
-	From    string    `json:"from,omitempty"`
-	Role    string    `json:"role,omitempty"`
-	Session string    `json:"session,omitempty"`
-	By      string    `json:"by,omitempty"`
+	From    string `json:"from,omitempty"`
+	Role    string `json:"role,omitempty"`
+	Session string `json:"session,omitempty"`
+	By      string `json:"by,omitempty"`
+	// Back is when its alarm (later add --until) brought it back: from then on, while it is parked, it is on the
+	// owner's todo.
+	Back    time.Time `json:"back,omitzero"`
 	Created time.Time `json:"created"`
 	Updated time.Time `json:"updated"`
 }

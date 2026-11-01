@@ -42,7 +42,12 @@ const W = {
   stopped: (c, t) => c + ": ticker stopped" + (t ? " " + t + " ago" : ""), shiftStopped: (c) => c + ": shift stopped",
   lost: "reconnecting…", noCrew: "No crew under ~/.zmina — zmina init",
   min: "min", h: "h", d: "d", lessMin: "<1 min", busyLive: "working", notLive: "not working",
+  alarms: "Alarms", alSet: "Set", alNew: "Remind me", alWhat: "What to remind you of", alWhen: "When: tomorrow 09:00, +2h, thu",
+  alMove: "Move", alOff: "Off", alMoved: "Moved", alOffDone: "Taken off", alSetDone: "Set", alNone: "no alarms set",
+  alFor: (f) => (f === "you" ? "for you" : "for " + f), alWakes: (r) => r + " wakes", alBack: "back: ", alIn: (d) => "in " + d,
+  alAsWords: (w) => "set as «" + w + "»", alDue: "due now", backTag: "back",
   ev: {
+    alarm: "alarm: ", sleep: "asleep ",
     new: "started: ", waitingOn: "waits on you: ", waitingWho: (w) => "waits on " + w + ": ", done: "done", dropped: "dropped",
     reopened: "back in work", asked: "asks you: ", answered: "you answered: ", parked: "parked: ",
     blocked: "stuck: ", watchFailed: "watch failed: ", start: "shift started", stop: "shift stopped",
@@ -64,6 +69,7 @@ let pointerDown = false;
 let openHand = "";
 let openRow = ""; // the one row whose actions are open
 let draft = { k: "", text: "" }; // the reply being typed, kept across renders
+let alDraft = { text: "", when: "" }; // the reminder being set, kept across renders
 let full = null; // the task opened on the whole screen: {crew, id, data: /api/task, peek: its holder's screen}
 const groups = new Set(); // «waiting on others» groups open
 const stacked = new Set(JSON.parse(localStorage.getItem("zmina.stacked") || "[]")); // board columns folded into a stack
@@ -120,6 +126,7 @@ function render() {
 
   // Keys the server took leave once its snapshot no longer has them.
   const held = new Set([...snap.todo, ...snap.later].map((it) => key(it.crew, it.id)));
+  for (const a of snap.alarms || []) held.add(alarmKey(a));
   for (const w of snap.work) if (w.lane === "others") held.add(otherKey(w));
   for (const k of sentKeys) if (!held.has(k)) sentKeys.delete(k);
   const todo = snap.todo.filter((it) => shows(it.crew));
@@ -137,6 +144,7 @@ function render() {
   renderAsks(asks);
   renderGo(going);
   renderLater(parked);
+  renderAlarms();
   renderOthers(others);
   renderQuiet();
   renderFoot();
@@ -320,8 +328,10 @@ function toast(word, undo) {
   return t;
 }
 
-async function post(body) {
-  const r = await fetch("api/todo", { method: "POST", headers: { "Content-Type": "application/json", "X-Zmina": "1" }, body: JSON.stringify(body) });
+async function post(body) { return postTo("api/todo", body); }
+
+async function postTo(url, body) {
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "X-Zmina": "1" }, body: JSON.stringify(body) });
   if (!r.ok) throw new Error((await r.text()).trim());
 }
 
@@ -453,6 +463,7 @@ function done(it) {
 // itemPanel is an ask's or a held task's opened row; its primary is the recommendation, else «done» where the item
 // can be done (a check, anything the owner holds).
 function itemPanel(it, holds) {
+  if (it.kind === "later") return backPanel(it);
   const rec = it.kind === "decision" && it.rec;
   const primary = rec ? { label: it.rec, fn: () => act(it, "yes", "", W.sentTo), icon: "check" }
     : holds || it.kind === "check" ? { label: W.done, fn: () => done(it), icon: "check" } : null;
@@ -465,6 +476,13 @@ function itemPanel(it, holds) {
     meta: [holds ? W.waits(who(it.crew, it.blocks || it.role) || "—") : it.role && W.from(who(it.crew, it.role))], url: it.url,
     reply: it, primary, muted,
   });
+}
+
+// backPanel is a parked item its alarm brought back: «Bring back» hands it to the dispatcher; it can be parked again
+// or discarded.
+function backPanel(it) {
+  return panel({ body: [it.note], primary: { label: W.back, fn: () => act(it, "back", "", W.broughtBack), icon: "undo" },
+    muted: [[W.park, () => act(it, "park", "", W.parkedTo), "clock"], [W.drop, () => act(it, "drop", "", W.dropped), "trash"]] });
 }
 
 // ids is what the row's title attribute carries: the ids leave the screen.
@@ -516,7 +534,8 @@ function renderHold(hold) {
 function askRow(it) {
   const k = key(it.crew, it.id);
   const hov = el("div");
-  hov.append(button("q", W.answer, () => toggleRow(k)));
+  if (it.kind === "later") hov.append(button("q", W.back, () => act(it, "back", "", W.broughtBack)));
+  else hov.append(button("q", W.answer, () => toggleRow(k)));
   if (it.kind === "check") hov.append(button("q", W.done, () => act(it, "done", "", W.sentTo)));
   hov.append(button("q", W.park, () => act(it, "park", "", W.parkedTo)));
   if (it.kind !== "check") hov.append(button("q", W.no, () => act(it, "answer", W.noText, W.sentTo)));
@@ -635,6 +654,151 @@ function laterPanel(it) {
     muted: [[W.drop, () => act(it, "drop", "", W.dropped), "trash"]] });
 }
 
+// ---- alarms: reminders (for you, a role, another crew), roles asleep, parked items set to come back. A row opens to
+// a field that moves it («tomorrow 09:00», «+2h») and a muted «Off»; «Set» on the heading opens a new reminder for
+// you. Ringing is the ticker's: a reminder lands on your move, a role is started and told.
+
+const alarmKey = (a) => "alarm:" + key(a.crew, a.id);
+const NEW_ALARM = "alarm:new";
+
+// alarmWhen is when it rings: the time today, else the day and the time.
+function alarmWhen(a) {
+  const t = new Date(a.at);
+  const now = new Date(nowMs());
+  const sameDay = t.toDateString() === now.toDateString();
+  const day = sameDay ? "" : t.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }) + " ";
+  return day + hhmm(a.at);
+}
+
+function alarmText(a) {
+  if (a.kind === "sleep") return W.alWakes(who(a.crew, a.role));
+  if (a.kind === "later") return W.alBack + a.text;
+  return a.text;
+}
+
+function alarmHead() {
+  const live = (snap.alarms || []).filter((a) => shows(a.crew) && !gone(alarmKey(a)));
+  const b = button("hl", W.alSet, () => toggleRow(NEW_ALARM));
+  b.setAttribute("aria-expanded", openRow === NEW_ALARM ? "true" : "false");
+  return [el("span", "", W.alarms + (live.length ? " " + live.length : "")), b];
+}
+
+function alarmRows(cls) {
+  const live = (snap.alarms || []).filter((a) => shows(a.crew) && !gone(alarmKey(a)));
+  const rows = live.map((a) => alarmRow(a, cls));
+  if (openRow === NEW_ALARM) rows.unshift(newAlarmRow(cls));
+  return rows;
+}
+
+function alarmRow(a, cls) {
+  const k = alarmKey(a);
+  const words = el("div", "words");
+  words.append(el("span", "tt", alarmText(a)));
+  if (a.kind !== "sleep") words.append(el("span", "gr", W.alFor(who(a.crew, a.for === "you" ? "" : a.for) || "you")));
+  const left = T(a.at) - nowMs();
+  const when = el("span", "age m al-t", alarmWhen(a));
+  when.title = left > 0 ? W.alIn(dur(left)) : W.alDue;
+  const row = rowShell(k, cls, words, when, null, null, alarmPanel(a, k));
+  row.title = a.id + (a.later ? " · " + a.later : "");
+  return row;
+}
+
+// alarmPanel: the note, when it was set as, a field for the new time with «Move», and «Off».
+function alarmPanel(a, k) {
+  const p = el("div");
+  if (a.note) p.append(el("p", "pn", a.note));
+  const left = T(a.at) - nowMs();
+  p.append(el("p", "meta", [left > 0 ? W.alIn(dur(left)) : W.alDue, a.when ? W.alAsWords(a.when) : ""].filter(Boolean).join(" · ")));
+  const line = el("div", "ctl");
+  const f = whenField(k, (v) => { draft = { k, text: v }; });
+  if (draft.k === k) f.value = draft.text;
+  const prim = labelled(button("btn", "", () => f.value.trim() && alarmAct(a, "move", f.value.trim(), "", W.alMoved, k)), "clock", W.alMove);
+  const sync = () => { prim.disabled = !f.value.trim(); };
+  sync();
+  f.addEventListener("input", sync);
+  f.addEventListener("keydown", (e) => { if (e.key === "Enter" && f.value.trim()) { e.preventDefault(); prim.click(); } });
+  const acts = el("div", "acts");
+  const mute = el("div", "mute");
+  const off = labelled(button("ib", "", () => alarmAct(a, "off", "", "", W.alOffDone, k), W.alOff), "x", W.alOff);
+  off.setAttribute("aria-label", W.alOff);
+  mute.append(off);
+  acts.append(prim, mute);
+  line.append(f, acts);
+  p.append(line);
+  return p;
+}
+
+function whenField(k, keep) {
+  const f = el("textarea", "field when");
+  f.rows = 1;
+  f.placeholder = W.alWhen;
+  f.setAttribute("aria-label", W.alWhen);
+  f.addEventListener("input", () => keep(f.value));
+  f.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); draft = { k: "", text: "" }; toggleRow(k); } });
+  return f;
+}
+
+// newAlarmRow is a reminder for you being set: what, when, «Set». It goes to the crew shown, else the first.
+function newAlarmRow(cls) {
+  const words = el("div", "words");
+  words.append(el("span", "tt", W.alNew));
+  const p = el("div");
+  const line = el("div", "ctl");
+  const what = el("textarea", "field");
+  what.rows = 1;
+  what.placeholder = W.alWhat;
+  what.setAttribute("aria-label", W.alWhat);
+  what.value = alDraft.text;
+  const when = whenField(NEW_ALARM, (v) => { alDraft.when = v; sync(); });
+  when.value = alDraft.when;
+  const prim = labelled(button("btn", "", () => {
+    const crew = filter !== "all" ? filter : (snap.crews.find((c) => c.key === "default") || snap.crews[0] || {}).key;
+    if (!crew) return;
+    alarmAct({ crew, id: "" }, "set", alDraft.when.trim(), alDraft.text.trim(), W.alSetDone, NEW_ALARM);
+  }), "clock", W.alSet);
+  const sync = () => { prim.disabled = !(alDraft.text.trim() && alDraft.when.trim()); };
+  what.addEventListener("input", () => { alDraft.text = what.value; sync(); });
+  what.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); toggleRow(NEW_ALARM); } });
+  for (const f of [what, when]) f.addEventListener("keydown", (e) => { if (e.key === "Enter" && !prim.disabled) { e.preventDefault(); prim.click(); } });
+  sync();
+  const acts = el("div", "acts");
+  acts.append(prim);
+  line.append(what, when, acts);
+  p.append(line);
+  return rowShell(NEW_ALARM, cls + " new", words, null, null, null, p);
+}
+
+// alarmAct posts set, move or off at once (a time typed is seen before it goes); off waits the 5 s undo.
+function alarmAct(a, action, when, text, word, k) {
+  openRow = "";
+  draft = { k: "", text: "" };
+  const go = async () => {
+    try {
+      await postTo("api/alarm", { crew: a.crew, id: a.id, action, when, text });
+      if (action === "set") alDraft = { text: "", when: "" };
+      if (action !== "off") toast(word);
+    } catch (e) {
+      sentKeys.delete(k);
+      if (action === "set") openRow = NEW_ALARM;
+      toast(W.notSent + e.message);
+    }
+    render();
+  };
+  if (action !== "off") { go(); render(); return; }
+  const t = toast(word, () => { clearTimeout(timer); pending.delete(k); render(); });
+  const timer = setTimeout(() => { pending.delete(k); sentKeys.add(k); t.remove(); go(); }, 5000);
+  pending.set(k, timer);
+  render();
+}
+
+function renderAlarms() {
+  const head = alarmHead();
+  $("alarms-h").replaceChildren(...head);
+  const rows = alarmRows("");
+  if (!rows.length) rows.push(el("p", "none", W.alNone));
+  $("alarms-rows").replaceChildren(...rows);
+}
+
 // ---- L5 · waiting on others: one line per person, open on click; a row opens like a going one, with «Take it back»
 
 function renderOthers(others) {
@@ -733,6 +897,8 @@ function renderCockpit(hold, asks, others, parked) {
   const qs = asks.filter(live);
   $("move-ask-h").textContent = qs.length ? W.ask : "";
   $("move-asks").replaceChildren(...qs.map((it) => moveRow(it, false)));
+  $("move-al-h").replaceChildren(...alarmHead());
+  $("move-alarms").replaceChildren(...alarmRows("mv al"));
 
   renderBand(crews);
   renderBoard(parked);
@@ -790,7 +956,8 @@ function moveRow(it, holds) {
     const why = it.kind === "decision" ? it.reason : it.note;
     if (why) words.append(el("span", "gr", why));
   }
-  const tag = chip(it) || (it.kind === "check" ? el("span", "chip ghost", W.check) : null);
+  const tag = chip(it) || (it.kind === "check" ? el("span", "chip ghost", W.check)
+    : it.kind === "later" ? el("span", "chip ghost", W.backTag) : null);
   const row = rowShell(key(it.crew, it.id), "mv " + (holds ? "hold" : "ask"), words, holds ? ageOf(it) : null, tag, null, itemPanel(it, holds));
   row.title = ids(it.id, it.task);
   if (it.task) row.dataset.w = key(it.crew, it.task);
@@ -1261,6 +1428,8 @@ function feedLine(e, answered) {
       break;
     case "blocked": text = W.ev.blocked + d.replace(/^[^:]+:\s*/, ""); break;
     case "watch-failed": text = W.ev.watchFailed + d; break;
+    case "alarm": text = W.ev.alarm + d.replace(/^R-\d+:?\s*/, ""); break;
+    case "sleep": text = W.ev.sleep + d.replace(/^R-\d+\s*/, ""); break;
     case "start": text = W.ev.start; break;
     case "stop": text = W.ev.stop; break;
   }
