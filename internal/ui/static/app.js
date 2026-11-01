@@ -42,7 +42,7 @@ const W = {
   stopped: (c, t) => c + ": ticker stopped" + (t ? " " + t + " ago" : ""), shiftStopped: (c) => c + ": shift stopped",
   lost: "reconnecting…", noCrew: "No crew under ~/.zmina — zmina init",
   min: "min", h: "h", d: "d", lessMin: "<1 min", busyLive: "working", notLive: "not working",
-  alarms: "Alarms", alSet: "Set", alNew: "Remind me", alWhat: "What to remind you of", alWhen: "When: tomorrow 09:00, +2h, thu",
+  alarms: "Alarms", alSet: "Set", alNew: "Remind me", alWhat: "What to remind you of", alWhen: "tomorrow 09:00, +2h", alWhenLabel: "When: tomorrow 09:00, +2h, thu, a date",
   alMove: "Move", alOff: "Off", alMoved: "Moved", alOffDone: "Taken off", alSetDone: "Set", alNone: "no alarms set",
   alFor: (f) => (f === "you" ? "for you" : "for " + f), alWakes: (r) => r + " wakes", alBack: "back: ", alIn: (d) => "in " + d,
   alAsWords: (w) => "set as «" + w + "»", alDue: "due now", backTag: "back",
@@ -732,7 +732,8 @@ function whenField(k, keep) {
   const f = el("textarea", "field when");
   f.rows = 1;
   f.placeholder = W.alWhen;
-  f.setAttribute("aria-label", W.alWhen);
+  f.setAttribute("aria-label", W.alWhenLabel);
+  f.title = W.alWhenLabel;
   f.addEventListener("input", () => keep(f.value));
   f.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); draft = { k: "", text: "" }; toggleRow(k); } });
   return f;
