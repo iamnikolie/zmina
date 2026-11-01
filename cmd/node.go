@@ -791,7 +791,6 @@ func (a *app) deliverFrom() mesh.Deliver {
 // watch or role is named, and the body quoted after a wrapper it cannot forge.
 func remoteSource(from mesh.Address) string { return "remote " + from.String() }
 
-//
 // remoteText is the note a body is typed as: whole when it fits remoteMax, else its head and, after the closing
 // quote — where the body cannot reach, quoteSafe having taken every quote mark out of it — where the whole text is.
 // long reports the second case: the caller stores the body under id.
