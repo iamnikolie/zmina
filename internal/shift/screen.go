@@ -1,6 +1,7 @@
 package shift
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -30,7 +31,7 @@ func (s *Shift) watchScreen(name string, now time.Time) []string {
 	rs := s.State.Role(name)
 
 	_, ok, err := s.Tmux.Prompt(name)
-	if err == nil && !ok && s.trust(name) {
+	if err == nil && !ok && !s.isCodex(name) && s.trust(name) {
 		// Answered at once: the boot goes on.
 		return nil
 	}
@@ -63,7 +64,7 @@ func (s *Shift) watchScreen(name string, now time.Time) []string {
 	}
 
 	if sess := s.session(name); sess != nil {
-		if turn, err := s.Reg.Last(sess.SessionID); err == nil && turn.Error != "" && turn.ErrorID != rs.ErrorNoted {
+		if turn, err := s.registryFor(name).Last(sess.SessionID); err == nil && turn.Error != "" && turn.ErrorID != rs.ErrorNoted {
 			rs.ErrorNoted = turn.ErrorID
 			note := name + ": its last turn ended in an API error: " + clip(turn.Error)
 			s.log(name, "api-error", "", note)
@@ -226,29 +227,40 @@ func clip(s string) string {
 	return s
 }
 
-// landed checks the line last typed into a role. It reports false while that line still has to show it was
-// taken: then nothing new is typed. A line not taken within confirmAfter is pressed again when it still sits in
-// the input line, else typed again; after typeTries it moves to the failed list.
+// landed reports whether the line typed into a role last has landed, so the next may be typed. A line still in the
+// role's input line has not, whatever its status says (a message through Remote Control moves the status too): after
+// confirmAfter it gets Enter again. One gone from the input line has landed once the status moved; else after
+// confirmAfter it is typed again while the role is at its prompt. After typeTries it is kept as failed and, if it
+// still sits in the input line, cleared from it: a line zmina typed is sent or not left there.
 func (s *Shift) landed(name string, now time.Time) bool {
 	rs := s.State.Role(name)
 	if rs.Sent == nil {
 		return true
 	}
 
-	if sess := s.session(name); sess != nil && sess.StatusUpdatedAt > rs.Sent.At.UnixMilli() {
-		rs.Sent = nil
+	sent := rs.Sent
+	draft, ok, err := s.Tmux.Prompt(name)
+	unsent := err == nil && ok && holds(draft, sent.Line)
 
-		return true
+	if !unsent {
+		if sess := s.session(name); sess != nil && sess.StatusUpdatedAt > sent.At.UnixMilli() {
+			rs.Sent = nil
+
+			return true
+		}
 	}
 
-	if now.Sub(rs.Sent.At) < confirmAfter {
+	if now.Sub(sent.At) < confirmAfter || !unsent && !s.atPrompt(name, now) {
 		return false
 	}
 
-	sent := rs.Sent
 	sent.Tries++
 
 	if sent.Tries >= typeTries {
+		if unsent {
+			s.clearInput(name, sent.Line)
+		}
+
 		rs.Failed = append(rs.Failed, Failed{Line: sent.Line, Error: "typed, never taken", At: now})
 		rs.Sent = nil
 		s.log(name, "type-failed", "", "never taken: "+sent.Line)
@@ -256,25 +268,82 @@ func (s *Shift) landed(name string, now time.Time) bool {
 		return true
 	}
 
-	if draft, ok, err := s.Tmux.Prompt(name); err == nil && ok && draft != "" &&
-		strings.HasPrefix(oneLine(sent.Line), firstWords(draft)) {
-		// Typed but not sent: press Enter.
+	sent.At = now
+
+	if unsent {
 		_ = s.Tmux.Keys(name, "Enter")
-		sent.At = now
 		s.log(name, "pressed-again", "", sent.Line)
 
 		return false
 	}
 
-	if err := s.Tmux.Type(name, sent.Line); err != nil {
+	if err := s.typeLine(name, sent.Line); err != nil {
 		s.log(name, "type-failed", "", fmt.Sprintf("try %d: %s: %s", sent.Tries, sent.Line, err))
 	} else {
 		s.log(name, "typed-again", "", sent.Line)
 	}
 
-	sent.At = now
-
 	return false
+}
+
+const (
+	// submitWait is how long a typed line is given to leave the input line after its Enter.
+	submitWait = 700 * time.Millisecond
+	// submitTries is how many times Enter is pressed again on a line that stays in the input line.
+	submitTries = 2
+)
+
+// errUnsent is a typed line its Enter never sent: it was cleared from the input line.
+var errUnsent = errors.New("typed, Enter did not send it; cleared from the input line")
+
+// typeLine types a line and presses Enter, then makes sure the Enter sent it: Claude Code can take a long line typed
+// in one burst, its Enter with it, as a paste, and leave it in the input line. A line still there gets Enter again;
+// one that stays is cleared and errUnsent returned — a line zmina typed is sent, or not left typed. An input line
+// that cannot be read (a dialog, a screen being drawn) is left to landed.
+func (s *Shift) typeLine(name, line string) error {
+	if err := s.Tmux.Type(name, line); err != nil {
+		return err
+	}
+
+	for try := 0; ; try++ {
+		s.pause(submitWait)
+
+		draft, ok, err := s.Tmux.Prompt(name)
+		if err != nil || !ok || !holds(draft, line) {
+			return nil
+		}
+
+		if try == submitTries {
+			s.clearInput(name, line)
+
+			return errUnsent
+		}
+
+		_ = s.Tmux.Keys(name, "Enter")
+		s.log(name, "pressed-again", "", line)
+	}
+}
+
+// clearInput takes a typed line zmina could not send out of the role's input line: C-e, then C-u (line end, then
+// delete to its start), never C-c, which ends a claude whose input line is already empty.
+func (s *Shift) clearInput(name, line string) {
+	_ = s.Tmux.Keys(name, "C-e", "C-u")
+	s.log(name, "unsent-cleared", "", line)
+}
+
+// holds reports whether an input line holds a line zmina typed: its start, as the input line shows it.
+func holds(draft, line string) bool {
+	return draft != "" && strings.HasPrefix(oneLine(line), firstWords(draft))
+}
+
+func (s *Shift) pause(d time.Duration) {
+	if s.Pause != nil {
+		s.Pause(d)
+
+		return
+	}
+
+	time.Sleep(d)
 }
 
 // firstWords is the start of a draft as the input line shows it: wrapped lines and the cut-off end left out.

@@ -19,7 +19,7 @@ file). Change it with `zmina seat` (below), not by hand. A full example crew wit
 is in the repository's `examples/`.
 
 ```yaml
-namespace: ~/.claude                     # CLAUDE_CONFIG_DIR of every role (default ~/.claude; init writes yours)
+namespace: ~/.claude                     # CLAUDE_CONFIG_DIR of Claude roles (default ~/.claude; init writes yours)
 dir: ~/work                              # default working directory (default ~)
 # claude: /opt/bin/claude                # the claude binary (default: claude from PATH)
 agents: ~/.zmina/agents                  # <role>/AGENT.md boot documents (default: agents/ next to this file)
@@ -62,6 +62,80 @@ roles:
     schedule: "0 19 * * 1-5"             # cron: minute hour day-of-month month day-of-week
     prompt: write today's summary        # one line typed at each run
 ```
+
+### Codex roles
+
+Roles default to `runtime: claude`. Set `runtime: codex` for selected seats in the same crew:
+
+```yaml
+# codex: /opt/bin/codex  # optional executable; default codex from PATH
+roles:
+  dispatcher: {}
+  dev:
+    runtime: codex
+    # codex_transport: shared             # shared CLI daemon; default stdio
+    profile: deep-review                  # ~/.codex/deep-review.config.toml
+    # model: your-model-id                 # optional override of the profile
+    reasoning_effort: high
+    sandbox: workspace-write
+    approval_policy: on-request
+    resume: always
+    # codex_home: ~/.codex  # config, skills and authentication; default ~/.codex
+    # args: [-c, 'model_verbosity="low"']  # extra App Server arguments
+```
+
+By default the adapter runs a dedicated `codex app-server` over stdio inside the role's tmux pane.
+With `codex_transport: shared`, the bridge connects by WebSocket
+to `<codex_home>/app-server-control/app-server-control.sock`, using the already running managed daemon
+(`codex app-server daemon start`). This shares a CLI daemon between protocol clients; it does not attach to the desktop app's private
+App Server. Desktop/mobile access only works when their connection reaches this exact daemon. A running
+desktop app and CLI daemon can share one Remote Control registration and conflict with HTTP 409
+("Remote app server already online"). Do not enable/restart Remote Control as an automatic repair:
+first identify which server the phone uses. Enabling/disabling CLI Remote Control can restart its daemon.
+A standalone server holds a separate writer lease and can cause "Another Codex session is using this task"
+when opening the same thread from the app. Stop the idle role, change its transport, then resume it to
+move that thread to the shared daemon. Do not set `args` in shared mode: use role fields/profile for
+per-thread settings; global server flags belong to the daemon. `down` disconnects this role, not the daemon.
+The server reads the Codex home configuration, then applies the selected profile and explicit role settings. `args` are App Server
+flags, not interactive Codex CLI flags. `profile` loads `<codex_home>/<name>.config.toml`, using top-level
+TOML keys as in current Codex CLI profiles (letters, digits, hyphens and underscores in names). Missing or
+invalid profiles fail before starting the role. Profile contents go over stdio rather than in process
+arguments; TOML parser errors do not quote configuration values.
+The adapter supplies the profile through App Server's per-thread `config` overrides, also on resume:
+explicit role settings > profile > the server's base/project configuration. This differs from native CLI's
+project-over-profile precedence. Use absolute paths in profile settings that name files. Profile-specific
+settings apply to the thread; global server/account setup still uses `codex_home`. Existing Claude roles
+keep their configuration and flags.
+
+`up`, `send`, `queue`, `attach`, `down`, scheduling and task worktrees use the same commands for both
+runtimes. In mixed crews every role's boot includes the instruction to use `zmina send <role> --when-idle <text>`
+for inter-role messages: Claude SendMessage cannot reach a Codex seat. Restart existing Claude roles after
+switching the crew to mixed runtimes so they receive that instruction. Codex idle/busy/waiting, thread ID, context and turn errors come from protocol events, recorded
+atomically under the crew's state directory in `codex/`. `resume: always` resumes its recorded thread;
+switching runtime starts a fresh conversation. Put a role and its copies down before changing `runtime`
+or `codex_home` / `profile` / `codex_transport` with `seat set`.
+
+`attach` shows a line-oriented bridge console, not the native Codex TUI. Commands: `/compact`, `/clear`,
+`/exit`. Approvals show the request details: type `y`, `n` or `cancel`, then Enter. Other server requests
+require their explicit JSON result. Queued tasks wait while a request is open; they never answer it.
+`down --clear` discards the console draft and exits even while a request is pending.
+
+Claude Remote Control and Claude tool names (`drop_tools` / `keep_tools`) do not apply to Codex.
+Per-role Claude-only settings are rejected; crew `drop_tools` applies only to Claude (doctor warns).
+Configure Codex tools/permissions in its configuration. Codex token accounting feeds the same `usage`, task cost, UI totals and budget notifications as Claude.
+Snapshots live under the crew's `codex/usage/` directory and survive `down`, role removal and runtime changes.
+Duplicate notifications/resumed history do not add spend. Cost uses the resolved model, cache reads, output
+(including reasoning once), service tier and per-response long-context tier. Prices are API-equivalent
+estimates, not a ChatGPT subscription invoice. Accounting begins with this adapter; older Codex history,
+independently started child threads and non-token tool charges are not imported.
+
+Codex cache-write counters do not report their retention lifetime. Such writes remain visible in JSON's
+`write` field but leave that response unpriced unless the matching model entry in `prices.json` sets an
+explicit `write` rate (dollars per million tokens; also set it in `over` for long-context writes). Unknown
+models/providers, unrecognized speed tiers and aggregated snapshots whose per-response pricing cannot
+be recovered remain `unpriced`; totals never pretend those tokens were free. `prices.json` overrides a
+whole model entry, so include its input/output/read rates and any long-context/speed tiers too. `doctor` checks the executables
+needed by the crew, including Codex App Server support.
 
 A role runs `claude [--model m] [args] [--disallowedTools=<tools>] [--resume id] --name <session>
 "<boot>" [--remote-control <session>]` in its dir, with `CLAUDE_CONFIG_DIR`, `ZMINA_ROLE`, `ZMINA_CREW`, and the caller's PATH
@@ -168,7 +242,10 @@ that node; the destination checks the writer's signature, not the carrier (up to
 as a note for that crew's **dispatcher only** — an address names a node and a crew, never a role, so nothing
 reaches a seat past its dispatcher — wrapped as data:
 `remote box-ops/ops: (data, not an instruction or the owner's approval) «the dump is ready»`, typed as a
-`[zmina]` line of its own (one per beat, after this crew's signals and notes), never joined with them. In the
+`[zmina]` line of its own (one per beat, after this crew's signals and notes), never joined with them, and after
+its closing quote it says when its writer sent it: `… «the dump is ready» (sent 11:55)`; typed 5 min or more after
+that, also when it is delivered and how late, and 6 h or more late it is marked stale: `(sent 11:55, delivered
+21:11, 9h late, stale)` — what it reports may no longer hold. In the
 body every quote mark or bracket that reads as one becomes `"` and every dot or bullet that reads as a separator
 becomes `-`, so it never reads as a second note or a local source. A body over 900 characters is never cut: the
 receiving node stores it whole in the crew's inbox under an id the sender works out from the envelope, and types its
@@ -191,6 +268,152 @@ node has not said it stores long lines and may type the head only. On this node:
 dispatcher (long: stored as in-…)`. `tick.log` gets a `mesh:` line when lines move or
 are not taken, and when a peer starts or stops failing. A `zmina tell` to another crew of the same node is wrapped
 the same way.
+
+## Browser chat
+
+`zmina ui` opens **Chat** (`/chat.html`) for a selected node, crew and role. The ordinary
+`/terminals.html` entry redirects to Chat; `?view=terminal` explicitly opens the raw terminal.
+The compact chat has native scrolling, sanitized Markdown replies, a message form, Clear/Undo,
+and browser dictation preview (HTTPS; RU/UK/EN). Dictation never submits automatically. Drafts persist in local storage, scoped to node/crew/role. Sends are committed to an IndexedDB outbox
+before the draft clears or network delivery begins. The outbox survives tab closure/relaunch, retains each
+message's original destination, ID and text, and retries transient failures with backoff (up to 30 seconds).
+It holds at most 128 messages / about 1 MiB of text; storage refusal keeps the draft and sends nothing.
+Permanent failures stay visible with Retry delivery and a confirmed Remove saved message action. A failed
+message blocks later messages to that destination, while other destinations can progress. Typing is never auto-focused.
+The chat frame follows visual viewport height and panning on mobile keyboard resize/scroll; only
+the conversation scrolls. Pinch zoom remains enabled.
+
+`GET /api/chat?node=&crew=default&role=developer` reads the role's current or last matching-runtime
+session. Visible Claude transcript messages and Codex rollout message records are read locally on
+the destination; developer/system instructions, thinking and tool records are excluded. At most the
+last 8 MiB of a transcript are read; each response page retains up to 200 messages / about 1 MiB of text.
+Pending receipt display is also bounded to 200 messages / about 1 MiB; full queue inspection remains in Terminal.
+An optional opaque `cursor` query resumes after an unchanged prefix of that session; `more` asks the client
+to fetch the next page immediately. `reset` replaces the client window when the session or prefix changed;
+`history_gap` explicitly reports unavailable/edited history in the same session. Cursors are carried inside
+the signed mesh request. Old clients and workers continue using full recent snapshots. The browser saves
+up to 1000 messages / about 4 MiB of text for each of its 20 most recently saved conversations and resumes
+from the saved cursor after reopening. Saved views are labelled while reconnecting. This is recent history,
+not an unlimited archive or offline app shell. Polling refreshes replies every three seconds; this version
+does not stream token deltas or render structured tool cards.
+Both runtimes share one Markdown renderer: tables keep readable column widths inside labelled horizontal
+scrollers, code blocks preserve whitespace and expose Copy, and lists/checklists/quotes/long links have
+bounded layout. Raw HTML/XML is escaped as text; image references are explicit links without automatic
+fetching. Unknown fenced languages, diagrams and math remain readable source. Malformed rendering falls
+back to literal text. Browser regression fixtures live in `internal/ui/testdata/chat-content.html`.
+Codex environment context and injected AGENTS instructions are omitted using runtime content provenance,
+not by matching user-written XML. Only browser messages bearing their owner request ID are labelled You.
+Unmarked terminal/crew input is a compact Session message with full text collapsed; its author is not guessed
+from name-like prefixes. Explicit owner text is preserved even when it looks like a runtime envelope.
+Runtime task notifications appear as background events with status, summary and result. IDs, file paths
+and event output stay in collapsed technical details; they are never labelled as owner messages.
+
+`POST /api/chat/send` accepts JSON `node`, `crew`, `role`, `id`, `text` (X-Zmina header required).
+Acceptance is saved in the role's durable queue before delivery. An unchanged retry ID returns the
+same acceptance; changing text under that ID is refused. Request identities remain for at least seven days,
+plus any still queued, failed or awaiting terminal delivery. A role retains at most 4096 receipts; when full,
+new acceptance is refused instead of evicting identities inside that window. Snapshots advertise this guarantee
+as `retry_window_seconds`. The browser checks the destination before sending and never automatically repeats
+an uncertain send to an older worker without that guarantee. Automatic retries stop six days after the first
+network send attempt; expired entries require inspection before a new send. This protects bounded retries,
+not unlimited exactly-once execution.
+Messages wait for the ordinary idle/empty-prompt checks; neither a busy role nor a native draft/dialog
+is overwritten. Multiline or long text is stored whole in the crew inbox and delivered with a reference
+for the role to read. Delivery states distinguish local storage, server queueing, sent to the role, and
+`accepted`: only a matching owner-message ID in the runtime's visible transcript proves agent acceptance.
+Acceptance does not mean successful task completion. A send without that evidence remains unconfirmed,
+including after the conversation changes. The form also exposes delivery failures. Failed delivery remains inspectable with
+`zmina queue`; restarting the browser does not discard accepted work.
+
+**File attachments.** Attach file opens the native file/photo picker; up to four files, each at most 8 MiB.
+The draft keeps filename/size and Remove; file-only messages are allowed. Draft files and accepted sends
+retain their immutable Blob bytes in IndexedDB, scoped to the original destination; queued file bytes are
+bounded to 64 MiB in total. A failed upload keeps the message and its files for an explicit retry.
+
+`POST /api/chat/upload` accepts `node`, `crew`, `role`, and `upload: {id, name, data}` (base64 bytes).
+The ordinary write guard applies; `chat/upload` and `chat/file` over mesh require the owner's signature.
+The destination stores files atomically in its crew's `chat-files/<role hash>/<file ID>/` with private
+permissions. IDs are immutable: a retry returns the same metadata, changed filename/bytes are refused.
+Storage is bounded to 256 MiB / 1024 files per crew; files stay until explicitly removed from disk, so a
+queued task never loses its attachment through automatic expiry. No external upload service is used.
+Snapshots advertise `attachments_supported`; older workers refuse files explicitly instead of sending
+only the text. Upgrade remote workers before attaching files to them; a laptop install updates local roles only.
+
+`POST /api/chat/send` additionally accepts `files: [attachment ID, ...]`. Every ID is resolved inside that
+role's storage; content metadata participates in request deduplication. Agent input includes quoted local
+paths and names, using the existing full-message inbox; the agent opens them with its own file-reading
+tools (including images/PDFs where supported). Browser bubbles expose download links via
+`GET /api/chat/file?node=&crew=&role=&id=`. Downloads are attachment-only, octet-stream, no-sniff and
+uncached; uploaded HTML/SVG is never executed or embedded. Files are never executed automatically.
+
+`POST /api/chat/action` accepts the same destination plus `action`: `start` explicitly starts a down
+role with its configured settings; `stop` sends one Ctrl+C only when the observed role is actively
+working and has no draft/dialog. Chat does not answer native approval prompts: open **Terminal**.
+Reading Chat does not resume a Codex thread or attach another native app writer. Chat is not a tmux
+attachment and does not pin an idle role against the configured release policy.
+
+Remote `chat/read`, `chat/send`, `chat/action` use the same owner-signed mesh requests and relay routes
+as terminals. UI token/Host/CSRF guards still apply. Update gateway, worker and relays before remote use.
+
+## Mesh terminals
+
+`zmina terminal ls [node] [--json]` lists configured roles (including running copies) on this node or
+an authenticated mesh peer. `zmina terminal attach <role> --node <node> --crew-key <key>` attaches this
+terminal to an existing role; `--node` defaults to this node, `--crew-key` to `default`.
+Detach with the tmux prefix then `d`. Disconnecting never stops the role. It does not start a role or
+resume a Codex thread: the existing tmux process keeps its runtime, profile, environment and usage accounting.
+
+Chat has a **Terminal** link (`/terminals.html?view=terminal`), available on mobile and desktop. Choose a node,
+then a crew/role, then Connect. The page carries raw terminal input, output and window-size changes over a
+same-origin WebSocket. Session selection and connection actions collapse into a one-row header; Esc,
+Tab, Ctrl-C, arrows and Enter live in the actions menu, alongside Edit message and Clear/Undo clear.
+The bottom toolbar uses microphone, keyboard, clear-input (eraser) and menu icons; Send shares that row
+when a draft exists. Clear terminal input sends Ctrl+E then Ctrl+U (line end, then delete to line start); it never
+sends Enter, Ctrl+C, `/clear` or a process signal. Its exact editing range follows the runtime/keybindings
+(e.g. the current logical line in a multiline readline editor). Restore input sends Ctrl+Y from the menu for Claude roles;
+it is disabled for the Codex bridge's canonical terminal, which has no yank buffer. Clear message/Undo clear
+only affects the browser's dictation preview. Neither action clears conversation history. The terminal keyboard is opt-in (Keyboard), never
+automatically focused on connection or a touch-key press. Dictate uses the browser's SpeechRecognition /
+webkitSpeechRecognition API over HTTPS, with RU/UK/EN selectable in Session. Recognition fills a read-only
+message preview without opening the keyboard; Edit explicitly enables editing, Send inserts the reviewed
+text and Enter into the current terminal. Dictation never sends automatically, never retries a sent message,
+and a draft stays bound to its original node/crew/role. Safari may require Siri/Dictation and microphone /
+speech-recognition permission. Unsupported/insecure browsers show an inline explanation. For microphone
+access over Tailscale use a private HTTPS Serve proxy; raw HTTP tailnet IP access still supports terminals. Disconnect detaches only the
+browser's tmux client. Reconnect opens the same running role; input is never retried or queued after a
+broken connection. The clock-arrow button opens terminal History. Scrolling up with a mouse wheel, or pulling downward on
+the live screen with a finger, also opens it. This is a stable, read-only history snapshot (up to 10000 lines / 2 MiB), fetched through an owner-signed
+`terminal/history` mesh operation. For Claude roles, visible user/assistant messages come from the recent
+saved session transcript (at most its last 8 MiB read); thinking, internal metadata and sidechains are
+excluded. This supports full-screen Claude sessions whose alternate screen leaves no tmux scrollback.
+Other roles, or a role without saved messages yet, use tmux's retained scrollback.
+Scroll it normally; reaching its bottom or pressing Latest returns to the live PTY. Reading history never
+enters shared tmux copy mode, sends agent keys or stops live output. Snapshots are scoped to the connected
+node/crew/role and cancelled on disconnect/switch. This is recent text history, not an unbounded archive: output beyond these limits, discarded tmux lines
+and hidden full-screen tool panes are not reconstructed. Update remote
+nodes to support this additional operation.
+
+Down roles are listed but cannot be attached; start them from an existing dispatcher
+terminal or the CLI, then Refresh roles. Terminal attachments count as attached clients, so the ticker's
+existing idle-release/clear rules respect an owner using the terminal.
+
+Remote terminal access is an **owner operation**, unlike dispatcher-to-dispatcher data notes. Run the UI or
+CLI on the mesh node holding `owner.key`; keep that key on that one node. Every connection uses the ordinary
+mesh node certificate handshake, then the destination requires an owner signature bound to its fresh
+challenge and the terminal operation. A certified peer alone cannot open a terminal. Local terminals need
+no mesh enrollment. The UI's token and Host guard still apply; WebSocket upgrades additionally require an
+exact same-origin browser. For Tailscale, bind the UI to its tailnet address with `--token` (or
+`ZMINA_UI_TOKEN`), or keep it on loopback behind a private reverse proxy that preserves Host/Origin and
+supports WebSocket upgrades. For the latter use `--allow-host <exact-hostname[:port]>` with the token to
+allow that proxy hostname through the loopback Host guard (repeat or comma-separate for multiple hosts). Open `?token=...` once to set the HttpOnly, SameSite Strict cookie. It lasts 90 days and renews on each authenticated HTML page load. Secure is set for native TLS or HTTPS forwarded by a loopback proxy on an explicitly allowed hostname. Missing authentication returns an uncached HTML sign-in hint.
+
+The mesh uses its existing SSH/command addresses, not a separate terminal port on each worker. If the destination
+has no direct address, a learned `Through` route opens authenticated live tunnels through intermediary nodes;
+the original caller still authenticates the destination and signs its terminal request. Every hop must be
+online. Streams are never stored in the message outbox; they have no offline delivery. Route loops/hops are
+bounded. Update zmina on the gateway, destination and any relay before using this protocol extension; older
+nodes continue exchanging ordinary notes but do not support terminal operations. The browser assets are
+embedded locally (xterm.js, MIT); no CDN is required.
 
 ## Watches — detectors the ticker runs
 
@@ -418,11 +641,11 @@ shows its actions in place. Every
 answer goes, after a 5 s undo, to that item's crew's dispatcher only. Every project gets one of five tints (by
 its name, or `projects: <name>: tint: pN` in the crew file), a rule at the row's left; hovering a row raises its
 project across the page. The page's words are English only; task notes and todo text show as they were written.
-The page never types into a role.
+Todo answers never type into a role. The separate Terminals page attaches directly to an existing role.
 
 Bound to 127.0.0.1 by default and only answers requests that name it (`Host`), so another web page cannot read or
 write through the browser. Writes need the page's own header. A non-loopback `--addr` is refused unless
-`--token <secret>` (or `$ZMINA_UI_TOKEN`) is set: the page then needs `?token=` once (it is kept in a cookie).
+`--token <secret>` (or `$ZMINA_UI_TOKEN`) is set: the page then needs `?token=` once (it is kept in a 90-day HttpOnly, SameSite Strict cookie, renewed on authenticated page loads).
 Live over server-sent events; the files are inside the binary.
 
 ## Later — the parked list
@@ -484,7 +707,7 @@ todo. The log has `alarm` (set, moved, off, rang) and `sleep`.
 | Command | Does |
 |---|---|
 | `zmina seat add <role> [--about … --dir … --boot … --model … --keep … --args=--chrome,--x --resume always --schedule "…" --prompt "…" --expires 3d]` | add a role. `--expires` takes `12h`, `3d`, a date or a date and time. |
-| `zmina seat set <role> key=value …` | change keys; `key=` removes one. Keys: session, dir, boot, keep, model, args (`[--a, --b]` or `--a,--b`), about, remote_control (`true`/`false`), resume, schedule, prompt, expires, context_max, context_action, drop_tools, keep_tools (lists, like args), release_idle_minutes, budget. |
+| `zmina seat set <role> key=value …` | change keys; `key=` removes one. Keys: runtime, profile, codex_transport, codex_home, reasoning_effort, sandbox, approval_policy, session, dir, boot, keep, model, args (`[--a, --b]` or `--a,--b`), about, remote_control (`true`/`false`), resume, schedule, prompt, expires, context_max, context_action, drop_tools, keep_tools (lists, like args), release_idle_minutes, budget. |
 | `zmina seat rm <role>` | remove a role that is down and holds no active task (`--force` despite tasks). |
 
 Every edit keeps the file's comments, is checked by loading it before it is written (a crew that
@@ -593,10 +816,15 @@ alone for the beat — never taken as ended; a role being put down is left alone
 6. When the dispatcher is idle and has been up `boot_grace`, the waiting signals and notes are typed
    into it as one line: `[zmina] mr-watch: !35 … · designer: ended · director: busy for 95 min on
    T-3`. Then each other role that is up `boot_grace` and idle gets its first queued line; a line
-   tmux refuses is tried three beats, then kept as failed (`zmina queue`). A typed line has to land:
-   the role's status changes when it takes a line. Until it does, nothing more is typed into that
-   role; after 90 s a line still sitting in the input line gets Enter again, one gone from it is
-   typed again, and after three tries it is kept as failed (`typed, never taken`).
+   tmux refuses is tried three beats, then kept as failed (`zmina queue`). A typed line is sent or not left
+   typed: Claude Code can take a long line typed in one burst, its Enter with it, as a paste and keep it in the
+   input line, so a line still there a moment after its Enter gets Enter again (twice), and one that stays is
+   cleared (C-e C-u, never C-c) and waits for the next beat. A typed line has to land: the role's status changes
+   when it takes a line, but a line still in the input line has not landed whatever the status says (a message
+   through Remote Control moves it too). Until it lands, nothing more is typed into that role; after 90 s a line
+   still sitting in the input line gets Enter again — even while a background shell keeps the role off idle —
+   one gone from it is typed again, and after three tries it is kept as failed (`typed, never taken`) and taken
+   out of the input line.
    «Idle» here also covers a role at its prompt whose status stays off idle because a background shell or agent it
    started still runs: its transcript's newest line ends a turn (an end_turn reply, the turn's closing system line)
    and its input line is on screen and empty. Never a role that shows a dialog. Release and trims still wait for a

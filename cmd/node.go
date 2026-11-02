@@ -539,7 +539,8 @@ func (a *app) nodeServe() *cobra.Command {
 			// stdout is the session: nothing else may write there.
 			quiet := &app{out: io.Discard, err: a.err}
 
-			return me.Serve(stdioRW{cmd.InOrStdin(), cmd.OutOrStdout()}, quiet.deliverFrom(), time.Now)
+			return me.ServeTerminals(cmd.Context(), stdioRW{cmd.InOrStdin(), cmd.OutOrStdout()},
+				quiet.deliverFrom(), time.Now, quiet.terminalServices(), mesh.Exec{})
 		},
 	}
 
@@ -703,12 +704,13 @@ func (a *app) deliverHere(key string, from mesh.Address, body string) (string, e
 		return "", err
 	}
 
-	return a.noteRemote(c.Path, from, id, body)
+	return a.noteRemote(c.Path, from, id, body, time.Now())
 }
 
 // noteRemote queues a line from another crew for the crew's dispatcher: typed whole when it fits, else stored whole
-// in the crew's inbox under id and typed as its head and the id (remoteText). It returns the id when it stored it.
-func (a *app) noteRemote(path string, from mesh.Address, id, body string) (string, error) {
+// in the crew's inbox under id and typed as its head and the id (remoteText). sent is when its writer sent it: the
+// typed line says so, and how late it comes (shift.Lateness). It returns the id when it stored it.
+func (a *app) noteRemote(path string, from mesh.Address, id, body string, sent time.Time) (string, error) {
 	text, long := remoteText(body, id)
 
 	err := a.forCrew(path).withState(func(s *shift.Shift) error {
@@ -718,7 +720,7 @@ func (a *app) noteRemote(path string, from mesh.Address, id, body string) (strin
 			}
 		}
 
-		if _, err := s.Note(remoteSource(from), text, false); err != nil {
+		if _, err := s.NoteSent(remoteSource(from), text, sent); err != nil {
 			return err
 		}
 
@@ -770,7 +772,7 @@ func storedAs(id, node string) string {
 // note — never a task, a start or a change — wrapped as data (remoteSource, remoteText). A line too long to type is
 // stored whole under the id its sender can work out (mesh.InboxID).
 func (a *app) deliverFrom() mesh.Deliver {
-	return func(key, from, id, body string) error {
+	return func(key, from, id, body string, sent time.Time) error {
 		src, err := mesh.ParseAddress(from)
 		if err != nil {
 			return fmt.Errorf("%w: %v", mesh.ErrRefused, err)
@@ -781,7 +783,7 @@ func (a *app) deliverFrom() mesh.Deliver {
 			return fmt.Errorf("%w: %v", mesh.ErrRefused, err)
 		}
 
-		_, err = a.noteRemote(c.Path, src, mesh.InboxID(id), body)
+		_, err = a.noteRemote(c.Path, src, mesh.InboxID(id), body, sent)
 
 		return err
 	}

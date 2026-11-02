@@ -284,6 +284,16 @@ func (c *Client) Input(name string) (draft, suggestion string, ok bool, err erro
 	}
 
 	lines := strings.Split(out, "\n")
+	// Codex bridge marks its current mode. Never mistake an old input line for a live prompt.
+	for i := len(lines) - 1; i >= 0; i-- {
+		plain := strings.TrimSpace(sgr.ReplaceAllString(lines[i], ""))
+		if strings.HasPrefix(plain, "[zmina codex: ") {
+			if plain != "[zmina codex: idle]" {
+				return "", "", false, nil
+			}
+			break
+		}
+	}
 	for i := len(lines) - 1; i >= 0; i-- {
 		plain := strings.TrimSpace(sgr.ReplaceAllString(lines[i], ""))
 		if !strings.HasPrefix(plain, "❯") || !underRule(lines[:i]) {
@@ -511,7 +521,7 @@ var DefaultDrop = []string{
 	"CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_CHILD_SESSION",
 	"CLAUDE_CODE_MESSAGING_*", "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_EXECPATH", "CLAUDE_PID", "CLAUDE_EFFORT",
 	"CLAUDE_CONFIG_DIR", "ZMINA_ROLE", "TMUX", "TMUX_PANE", "CMUX_*", "TERM_SESSION_ID", "ITERM_SESSION_ID",
-	"__CFBundleIdentifier",
+	"__CFBundleIdentifier", "CODEX_THREAD_ID", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
 }
 
 // CleanEnv drops DefaultDrop and the extra names (NAME, or PREFIX*) from env.

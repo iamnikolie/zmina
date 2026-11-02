@@ -17,6 +17,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/iamnikolie/zmina/internal/codex"
 	"github.com/iamnikolie/zmina/internal/cost"
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/events"
@@ -205,6 +206,19 @@ func usageCells(crews []uiCrew, node string, since time.Time, prices cost.Table)
 
 		evs, _ := eventLog(c).Read(events.Filter{})
 		ledgers[key] = cost.NewLedger(tasks, evs)
+		us, usageErr := (&codex.Registry{Dir: filepath.Join(c.StateDir(), "codex")}).UsageSessions(since)
+		if usageErr != nil {
+			problems = append(problems, fmt.Sprintf("crew %s: Codex usage: %v", key, usageErr))
+		}
+		for _, u := range us {
+			if u.Message.UnpricedReason != "" {
+				problem := fmt.Sprintf("crew %s: Codex role %s: %s", key, u.Role, u.Message.UnpricedReason)
+				if !slices.Contains(problems, problem) {
+					problems = append(problems, problem)
+				}
+			}
+			sessions = append(sessions, cost.Session{Node: node, Crew: key, Role: u.Role, Group: u.Group, Dispatcher: dispatcherSession(c), Messages: []registry.Message{u.Message}})
+		}
 
 		names := crewSessions(c)
 		outside := worktreeDirs(c, tasks)
@@ -403,7 +417,7 @@ func printUsage(out io.Writer, by string, rows []cost.Row, total cost.Row, manyC
 			cols = append(cols, crewName)
 		}
 
-		ctx := r.Input + r.Write5m + r.Write1h + r.Read
+		ctx := r.Input + r.Write + r.Write5m + r.Write1h + r.Read
 		perTurn := ctx / max(r.Turns, 1)
 
 		mark := ""

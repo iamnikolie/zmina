@@ -216,3 +216,34 @@ func TestShortModel(t *testing.T) {
 		assert.Equal(t, want, ShortModel(id))
 	}
 }
+
+func TestCodexRates(t *testing.T) {
+	p := Builtin()
+	for model, rate := range map[string][3]float64{"gpt-6.1-sol": {2, 10, 0.10}, "gpt-6.1-terra": {1, 5, 0.05}, "gpt-6-luna": {0.10, 0.50, 0.01}, "gpt-6-astra": {10, 50, 1}} {
+		m := registry.Message{Model: model, Input: 100_000, Read: 100_000, Output: 100_000}
+		usd, ok := p.Cost(m)
+		require.True(t, ok)
+		assert.InDelta(t, (rate[0]+rate[1]+rate[2])/10, usd, 1e-9)
+		m.Input = 200_000
+		usd, ok = p.Cost(m)
+		require.True(t, ok)
+		assert.InDelta(t, (4*rate[0]+2*rate[2]+1.5*rate[1])/10, usd, 1e-9)
+		m.Speed = "fast"
+		fast, ok := p.Cost(m)
+		require.True(t, ok)
+		assert.InDelta(t, 2*usd, fast, 1e-9)
+	}
+	m := registry.Message{Model: "gpt-6.1-sol", Write: 10}
+	_, ok := p.Cost(m)
+	assert.False(t, ok, "unknown cache lifetime cannot silently use an invented rate")
+	explicit := float64(5)
+	price := p.Models[m.Model]
+	price.Write = &explicit
+	p.Models[m.Model] = price
+	usd, ok := p.Cost(m)
+	require.True(t, ok)
+	assert.InDelta(t, .00005, usd, 1e-9)
+	m.UnpricedReason = "incomplete snapshot"
+	_, ok = p.Cost(m)
+	assert.False(t, ok)
+}

@@ -53,6 +53,16 @@ var (
 
 // Role is one long-lived named session.
 type Role struct {
+	// Runtime selects claude (default) or codex.
+	Runtime        string `yaml:"runtime"`
+	Profile        string `yaml:"profile"`
+	CodexTransport string `yaml:"codex_transport"`
+	// CodexHome selects Codex configuration and authentication; empty uses ~/.codex.
+	CodexHome       string `yaml:"codex_home"`
+	ReasoningEffort string `yaml:"reasoning_effort"`
+	Sandbox         string `yaml:"sandbox"`
+	ApprovalPolicy  string `yaml:"approval_policy"`
+
 	// Name is the role's key in the crew file; it is also its tmux session.
 	Name string `yaml:"-"`
 	// Session is the Claude Code session name other sessions message it by (default <prefix><role>).
@@ -179,6 +189,7 @@ type Crew struct {
 	Agents string `yaml:"agents"`
 	// Claude is the claude binary (default: claude from PATH).
 	Claude string `yaml:"claude"`
+	Codex  string `yaml:"codex"`
 	// Dispatcher names the role that never sleeps and hears the ticker's notes.
 	Dispatcher string `yaml:"dispatcher"`
 	// StuckMinutes is how long a role may stay busy before the dispatcher hears of it.
@@ -460,6 +471,7 @@ func (c *Crew) complete() {
 	c.Dir = anchor(home, ExpandHome(or(c.Dir, defaultDir)))
 	c.Agents = anchor(home, ExpandHome(or(c.Agents, defaultAgents)))
 	c.Claude = ExpandHome(or(c.Claude, "claude"))
+	c.Codex = ExpandHome(or(c.Codex, "codex"))
 	c.Dispatcher = or(c.Dispatcher, defaultDispatcher)
 	c.Prefix = or(c.Prefix, defaultPrefix)
 
@@ -478,6 +490,10 @@ func (c *Crew) complete() {
 		}
 
 		r.Name = name
+		r.Runtime = or(r.Runtime, "claude")
+		if r.CodexHome != "" {
+			r.CodexHome = anchor(home, ExpandHome(r.CodexHome))
+		}
 		r.Session = or(r.Session, c.Prefix+name)
 		r.Dir = anchor(home, ExpandHome(or(r.Dir, c.Dir)))
 		r.Keep = Keep(or(string(r.Keep), string(KeepManual)))
@@ -572,6 +588,10 @@ func (c *Crew) check() error {
 
 	for _, name := range c.Names() {
 		r := c.Roles[name]
+
+		if err := r.CheckRuntime(); err != nil {
+			return fmt.Errorf("role %s: %w", name, err)
+		}
 
 		if !roleRe.MatchString(name) {
 			return fmt.Errorf("role %q: names are lowercase words joined by dashes", name)

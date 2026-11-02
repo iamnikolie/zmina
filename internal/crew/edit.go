@@ -11,7 +11,7 @@ import (
 )
 
 // SeatKeys are the role keys 'zmina seat set' may change.
-var SeatKeys = []string{"session", "dir", "boot", "keep", "model", "args", "about", "remote_control", "resume",
+var SeatKeys = []string{"runtime", "profile", "codex_transport", "codex_home", "reasoning_effort", "sandbox", "approval_policy", "session", "dir", "boot", "keep", "model", "args", "about", "remote_control", "resume",
 	"schedule", "prompt", "expires", "context_max", "context_action", "drop_tools", "keep_tools",
 	"release_idle_minutes", "budget"}
 

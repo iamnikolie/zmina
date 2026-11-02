@@ -85,6 +85,17 @@ func (a *app) seatSetCommand() *cobra.Command {
 			}
 
 			return a.editSeat(args[0], sortedPairs(set), func(s *shift.Shift, e *crew.Edit) (string, error) {
+				for _, key := range []string{"runtime", "codex_home", "profile", "codex_transport"} {
+					if _, changed := set[key]; !changed {
+						continue
+					}
+					for _, v := range s.Views() {
+						base, _, _ := shift.SplitInstance(v.Role)
+						if base == args[0] && v.State != shift.PresenceDown {
+							return "", fmt.Errorf("%s is %s; zmina down %s before changing runtime, codex_home, profile or codex_transport", v.Role, v.State, v.Role)
+						}
+					}
+				}
 				return "changed", e.Set(args[0], set)
 			})
 		},

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1113">
+<title>Terminals · zmina</title>
+<link rel="icon" href="assets/mark.svg">
+<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="vendor/xterm.css">
+<link rel="stylesheet" href="terminals.css">
+<script src="vendor/xterm.js" defer></script>
+<script src="vendor/addon-fit.js" defer></script>
+<script src="terminals.js" defer></script>
+</head>
+<body class="term-page">
+<header class="term-head">
+<a href="/">zmina</a>
+<details id="session-settings" open>
+<summary><span id="session-title">Choose a role</span><span class="term-menu-label">Session</span></summary>
+<div class="term-settings">
+<label>Node<select id="node" name="node"></select></label>
+<label>Role<select id="target" name="target"><option value="">Choose a node</option></select></label>
+<div class="term-actions">
+<button id="refresh" type="button">Refresh</button>
+<button id="connect" type="button" disabled>Connect</button>
+<button id="disconnect" type="button" disabled>Disconnect</button>
+</div>
+<label>Dictation language<select id="speech-language" name="speech-language"><option value="ru-RU">Russian</option><option value="uk-UA">Ukrainian</option><option value="en-US">English</option></select></label>
+</div>
+</details>
+<a id="chat-link" href="chat.html">Chat</a>
+<button id="history-toggle" class="term-icon" type="button" disabled aria-label="Terminal history" title="Terminal history" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11a9 9 0 1 1 2 7M3 4v7h7M12 7v5l3 2"/></svg></button>
+</header>
+<main id="terminal" aria-label="Role terminal">
+<div id="history-view" hidden role="region" aria-label="Terminal history">
+<pre id="history-text" tabindex="0" aria-label="Scrollable terminal history"></pre>
+<button id="history-return" type="button">Latest ↓</button>
+</div>
+</main>
+<footer class="term-footer">
+<div id="draft-panel" hidden>
+<label class="term-sr" for="draft">Message <span id="draft-destination"></span></label>
+<textarea id="draft" name="message" rows="2" readonly spellcheck="false" aria-describedby="speech-status" placeholder="Dictate a message…"></textarea>
+</div>
+<p id="speech-status" role="status" aria-live="polite" hidden></p>
+<div class="term-toolbar">
+<button id="dictate" class="term-icon" type="button" disabled aria-pressed="false" aria-label="Dictate" title="Dictate"><svg class="mic-symbol" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg><svg class="stop-symbol" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></button>
+<button id="keyboard" class="term-icon" type="button" disabled aria-pressed="false" aria-label="Keyboard" title="Keyboard"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M6 9h1m4 0h1m4 0h1M6 12h1m4 0h1m4 0h1M7 16h10"/></svg></button>
+<button class="term-icon" type="button" data-key="clear-input" disabled aria-label="Clear terminal input" title="Clear terminal input (Ctrl+E, Ctrl+U)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 3 7 7-10 10H5l-4-4L14 3Z"/><path d="m8 9 7 7M10 20h12"/></svg></button>
+<details id="key-menu">
+<summary aria-label="Keys and message actions" title="Keys and message actions"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></summary>
+<div class="term-keys" aria-label="Terminal keys">
+<button id="edit-draft" type="button" disabled>Edit message</button>
+<button id="clear-draft" type="button" disabled>Clear message</button>
+<button id="restore-input" type="button" data-key="restore-input" disabled>Restore input</button>
+<button type="button" data-key="escape" disabled>Esc</button>
+<button type="button" data-key="tab" disabled>Tab</button>
+<button type="button" data-key="interrupt" disabled>Ctrl-C</button>
+<button type="button" data-key="up" disabled aria-label="Up arrow">↑</button>
+<button type="button" data-key="down" disabled aria-label="Down arrow">↓</button>
+<button type="button" data-key="enter" disabled>Enter</button>
+</div>
+</details>
+<button id="send-draft" type="button" disabled hidden><span>Send</span></button>
+</div>
+<p id="status" role="status" aria-live="polite">Loading nodes…</p>
+</footer>
+</body>
+</html>

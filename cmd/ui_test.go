@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -498,4 +499,70 @@ func TestUIAlarms(t *testing.T) {
 	snap = a.uiSnapshot()
 	require.Len(t, snap.Alarms, 1)
 	assert.Equal(t, "R-2", snap.Alarms[0].ID)
+}
+
+func TestUIAuthCookiePersistsAndRefreshesOnPageLoads(t *testing.T) {
+	handler := guard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }), "127.0.0.1:7518", true, "example-token", "proxy.example")
+	for _, tc := range []struct {
+		name, remote, host, proto string
+		tls, secure               bool
+	}{
+		{name: "plain HTTP", remote: "127.0.0.1:1234", host: "127.0.0.1:7518"},
+		{name: "native TLS", remote: "192.0.2.1:1234", host: "127.0.0.1:7518", tls: true, secure: true},
+		{name: "local HTTPS proxy", remote: "127.0.0.1:1234", host: "proxy.example", proto: "https", secure: true},
+		{name: "untrusted forwarded header", remote: "192.0.2.1:1234", host: "proxy.example", proto: "https"},
+		{name: "unconfigured proxy hostname", remote: "127.0.0.1:1234", host: "127.0.0.1:7518", proto: "https"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, query := range []bool{true, false} {
+				path := "http://" + tc.host + "/chat.html"
+				if query {
+					path += "?token=example-token"
+				}
+				req := httptest.NewRequest(http.MethodGet, path, nil)
+				req.RemoteAddr = tc.remote
+				req.Header.Set("X-Forwarded-Proto", tc.proto)
+				if tc.tls {
+					req.TLS = &tls.ConnectionState{}
+				}
+				if !query {
+					req.AddCookie(&http.Cookie{Name: uiCookie, Value: "example-token"})
+				}
+				recorder := httptest.NewRecorder()
+				handler.ServeHTTP(recorder, req)
+				require.Equal(t, http.StatusOK, recorder.Code)
+				cookies := recorder.Result().Cookies()
+				require.Len(t, cookies, 1, "both initial sign-in and cookie-only page loads renew expiry")
+				cookie := cookies[0]
+				require.Equal(t, uiCookie, cookie.Name)
+				require.Equal(t, "/", cookie.Path)
+				require.Equal(t, 90*24*60*60, cookie.MaxAge)
+				require.WithinDuration(t, time.Now().Add(90*24*time.Hour), cookie.Expires, 2*time.Second)
+				require.True(t, cookie.HttpOnly)
+				require.Equal(t, http.SameSiteStrictMode, cookie.SameSite)
+				require.Equal(t, tc.secure, cookie.Secure)
+			}
+		})
+	}
+	req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7518/api/ping", nil)
+	req.AddCookie(&http.Cookie{Name: uiCookie, Value: "example-token"})
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, req)
+	require.Empty(t, recorder.Result().Cookies(), "background polling must not extend sign-in indefinitely")
+}
+
+func TestUIMissingTokenReturnsUncachedHTMLHint(t *testing.T) {
+	handler := guard(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("unauthenticated request reached app") }), "127.0.0.1:7518", true, "example-token")
+	for _, path := range []string{"/chat.html", "/chat.html?token=wrong"} {
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7518"+path, nil))
+		require.Equal(t, http.StatusUnauthorized, recorder.Code)
+		require.Equal(t, "text/html; charset=utf-8", recorder.Header().Get("Content-Type"))
+		require.Equal(t, "no-store", recorder.Header().Get("Cache-Control"))
+		require.Empty(t, recorder.Header().Get("Content-Disposition"))
+		require.Contains(t, recorder.Body.String(), "?token=")
+		require.Contains(t, recorder.Body.String(), "once")
+		require.NotContains(t, recorder.Body.String(), "example-token")
+		require.Empty(t, recorder.Result().Cookies())
+	}
 }

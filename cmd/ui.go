@@ -47,6 +47,7 @@ func (a *app) uiCommand() *cobra.Command {
 	var (
 		addr, token string
 		noOpen      bool
+		allowHosts  []string
 	)
 
 	c := &cobra.Command{
@@ -56,6 +57,9 @@ func (a *app) uiCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if token == "" {
 				token = os.Getenv("ZMINA_UI_TOKEN")
+			}
+			if len(allowHosts) > 0 && token == "" {
+				return errors.New("--allow-host needs --token (or $ZMINA_UI_TOKEN)")
 			}
 
 			host, _, err := net.SplitHostPort(addr)
@@ -85,7 +89,7 @@ func (a *app) uiCommand() *cobra.Command {
 				return err
 			}
 
-			srv := &http.Server{Handler: a.uiHandler(ln.Addr().String(), loopback, token),
+			srv := &http.Server{Handler: a.uiHandler(ln.Addr().String(), loopback, token, allowHosts...),
 				ReadHeaderTimeout: 10 * time.Second}
 
 			url := "http://" + ln.Addr().String() + "/"
@@ -123,6 +127,7 @@ func (a *app) uiCommand() *cobra.Command {
 	c.Flags().StringVar(&token, "token", "", "secret the page needs (?token= once, then a cookie); default "+
 		"$ZMINA_UI_TOKEN")
 	c.Flags().BoolVar(&noOpen, "no-open", false, "print the address, do not open a browser")
+	c.Flags().StringSliceVar(&allowHosts, "allow-host", nil, "additional exact Host for a private reverse proxy; requires a token")
 
 	return c
 }
@@ -234,7 +239,7 @@ func openBrowser(url string) {
 }
 
 // uiHandler serves the page, its stream and its few calls. bound is the listener's host:port.
-func (a *app) uiHandler(bound string, loopback bool, token string) http.Handler {
+func (a *app) uiHandler(bound string, loopback bool, token string, allowHosts ...string) http.Handler {
 	mux := http.NewServeMux()
 
 	static, _ := fs.Sub(ui.Files, "static")
@@ -242,6 +247,8 @@ func (a *app) uiHandler(bound string, loopback bool, token string) http.Handler 
 	mux.HandleFunc("GET /api/ping", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "zmina") })
 	mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, a.uiSnapshot()) })
 	mux.HandleFunc("GET /api/stream", a.uiStream)
+	a.uiTerminals(mux)
+	a.uiChat(mux)
 
 	costs := &uiCostCache{read: a.readUICost}
 	mux.HandleFunc("GET /api/cost", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, costs.get()) })
@@ -380,7 +387,7 @@ func (a *app) uiHandler(bound string, loopback bool, token string) http.Handler 
 		writeJSON(w, map[string]string{"done": line})
 	})
 
-	return guard(mux, bound, loopback, token)
+	return guard(mux, bound, loopback, token, allowHosts...)
 }
 
 // alarmAction is the page's set, move and off; the caller holds the lock. set is a reminder for the owner, or for a
@@ -445,9 +452,14 @@ func (a *app) takeBack(s *shift.Shift, id string) (string, error) {
 // cannot read or write through the owner's browser). With a token: ?token= once sets a cookie, every request needs
 // one of them. A write must carry X-Zmina, which a cross-site form or fetch cannot send without a preflight this
 // server never answers.
-func guard(next http.Handler, bound string, loopback bool, token string) http.Handler {
+func guard(next http.Handler, bound string, loopback bool, token string, allowHosts ...string) http.Handler {
 	_, port, _ := net.SplitHostPort(bound)
 	hosts := map[string]bool{bound: true, "localhost:" + port: true, "127.0.0.1:" + port: true, "[::1]:" + port: true}
+	if token != "" {
+		for _, host := range allowHosts {
+			hosts[host] = true
+		}
+	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if loopback && !hosts[r.Host] {
@@ -463,15 +475,21 @@ func guard(next http.Handler, bound string, loopback bool, token string) http.Ha
 			}
 
 			if subtle.ConstantTimeCompare([]byte(given), []byte(token)) != 1 {
-				http.Error(w, "token needed", http.StatusUnauthorized)
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.Header().Set("Cache-Control", "no-store")
+				w.Header().Set("X-Content-Type-Options", "nosniff")
+				w.WriteHeader(http.StatusUnauthorized)
+				fmt.Fprint(w, `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Token needed · zmina</title><h1>Token needed</h1><p>Open your private link with <code>?token=…</code> once to sign in on this device.</p></html>`)
 
 				return
 			}
 
-			if r.URL.Query().Get("token") != "" {
-				// Secure only over TLS: a LAN page over plain HTTP would never get the cookie back.
+			page := r.Method == http.MethodGet && (r.URL.Path == "/" || strings.HasSuffix(r.URL.Path, ".html"))
+			if r.URL.Query().Get("token") != "" || page {
+				const lifetime = 90 * 24 * time.Hour
 				http.SetCookie(w, &http.Cookie{Name: uiCookie, Value: token, Path: "/", HttpOnly: true,
-					Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode})
+					MaxAge: int(lifetime / time.Second), Expires: time.Now().Add(lifetime).UTC(),
+					Secure: secureUIRequest(r, allowHosts), SameSite: http.SameSiteStrictMode})
 			}
 		}
 
@@ -487,6 +505,31 @@ func guard(next http.Handler, bound string, loopback bool, token string) http.Ha
 			"img-src 'self' data:; frame-ancestors 'none'")
 		next.ServeHTTP(w, r)
 	})
+}
+
+// Forwarded TLS is trusted only from a local proxy using an explicitly allowed
+// hostname. Ordinary clients cannot make plain HTTP cookies Secure by spoofing a header.
+func secureUIRequest(r *http.Request, proxyHosts []string) bool {
+	if r.TLS != nil {
+		return true
+	}
+	if r.Header.Get("X-Forwarded-Proto") != "https" {
+		return false
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return false
+	}
+	for _, allowed := range proxyHosts {
+		if r.Host == allowed {
+			return true
+		}
+	}
+	return false
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

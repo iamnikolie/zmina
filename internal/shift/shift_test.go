@@ -41,6 +41,9 @@ type fakeTmux struct {
 	onType func(name string)
 	// draftStays keeps a draft on C-c; dialogStays keeps a dialog on Escape.
 	draftStays, dialogStays bool
+	// enterLost is how many Enters a role swallows: a typed line stays in its input line, as a claude that takes
+	// a long burst and its Enter as a paste.
+	enterLost map[string]int
 }
 
 func (f *fakeTmux) KeepScreens(string) error { return nil }
@@ -106,6 +109,15 @@ func (f *fakeTmux) Keys(n string, keys ...string) error {
 			if presses++; presses == 2 {
 				delete(f.up, n)
 			}
+		case k == "C-u" && d != "-":
+			delete(f.drafts, n)
+		case k == "Enter" && d != "" && d != "-" && f.enterLost[n] > 0:
+			f.enterLost[n]--
+		case k == "Enter" && d != "" && d != "-" && f.enterLost != nil:
+			delete(f.drafts, n)
+			if f.onType != nil {
+				f.onType(n)
+			}
 		case strings.Contains(f.screen, k+". Exit and stop tasks"):
 			delete(f.up, n)
 			f.screen = ""
@@ -152,6 +164,12 @@ func (f *fakeTmux) Type(n, text string) error {
 	}
 
 	f.typed[n] = append(f.typed[n], text)
+	if f.enterLost[n] > 0 {
+		f.enterLost[n]--
+		f.drafts[n] = text
+
+		return nil
+	}
 	if f.onType != nil {
 		f.onType(n)
 	}
@@ -337,6 +355,7 @@ func fixtureWith(t *testing.T, body string) fix {
 	}
 	s.Tmux, s.Reg, s.Tasks, s.Later, s.Events, s.State, s.Path = f.tm, f.rg, f.tk, f.lt, f.ev, NewState(), "/bin"
 	s.Now = func() time.Time { return *f.now }
+	s.Pause = func(time.Duration) {}
 	s.By = "hand"
 	f.tm.onType = func(n string) {
 		if sess := f.rg.byPID[f.tm.up[n]]; sess != nil {

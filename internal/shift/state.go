@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/iamnikolie/zmina/internal/chat"
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/watch"
 )
@@ -38,6 +39,9 @@ type State struct {
 	// Signals wait for the dispatcher: work found by zmina note and the watches. They are refused at intake when
 	// too many wait, never dropped once accepted.
 	Signals []string `json:"signals,omitempty"`
+	// SignalSent is when a signal from another crew (zmina tell) was sent, by its text, so the line typed into the
+	// dispatcher says how late it comes.
+	SignalSent map[string]time.Time `json:"signal_sent,omitempty"`
 	// Notes wait for the dispatcher too: the ticker's own health notes, deduplicated and capped.
 	Notes []string `json:"notes,omitempty"`
 	// Watch holds, per watch, its stored keys, held events, failures and cache.
@@ -58,6 +62,8 @@ type State struct {
 
 // RoleState is what zmina keeps of one role.
 type RoleState struct {
+	// ChatReceipts deduplicates accepted owner messages from browser/mesh clients.
+	ChatReceipts []chat.Receipt `json:"chat_receipts,omitempty"`
 	// Up is whether the role was up when zmina last looked; a role that was up and is not has ended.
 	Up bool `json:"up,omitempty"`
 	// Started is when zmina last started (or tried to start) it.
@@ -76,7 +82,9 @@ type RoleState struct {
 	Held bool `json:"held,omitempty"`
 	// Broken roles die on boot: the ticker stops starting them until the next hand up.
 	Broken bool `json:"broken,omitempty"`
-	// LastSession is the role's last Claude Code session id, for --resume.
+	// LastRuntime identifies the runtime owning LastSession; empty means legacy Claude.
+	LastRuntime string `json:"last_runtime,omitempty"`
+	// LastSession is the role's last conversation id, for --resume.
 	LastSession string `json:"last_session,omitempty"`
 	// Inbox holds lines typed into the role the next time it is idle; Attempts counts failed tries of the first.
 	Inbox    []string `json:"inbox,omitempty"`

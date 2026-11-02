@@ -15,6 +15,7 @@ import (
 
 	"github.com/iamnikolie/zmina/internal/alarm"
 	"github.com/iamnikolie/zmina/internal/asks"
+	"github.com/iamnikolie/zmina/internal/codex"
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/events"
 	"github.com/iamnikolie/zmina/internal/inbox"
@@ -121,6 +122,8 @@ type Shift struct {
 	// Inbox keeps the whole text of a note too long to type; nil cuts it instead.
 	Inbox *inbox.Store
 	Now   func() time.Time
+	// Pause waits while a typed line leaves the input line (typeLine); nil sleeps.
+	Pause func(time.Duration)
 	// Path is the PATH roles start with.
 	Path string
 	// By is who acts: hand, ticker, or the role running the command.
@@ -157,6 +160,8 @@ const (
 
 // View is what is known of one role right now.
 type View struct {
+	Runtime   string    `json:"runtime,omitempty"`
+	Profile   string    `json:"profile,omitempty"`
 	Role      string    `json:"role"`
 	Session   string    `json:"session"`
 	Keep      crew.Keep `json:"keep"`
@@ -290,7 +295,7 @@ func (s *Shift) Views() []View {
 		}
 
 		rs := s.State.Role(name)
-		v := View{Role: name, Session: r.Session, Keep: r.Keep, About: r.About, Dir: r.Dir, State: PresenceDown,
+		v := View{Runtime: r.Runtime, Profile: r.Profile, Role: name, Session: r.Session, Keep: r.Keep, About: r.About, Dir: r.Dir, State: PresenceDown,
 			Tasks: held[name], Inbox: len(rs.Inbox), Failed: len(rs.Failed), NextRun: rs.NextRun,
 			Expires: r.ExpiresAt(), Broken: rs.Broken, ContextMax: r.ContextLimit(), Asleep: s.Asleep(name)}
 		if rs.Dir != "" {
@@ -309,20 +314,20 @@ func (s *Shift) Views() []View {
 		case p.State == tmux.Up:
 			v.State, v.PID = PresenceUp, p.PID
 
-			if sess, err = s.Reg.ByPID(p.PID); err != nil {
+			if sess, err = s.registryFor(name).ByPID(p.PID); err != nil {
 				v.Status = "unknown"
 			}
 		case p.State == tmux.Dead:
 			v.State = PresenceDead
 		default:
-			if sess = s.Reg.LiveByName(r.Session); sess != nil {
+			if sess = s.registryFor(name).LiveByName(r.Session); sess != nil {
 				v.State, v.PID = PresenceOutside, sess.PID
 			}
 		}
 
 		if sess != nil {
 			v.Status, v.SessionID, v.Since = sess.Status, sess.SessionID, sess.StatusSince()
-			turn, _ := s.Reg.Last(sess.SessionID)
+			turn, _ := s.registryFor(name).Last(sess.SessionID)
 			v.Context = turn.Context
 		}
 
@@ -350,6 +355,9 @@ func (s *Shift) Views() []View {
 // Command is the claude command line of a role. The name goes before the first message and again after
 // --remote-control, which comes last because it takes an optional name and would read the message as one.
 func (s *Shift) Command(r *crew.Role, resume string) []string {
+	if r.IsCodex() {
+		return s.codexCommand(r, resume)
+	}
 	argv := []string{s.Crew.Claude}
 	if r.Model != "" {
 		argv = append(argv, "--model", r.Model)
@@ -389,16 +397,23 @@ const RemoteRule = "[zmina] Lines from other crews (zmina tell) arrive as `remot
 
 // BootText is a role's first message: its boot, and for the dispatcher the rule about other crews' lines.
 func (s *Shift) BootText(r *crew.Role) string {
-	if r.Name == "" || r.Name != s.Crew.Dispatcher {
-		return r.Boot
+	text := r.Boot
+	for _, role := range s.Crew.Roles {
+		if role.IsCodex() {
+			text = strings.TrimSpace(text + "\n\n" + MixedRuntimeRule)
+			break
+		}
 	}
-
-	if r.Boot == "" {
-		return RemoteRule
+	if r.Name != "" && r.Name == s.Crew.Dispatcher {
+		text = strings.TrimSpace(text + "\n\n" + RemoteRule)
 	}
-
-	return r.Boot + "\n\n" + RemoteRule
+	return text
 }
+
+// MixedRuntimeRule gives both engines a transport they can use to reach every seat.
+const MixedRuntimeRule = "[zmina] This crew includes Codex seats. For inter-role messages use " +
+	"`zmina send <role> --when-idle <text>` with a role key from `zmina ls`; Claude SendMessage cannot reach " +
+	"Codex seats. Your role key is $ZMINA_ROLE; $ZMINA_CREW selects this crew."
 
 // Env is what a role runs with on top of the tmux server's environment.
 // RolePath is the PATH a role starts with: the caller's, less directories under the temp dir. A terminal app puts
@@ -431,13 +446,22 @@ func (s *Shift) Env(r *crew.Role) []string {
 		lang = "en_US.UTF-8"
 	}
 
-	return []string{
-		"CLAUDE_CONFIG_DIR=" + s.Crew.Namespace,
+	env := []string{
 		"ZMINA_ROLE=" + r.Name,
 		"ZMINA_CREW=" + s.Crew.Path,
 		"PATH=" + RolePath(s.Path),
 		"LANG=" + lang,
 	}
+	if r.IsCodex() {
+		home := r.CodexHome
+		if home == "" {
+			home = crew.ExpandHome("~/.codex")
+		}
+		env = append(env, "CODEX_HOME="+home)
+	} else {
+		env = append([]string{"CLAUDE_CONFIG_DIR=" + s.Crew.Namespace}, env...)
+	}
+	return env
 }
 
 // UpOptions tune one start.
@@ -479,6 +503,15 @@ func (s *Shift) start(name string, o UpOptions) error {
 		return fmt.Errorf("%s is already up: zmina attach %s", name, name)
 	}
 
+	if r.IsCodex() && r.Profile != "" {
+		home := r.CodexHome
+		if home == "" {
+			home = crew.ExpandHome("~/.codex")
+		}
+		if _, err := codex.LoadProfile(home, r.Profile); err != nil {
+			return err
+		}
+	}
 	dir := r.Dir
 	if o.Dir != "" {
 		dir = o.Dir
@@ -486,7 +519,7 @@ func (s *Shift) start(name string, o UpOptions) error {
 		return err
 	}
 
-	if other := s.Reg.LiveByName(r.Session); other != nil {
+	if other := s.registryFor(name).LiveByName(r.Session); other != nil {
 		return fmt.Errorf("%s: a session named %s already runs outside zmina (pid %d, %s); end it first",
 			name, r.Session, other.PID, other.Cwd)
 	}
@@ -494,13 +527,26 @@ func (s *Shift) start(name string, o UpOptions) error {
 	rs := s.State.Role(name)
 
 	resume := o.Resume
+	lastRuntime := rs.LastRuntime
+	if lastRuntime == "" {
+		lastRuntime = "claude"
+	}
+	runtime := r.Runtime
+	if runtime == "" {
+		runtime = "claude"
+	}
+	if resume == "last" && lastRuntime != runtime {
+		return fmt.Errorf("%s: last session belongs to %s, not %s; start a fresh session", name, lastRuntime, runtime)
+	}
 	switch {
 	case resume == "last":
 		if resume = rs.LastSession; resume == "" {
 			return fmt.Errorf("%s: no last session known to resume; zmina up %s starts a fresh one", name, name)
 		}
 	case resume == "" && r.Resume == crew.ResumeAlways:
-		resume = rs.LastSession
+		if lastRuntime == runtime {
+			resume = rs.LastSession
+		}
 	}
 
 	if err := s.Tmux.Start(name, dir, s.Env(r), s.Command(r, resume)); err != nil {
@@ -565,6 +611,16 @@ func (s *Shift) BeginDown(name string, o DownOptions) (bool, error) {
 		return false, nil
 	}
 
+	if s.isCodex(name) && o.Clear {
+		s.remember(name, p)
+		rs.Up, rs.Held, rs.Downing = false, name != s.Crew.Dispatcher, s.Now()
+		// The bridge uses canonical terminal input: C-u discards a draft without answering a pending request.
+		if err := s.Tmux.Keys(name, "C-u"); err != nil {
+			return false, err
+		}
+		s.log(name, "down", "", "cleared Codex input")
+		return true, s.Tmux.Type(name, "/exit")
+	}
 	prompt, detail, err := s.clearPrompt(name, o.Clear)
 	if err != nil {
 		return false, err
@@ -763,8 +819,10 @@ func (s *Shift) remember(name string, p tmux.Pane) {
 		return
 	}
 
-	if sess, _ := s.Reg.ByPID(p.PID); sess != nil && sess.SessionID != "" {
+	if sess, _ := s.registryFor(name).ByPID(p.PID); sess != nil && sess.SessionID != "" {
 		s.State.Role(name).LastSession = sess.SessionID
+		r, _ := s.Role(name)
+		s.State.Role(name).LastRuntime = r.Runtime
 	}
 }
 
@@ -813,6 +871,32 @@ func (s *Shift) Queue(name, text string) error {
 // A text longer than noteMax is never cut silently: with an inbox, its whole text is stored there and the note
 // carries its head and the entry's id (Pointer).
 func (s *Shift) Note(from, text string, ifUp bool) (bool, error) {
+	_, queued, err := s.note(from, text, ifUp)
+
+	return queued, err
+}
+
+// NoteSent is Note for a line from another crew, with when its writer sent it: the line typed into the dispatcher
+// says when it was sent and, past remoteLateAfter, when it is delivered and how late (Lateness).
+func (s *Shift) NoteSent(from, text string, sent time.Time) (bool, error) {
+	note, queued, err := s.note(from, text, false)
+	if err != nil || note == "" || sent.IsZero() {
+		return queued, err
+	}
+
+	if _, ok := s.State.SignalSent[note]; !ok {
+		if s.State.SignalSent == nil {
+			s.State.SignalSent = map[string]time.Time{}
+		}
+
+		s.State.SignalSent[note] = sent
+	}
+
+	return queued, nil
+}
+
+// note queues a note and returns it as queued (or as it already waits).
+func (s *Shift) note(from, text string, ifUp bool) (string, bool, error) {
 	whole := text
 	from, text = clipRunes(oneLine(from), noteMax/10), oneLine(text)
 
@@ -823,7 +907,7 @@ func (s *Shift) Note(from, text string, ifUp bool) (bool, error) {
 		}
 
 		if err != nil {
-			return false, fmt.Errorf("the note is %d characters, too long to type, and could not be stored: %w", n, err)
+			return "", false, fmt.Errorf("the note is %d characters, too long to type, and could not be stored: %w", n, err)
 		}
 
 		text = Pointer(text, id, noteMax)
@@ -831,27 +915,27 @@ func (s *Shift) Note(from, text string, ifUp bool) (bool, error) {
 
 	text = clipRunes(text, noteMax)
 	if from == "" || text == "" {
-		return false, errors.New("a note needs a source and a text")
+		return "", false, errors.New("a note needs a source and a text")
 	}
 
 	d := s.Crew.Dispatcher
 	if ifUp && !s.has(d) {
-		return false, fmt.Errorf("%s: %w", d, ErrNotUp)
+		return "", false, fmt.Errorf("%s: %w", d, ErrNotUp)
 	}
 
 	note := from + ": " + text
 	if slices.Contains(s.State.Signals, note) {
-		return false, nil
+		return note, false, nil
 	}
 
 	if len(s.State.Signals) >= signalsMax {
-		return false, fmt.Errorf("%d notes already wait for the dispatcher; it is not reading them", signalsMax)
+		return "", false, fmt.Errorf("%d notes already wait for the dispatcher; it is not reading them", signalsMax)
 	}
 
 	s.State.Signals = append(s.State.Signals, note)
 	s.log(d, "noted", "", note)
 
-	return true, nil
+	return note, true, nil
 }
 
 // oneLine folds whitespace, newlines included, to single spaces and drops control characters: a note is typed as

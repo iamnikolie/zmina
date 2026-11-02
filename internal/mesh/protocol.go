@@ -11,13 +11,16 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/iamnikolie/zmina/internal/chat"
 )
 
 // protocolVersion is the version a node speaks; a node refuses a session with a newer one it does not know.
 const protocolVersion = 1
 
-// Deliver hands an envelope addressed to this node to one of its crews ("" for the node's default crew), with its id.
-type Deliver func(crew, from, id, body string) error
+// Deliver hands an envelope addressed to this node to one of its crews ("" for the node's default crew), with its id
+// and when its writer sent it (zero when the envelope's time does not read).
+type Deliver func(crew, from, id, body string, sent time.Time) error
 
 // wire is one line of the protocol, JSON over the stream. A session is: hello (both ways), auth, ok, then any of
 // push → ack, pull → envs → ack → ok, and bye.
@@ -34,12 +37,22 @@ type wire struct {
 	// Wait, on a pull, is how many seconds the peer may hold it for something to arrive.
 	Wait int `json:"wait,omitempty"`
 	// BodyMax, in a hello, is the longest body the node takes (BodyMax); an older node sends none.
-	BodyMax int `json:"body_max,omitempty"`
+	BodyMax  int              `json:"body_max,omitempty"`
+	Terminal *TerminalRequest `json:"terminal,omitempty"`
+	Targets  []TerminalTarget `json:"targets,omitempty"`
+	Data     []byte           `json:"data,omitempty"`
+	Cols     uint16           `json:"cols,omitempty"`
+	Rows     uint16           `json:"rows,omitempty"`
+	Node     string           `json:"node,omitempty"`
+	Via      []string         `json:"via,omitempty"`
+	Text     string           `json:"text,omitempty"`
+	Chat     *chat.Snapshot   `json:"chat,omitempty"`
 }
 
 type conn struct {
-	enc *json.Encoder
-	dec *json.Decoder
+	enc       *json.Encoder
+	dec       *json.Decoder
+	challenge []byte
 }
 
 func newConn(rw io.ReadWriter) *conn {
@@ -90,6 +103,14 @@ type Session struct {
 
 // Serve answers one session on r/w: the peer side of `zmina node serve --stdio`.
 func (n *Node) Serve(rw io.ReadWriter, deliver Deliver, now func() time.Time) error {
+	return n.ServeTerminals(context.Background(), rw, deliver, now, nil, nil)
+}
+
+// ServeTerminals adds live terminal services to the ordinary mesh session. Terminal requests require
+// proof of the owner key in addition to the usual node authentication.
+func (n *Node) ServeTerminals(ctx context.Context, rw io.ReadWriter, deliver Deliver, now func() time.Time,
+	services *TerminalServices, transport Transport,
+) error {
 	c := newConn(rw)
 
 	fail := func(err error) error {
@@ -119,6 +140,7 @@ func (n *Node) Serve(rw io.ReadWriter, deliver Deliver, now func() time.Time) er
 	if err != nil {
 		return fail(err)
 	}
+	c.challenge = mine
 
 	told, err := n.told()
 	if err != nil {
@@ -164,6 +186,10 @@ func (n *Node) Serve(rw io.ReadWriter, deliver Deliver, now func() time.Time) er
 		}
 
 		switch w.Op {
+		case "terminal/list", "terminal/open", "terminal/history", "chat/read", "chat/send", "chat/action", "chat/upload", "chat/file":
+			return n.serveTerminal(ctx, c, w, services)
+		case "terminal/tunnel":
+			return n.serveTunnel(ctx, rw, c, w, transport)
 		case "bye":
 			return nil
 		case "push":
@@ -300,6 +326,7 @@ func (n *Node) open(c *conn, want string, now func() time.Time) (string, error) 
 	if err != nil {
 		return "", err
 	}
+	c.challenge = hi.Nonce
 
 	if hi.Cert == nil {
 		return "", errors.New("the peer sent no certificate")
@@ -552,7 +579,7 @@ func (n *Node) receive(envs []Envelope, deliver Deliver, now time.Time) ([]strin
 
 			switch {
 			case to.Node == n.Name:
-				err := deliver(to.Crew, e.From, e.ID, e.Body)
+				err := deliver(to.Crew, e.From, e.ID, e.Body, e.SentAt())
 				if errors.Is(err, ErrRefused) {
 					// Refused for good: the giver drops it, nobody retries.
 					seen[e.ID] = now

@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/iamnikolie/zmina/internal/codex"
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/shift"
 	"github.com/iamnikolie/zmina/internal/tmux"
@@ -92,8 +93,21 @@ func (a *app) diagnose() []check {
 		add("tmux", "ok", "%s", t.Bin)
 	}
 
-	a.checkClaude(c, add)
-	a.checkRegistry(c, add)
+	hasClaude, hasCodex := false, false
+	for _, r := range c.Roles {
+		if r.IsCodex() {
+			hasCodex = true
+		} else {
+			hasClaude = true
+		}
+	}
+	if hasClaude {
+		a.checkClaude(c, add)
+		a.checkRegistry(c, add)
+	}
+	if hasCodex {
+		a.checkCodex(c, add)
+	}
 	a.checkTicker(c, add)
 
 	st, err := shift.Read(c.StateDir())
@@ -332,4 +346,48 @@ func lockHolder(path string) string {
 	}
 
 	return "another zmina"
+}
+
+func (a *app) checkCodex(c *crew.Crew, add func(name, level, format string, args ...any)) {
+	bin, err := lookIn(shift.RolePath(os.Getenv("PATH")), c.Codex)
+	if err != nil {
+		add("codex", "fail", "%s is not on the roles' PATH (set codex: in the crew file)", c.Codex)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	help, err := exec.CommandContext(ctx, bin, "app-server", "--help").CombinedOutput()
+	if err != nil || !strings.Contains(string(help), "stdio") {
+		add("codex", "fail", "%s needs App Server with stdio transport", bin)
+		return
+	}
+	add("codex", "ok", "%s · App Server stdio · adapter registry %s", bin, filepath.Join(c.StateDir(), "codex"))
+	for _, r := range c.Roles {
+		if r.IsCodex() && r.CodexTransport == "shared" {
+			home := r.CodexHome
+			if home == "" {
+				home = crew.ExpandHome("~/.codex")
+			}
+			socket := filepath.Join(home, "app-server-control", "app-server-control.sock")
+			if st, err := os.Stat(socket); err != nil || st.Mode()&os.ModeSocket == 0 {
+				add("codex", "fail", "role %s: shared daemon socket unavailable at %s; codex app-server daemon start", r.Name, socket)
+			} else {
+				add("codex", "ok", "role %s: shared daemon socket %s", r.Name, socket)
+			}
+		}
+		if r.IsCodex() && r.Profile != "" {
+			home := r.CodexHome
+			if home == "" {
+				home = crew.ExpandHome("~/.codex")
+			}
+			if _, err := codex.LoadProfile(home, r.Profile); err != nil {
+				add("codex", "fail", "role %s: %v", r.Name, err)
+			} else {
+				add("codex", "ok", "role %s: profile %s", r.Name, r.Profile)
+			}
+		}
+		if r.IsCodex() && len(c.DropTools) > 0 {
+			add("codex", "warn", "role %s: crew drop_tools applies only to Claude; configure Codex tools in codex_home", r.Name)
+		}
+	}
 }

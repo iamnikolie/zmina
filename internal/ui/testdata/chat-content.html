@@ -1,0 +1,43 @@
+<!doctype html>
+<html class="chat-document" lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Chat content regression fixtures</title>
+<link rel="stylesheet" href="../static/app.css">
+<link rel="stylesheet" href="../static/terminals.css">
+<link rel="stylesheet" href="../static/chat.css">
+<script src="../static/vendor/marked.js"></script>
+<script src="../static/vendor/purify.js"></script>
+<script src="../static/chat-content.js"></script>
+<body class="term-page chat-page">
+<header class="term-head">Chat content regression fixtures</header>
+<main id="conversation"><div id="messages"></div></main>
+<script>
+(async () => {
+  const fixtures = await (await fetch('chat-content.json')).json();
+  const results = [];
+  for (const fixture of fixtures) {
+    const article = document.createElement('article'); article.className = 'chat-message assistant';
+    const name = document.createElement('div'); name.className = 'message-head'; name.textContent = fixture.name;
+    const body = document.createElement('div'); body.className = 'message-body'; article.append(name, body);
+    document.querySelector('#messages').append(article);
+    zminaChatContent.render(fixture.markdown, body);
+    const table = body.querySelector('.table-scroll'), code = body.querySelector('.message-code');
+    const errors = [];
+    if (document.documentElement.scrollWidth > innerWidth || article.scrollWidth > article.clientWidth + 1) errors.push('page overflow');
+    if (fixture.table && (!table || table.querySelector('th').getBoundingClientRect().width < 90)) errors.push('table squeezed');
+    if (fixture.code && (!code || !code.querySelector('button'))) errors.push('missing code controls');
+    if (fixture.tasks && body.querySelectorAll('.task-check').length !== 2) errors.push('lost checklist');
+    if (body.querySelector('script,img,iframe,object,input') || body.querySelector('[href^="javascript:"]') || window.__renderXSS) errors.push('unsafe content');
+    if (!body.textContent.trim()) errors.push('empty fallback');
+    results.push({name:fixture.name, errors});
+  }
+  const button = document.querySelector('.message-code button'), pre = document.querySelector('.message-code pre');
+  let copied;
+  Object.defineProperty(navigator, 'clipboard', {configurable:true, value:{writeText:async text=>{copied=text;}}});
+  button.click(); await Promise.resolve();
+  results.push({name:'Copy preserves exact text',errors:copied===pre.textContent ? [] : ['copy mismatch']});
+  window.chatContentResults = {width:innerWidth, results, passed:results.every(result=>result.errors.length===0)};
+})();
+</script>
+</html>

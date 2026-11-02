@@ -32,6 +32,33 @@ zmina tell box-ops/ops "the dump is ready"   # a crew on another machine or user
 Reference: `zmina skill` (`cmd/skill.md`, embedded in the binary). An example crew with five roles
 and their boot documents, ready to copy: `examples/`. A ready watch source: `contrib/disk-free.sh`.
 
+## Mixed Claude and Codex crews
+
+Set `runtime: codex` on selected roles; omitted runtime keeps Claude Code:
+
+```yaml
+roles:
+  dispatcher: {}
+  dev:
+    runtime: codex
+    profile: deep-review    # ~/.codex/deep-review.config.toml
+    reasoning_effort: high
+    sandbox: workspace-write
+    approval_policy: on-request
+    resume: always
+```
+
+Codex uses `~/.codex` (or per-role `codex_home`) and a dedicated stdio App Server. The normal
+`up`, `send`, `queue`, `down`, scheduling and worktree commands work across both runtimes. The
+attached console streams responses and accepts approval answers; it is not the native Codex TUI.
+Set `codex_transport: shared` to use the managed CLI daemon from multiple protocol clients.
+The desktop app can run a different private server; mobile access requires both clients to reach the
+same server. Sharing the CLI daemon alone does not guarantee access through the desktop/mobile app.
+Profiles apply through per-thread overrides; explicit role settings win. Token usage survives role shutdown
+and feeds `usage`, task costs and budgets at API-equivalent rates. Claude Remote Control/tool filters
+remain Claude-only. Full adapter
+settings and limitations: `zmina skill` → **Codex roles**.
+
 ## Install
 
 **Homebrew:**
@@ -92,3 +119,20 @@ state file zmina cannot read), `zmina stop` / `zmina start` (the whole shift).
 ## License
 
 MIT — see [LICENSE](LICENSE). Not affiliated with Anthropic; Claude Code is theirs.
+
+### Chat and terminals through the mesh
+
+Open **Chat** in `zmina ui` for a mobile conversation with a role: saved messages, Markdown,
+dictation preview, per-role drafts and durable queued sending. Replies refresh every three seconds.
+Approvals and interactive tool prompts stay in **Terminal**. Chat reads existing session records; it
+does not open another native Codex writer. Start role uses its configured runtime and profile.
+
+Open **Terminal** from Chat to attach to an existing role from a desktop or phone browser.
+Select a mesh node and its crew/role; keyboard input, output and resize travel over the authenticated mesh
+transport, including live relay routes. The role stays in its original tmux session when the browser disconnects.
+Run the gateway on the owner node; remote terminals require a fresh owner signature, not merely a peer certificate.
+For private access through Tailscale, use the existing UI token and a tailnet listener or a private reverse proxy
+with WebSocket support. Update the gateway, worker and relays to this version.
+
+CLI equivalents: `zmina terminal ls <node> --json` and
+`zmina terminal attach <role> --node <node> --crew-key default`.

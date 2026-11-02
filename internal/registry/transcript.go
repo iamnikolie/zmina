@@ -274,9 +274,12 @@ type Message struct {
 	At    time.Time `json:"at"`
 	Model string    `json:"model"`
 	// Speed is the reply's speed when it is not standard (fast).
-	Speed string `json:"speed,omitempty"`
-	Input int    `json:"input"`
+	Speed          string `json:"speed,omitempty"`
+	PricingPrompt  int    `json:"pricing_prompt,omitempty"`
+	UnpricedReason string `json:"unpriced_reason,omitempty"`
+	Input          int    `json:"input"`
 	// Write5m and Write1h are the cache writes by their lifetime; Read the cache reads.
+	Write     int `json:"write,omitempty"` // Codex cache writes whose lifetime is not in the event.
 	Write5m   int `json:"write_5m"`
 	Write1h   int `json:"write_1h"`
 	Read      int `json:"read"`
@@ -293,7 +296,7 @@ type Message struct {
 }
 
 // Prompt is the tokens the reply read: its input, cache writes and cache reads.
-func (m Message) Prompt() int { return m.Input + m.Write5m + m.Write1h + m.Read }
+func (m Message) Prompt() int { return m.Input + m.Write + m.Write5m + m.Write1h + m.Read }
 
 // Tokens is every token of the reply.
 func (m Message) Tokens() int { return m.Prompt() + m.Output }
@@ -352,6 +355,9 @@ func (l *line) trigger() (trigger, from string) {
 
 	return textTrigger(text)
 }
+
+// TextTrigger classifies a prompt without storing its body in accounting records.
+func TextTrigger(text string) (string, string) { return textTrigger(text) }
 
 func textTrigger(text string) (string, string) {
 	switch {

@@ -20,10 +20,11 @@ type inbox struct {
 	mu   sync.Mutex
 	got  []string
 	ids  []string
+	sent []time.Time
 	fail error
 }
 
-func (b *inbox) deliver(crew, from, id, body string) error {
+func (b *inbox) deliver(crew, from, id, body string, sent time.Time) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -33,6 +34,7 @@ func (b *inbox) deliver(crew, from, id, body string) error {
 
 	b.got = append(b.got, crew+" ← "+from+": "+body)
 	b.ids = append(b.ids, id)
+	b.sent = append(b.sent, sent)
 
 	return nil
 }
@@ -148,7 +150,7 @@ func sync1(n *Node, p *pipes) []Session {
 func TestDirectBothWays(t *testing.T) {
 	p, laptop, ops, _ := trio(t)
 
-	tell(t, laptop, "default", "box-ops/ops", "deploy is green")
+	e := tell(t, laptop, "default", "box-ops/ops", "deploy is green")
 	tell(t, ops, "ops", "laptop", "need a token for gitlab")
 
 	for _, s := range sync1(laptop, p) {
@@ -156,6 +158,9 @@ func TestDirectBothWays(t *testing.T) {
 	}
 
 	assert.Equal(t, []string{"ops ← laptop/default: deploy is green"}, p.inboxes["box-ops"].list())
+	require.Len(t, p.inboxes["box-ops"].sent, 1)
+	assert.True(t, e.SentAt().Equal(p.inboxes["box-ops"].sent[0]), "handed over with when its writer sent it")
+	assert.False(t, e.SentAt().IsZero())
 	assert.Equal(t, []string{" ← box-ops/ops: need a token for gitlab"}, p.inboxes["laptop"].list())
 
 	out, _ := laptop.Outbox()

@@ -18,11 +18,13 @@ import (
 // Rates are dollars per million tokens. A cache write left at 0 is the API's multiple of the input rate: 1.25×
 // for five minutes, 2× for an hour.
 type Rates struct {
-	Input   float64 `json:"input"`
-	Output  float64 `json:"output"`
-	Read    float64 `json:"read"`
-	Write5m float64 `json:"write_5m,omitempty"`
-	Write1h float64 `json:"write_1h,omitempty"`
+	Input float64 `json:"input"`
+	// Write is explicit because Codex usage does not identify cache lifetime. Nil leaves those writes unpriced.
+	Write   *float64 `json:"write,omitempty"`
+	Output  float64  `json:"output"`
+	Read    float64  `json:"read"`
+	Write5m float64  `json:"write_5m,omitempty"`
+	Write1h float64  `json:"write_1h,omitempty"`
 }
 
 func (r Rates) write5m() float64 { return or(r.Write5m, 1.25*r.Input) }
@@ -35,7 +37,8 @@ type Price struct {
 	Above int    `json:"above,omitempty"`
 	Over  *Rates `json:"over,omitempty"`
 	// Fast multiplies the rates of a fast-mode reply; 0 leaves fast mode unpriced.
-	Fast float64 `json:"fast,omitempty"`
+	Fast        float64            `json:"fast,omitempty"`
+	Multipliers map[string]float64 `json:"multipliers,omitempty"`
 }
 
 // Table is the prices zmina knows, as of a date.
@@ -67,6 +70,13 @@ func Builtin() Table {
 		WebSearch: 0.01,
 		From:      "built in",
 		Models: map[string]Price{
+			// OpenAI standard short-context API rates, checked against https://developers.openai.com/api/docs/pricing.
+			// Unknown cache-write lifetime is deliberately not assigned a built-in price.
+			"gpt-6-astra":       openAIPrice(10, 50, 1),
+			"gpt-6.1-sol":       openAIPrice(2, 10, 0.10),
+			"gpt-6.1-terra":     openAIPrice(1, 5, 0.05),
+			"gpt-6-luna":        openAIPrice(0.10, 0.50, 0.01),
+			"gpt-5.6-sol":       openAIPrice(4, 20, 0.40),
 			"claude-fable-5-1":  r(10, 50, 0.25),
 			"claude-mythos-5-1": r(10, 50, 0.25),
 			"claude-fable-5":    r(10, 50, 1),
@@ -150,29 +160,44 @@ func (t Table) Find(model string) (Price, bool) {
 
 // Cost is a reply's price in dollars; ok is false when the table has no price for its model or its speed.
 func (t Table) Cost(m registry.Message) (float64, bool) {
+	if m.UnpricedReason != "" {
+		return 0, false
+	}
 	p, ok := t.Find(m.Model)
 	if !ok {
 		return 0, false
 	}
 
 	r := p.Rates
-	if p.Over != nil && m.Prompt() > p.Above {
+	prompt := m.Prompt()
+	if m.PricingPrompt > 0 {
+		prompt = m.PricingPrompt
+	}
+	if p.Over != nil && prompt > p.Above {
 		r = *p.Over
 	}
 
+	if m.Write > 0 && r.Write == nil {
+		return 0, false
+	}
 	mult := 1.0
 
 	if m.Speed != "" {
-		if m.Speed != "fast" || p.Fast == 0 {
+		if m.Speed == "fast" && p.Fast > 0 {
+			mult = p.Fast
+		} else if n := p.Multipliers[m.Speed]; n > 0 {
+			mult = n
+		} else {
 			return 0, false
 		}
-
-		mult = p.Fast
 	}
 
 	usd := (float64(m.Input)*r.Input + float64(m.Write5m)*r.write5m() + float64(m.Write1h)*r.write1h() +
 		float64(m.Read)*r.Read + float64(m.Output)*r.Output) / 1e6
 
+	if r.Write != nil {
+		usd += float64(m.Write) * *r.Write / 1e6
+	}
 	return usd*mult + float64(m.WebSearch)*t.WebSearch, true
 }
 
@@ -182,4 +207,8 @@ func or(v, def float64) float64 {
 	}
 
 	return def
+}
+
+func openAIPrice(in, out, read float64) Price {
+	return Price{Rates: Rates{Input: in, Output: out, Read: read}, Above: 272_000, Over: &Rates{Input: 2 * in, Output: 1.5 * out, Read: 2 * read}, Fast: 2, Multipliers: map[string]float64{"flex": 0.5, "ultrafast": 6}}
 }

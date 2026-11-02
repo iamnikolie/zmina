@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Chat outbox regression fixtures</title>
+<script src="../static/chat-store.js"></script>
+<pre id="result">Checking persistent delivery…</pre>
+<script>
+(async () => {
+  const store = zminaChatStore, dest = {node: "fixture", crew: "test", role: "dev"};
+  const checkpointKey = "zmina.chat.outbox-fixture", results = [];
+  const assert = (condition, name) => { if (!condition) throw new Error(name); results.push(name); };
+  try {
+    let saved = JSON.parse(localStorage.getItem(checkpointKey) || "null");
+    if (!saved) {
+      const id = crypto.randomUUID();
+      const blob=new Blob(["fixture file bytes"],{type:"text/plain"});
+      saved = await store.enqueue(dest, id, "Persist after a real page reload: Привет",[{id:crypto.randomUUID(),name:"fixture.txt",size:blob.size,type:blob.type,blob}]);
+      localStorage.setItem(checkpointKey, JSON.stringify(saved));
+      location.reload(); return;
+    }
+    assert((await store.list()).some(row => row.id === saved.id && row.text === saved.text && row.dest.node === dest.node), "queued identity, text and destination survive reload");
+    const restored=(await store.list()).find(row=>row.id===saved.id);
+    assert(await restored.files[0].blob.text()==="fixture file bytes", "attachment Blob survives reload byte for byte");
+    await store.saveFiles(dest,restored.files);
+    assert(await (await store.loadFiles(dest))[0].blob.text()==="fixture file bytes", "draft attachment bytes persist");
+    await store.saveFiles(dest,[]);
+    await Promise.all([store.enqueue(dest, saved.id, saved.text,restored.files), store.enqueue(dest, saved.id, saved.text,restored.files)]);
+    assert((await store.list()).filter(row => row.id === saved.id).length === 1, "concurrent retries keep one identity");
+    let refused = false;
+    try { await store.enqueue(dest, saved.id, "different payload"); } catch (_) { refused = true; }
+    assert(refused, "same ID with changed payload is refused");
+    await store.remove(saved.key); await store.update(saved);
+    assert(!(await store.list()).some(row => row.id === saved.id), "late failure never resurrects acknowledged send");
+    const initial = await store.list(), added = [];
+    try {
+      for (let i = initial.length; i < 128; i++) added.push(await store.enqueue(dest, crypto.randomUUID(), "bounded"));
+      refused = false;
+      try { await store.enqueue(dest, crypto.randomUUID(), "over capacity"); } catch (_) { refused = true; }
+      assert(refused && (await store.list()).length === 128, "capacity refusal preserves every previously accepted write");
+    } finally { for (const entry of added) await store.remove(entry.key); }
+    for (let i = 0; i < 21; i++) await store.saveHistory({...dest, role: "history-" + i}, {cursor: String(i), messages: []});
+    assert(!(await store.loadHistory({...dest, role: "history-0"})) && (await store.loadHistory({...dest, role: "history-20"})).cursor === "20", "history retains newest 20 conversations");
+    localStorage.removeItem(checkpointKey);
+    window.chatOutboxResults = {passed: true, results};
+  } catch (error) { window.chatOutboxResults = {passed: false, results, error: error.message}; }
+  document.querySelector("#result").textContent = JSON.stringify(window.chatOutboxResults, null, 2);
+})();
+</script>

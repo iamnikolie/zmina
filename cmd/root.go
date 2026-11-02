@@ -38,7 +38,7 @@ func NewRoot(out, errw io.Writer) *cobra.Command {
 
 	root := &cobra.Command{
 		Use:   "zmina",
-		Short: "The shift: long-lived Claude Code role sessions, kept up, with one dispatcher that never sleeps",
+		Short: "The shift: long-lived Claude Code and Codex role sessions, kept up, with one dispatcher that never sleeps",
 		Long: `zmina — the shift.
 
 Each role in the crew file (designer, reviewer, a developer seat, ...) is a long-lived
@@ -70,7 +70,7 @@ Run 'zmina skill' for the full agent reference.`,
 	root.AddCommand(a.taskCommand(), a.todoCommand(), a.laterCommand(), a.remindCommand(), a.sleepCommand(), a.seatCommand(), a.logCommand(), a.noteCommand(), a.inboxCommand(), a.watchCommand(),
 		a.stopCommand(), a.startCommand(), a.queueCommand(), a.stateCommand(), a.tickerCommand(),
 		a.launchdCommand(), a.doctorCommand(), a.usageCommand(), a.skillCommand(), a.versionCommand(), a.uiCommand(),
-		a.nodeCommand(), a.tellCommand())
+		a.nodeCommand(), a.tellCommand(), a.codexCommand(), a.terminalCommand())
 
 	return root
 }

@@ -228,3 +228,98 @@ func viewOf(f fix, role string) View {
 
 	return View{}
 }
+
+const dispatcherOnly = "namespace: /ns\nclaude: claude\ntimezone: UTC\nroles:\n  dispatcher:\n    boot: read d and boot\n"
+
+// A long line typed in one burst can land in Claude Code's input line with its Enter taken as part of a paste: the
+// line is pressed again at once, and it goes.
+func TestTypedLineWhoseEnterIsLostIsPressedAgain(t *testing.T) {
+	f := fixtureWith(t, dispatcherOnly)
+	require.NoError(t, f.s.Up("dispatcher"))
+	f.status("dispatcher", "idle", *f.now)
+	*f.now = f.now.Add(3 * time.Minute)
+	f.tm.enterLost = map[string]int{"dispatcher": 1}
+
+	_, err := f.s.NoteSent("remote box/ops", "«the dump is ready»", f.now.Add(-time.Minute))
+	require.NoError(t, err)
+	f.s.Tick()
+
+	assert.Equal(t, []string{"[zmina] remote box/ops: «the dump is ready» (sent 12:02)"}, f.tm.typed["dispatcher"])
+	assert.Equal(t, []string{"Enter"}, f.tm.keys["dispatcher"], "pressed again")
+	assert.Empty(t, f.tm.drafts["dispatcher"], "sent")
+	assert.Empty(t, f.s.State.Signals)
+	assert.Empty(t, f.s.State.SignalSent)
+}
+
+// A line whose Enter never sends it is not left in the input line: cleared, and it waits for the next beat.
+func TestTypedLineThatStaysIsClearedNotLeft(t *testing.T) {
+	f := fixtureWith(t, dispatcherOnly)
+	require.NoError(t, f.s.Up("dispatcher"))
+	f.status("dispatcher", "idle", *f.now)
+	*f.now = f.now.Add(3 * time.Minute)
+	f.tm.enterLost = map[string]int{"dispatcher": 10}
+
+	_, err := f.s.Note("mr-watch", "!35 merged", false)
+	require.NoError(t, err)
+	f.s.Tick()
+
+	assert.Equal(t, []string{"Enter", "Enter", "C-e", "C-u"}, f.tm.keys["dispatcher"])
+	assert.Empty(t, f.tm.drafts["dispatcher"], "never left typed")
+	assert.Equal(t, []string{"mr-watch: !35 merged"}, f.s.State.Signals, "still waits")
+	assert.Nil(t, f.s.State.Role("dispatcher").Sent)
+}
+
+// The failure of 1 Nov: a remote line sat typed in the dispatcher's input line for hours. Its status moved (the
+// owner wrote through Remote Control) and a background shell kept it off idle, so the line counted as landed, the
+// draft held every later line back, and Enter was never pressed again. A line zmina typed that still sits in the
+// input line is zmina's own: it gets Enter, and the queue moves on.
+func TestOwnLineLeftInInputLineIsPressedNotWaitedOn(t *testing.T) {
+	f := fixtureWith(t, dispatcherOnly)
+	require.NoError(t, f.s.Up("dispatcher"))
+	f.status("dispatcher", "idle", *f.now)
+	*f.now = f.now.Add(3 * time.Minute)
+
+	stuck := "[zmina] remote box/ops: «Sekker P1 is up, MR !3» (sent 11:55)"
+	d := f.s.State.Role("dispatcher")
+	d.Sent = &Sent{Line: stuck, At: *f.now}
+	f.tm.drafts["dispatcher"] = stuck
+	f.tm.enterLost = map[string]int{}
+
+	// The owner writes through Remote Control: the status moves, the line stays put; a background shell keeps
+	// the status busy after the turn ends.
+	*f.now = f.now.Add(time.Minute)
+	f.status("dispatcher", "busy", *f.now)
+	f.rg.ended = map[string]bool{"sid-dispatcher": true}
+
+	_, err := f.s.NoteSent("remote box/ops", "«deploy is done»", f.now.Add(-9*time.Hour))
+	require.NoError(t, err)
+
+	f.s.Tick()
+	assert.Empty(t, f.tm.keys["dispatcher"], "inside confirmAfter: still given time")
+	assert.Empty(t, f.tm.typed["dispatcher"])
+
+	*f.now = f.now.Add(time.Minute)
+	f.s.Tick()
+	assert.Equal(t, []string{"Enter"}, f.tm.keys["dispatcher"], "its own line gets Enter")
+	assert.Empty(t, f.tm.drafts["dispatcher"])
+
+	*f.now = f.now.Add(time.Minute)
+	f.s.Tick()
+	require.Len(t, f.tm.typed["dispatcher"], 1, "the queue moves on")
+	assert.Equal(t, "[zmina] remote box/ops: «deploy is done» (sent 03:04, delivered 12:06, 9h late, stale)",
+		f.tm.typed["dispatcher"][0])
+}
+
+func TestLateness(t *testing.T) {
+	now := time.Date(2026, 11, 1, 21, 11, 0, 0, time.UTC)
+
+	for sent, want := range map[time.Time]string{
+		{}:                                       "",
+		now.Add(-2 * time.Minute):                " (sent 21:09)",
+		now.Add(-40 * time.Minute):               " (sent 20:31, delivered 21:11, 40m late)",
+		now.Add(-(9*time.Hour + 16*time.Minute)): " (sent 11:55, delivered 21:11, 9h late, stale)",
+		now.Add(-50 * time.Hour):                 " (sent Fri 30 Oct 19:11, delivered 21:11, 2d late, stale)",
+	} {
+		assert.Equal(t, want, Lateness(sent, now, time.UTC))
+	}
+}

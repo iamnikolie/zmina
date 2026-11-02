@@ -90,7 +90,7 @@ func (s *Shift) Tick() []string {
 		}
 
 		if !up && !stopped && r.Keep == crew.KeepAlways && !rs.Held && !rs.Broken &&
-			s.Reg.LiveByName(r.Session) == nil && now.Sub(rs.Started) >= reopenPause {
+			s.registryFor(name).LiveByName(r.Session) == nil && now.Sub(rs.Started) >= reopenPause {
 			if err := s.start(name, UpOptions{}); err != nil {
 				// Wait the usual pause before the next try, so a role that cannot start does not fill the log.
 				rs.Started = now
@@ -197,7 +197,7 @@ func (s *Shift) trim(name string, r *crew.Role, now time.Time, tasks []string) s
 	}
 
 	if rs.TrimPending {
-		turn, err := s.Reg.Last(sess.SessionID)
+		turn, err := s.registryFor(name).Last(sess.SessionID)
 		used := turn.Context
 
 		if err != nil || used == 0 {
@@ -241,7 +241,7 @@ func (s *Shift) trim(name string, r *crew.Role, now time.Time, tasks []string) s
 		return ""
 	}
 
-	turn, err := s.Reg.Last(sess.SessionID)
+	turn, err := s.registryFor(name).Last(sess.SessionID)
 	used := turn.Context
 
 	if err != nil || used <= limit {
@@ -266,7 +266,7 @@ func (s *Shift) trim(name string, r *crew.Role, now time.Time, tasks []string) s
 		return fmt.Sprintf("%s: /%s (%s): %s", name, do, detail, err)
 	}
 
-	if boot := s.BootText(r); do == crew.ContextClear && boot != "" {
+	if boot := s.BootText(r); do == crew.ContextClear && !r.IsCodex() && boot != "" {
 		rs.Inbox = append(rs.Inbox, boot)
 	}
 
@@ -443,7 +443,7 @@ func (s *Shift) schedule(name string, r *crew.Role, now time.Time, tasks []strin
 	rs.Inbox = append(rs.Inbox, queued)
 	s.log(name, "scheduled", t.ID, r.Prompt)
 
-	if up || rs.Broken || s.Reg.LiveByName(r.Session) != nil {
+	if up || rs.Broken || s.registryFor(name).LiveByName(r.Session) != nil {
 		return name + ": scheduled run " + t.ID, "", false
 	}
 
@@ -532,7 +532,7 @@ func (s *Shift) session(name string) *registry.Session {
 		return nil
 	}
 
-	sess, _ := s.Reg.ByPID(p.PID)
+	sess, _ := s.registryFor(name).ByPID(p.PID)
 
 	return sess
 }
@@ -566,7 +566,7 @@ func (s *Shift) atPrompt(name string, now time.Time) bool {
 		return false
 	}
 
-	if turn, err := s.Reg.Last(sess.SessionID); err != nil || !turn.Ended {
+	if turn, err := s.registryFor(name).Last(sess.SessionID); err != nil || !turn.Ended {
 		return false
 	}
 
@@ -592,14 +592,22 @@ func (s *Shift) deliver(now time.Time) string {
 		}
 	}
 
+	for sig := range s.State.SignalSent {
+		if !slices.Contains(remote, sig) {
+			delete(s.State.SignalSent, sig)
+		}
+	}
+
 	parts := append(local, s.State.Notes...)
-	if len(parts) == 0 && len(remote) > 0 {
-		parts = remote[:1]
+	alone := len(parts) == 0 && len(remote) > 0
+	if alone {
+		parts = []string{remote[0] + s.lateness(remote[0], now)}
 	}
 
 	// A line queued for the dispatcher itself goes first: after a clear it is the boot line, and the signals
-	// belong to a dispatcher that knows its job.
-	if len(parts) == 0 || len(s.State.Role(d).Inbox) > 0 || !s.atPrompt(d, now) || !s.landed(d, now) {
+	// belong to a dispatcher that knows its job. The line typed last has to land first: landed presses Enter on it
+	// while it still sits in the input line, whatever the dispatcher's status says.
+	if len(parts) == 0 || len(s.State.Role(d).Inbox) > 0 || !s.landed(d, now) || !s.atPrompt(d, now) {
 		return ""
 	}
 
@@ -609,21 +617,76 @@ func (s *Shift) deliver(now time.Time) string {
 	}
 
 	line := "[zmina] " + strings.Join(parts, " · ")
-	if err := s.Tmux.Type(d, line); err != nil {
+	if err := s.typeLine(d, line); err != nil {
 		return ""
 	}
 
 	s.State.Role(d).Sent = &Sent{Line: line, At: now}
 
-	if len(local)+len(s.State.Notes) > 0 {
-		s.State.Signals, s.State.Notes = remote, nil
-	} else {
+	if alone {
+		delete(s.State.SignalSent, remote[0])
 		s.State.Signals = slices.Clone(remote[1:])
+	} else {
+		s.State.Signals, s.State.Notes = remote, nil
 	}
 	s.Told = true
 	s.log(d, "told", "", line)
 
 	return line
+}
+
+const (
+	// remoteLateAfter is how long after it was sent a line from another crew is typed before it says when it is
+	// delivered and how late.
+	remoteLateAfter = 5 * time.Minute
+	// staleAfter is how old such a line is before it is marked stale: what it reports may no longer hold.
+	staleAfter = 6 * time.Hour
+)
+
+// Lateness is what a line from another crew carries after its closing quote, where its body cannot reach: when it
+// was sent, and past remoteLateAfter when it is delivered and how late — " (sent 11:55, delivered 21:11, 9h late, stale)".
+func Lateness(sent, now time.Time, loc *time.Location) string {
+	if sent.IsZero() {
+		return ""
+	}
+
+	sent, now = sent.In(loc), now.In(loc)
+
+	clock := func(t time.Time) string {
+		if y, m, d := t.Date(); y == now.Year() && m == now.Month() && d == now.Day() {
+			return t.Format("15:04")
+		}
+
+		return t.Format("Mon 2 Jan 15:04")
+	}
+
+	late := now.Sub(sent)
+	if late < remoteLateAfter {
+		return " (sent " + clock(sent) + ")"
+	}
+
+	out := " (sent " + clock(sent) + ", delivered " + now.Format("15:04") + ", " + span(late) + " late"
+	if late >= staleAfter {
+		out += ", stale"
+	}
+
+	return out + ")"
+}
+
+// span is a lateness in its biggest unit: 9h, 2d, 40m.
+func span(d time.Duration) string {
+	switch {
+	case d >= 48*time.Hour:
+		return fmt.Sprintf("%dd", int(d/(24*time.Hour)))
+	case d >= time.Hour:
+		return fmt.Sprintf("%dh", int(d/time.Hour))
+	}
+
+	return fmt.Sprintf("%dm", int(d/time.Minute))
+}
+
+func (s *Shift) lateness(signal string, now time.Time) string {
+	return Lateness(s.State.SignalSent[signal], now, s.Crew.Location())
 }
 
 // IsRemote reports a signal from another crew (zmina tell): its source starts with "remote ".
@@ -637,13 +700,13 @@ func (s *Shift) Deliver() string { return s.deliver(s.Now()) }
 // queue), so it never blocks the lines after it. It returns a line for the log.
 func (s *Shift) deliverInbox(name string, now time.Time) string {
 	rs := s.State.Role(name)
-	if len(rs.Inbox) == 0 || !s.atPrompt(name, now) || !s.landed(name, now) {
+	if len(rs.Inbox) == 0 || !s.landed(name, now) || !s.atPrompt(name, now) {
 		return ""
 	}
 
 	head := rs.Inbox[0]
 
-	if err := s.Tmux.Type(name, head); err != nil {
+	if err := s.typeLine(name, head); err != nil {
 		rs.Attempts++
 		s.log(name, "type-failed", "", fmt.Sprintf("try %d: %s: %s", rs.Attempts, head, err))
 
@@ -667,3 +730,7 @@ func (s *Shift) deliverInbox(name string, now time.Time) string {
 
 	return "typed into " + name + ": " + head
 }
+
+// FlushInbox attempts the ordinary safe idle delivery path for one role, without starting any roles.
+// Call under the crew state lock. Busy roles, dialogs, drafts and unlanded messages retain their queue.
+func (s *Shift) FlushInbox(name string) string { return s.deliverInbox(name, s.Now()) }

@@ -44,6 +44,16 @@ type Envelope struct {
 	Via []string `json:"via,omitempty"`
 }
 
+// SentAt is when the writer sent the envelope; zero when At does not read.
+func (e Envelope) SentAt() time.Time {
+	t, err := time.Parse(time.RFC3339Nano, e.At)
+	if err != nil {
+		return time.Time{}
+	}
+
+	return t
+}
+
 func (e Envelope) message() []byte {
 	return []byte(strings.Join([]string{"zmina-env", e.ID, e.From, e.To, e.At, e.Body}, "\x00"))
 }

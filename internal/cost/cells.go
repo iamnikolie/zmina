@@ -28,6 +28,7 @@ type Cell struct {
 	// Sub is how many of the turns were a subagent's.
 	Sub     int `json:"sub,omitempty"`
 	Input   int `json:"input"`
+	Write   int `json:"write,omitempty"`
 	Write5m int `json:"write_5m"`
 	Write1h int `json:"write_1h"`
 	Read    int `json:"read"`
@@ -40,6 +41,7 @@ type Cell struct {
 func (c *Cell) add(m registry.Message, usd float64, priced bool) {
 	c.Turns++
 	c.Input += m.Input
+	c.Write += m.Write
 	c.Write5m += m.Write5m
 	c.Write1h += m.Write1h
 	c.Read += m.Read
@@ -60,6 +62,7 @@ func (c *Cell) sum(o Cell) {
 	c.Turns += o.Turns
 	c.Sub += o.Sub
 	c.Input += o.Input
+	c.Write += o.Write
 	c.Write5m += o.Write5m
 	c.Write1h += o.Write1h
 	c.Read += o.Read
@@ -69,7 +72,7 @@ func (c *Cell) sum(o Cell) {
 }
 
 // Tokens is every token of the cell.
-func (c Cell) Tokens() int { return c.Input + c.Write5m + c.Write1h + c.Read + c.Output }
+func (c Cell) Tokens() int { return c.Input + c.Write + c.Write5m + c.Write1h + c.Read + c.Output }
 
 // Session is one role session's replies to price and give to tasks.
 type Session struct {

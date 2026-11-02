@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en" class="chat-document">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f1113">
+<title>Chat · zmina</title>
+<link rel="icon" href="assets/mark.svg">
+<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="terminals.css">
+<link rel="stylesheet" href="chat.css">
+<script src="vendor/marked.js" defer></script>
+<script src="vendor/purify.js" defer></script>
+<script src="chat-content.js" defer></script>
+<script src="chat-store.js" defer></script>
+<script src="chat.js" defer></script>
+</head>
+<body class="term-page chat-page">
+<header class="term-head">
+<a href="/">zmina</a>
+<details id="session-settings" open>
+<summary><span id="session-title">Choose a role</span><span class="term-menu-label">Session</span></summary>
+<div class="term-settings">
+<label>Node<select id="node" name="node"></select></label>
+<label>Role<select id="target" name="target"><option value="">Choose a node</option></select></label>
+<div class="term-actions"><button id="refresh" type="button">Refresh</button><button id="open-chat" type="button" disabled>Open chat</button></div>
+<label>Dictation language<select id="speech-language" name="speech-language"><option value="ru-RU">Russian</option><option value="uk-UA">Ukrainian</option><option value="en-US">English</option></select></label>
+<span id="runtime-info"></span>
+</div>
+</details>
+<nav class="chat-nav" aria-label="Role view"><a id="terminal-link" href="terminals.html?view=terminal">Terminal</a></nav>
+</header>
+<div class="chat-state"><span id="agent-state" role="status" aria-live="polite">Choose a role</span><button id="start-role" type="button" hidden>Start role</button><button id="stop-turn" type="button" hidden aria-label="Stop current turn">Stop</button></div>
+<p id="chat-error" class="chat-error" role="status" hidden></p>
+<main id="conversation" aria-label="Conversation"><div id="messages"></div><p id="empty-chat">Choose a role to open its conversation.</p></main>
+<button id="chat-latest" type="button" hidden>Latest ↓</button>
+<form id="composer" class="chat-composer">
+<div id="draft-files" class="chat-attachments" aria-live="polite"></div>
+<input id="file-input" type="file" multiple hidden>
+<button id="attach-file" class="term-icon" type="button" aria-label="Attach file" title="Attach file" disabled>+</button>
+<button id="dictate" class="term-icon" type="button" disabled aria-label="Dictate" aria-pressed="false" title="Dictate"><svg class="mic-symbol" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg><svg class="stop-symbol" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></button>
+<label class="term-sr" for="message">Message to this role</label>
+<textarea id="message" name="message" rows="2" maxlength="4096" placeholder="Message this role…"></textarea>
+<button id="clear-message" class="term-icon" type="button" disabled aria-label="Clear draft" title="Clear draft"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 3 7 7-10 10H5l-4-4L14 3Z"/><path d="m8 9 7 7M10 20h12"/></svg></button>
+<button id="send-message" type="submit" disabled>Send</button>
+<p id="composer-status" role="status" aria-live="polite" hidden></p>
+</form>
+</body>
+</html>
