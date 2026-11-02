@@ -279,7 +279,7 @@ func TestOwnLineLeftInInputLineIsPressedNotWaitedOn(t *testing.T) {
 	f.status("dispatcher", "idle", *f.now)
 	*f.now = f.now.Add(3 * time.Minute)
 
-	stuck := "[zmina] remote box/ops: «Sekker P1 is up, MR !3» (sent 11:55)"
+	stuck := "[zmina] remote box/ops: «shop P1 is up, MR !3» (sent 11:55)"
 	d := f.s.State.Role("dispatcher")
 	d.Sent = &Sent{Line: stuck, At: *f.now}
 	f.tm.drafts["dispatcher"] = stuck
