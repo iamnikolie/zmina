@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/iamnikolie/zmina/internal/record"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -76,8 +77,15 @@ func ParseState(s string) (State, error) {
 
 // Task is one piece of work handed to a role.
 type Task struct {
-	ID   string `json:"id"`
-	Role string `json:"role"`
+	// CheckpointTaskUpdated binds explicit checkpoint validation to this task snapshot.
+	CheckpointTaskUpdated time.Time      `json:"checkpoint_task_updated,omitempty"`
+	HandoffIncomplete     bool           `json:"handoff_incomplete,omitempty"`
+	Delivery              *Delivery      `json:"delivery,omitempty"`
+	Conversations         []Conversation `json:"conversations,omitempty"`
+	Result                *record.Ref    `json:"result,omitempty"`
+	Checkpoint            *record.Ref    `json:"checkpoint,omitempty"`
+	ID                    string         `json:"id"`
+	Role                  string         `json:"role"`
 	// Asked is what was asked, in the owner's words where they gave them.
 	Asked string `json:"asked"`
 	State State  `json:"state"`

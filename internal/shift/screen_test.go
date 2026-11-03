@@ -1,6 +1,7 @@
 package shift
 
 import (
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -86,17 +87,17 @@ func TestTypedLineThatDoesNotLand(t *testing.T) {
 	f.s.Tick()
 	assert.Equal(t, []string{"Enter"}, f.tm.keys["designer"])
 
-	// Gone from the input line and still not taken: typed again.
+	// Gone from the input with no status confirmation: inspect before any replay.
 	f.tm.drafts["designer"] = ""
 	*f.now = f.now.Add(2 * time.Minute)
 	f.s.Tick()
-	assert.Equal(t, []string{"review the landing", "review the landing"}, f.tm.typed["designer"])
+	assert.Equal(t, []string{"review the landing", "then the footer"}, f.tm.typed["designer"])
 
 	*f.now = f.now.Add(2 * time.Minute)
 	f.s.Tick()
 	*f.now = f.now.Add(2 * time.Minute)
 	f.s.Tick()
-	assert.NotEmpty(t, f.s.State.Role("designer").Failed, "never taken: kept in zmina queue")
+	assert.NotEmpty(t, f.s.State.Role("designer").Failed, "unconfirmed: kept in zmina queue")
 	assert.Contains(t, strings.Join(f.tm.typed["designer"], "|"), "then the footer", "the queue moves on")
 }
 
@@ -219,6 +220,30 @@ func TestViewsShowPromptAndNow(t *testing.T) {
 	assert.True(t, viewOf(f, "designer").Prompt, "a dialog instead of the input line")
 }
 
+func TestBusyViewKeepsLastStatusAfterItScrollsAway(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	require.NoError(t, f.s.Up("designer"))
+	f.status("designer", "busy", *f.now)
+	f.tm.screen = "⏺ Checking the contrast.\n───\n❯ "
+	f.s.Tick()
+	started := *f.now
+
+	*f.now = f.now.Add(time.Minute)
+	f.tm.screen = "⏺ Bash(go test ./...)\n  ⎿  running\n───\n❯ "
+	for range 2 {
+		v := viewOf(f, "designer")
+		assert.Equal(t, "busy", v.Status)
+		assert.Equal(t, "Checking the contrast.", v.Now)
+		assert.Equal(t, started, v.NowAt)
+		f.s.Tick()
+	}
+
+	f.tm.screen = "⏺ Contrast passes.\n───\n❯ "
+	v := viewOf(f, "designer")
+	assert.Equal(t, "Contrast passes.", v.Now)
+	assert.Equal(t, *f.now, v.NowAt)
+}
+
 func viewOf(f fix, role string) View {
 	for _, v := range f.s.Views() {
 		if v.Role == role {
@@ -322,4 +347,20 @@ func TestLateness(t *testing.T) {
 	} {
 		assert.Equal(t, want, Lateness(sent, now, time.UTC))
 	}
+}
+
+func TestQueuedFailureImmediatelyNamesTaskToDispatcher(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	require.NoError(t, f.s.Up("designer"))
+	*f.now = f.now.Add(bootPause)
+	f.status("designer", "idle", *f.now)
+	require.NoError(t, f.s.Queue("designer", "[zmina T-1] read the packet"))
+	f.tm.typeErr = errors.New("typed, Enter did not send it; cleared from the input line")
+	f.s.deliverInbox("designer", *f.now)
+	require.Len(t, f.s.State.Notes, 1)
+	assert.Contains(t, f.s.State.Notes[0], "designer: delivery failed (T-1)")
+	assert.Contains(t, f.s.State.Notes[0], "Enter did not send")
+	assert.Empty(t, f.s.State.Role("designer").Failed, "alert before retries are exhausted")
+	f.s.deliverInbox("designer", *f.now)
+	assert.Len(t, f.s.State.Notes, 1, "same failure coalesces while queued")
 }

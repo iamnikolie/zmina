@@ -50,8 +50,12 @@ roles:
 
 Codex uses `~/.codex` (or per-role `codex_home`) and a dedicated stdio App Server. The normal
 `up`, `send`, `queue`, `down`, scheduling and worktree commands work across both runtimes. The
-attached console streams responses and accepts approval answers; it is not the native Codex TUI.
-Set `codex_transport: shared` to use the managed CLI daemon from multiple protocol clients.
+stdio console streams responses and accepts approval answers. Set `codex_transport: shared` to use the
+managed CLI daemon from multiple clients: `zmina attach <role>` opens the full native Codex TUI on the
+role’s current thread while the bridge stays connected. A stdio role needs `attach <role> --raw` for
+its tmux bridge; bare attach explains how to use that view or switch transport while the role is down.
+Native attach passes selectable approval policies through config overrides. A live `untrusted` thread
+retains its daemon policy without selecting that retired value in the native client's configuration.
 The desktop app can run a different private server; mobile access requires both clients to reach the
 same server. Sharing the CLI daemon alone does not guarantee access through the desktop/mobile app.
 Profiles apply through per-thread overrides; explicit role settings win. Token usage survives role shutdown

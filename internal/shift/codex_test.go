@@ -60,3 +60,43 @@ func TestRuntimeSwitchCannotResumeClaudeSession(t *testing.T) {
 	require.NoError(t, s.Up("designer"))
 	assert.Equal(t, "", s.State.Role("designer").LastRuntime, "legacy state remains readable")
 }
+
+func TestCodexBusyWithoutInputIsNotBlockedAndWaitingNoticesRevalidate(t *testing.T) {
+	s, tm, _, _ := fixture(t)
+	r, err := s.Role("designer")
+	require.NoError(t, err)
+	r.Runtime = "codex"
+	require.NoError(t, s.Up("designer"))
+	p, err := s.probe("designer")
+	require.NoError(t, err)
+	reg := &codex.Registry{Dir: filepath.Join(s.Crew.StateDir(), "codex")}
+	rec := codex.Record{Session: registry.Session{PID: p.PID, Name: r.Session, SessionID: "thread", Status: "busy", StatusUpdatedAt: s.Now().UnixMilli()}}
+	require.NoError(t, reg.Save(rec))
+	now := s.Now().Add(time.Hour)
+	s.State.Role("designer").Started = now.Add(-time.Hour)
+	tm.drafts["designer"] = "-"
+	assert.Empty(t, s.watchScreen("designer", now))
+	assert.Empty(t, s.watchScreen("designer", now.Add(time.Hour)), "normal long work has no input prompt")
+	for _, v := range s.Views() {
+		if v.Role == "designer" {
+			assert.False(t, v.Prompt)
+		}
+	}
+	rec.Status = "waiting"
+	require.NoError(t, reg.Save(rec))
+	assert.Empty(t, s.watchScreen("designer", now.Add(2*time.Hour)))
+	notes := s.watchScreen("designer", now.Add(3*time.Hour))
+	require.Len(t, notes, 1)
+	s.addNotes(notes)
+	require.Len(t, s.currentNotes(), 1)
+	for _, v := range s.Views() {
+		if v.Role == "designer" {
+			assert.True(t, v.Prompt)
+		}
+	}
+	rec.Status = "busy"
+	require.NoError(t, reg.Save(rec))
+	assert.Empty(t, s.currentNotes(), "an answered approval cannot leave a stale blocked alert")
+	assert.Empty(t, s.watchScreen("designer", now.Add(4*time.Hour)))
+	assert.True(t, s.State.Role("designer").NoPrompt.IsZero())
+}

@@ -33,7 +33,17 @@ var (
 // (up, started, stretches already reported) and could be seen again; most is what it was told or decided (holds,
 // broken marks, queues, last sessions, schedule progress) and exists nowhere else.
 type State struct {
-	Version int `json:"version"`
+	// AcceptanceNotified commits alert deduplication with its dispatcher queue entry. Keys include the
+	// submitted session/time; legacy task/packet keys remain readable until a fresh submission.
+	AcceptanceNotified map[string]time.Time            `json:"acceptance_notified,omitempty"`
+	MessageLines       map[string]string               `json:"message_lines,omitempty"`
+	MessageStages      map[string]map[string]time.Time `json:"message_stages,omitempty"`
+	RemoteBatches      int                             `json:"remote_batches,omitempty"`
+	RecordNotified     map[string]bool                 `json:"record_notified,omitempty"`
+	NoticeMeta         map[string]NoticeMeta           `json:"notice_meta,omitempty"`
+	SignalCounts       map[string]int                  `json:"signal_counts,omitempty"`
+	Reports            map[string]ReportState          `json:"reports,omitempty"`
+	Version            int                             `json:"version"`
 	// Roles is per role and instance.
 	Roles map[string]*RoleState `json:"roles,omitempty"`
 	// Signals wait for the dispatcher: work found by zmina note and the watches. They are refused at intake when
@@ -62,6 +72,9 @@ type State struct {
 
 // RoleState is what zmina keeps of one role.
 type RoleState struct {
+	RecoverySession string `json:"recovery_session,omitempty"`
+	RecoveryContext int    `json:"recovery_context,omitempty"`
+	RecoveryDrops   int    `json:"recovery_drops,omitempty"`
 	// ChatReceipts deduplicates accepted owner messages from browser/mesh clients.
 	ChatReceipts []chat.Receipt `json:"chat_receipts,omitempty"`
 	// Up is whether the role was up when zmina last looked; a role that was up and is not has ended.
@@ -84,6 +97,8 @@ type RoleState struct {
 	Broken bool `json:"broken,omitempty"`
 	// LastRuntime identifies the runtime owning LastSession; empty means legacy Claude.
 	LastRuntime string `json:"last_runtime,omitempty"`
+	LastHome    string `json:"last_home,omitempty"`
+	LastDir     string `json:"last_dir,omitempty"`
 	// LastSession is the role's last conversation id, for --resume.
 	LastSession string `json:"last_session,omitempty"`
 	// Inbox holds lines typed into the role the next time it is idle; Attempts counts failed tries of the first.

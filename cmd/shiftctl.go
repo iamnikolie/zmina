@@ -106,7 +106,7 @@ func (a *app) queueCommand() *cobra.Command {
 					}
 
 					for _, f := range q.Failed {
-						fmt.Fprintf(a.out, "  failed   %s (%s, %s)\n", f.Line, f.Error, f.At.Format("01-02 15:04"))
+						fmt.Fprintf(a.out, "  failed   %s (%s, %s)\n", f.Line, f.Error, f.At.Local().Format("01-02 15:04"))
 					}
 				}
 
@@ -141,6 +141,9 @@ func (a *app) queueCommand() *cobra.Command {
 				n, err := s.Drop(args[0], all)
 				if err == nil {
 					fmt.Fprintf(a.out, "%s: %d lines dropped\n", args[0], n)
+					if waiting := len(s.State.Role(args[0]).Inbox); !all && waiting > 0 {
+						fmt.Fprintf(a.out, "%d inbox lines remain; use zmina --crew %s queue drop %s --all to drop them\n", waiting, quoteCommandArg(s.Crew.Path), quoteCommandArg(args[0]))
+					}
 				}
 
 				return err

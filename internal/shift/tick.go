@@ -43,6 +43,16 @@ const (
 // beat. It returns what it did, for the log.
 func (s *Shift) Tick() []string {
 	now := s.Now()
+	if s.ReconcileMessages != nil {
+		if err := s.ReconcileMessages(s); err != nil && s.Warn != nil {
+			s.Warn(err)
+		}
+	}
+	for _, name := range s.Names() {
+		s.pruneTaskInbox(name)
+	}
+	s.NotifyRecords()
+	s.acceptanceAlerts()
 	held := s.held()
 	stopped := !s.State.Stopped.IsZero()
 	s.State.LastTick = now
@@ -72,6 +82,7 @@ func (s *Shift) Tick() []string {
 		up := p.State == tmux.Up
 		if up {
 			s.remember(name, p)
+			s.observeRecovery(name)
 			// A role started by an older zmina would vanish without a screen.
 			_ = s.Tmux.KeepScreens(name)
 		}
@@ -175,6 +186,12 @@ func (s *Shift) Tick() []string {
 		}
 	}
 
+	if s.ReconcileMessages != nil {
+		if err := s.ReconcileMessages(s); err != nil && s.Warn != nil {
+			s.Warn(err)
+		}
+	}
+
 	return did
 }
 
@@ -258,6 +275,14 @@ func (s *Shift) trim(name string, r *crew.Role, now time.Time, tasks []string) s
 		return ""
 	}
 
+	recoveryPath := ""
+	if name == s.Crew.Dispatcher {
+		var err error
+		recoveryPath, _, err = s.RecoveryPack()
+		if err != nil {
+			return name + ": trim skipped: recovery pack: " + err.Error()
+		}
+	}
 	// A failed try waits the pause too, so a role tmux refuses does not fill the log every beat.
 	rs.Trimmed, rs.TrimPending = now, true
 	detail := fmt.Sprintf("context %s over %s", Tokens(used), Tokens(limit))
@@ -270,6 +295,9 @@ func (s *Shift) trim(name string, r *crew.Role, now time.Time, tasks []string) s
 		rs.Inbox = append(rs.Inbox, boot)
 	}
 
+	if recoveryPath != "" && (do != crew.ContextClear || r.IsCodex()) {
+		s.queueRecovery(recoveryPath)
+	}
 	event := "compacted"
 	if do == crew.ContextClear {
 		event = "cleared"
@@ -298,7 +326,17 @@ func (s *Shift) AddNotes(notes []string) { s.addNotes(notes) }
 // addNotes queues health notes for the dispatcher: a note already waiting is not added twice, and past notesMax the
 // oldest health notes go. Signals (zmina note, watches) are a separate queue and never go this way.
 func (s *Shift) addNotes(notes []string) {
+	if s.State.NoticeMeta == nil {
+		s.State.NoticeMeta = map[string]NoticeMeta{}
+	}
 	for _, n := range notes {
+		meta := s.State.NoticeMeta[n]
+		if meta.Count == 0 {
+			meta = s.noticeMeta(n)
+		} else {
+			meta.Count++
+		}
+		s.State.NoticeMeta[n] = meta
 		if !slices.Contains(s.State.Notes, n) {
 			s.State.Notes = append(s.State.Notes, n)
 		}
@@ -306,6 +344,11 @@ func (s *Shift) addNotes(notes []string) {
 
 	if len(s.State.Notes) > notesMax {
 		s.State.Notes = s.State.Notes[len(s.State.Notes)-notesMax:]
+	}
+	for key := range s.State.NoticeMeta {
+		if !slices.Contains(s.State.Notes, key) {
+			delete(s.State.NoticeMeta, key)
+		}
 	}
 }
 
@@ -579,6 +622,7 @@ func (s *Shift) atPrompt(name string, now time.Time) bool {
 // Signals go first: they are work.
 func (s *Shift) deliver(now time.Time) string {
 	d := s.Crew.Dispatcher
+	s.pruneTaskInbox(d)
 
 	// A line from another crew goes as a line of its own, never joined with this crew's signals and notes: one
 	// per beat, after them.
@@ -598,10 +642,14 @@ func (s *Shift) deliver(now time.Time) string {
 		}
 	}
 
-	parts := append(local, s.State.Notes...)
-	alone := len(parts) == 0 && len(remote) > 0
+	parts := make([]string, 0, len(local)+len(s.State.Notes))
+	for _, line := range local {
+		parts = append(parts, repeated(line, s.State.SignalCounts[line]))
+	}
+	parts = append(parts, s.currentNotes()...)
+	alone := len(remote) > 0 && (len(parts) == 0 || s.State.RemoteBatches >= 3)
 	if alone {
-		parts = []string{remote[0] + s.lateness(remote[0], now)}
+		parts = []string{repeated(remote[0], s.State.SignalCounts[remote[0]]) + s.lateness(remote[0], now)}
 	}
 
 	// A line queued for the dispatcher itself goes first: after a clear it is the boot line, and the signals
@@ -625,9 +673,20 @@ func (s *Shift) deliver(now time.Time) string {
 
 	if alone {
 		delete(s.State.SignalSent, remote[0])
-		s.State.Signals = slices.Clone(remote[1:])
+		delete(s.State.SignalCounts, remote[0])
+		s.State.Signals = append(slices.Clone(local), remote[1:]...)
+		s.State.RemoteBatches = 0
 	} else {
+		if len(remote) > 0 {
+			s.State.RemoteBatches++
+		} else {
+			s.State.RemoteBatches = 0
+		}
+		for _, sig := range local {
+			delete(s.State.SignalCounts, sig)
+		}
 		s.State.Signals, s.State.Notes = remote, nil
+		s.State.NoticeMeta = nil
 	}
 	s.Told = true
 	s.log(d, "told", "", line)
@@ -699,8 +758,15 @@ func (s *Shift) Deliver() string { return s.deliver(s.Now()) }
 // reads each before the next. A line tmux refuses is tried typeTries beats, then moves to the failed list (zmina
 // queue), so it never blocks the lines after it. It returns a line for the log.
 func (s *Shift) deliverInbox(name string, now time.Time) string {
+	s.pruneTaskInbox(name)
 	rs := s.State.Role(name)
 	if len(rs.Inbox) == 0 || !s.landed(name, now) || !s.atPrompt(name, now) {
+		return ""
+	}
+
+	// Retiring an obsolete Sent record must not append a replacement packet to a preserved owner draft.
+	// An unreadable input is ambiguous too; leave it alone until it is visibly empty.
+	if draft, ok, err := s.Tmux.Prompt(name); err != nil || !ok || draft != "" {
 		return ""
 	}
 
@@ -708,6 +774,7 @@ func (s *Shift) deliverInbox(name string, now time.Time) string {
 
 	if err := s.typeLine(name, head); err != nil {
 		rs.Attempts++
+		s.deliveryFailure(name, head, err.Error())
 		s.log(name, "type-failed", "", fmt.Sprintf("try %d: %s: %s", rs.Attempts, head, err))
 
 		if rs.Attempts < typeTries {
@@ -722,6 +789,7 @@ func (s *Shift) deliverInbox(name string, now time.Time) string {
 
 	rs.Inbox, rs.Attempts = rs.Inbox[1:], 0
 	s.log(name, "typed", "", head)
+	s.submittedTask(name, head)
 
 	// A slash command may not change the status; only a line for the conversation is watched until it lands.
 	if !strings.HasPrefix(head, "/") {

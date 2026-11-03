@@ -115,10 +115,34 @@ atomically under the crew's state directory in `codex/`. `resume: always` resume
 switching runtime starts a fresh conversation. Put a role and its copies down before changing `runtime`
 or `codex_home` / `profile` / `codex_transport` with `seat set`.
 
-`attach` shows a line-oriented bridge console, not the native Codex TUI. Commands: `/compact`, `/clear`,
+`attach` on a shared Codex role opens the full native TUI with `codex resume <current-thread> --remote unix://`,
+using the role’s Codex home, profile, explicit model/effort/policies and current working directory. The bridge
+stays subscribed to the same daemon thread: human turns reach zmina and queued bridge turns appear in the TUI.
+No task body or new prompt is sent by attach. Exit the TUI to leave that client; it does not stop the bridge.
+Selectable approval policies pass as exact `-c approval_policy="…"` config values, not the narrower
+`--ask-for-approval` enum. Native CLI 0.166 rejects explicitly selecting `untrusted` through either
+interface. For that role policy, attach rejoins the existing daemon thread without an approval override,
+retaining its server-side policy instead of mapping it to `on-request`/`never`. Keep the role alive and
+change its configuration only while it and its copies are down. A retired explicit `untrusted` setting
+in local Codex config/profile files is an upstream client configuration error, not automatically rewritten.
+
+`attach --raw` opens the original tmux bridge for debugging. For `codex_transport: stdio`, bare `attach`
+refuses with a scoped `attach <role> --raw` command: a dedicated server cannot share the live thread with
+the native TUI. To change transport, stop the role and its copies first, select `shared`, start the daemon
+in the same Codex home and start the role again. Bridge console commands: `/compact`, `/clear`,
 `/exit`. Approvals show the request details: type `y`, `n` or `cancel`, then Enter. Other server requests
 require their explicit JSON result. Queued tasks wait while a request is open; they never answer it.
 `down --clear` discards the console draft and exits even while a request is pending.
+
+An App Server `already has an active writer` failure names the requested/current thread and explains that
+an external standalone Codex client holds it. Close that client, then retry up/resume. Human clients must
+reach the same daemon through `zmina attach <role>` or `codex resume <thread> --remote unix://` with the
+same `CODEX_HOME`; plain standalone resume can take the thread away from the bridge. Zmina reports the
+conflict without killing another client or stealing ownership. Other RPC errors keep their original detail.
+The bridge prints this startup/resume diagnostic in its console (`peek` / `attach --raw`).
+
+The cockpit Terminals page remains the existing text/bridge view; it does not launch the native TUI or
+create another thread writer. Native shared TUI attach is the local CLI command described above.
 
 Claude Remote Control and Claude tool names (`drop_tools` / `keep_tools`) do not apply to Codex.
 Per-role Claude-only settings are rejected; crew `drop_tools` applies only to Claude (doctor warns).
@@ -159,18 +183,18 @@ the role's add up.
 
 | Command | Does |
 |---|---|
-| `zmina ls [--json]` | first line: when the ticker last beat (and `STOPPED` while the shift is stopped). Then every role: `up` / `down` / `dead` (its process ended, the ticker collects it within a minute) / `outside` (a claude with that name runs, not under zmina) / `unknown` (tmux did not answer), `idle`/`busy` (`unknown` when its registry entry does not read), for how long, how many tokens its conversation fills (`362k/150k` with its `context_max`), the active tasks it holds, keep (+ next scheduled run, expiry), about. `--json` also has `prompt: true` while an up role's screen shows a dialog or a question instead of its input line, and `now` / `now_at`: the role's last status line in words (its screen's last `⏺ …` line that is not a tool call) and since when it says so. `*` marks the dispatcher; `(broken)` a role that dies on boot; `(bad dir)` a role whose dir is gone — it does not start, the rest of the crew runs on; `(N failed lines)` see `zmina queue`; `(asleep until Mon 09:00)` a role put to sleep (`zmina sleep`). Last line `later: N parked` while the parked list is not empty. |
-| `zmina up <role...>` / `--all` | start roles. Refuses a role already up, and a name a claude outside zmina already holds. Clears a hold and a broken mark. |
-| `zmina up <role> --as N` | a copy of the role, `<role>#N` (2–9) under `<session>-N`, same dir/boot/model/args; never kept up, gone once it is down. `zmina down dev#2`. |
-| `zmina up <role> [--as N] --task T-14` | a seat for a recorded task: started in the task's worktree when it has one, the task names this role, and its first line is `[zmina T-14] <asked> · you are in its worktree <path> on branch <b>`. Claude Code's "trust this folder" is answered for a worktree zmina made itself (`<crew>/worktrees/`), nowhere else. Refuses a task that is not active. |
-| `zmina up <role> --resume` / `--resume=<id>` | start on the role's last conversation, or on the session id given — with `=`: `--resume <id>` reads the id as a second role. zmina keeps each role's last session id. The boot message is sent again into the resumed conversation. |
-| `zmina down <role...>` / `--all` | types `/exit` (session-end hooks run), kills after 15 s; the wait happens outside the lock, so other commands and the ticker are not held up. `/exit` goes only into an empty input line: a draft there (it would be sent with `/exit`) or a dialog (its Enter would pick the highlighted answer) refuses the down, exit 1, nothing pressed. `--clear` drops the draft (C-c; BSpace and End do not clear it) or closes the dialog (Escape) first, then `/exit`; a screen Escape leaves without an input line gets C-c C-c in one call. Claude Code's "Background work is running" question on exit is answered "Exit and stop tasks". The dispatcher needs `--force`. |
-| `zmina restart <role>` | down + up: a new session under the same name. A draft or a dialog refuses it as with `down`; `--clear` too. |
+| `zmina ls [--json]` | first line: when the ticker last beat (and `STOPPED` while the shift is stopped). Then every role: `up` / `down` / `dead` (its process ended, the ticker collects it within a minute) / `outside` (a claude with that name runs, not under zmina) / `unknown` (tmux did not answer), `idle`/`busy` (`unknown` when its registry entry does not read), for how long, how many tokens its conversation fills (`362k/150k` with its `context_max`), the active tasks it holds, keep (+ next scheduled run, expiry), about. `--json` also has `prompt: true` while an up role's screen shows a dialog or a question instead of its input line, and `now` / `now_at`: the role's last status line in words (its screen's last `⏺ …` line that is not a tool call) and since when it says so. If tool output scrolls that line away, the last line and its timestamp are kept until new words appear. `*` marks the dispatcher; `(broken)` a role that dies on boot; `(bad dir)` a role whose dir is gone — it does not start, the rest of the crew runs on; `(N failed lines)` see `zmina queue`; `(asleep until Mon 09:00)` a role put to sleep (`zmina sleep`). Last line `later: N parked` while the parked list is not empty. |
+| `zmina up <role...>` / `--all` | start roles. Refuses a role already up, and a name a claude outside zmina already holds. Clears a hold and a broken mark. A sleeping role resumes its last known conversation, as at its alarm; the alarm still rings later. |
+| `zmina up <role> --as N` | a copy of the role, `<role>#N` (2–9) under `<session>-N`, same dir/boot/model/args; never kept up, gone once it is down. `zmina down dev --as 2` (or `zmina down 'dev#2'`). |
+| `zmina up <role> [--as N] --task T-1` | start a seat for an active recorded task, in its worktree when present. Queue one short handoff packet locator, never the inline task body. Read that file, check `task show` and its latest Note, then run the exact `task accept` command carried by the locator before work. By default continue a compatible task conversation, otherwise start fresh; `--continue` / `--fresh` make the choice explicit. The task names this role. Claude Code trust is answered only for worktrees zmina made under `<crew>/worktrees/`. |
+| `zmina up <role> --resume` / `--resume=<id>` | start on the role's last conversation, or on the session id given — with `=`: `--resume <id>` reads the id as a second role. zmina keeps each role's last session id; a different session with no recorded work does not replace a known conversation. The boot message is sent again into the resumed conversation. |
+| `zmina down <role...>` / `--all` / `zmina down <role> --as N` | types `/exit` (session-end hooks run), kills after 15 s; the wait happens outside the lock, so other commands and the ticker are not held up. `/exit` goes only into an empty input line: a draft there (it would be sent with `/exit`) or a dialog (its Enter would pick the highlighted answer) refuses the down, exit 1, nothing pressed. `--clear` drops the draft (C-c; BSpace and End do not clear it) or closes the dialog (Escape) first, then `/exit`; a screen Escape leaves without an input line gets C-c C-c in one call. Claude Code's "Background work is running" question on exit is answered "Exit and stop tasks". The dispatcher needs `--force`. |
+| `zmina restart <role>` | down + up under the same name, honoring the configured resume policy. `--fresh` forces a new conversation; `--continue` requires its last conversation. A draft or a dialog refuses it as with `down`; `--clear` too. |
 | `zmina send <role> <text>` | type one line into a role's prompt and press Enter. Text that starts with `-` goes after `--`: `zmina send dev -- '- item'`. `--when-idle` queues it instead: the ticker types it the first time the role is up, booted and idle (one queued line per minute). For a message between sessions prefer `SendMessage({to: "<prefix><role>"})`. |
 | `zmina peek <role> [-n 40]` | the last lines of a role's screen, as text — works from an agent, no terminal; also on a `dead` role. Claude Code's suggested next prompt, dim in an empty input line, shows as `❯ (suggestion) …`: nobody typed it. |
 | `zmina keys <role> <key...>` | press named keys: `Enter Escape Up Down Left Right Tab BTab Space BSpace PageUp PageDown Home End C-c y n 1`–`9`. Text goes with `send`. The keys of one call go in one tmux call: `zmina keys <role> C-c C-c` ends a claude, two separate calls are too slow for its double C-c. |
 | `zmina sleep <role> --until <when> [--note file\|-] [--clear]` | put the role down holding what it holds (its tasks stay its own, active), and wake it at `<when>` (see Alarms): it starts on its last conversation and its queue gets `[zmina alarm] <note>` — without `--note`, `you were put to sleep Sun 14:20; go on with T-5`. Prints `dev asleep until Mon 2 Nov 09:00 (in 19h) · R-4 · holds T-5`. Held while asleep: `keep: always` does not start it early. A role asleep already has its alarm moved. A draft or a dialog refuses it as with `down`, `--clear` too. Not the dispatcher, not a copy (`dev#2`). `zmina up` wakes it early (the alarm still rings: the line is queued); `zmina remind off R-4` keeps it down. |
-| `zmina attach <role>` | attach a terminal (detach: your tmux prefix, then `d`). Needs a TTY; from an agent it prints the command instead. |
+| `zmina attach <role> [--raw]` | shared Codex: full TUI on the current live daemon thread. `--raw`: original bridge in tmux. Claude: tmux attachment (detach: prefix, then `d`). Needs a TTY; otherwise prints the prepared command. |
 
 ## The shift: stop, start, doctor, queues, state
 
@@ -180,7 +204,7 @@ the role's add up.
 | `zmina start` | lifts the stop and starts the dispatcher. |
 | `zmina doctor [--json]` | checks crew file, tmux (3.2 or newer), claude as roles find it (their PATH; a binary in a temp dir fails) and the flags zmina passes, Claude Code's session registry (zmina reads it to tell idle from busy; it is not a public interface — doctor says when its shape changed), ticker beat, state, lock holder, task files, crews sharing a tmux server. Exit 1 on a fail. |
 | `zmina queue ls [--json]` | what waits to be typed: the dispatcher's signals and health notes, each role's inbox, and its failed lines (a line tmux refused three beats in a row). |
-| `zmina queue retry <role>` / `queue drop <role> [--all]` | put failed lines back at the head of the inbox / drop them (`--all`: the inbox too; for the dispatcher its signals and notes). |
+| `zmina queue retry <role>` / `queue drop <role> [--all]` | put failed lines back at the head of the inbox / drop them (`--all`: the inbox too; for the dispatcher its signals and notes). Without `--all`, any retained inbox count and the command needed to drop it are printed. The hint includes the resolved `--crew` path and shell-quotes both path and role, so it still targets this crew when pasted into another shell. |
 | `zmina state show` | the state as zmina reads it (JSON). |
 | `zmina state recover` | an unreadable `state.json` (or one from a newer zmina) is never written over: every writing command refuses until this moves it aside as `state.json.broken-<time>`. |
 | `zmina version` / `--version` | `zmina version <v>` on stdout. `version`, `skill` and `help` need no crew file. |
@@ -524,7 +548,7 @@ directory, readable or not, and never replaces a file; `task ls` and `doctor` na
 
 | Command | Does |
 |---|---|
-| `zmina task new <role> <asked...>` | record a task; prints `T-14 · dev`. `--repo <name or path>` (a name is a directory under the crew's dir), `--note`, `--title "<short plain sentence>"`, `--project <name>`, `--url <live thing>`, `--budget <dollars>` (what it may cost, see Usage), `--json`. |
+| `zmina task new <role> <asked...>` | record a task; prints `T-14 · dev`. If the role is already running, also queues its current handoff packet for explicit acceptance; does not restart the role or change its working directory. `--repo <name or path>` (a name is a directory under the crew's dir), `--note`, `--title "<short plain sentence>"`, `--project <name>`, `--url <live thing>`, `--budget <dollars>` (what it may cost, see Usage), `--json`. |
 | `zmina task new <role> --repo r --worktree <asked...>` | also gives it its own git worktree `~/.zmina/worktrees/<repo>-T-14` on a new branch `zmina/t-14` (`zmina/<crew>-t-14` for a named crew) from the repo's current branch (`--base` another). The role works there, never in the repo's checkout. The task is written before the worktree is made: if git fails, it stays as `dropped` with the error in its note. |
 | `zmina task ls [--all] [--role r] [--json]` | active tasks (`--all`: closed too). |
 | `zmina task show <id>` | one task with its cost line (see Usage) and its history from the event log. Ids: `T-14`, `t-14` or `14`. |
@@ -662,8 +686,8 @@ and that role's conversation.
 | `zmina later add <text...> [--note …] [--until <when>]` | park it; prints `L-3`. With `--until` (see Alarms) it comes back to the owner's todo at that time, through the notify command too: `L-3 · back Mon 2 Nov 09:00 (in 19h) · R-5`. |
 | `zmina later ls [--all] [--json]` | what is parked, oldest first: id, age, text (` · note`). `--all`: closed too, with their state. |
 | `zmina later done <id>` / `later drop <id>` | take it off the list (`--note` replaces its note). Ids: `L-3`, `l-3` or `3`. |
-| `zmina later take <id> <role> [--repo r --worktree --base b]` | turn it into a task as `task new` would (asked = its text, note `from L-3: <its note>`) and close it as `taken T-n`. If the task's worktree cannot be made, the item stays parked. |
-| `zmina later take <id> <role> --resume` | the same, and start the role on the conversation the item was parked from (`claude --resume <session>`), with `[zmina T-61] back from L-15: <text>` queued for it. Only for an item parked from a role's task, into that role (or a copy, `dev#2`: a conversation belongs to its directory), while the role is down. Prints `… · L-15 taken · dev2 up on <session>`. |
+| `zmina later take <id> <role> [--repo r --worktree --base b]` | turn the item into a task as `task new` would (asked = its text, note `from L-1: <its note>`) and close it as `taken T-n`. Carry its checkpoint, incomplete marker and conversation references into the new task; queue the current role-shaped handoff packet locator. If worktree creation fails, the item stays parked. |
+| `zmina later take <id> <role> --resume` | also start the down role on the stored conversation the item was parked from, then queue a short handoff packet locator. Read the packet and current `task show`/Note, and run its exact `task accept` command before work. Only for an item parked from a role task, into the same base role (or a copy such as `dev#2`), while the role is down. Prints `… · L-1 taken · dev#2 up on <session>`. |
 
 `zmina ls` ends with `later: N parked` while the list is not empty; nothing else reminds, but `--until`.
 `zmina log --task L-3` shows an item's history; `doctor` names damaged files.
@@ -691,7 +715,7 @@ A time that has passed is refused. Several words are one argument: quote them.
 | `zmina remind <when> <text...> [--note file\|-]` | a reminder for the owner. At its time it lands on the todo as a check (title = text, the note under it; from the role that set it, else `remind`) and goes through the crew's `notify` command. Prints `R-3 · you · Sun 8 Nov 09:00 (in 6d)`. |
 | `zmina remind <when> <text...> --role <role> [--note …]` | for a role: at its time the role is started if it is down — on the conversation its newest parked work came from (a released role, `task park`), else as `zmina up` would — and `[zmina alarm] <text> — <note>` waits in its queue, typed once it is booted and idle. While the shift is stopped it waits for `zmina start`. |
 | `zmina remind <when> <text...> --to <node>[/<crew>]` | another crew's dispatcher: at its time `[zmina alarm] <text> — <note>` goes to it as `zmina tell` sends a line (this node's crew at once, another node's through the outbox and the round after the beat). |
-| `zmina remind ls [--all] [--json]` | the alarms still to ring, soonest first: id, time (and how far), for whom, kind (`remind`, `sleep`, `later`), text. `--all`: rung and taken off too, with their state (`rang → A-7`, `off`) and an error when one could not do its part. |
+| `zmina remind ls [--all] [--json]` | the alarms still to ring, soonest first: id, time (and how far), for whom, kind (`remind`, `sleep`, `later`), text (sleep alarms show their note when set). `--all`: rung and taken off too, with their state (`rang → A-7`, `off`) and an error when one could not do its part. |
 | `zmina remind move <id> <when>` | another time for an alarm still to ring — a reminder, a role's wake-up, a parked item's return. Ids: `R-3`, `r-3`, `3`. |
 | `zmina remind off <id>` | take it off. A sleeping role then stays down until started by hand. |
 
@@ -804,11 +828,14 @@ alone for the beat — never taken as ended; a role being put down is left alone
    `release_idle_minutes` (its own, else the crew's; `off` or unset: never) that has sat idle that
    long — booted, nothing queued for it, its input line on screen and empty (Claude Code's dim
    suggestion is no draft), no terminal attached — is released. Holding no task, it goes down at
-   once. Holding tasks, it first gets `[zmina] idle 45m: you are released and go down in a few
-   minutes. For each task you hold (T-48, T-50) write what remains in one or two lines: zmina task
-   park <id> --note "<what remains>". Then stop.`; a task it has not parked 3 min later (and once
-   it is idle again) is parked with its title and the role's last status line (`<title>; last:
-   <now>`), and the role goes down. A draft in its input line or a new task for it calls the
+   once. Holding tasks, it first gets a short `[zmina release]` locator to a role-shaped checkpoint
+   request file. Read that file; for each task save `zmina task checkpoint <id> --file <json-file>`
+   using its named sections, then `zmina task park <id> --note "<what remains>"`, then stop. Task
+   bodies and multiline checkpoint guidance stay in the packet file, never in the terminal line.
+   A task not parked after 3 min (and once idle again) is parked automatically with its title,
+   latest Note, references and last status. Missing, stale or unreadable checkpoints mark that
+   fallback handoff `incomplete`; a status sentence never becomes a worker checkpoint. A draft
+   in the input line or a new task for it calls the
    release off (`release-off` in the log; it is released again after another idle stretch); a
    dialog or an attached terminal makes it wait. The dispatcher hears `released dev2 after 45m idle
    → L-15, L-16`; the log has `releasing`, `released` and a `down`.
@@ -823,8 +850,10 @@ alone for the beat — never taken as ended; a role being put down is left alone
    when it takes a line, but a line still in the input line has not landed whatever the status says (a message
    through Remote Control moves it too). Until it lands, nothing more is typed into that role; after 90 s a line
    still sitting in the input line gets Enter again — even while a background shell keeps the role off idle —
-   one gone from it is typed again, and after three tries it is kept as failed (`typed, never taken`) and taken
-   out of the input line.
+   one gone from it without status confirmation is kept as failed
+   (`typed, acceptance unconfirmed; inspect before retry`) rather than replayed. Inspect the role before
+   `queue retry`; the role may already have read the line. A remaining own draft is kept as failed
+   (`typed, never taken`) after three tries and taken out of the input line.
    «Idle» here also covers a role at its prompt whose status stays off idle because a background shell or agent it
    started still runs: its transcript's newest line ends a turn (an end_turn reply, the turn's closing system line)
    and its input line is on screen and empty. Never a role that shows a dialog. Release and trims still wait for a
@@ -922,3 +951,144 @@ and exists nowhere else. It is written whole (rename) and never over a file zmin
   list, so it never blocks the lines after it: `zmina queue ls`, `queue retry`.
 - Nothing here keeps the Mac awake: while it sleeps, the roles are paused, not gone, and a
   schedule that came due runs once on the first beat after waking.
+
+A queued role delivery failure immediately queues a dispatcher health note with the role, related task IDs and reason, even while delivery retries remain. Inspect `zmina queue ls` to recover the line.
+
+Task handoffs from `up --task` queue only a short packet locator. The immutable JSON under `<crew>/handoffs/T-n/<content-hash>.json` preserves the full request, latest Note and checkout metadata; read it before working. Multiline task bodies never pass through terminal input.
+
+### Role-shaped handoffs
+
+`zmina task handoff T-1 [--json]` renders the current task, including its latest Note, with its assigned role's shape. `up --task`, task reassignment (`task set --role`) and `later take` queue this packet's short locator. Reading the packet does not accept the task or authorize publication.
+
+Configure a crew default or replace it per role (copies inherit the role shape):
+```yaml
+handoff:
+  sections:
+    - name: summary
+      guidance: Brief current state
+    - name: next_step
+      guidance: The next concrete action
+roles:
+  designer:
+    handoff:
+      sections:
+        - name: decisions
+          guidance: Chosen direction and why
+        - name: open_questions
+          guidance: Questions for the owner
+```
+Without configuration, sections are `summary`, `done`, `remaining`, `open_questions`, `artifacts`, `next_step`. Use 1–32 unique lowercase section names (letters, digits, `_`, `-`); guidance at most 1000 bytes. No development-specific fields are required. The packet includes a request for checkpoint/results in this shape. `seat set <role> 'handoff={sections: [{name: summary, guidance: Brief state}]}'` edits a role's shape; `handoff=` removes the override.
+
+Dispatcher health notices are coalesced with counts. New idle/busy notices are revalidated against the same runtime session/status and current task assignment immediately before delivery; resolved conditions are logged and omitted. Legacy strings remain readable. Repeated pending signals also display their observation count; owner requests are not expired.
+
+For a worker's repeated conclusion use `zmina report --key T-1/direction 'Direction ready'`. The source is the calling role (`ZMINA_ROLE`, else `hand`); an identical source/key/body increments a durable count without another notification, including after delivery. Changed content notifies once. `report ls [--json]` shows counts; `report drop <key> [--source role]` removes one record. At 1024 keys new reports fail visibly until old keys are explicitly removed. This typed report path does not reinterpret arbitrary owner commands or silently discard task requests.
+
+`zmina restart <role>` ends and starts a role using the configured resume policy (including `resume: always`); it is not an unconditional context reset. `restart <role> --fresh` forces a new conversation; `restart <role> --continue` requires and resumes its last known conversation. The two flags are mutually exclusive. `--clear` still controls only draft/dialog clearing before shutdown.
+
+### Task results
+
+`zmina task result T-1 --file result.json` saves a worker-authored JSON object mapping every section in the role's handoff shape to a string (use "unknown" when needed; unknown names are rejected). `--file -` reads stdin, at most 1 MiB. `task done T-1 --result result.json` saves before closing. Same role/shape/content reuses the revision and original timestamp; changes create a new immutable file under `<crew>/results/T-1/<revision>.json`. No commit/test fields are imposed on non-developer roles.
+
+Read the latest with `task result T-1 [--json]`, or a previous `--revision <hash>`. `task show` and the cockpit task sheet show the latest result as worker-reported, not as independently verified or deployed. Missing/invalid records are explicit. Each revision queues one dispatcher notification; the ticker reconciles record files after a crash independently of task state or event-log retention. Legacy tasks can still close without a result. This does not send Telegram or authorize push/publish/deploy/merge.
+
+### Task conversation memory
+
+Task JSON optionally retains `conversations`: node/crew/config path, role or copy, runtime and namespace/home, session ID, cwd, last observed work and context evidence. The ticker/down records references only after observed runtime work; releasing a copy does not remove its task history. These are locators, not transcript backups; files must still exist in the runtime.
+
+`zmina up <role> --task T-1` now chooses a compatible task conversation by default, otherwise starts fresh with the current packet, and prints which mode was selected. Compatibility requires the same node, crew/config, base role (copies allowed), runtime/home and cwd. Node is optional when mesh is unconfigured; unknown identities remain scoped to the exact local crew path. `--continue` requires a compatible reference and fails with a `--fresh` recovery command if none exists; `--fresh` forces a new conversation without deleting old references. `--resume=<id>` remains an explicit caller-selected override. `--fresh`, `--continue`, `--resume` are mutually exclusive. Without `--task`, `--continue` means the role's last known conversation. No opaque runtime data is copied across nodes or Claude/Codex.
+
+### Dispatcher recovery
+
+`zmina context pack [dispatcher] [--json]` renders a deterministic projection of current tasks/notes, pending asks, parked work, alarms, role queues/in-flight messages/failures, explicit follow-ups and unread result revisions. Packs live under `<crew>/context/dispatcher/`; each category has at most eight entries and 400 text characters per entry. Counts and a full index file preserve everything beyond this preview; read referenced tasks/records and verify live state instead of treating the snapshot as authority. No model summarizes or infers missing decisions.
+
+`context followup add <text> [--task T-1] [--source reference]` records an unresolved promise in optional `<crew>/dispatcher.json`; `followup resolve F-1`, `followup ls [--all]` manage it. `context read T-1 [--revision hash]` marks a result read by the dispatcher, not relayed to the owner. Follow-ups/read cursors are durable source data; recovery files are disposable projections. Corrupt or future dispatcher state is reported, never overwritten by these commands.
+
+Dispatcher boot includes a recovery locator when there is open data. Zmina-managed compaction/clear generates a pack first and restores a locator before routine notices; native session changes or a context reduction below half the last known value on two positive observations trigger opportunistic refresh on a later tick. Unknown context readings leave the baseline unchanged; a rebound cancels a pending reduction. Native compaction cannot always be intercepted before it happens. A snapshot failure prevents managed trimming rather than silently discarding recorded threads. Unrecorded promises still require the dispatcher to record a follow-up or task note.
+
+### Explicit task acceptance
+
+Task packet locator lines include `zmina task accept T-1 --handoff <revision>`. Run it after reading the packet and verifying the current task, before doing work. Acceptance requires the exact current packet, assigned `ZMINA_ROLE`, unchanged task revision and the live runtime session to which that packet was submitted. A missing/superseded/session-mismatched packet gives `task handoff T-1 --queue` as the refresh path. Repeating valid acceptance is idempotent; generic busy status is not acceptance.
+
+Optional task `delivery` fields retain queued/sent/accepted/alerted times and session/role/runtime/home binding independently of task state. `task show` and cockpit details show the handoff state. The five-minute acceptance clock starts at successful submission to a live session (`sent_at`), never at queue time. Only an open task with the current packet/session/runtime/home binding and a live idle role can raise an acceptance alert. Down, held, sleeping, stopping, busy or dialog-bound roles, waiting/closed tasks, queued packets and failed submissions raise no acceptance alert. Pending notices bind to the delivery generation and exact submitted session/time and recheck these conditions before delivery.
+
+Acceptance-alert deduplication commits in `state.json` with the queued notice, scoped to that packet/generation/submission. The task's `alerted_at` is informational: a task write without the queue/state commit cannot suppress a lost alert. A withdrawn, undelivered notice removes its matching marker with queue removal, allowing one later valid alert; a committed, delivered alert stays deduplicated after restart. A fresh submission starts its own clock and marker scope. Legacy task/packet markers remain readable until a fresh submission supersedes them. Legacy tasks without delivery metadata are unchanged. Same accepted packet is not automatically requeued; no exactly-once work execution is claimed after a crash.
+
+Shared Codex App Server tools may not inherit the bridge's role environment. Generated packet/acceptance commands therefore include an explicit `--crew '<path>'` and `task accept --role '<assigned-role>'`. Explicit role is allowed for an unscoped (`hand`) caller, or must match the existing caller role; it does not bypass packet/task/live-session/runtime/home checks. This is an explicit worker receipt on a trusted local account, not process authentication or owner approval. Shared runtime boot repeats the crew/role scope so commands do not silently target the default crew.
+
+### Checkpointed release
+
+`zmina task checkpoint T-1 --file checkpoint.json` uses exactly the role's named-section JSON shape, immutable revisions, size limit and provenance rules of `task result`. Read it with `task checkpoint T-1 [--json] [--revision hash]`; `task show` includes the latest checkpoint. Saving a checkpoint binds its validation to the current task snapshot and clears an incomplete-handoff marker.
+Explicitly saving identical content after a task edit revalidates that snapshot without rewriting the immutable revision/time;
+an unchanged retry is idempotent. A later task edit makes it stale again; no result notification is emitted for a checkpoint.
+
+Idle release now queues one short locator to a file of role-shaped checkpoint requests, never multiline guidance through the terminal. Each task asks the worker to save its checkpoint and then park what remains. The existing three-minute grace and plain-idle/no-draft/no-attachment conditions stay. Missing, stale (not validated for the current task snapshot) or unreadable checkpoints mark fallback handoffs `incomplete`; release does not wait forever for a missing checkpoint once the role is safely idle. Latest references and conversation history remain on the original task and parked item. `later take` carries this provenance into the new task/packet; a checkpoint reference can name its original task, so it remains readable after task IDs change. Existing manual parking and legacy records remain readable. No checkpoint is invented from the last status sentence.
+
+### Typed mesh reports and explicit receipts
+
+`zmina tell <node/crew> --report-key <key> [--task T-1] [--file <file>] [--status] [text...]`
+queues a durable typed report. Both endpoints require registered, explicit crews and authenticated
+`reports_v2` support for new publication-addressed reports; sync directly with an upgraded peer first.
+`reports_v1` remains the legacy content-addressed format. Plain `tell` stays compatible with old peers.
+The existing signed envelope covers all report metadata. Capabilities and the negotiated body limit are
+separately authenticated. The encoded payload must fit the negotiated limit (at most 16000 bytes);
+`--file` preserves its text and never silently truncates. A local artifact path is provenance, not a promise
+that another node can open it. Remote text remains data, never owner authorization or direct role dispatch.
+
+The origin/recipient/key identify one logical report. Repeating the current content reuses its publication. A change, including a return to historical content,
+creates a new increasing sequence and publication revision, with a separate content hash. Delayed retries
+keep their original sequence and cannot replace a newer publication. Legacy content-addressed records stay readable. Full bodies stay in crew-local `messages/` and destination
+inbox storage. `--task` attaches the immutable result/checkpoint reference when present; reports never
+create tasks. `--status` may explicitly supersede an earlier status revision; ordinary reports and owner
+requests stay intact. Repeated deliveries coalesce instead of adding another notification.
+
+`zmina message ls` and `message show <id> [--revision <hash>] [--json]` expose observations and pending
+errors. Stages are `queued_origin`, `received`, `queued_dispatcher`, `submitted`, `read`, `relayed`.
+A transport ACK alone never proves dispatcher submission or reading. Queued/submitted receipts require
+committed queue state; a crash before that commit leaves confirmation pending. Source and local observation
+times are separate; monotonic revision/stage ordering does not trust clock ordering between nodes.
+
+At the destination, `message read <id> [--revision <hash>]` explicitly records dispatcher consumption;
+`message relayed <id> [--revision <hash>]` requires read first and explicitly records relay to the owner.
+Only the dispatcher or an owner terminal may record these. Neither command sends externally or claims
+that the owner read it. Reading removes only that report's notification. At the origin,
+`message retry <id> [--revision <hash>]` creates a fresh transport envelope for the same logical revision.
+Durable intents reconcile after crashes; offline envelopes remain pending. Retries cannot make receipts
+for the wrong origin, recipient, revision or sequence valid. Queue pressure retains the body and its pending
+notification. Remote notices get a turn after three local batches, without overwriting an owner draft.
+
+For Codex seats, the structured bridge status `waiting` identifies a blocked approval/question.
+A hidden input line during `busy` is normal work, not a blocked dialog. Pending blocked notices
+are revalidated before dispatch and disappear when the question is answered or that session ends.
+
+`restart` resolves and validates its continuation before stopping the role, including copies. It preserves
+the explicit session ID and working directory across copy cleanup, and rechecks runtime/home scope before
+starting. Restarting a copy follows the base role’s resume policy (creating a new copy still starts fresh).
+`--continue` fails before teardown if the known continuation is incompatible; `--fresh` bypasses it.
+
+Queued typed report/receipt envelopes recheck the authenticated capabilities and byte cap on the actual
+delivery connection, for both push and pull and every relay hop. An unsupported/downgraded peer leaves
+them pending with an envelope-specific transport error (`message show`, including `--json`); plain notes
+continue to drain. Restoring support lets the same pending envelope drain without a new logical report.
+
+Publication reports and their receipts use `[zmina-report-v2]` / wire version 2 and a separately signed
+`reports_v2` capability, bound to the session challenge and byte limit. Original v1 signatures/hello stay
+compatible with v1-only peers; legacy content-addressed reports and receipts still use v1. New report
+creation/retry and both push/pull/relay drains require the format actually carried by each signed body.
+A queued older envelope containing `content_hash` also requires v2, even under its earlier v1 prefix.
+A v1-only peer never receives these publications to refuse/ACK them: they stay queued with an upgrade
+reason, and drain unchanged once v2 support is authenticated. No automatic conversion to ordinary notes.
+
+Current `pending` errors come from durable envelope diagnostics (or the destination queue), not a past
+sync session. `last_sync_error` / `last_sync_error_at` in message JSON retain failed-attempt history;
+while no received receipt exists, text output labels this as a historical failed sync. Once delivery is
+observed, history remains in JSON without being shown as a current pending failure. Valid receipts clear
+origin transport errors without waiting for ticker reconciliation; old unprefixed sync errors on already
+received source records are migrated to history on read. Destination queue pressure remains current.
+
+Mesh wire messages remain one JSON object per newline-terminated frame. Each receiver drains the whole frame before replying, independent of stream fragmentation or write buffering. Switching to a live byte tunnel preserves bytes already prefetched after its ready frame. Existing handshakes, capability signatures and connection deadlines are unchanged.
+
+Human-readable task creation, result/checkpoint, event log and failed-queue timestamps use the local timezone of the CLI process. Stored timestamps and JSON output retain their original offsets.
+
+`queue ls` previews queued lines without consuming or acknowledging them. Reading a preview does not cancel later idle delivery. A saved in-flight line is never blindly retyped solely because a runtime status update is missing; an ambiguous submission becomes a visible failure for inspection. Crash recovery and explicit `queue retry` can still redeliver, so task acceptance remains bound to the immutable packet.
+
+Before idle delivery, and on each tick, task packet locators proven closed, reassigned or superseded by the current ledger leave the inbox and failed queue. An obsolete in-flight locator is retired without sending terminal keys. Pruning never clears input: the prompt API sees only a visible line, so even an exact visible match cannot prove the owner added no continuation text. Nonempty or unreadable input is preserved with a crew-scoped inspection notice; the notice resolves when input is visibly empty. Queued replacement work waits for a readable empty prompt, and never appends to the preserved draft. Ordinary messages and locators for missing/unreadable tasks are preserved.

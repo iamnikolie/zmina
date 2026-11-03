@@ -50,6 +50,8 @@ done
 // its path. The tmux server is killed after the test.
 func testCrew(t *testing.T, roles string) string {
 	t.Helper()
+	// Tests must not discover the operator's mesh or crew files through HOME.
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	t.Setenv("ZMINA_ROLE", "")
 
@@ -230,12 +232,11 @@ func TestStartStopWithRealTmux(t *testing.T) {
 	require.NoError(t, err)
 	assert.Regexp(t, `dev\s+\S+-dev\s+up`, out)
 
-	for i := 0; i < 40 && !strings.Contains(out, "claude --name"); i++ {
-		time.Sleep(50 * time.Millisecond)
-
+	require.Eventually(t, func() bool {
 		out, _, err = zm(t, crewFile, "peek", "dev", "-n", "5")
-		require.NoError(t, err)
-	}
+		return err == nil && strings.Contains(out, "claude --name")
+	}, 15*time.Second, 100*time.Millisecond)
+	require.Eventually(t, func() bool { text, _, _ := zm(t, crewFile, "peek", "dispatcher"); return strings.Contains(text, "❯") }, 15*time.Second, 100*time.Millisecond)
 
 	assert.Contains(t, out, "claude --name")
 	assert.NotContains(t, out, "--remote-control", "remote_control: false")
@@ -315,7 +316,8 @@ func TestUpWithTask(t *testing.T) {
 
 	out, _, err = zm(t, crewFile, "queue", "ls")
 	require.NoError(t, err)
-	assert.Contains(t, out, "[zmina T-1] fix the login · you are in its worktree "+wt)
+	assert.Contains(t, out, "[zmina T-1] Read handoff packet")
+	assert.NotContains(t, out, "fix the login")
 
 	out, _, err = zm(t, crewFile, "task", "show", "1")
 	require.NoError(t, err)
@@ -326,6 +328,43 @@ func TestUpWithTask(t *testing.T) {
 
 	_, _, err = zm(t, crewFile, "up", "dev", "--as", "3", "--task", "1")
 	assert.ErrorContains(t, err, "only an active task gets a seat")
+}
+
+func TestDownAsEndsOnlyTheCopy(t *testing.T) {
+	crewFile := testCrew(t, "  dev:\n")
+	_, _, err := zm(t, crewFile, "up", "dev")
+	require.NoError(t, err)
+	_, _, err = zm(t, crewFile, "up", "dev", "--as", "2")
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		out, _, _ := zm(t, crewFile, "peek", "dev#2")
+		return strings.Contains(out, "❯")
+	}, 15*time.Second, 100*time.Millisecond)
+
+	out, _, err := zm(t, crewFile, "down", "dev", "--as", "2")
+	require.NoError(t, err)
+	assert.Contains(t, out, "dev#2 down")
+	out, _, err = zm(t, crewFile, "ls", "--json")
+	require.NoError(t, err)
+	var roles []struct {
+		Role  string `json:"role"`
+		State string `json:"state"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &roles))
+	for _, r := range roles {
+		assert.NotEqual(t, "dev#2", r.Role)
+		if r.Role == "dev" {
+			assert.Equal(t, "up", r.State)
+		}
+	}
+
+	for _, args := range [][]string{
+		{"dev", "--as", "0"}, {"dev", "--as", "1"}, {"dev", "--as", "10"},
+		{"dev", "--all", "--as", "2"}, {"dev", "dispatcher", "--as", "2"}, {"dev#2", "--as", "2"},
+	} {
+		_, _, err := zm(t, crewFile, append([]string{"down"}, args...)...)
+		require.ErrorContains(t, err, "zmina down 'dev#2'")
+	}
 }
 
 func TestUsage(t *testing.T) {
@@ -468,18 +507,14 @@ func TestDownNeverSendsADraft(t *testing.T) {
 		return out
 	}
 
-	for i := 0; i < 40 && !strings.Contains(screen(), "❯"); i++ {
-		time.Sleep(50 * time.Millisecond)
-	}
+	require.Eventually(t, func() bool { return strings.Contains(screen(), "❯") }, 15*time.Second, 100*time.Millisecond)
 
 	// The owner's half-typed line, not sent.
 	draft := "drop the steps, start with steps 1–2 ✓"
 	keyOut, err := exec.Command("tmux", "-L", socket, "send-keys", "-t", "=dev:", "-l", draft).CombinedOutput()
 	require.NoError(t, err, string(keyOut))
 
-	for i := 0; i < 40 && !strings.Contains(screen(), "steps 1–2"); i++ {
-		time.Sleep(50 * time.Millisecond)
-	}
+	require.Eventually(t, func() bool { return strings.Contains(screen(), "steps 1–2") }, 15*time.Second, 100*time.Millisecond)
 
 	_, _, err = zm(t, crewFile, "down", "dev")
 	require.ErrorContains(t, err, "a draft sits in its input line")
@@ -559,15 +594,14 @@ func TestTaskParkAndResume(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "T-2 · dev · L-1 taken · dev up on abc-123\n", out)
 
-	screen := ""
-	for i := 0; i < 40 && !strings.Contains(screen, "--resume abc-123"); i++ {
-		time.Sleep(50 * time.Millisecond)
+	var screen string
+	require.Eventually(t, func() bool {
 		screen, _, _ = zm(t, crewFile, "peek", "dev", "-n", "5")
-	}
-
+		return strings.Contains(screen, "--resume abc-123")
+	}, 15*time.Second, 100*time.Millisecond, "resumed fake runtime must start before its argv is inspected")
 	assert.Contains(t, screen, "--resume abc-123")
 
 	out, _, err = zm(t, crewFile, "queue", "ls")
 	require.NoError(t, err)
-	assert.Contains(t, out, "[zmina T-2] back from L-1: images left; the CSS is done")
+	assert.Contains(t, out, "[zmina T-2] Read handoff packet")
 }

@@ -1,6 +1,10 @@
 package shift
 
 import (
+	"encoding/json"
+	"github.com/iamnikolie/zmina/internal/handoff"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -39,9 +43,21 @@ func TestReleaseParksWhatTheRoleLeaves(t *testing.T) {
 	f.s.Tick()
 	require.Len(t, f.tm.typed["designer"], 1, "the release line, nothing else")
 	line := f.tm.typed["designer"][0]
-	assert.Contains(t, line, "[zmina] idle 31m: you are released")
-	assert.Contains(t, line, "(T-1, T-2)")
-	assert.Contains(t, line, `zmina task park <id> --note "<what remains>"`)
+	assert.Contains(t, line, "[zmina release] Read checkpoint request")
+	assert.NotContains(t, line, "\n")
+	paths, err := filepath.Glob(filepath.Join(f.s.Crew.StateDir(), "releases", "*.json"))
+	require.NoError(t, err)
+	require.Len(t, paths, 1)
+	raw, err := os.ReadFile(paths[0])
+	require.NoError(t, err)
+	var request struct {
+		Tasks []handoff.Packet `json:"tasks"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &request))
+	require.Len(t, request.Tasks, 2)
+	assert.Equal(t, "T-1", request.Tasks[0].Task.ID)
+	assert.Equal(t, "T-2", request.Tasks[1].Task.ID)
+
 	assert.NotContains(t, strings.Join(f.s.State.Notes, "|"), "designer: idle", "the idle notice is replaced")
 	assert.True(t, f.tm.Has("designer"))
 
@@ -64,7 +80,9 @@ func TestReleaseParksWhatTheRoleLeaves(t *testing.T) {
 
 	require.Len(t, f.lt.list, 2)
 	assert.Equal(t, "two variants left; the second is half drawn", f.lt.list[0].Text)
-	assert.Equal(t, "pick the palette; last: Drawing the second variant", f.lt.list[1].Text, "the fallback")
+	assert.Contains(t, f.lt.list[1].Text, "handoff incomplete: checkpoint missing")
+	assert.Contains(t, f.lt.list[1].Text, "last observed status: Drawing the second variant")
+	assert.True(t, f.lt.list[1].Incomplete)
 
 	for i, id := range []string{"T-1", "T-2"} {
 		it := f.lt.list[i]

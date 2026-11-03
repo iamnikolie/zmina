@@ -563,6 +563,24 @@ func TestResume(t *testing.T) {
 	assert.Contains(t, strings.Join(f.tm.argv["writer"], " "), "--resume sid-writer")
 }
 
+func TestEmptySessionDoesNotReplaceLastConversation(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	rs := f.s.State.Role("designer")
+	rs.LastSession = "previous-conversation"
+	require.NoError(t, f.s.Up("designer"))
+	f.status("designer", "idle", *f.now)
+	f.s.Tick()
+	assert.Equal(t, "previous-conversation", rs.LastSession, "registration alone is not work")
+	require.NoError(t, f.s.Down("designer", DownOptions{}))
+	assert.Equal(t, "previous-conversation", rs.LastSession, "down must also preserve it")
+
+	require.NoError(t, f.s.Up("designer"))
+	f.status("designer", "busy", *f.now)
+	f.rg.context["sid-designer"] = 100
+	f.s.Tick()
+	assert.Equal(t, "sid-designer", rs.LastSession, "a session that has worked becomes resumable")
+}
+
 func TestEndedKeepsScreenAndNamesTask(t *testing.T) {
 	f := fixtureWith(t, crewYAML)
 	f.tm.screen = "panic: boom"
@@ -893,7 +911,7 @@ func TestNoteReachesIdleDispatcherAsOneLine(t *testing.T) {
 	*f.now = f.now.Add(bootPause)
 	f.s.Tick()
 	require.Len(t, f.tm.typed["dispatcher"], 1)
-	assert.Equal(t, "[zmina] mr-watch: !35 — 4 new threads (reviewer X) · harvester: started again (keep: always)",
+	assert.Equal(t, "[zmina] mr-watch: !35 — 4 new threads (reviewer X) (repeated 2 times) · harvester: started again (keep: always)",
 		f.tm.typed["dispatcher"][0])
 	assert.Empty(t, f.s.State.Signals)
 	assert.True(t, f.ev.has("dispatcher", "noted"))
@@ -1074,4 +1092,18 @@ func TestWaitGoneAnswersTheExitDialog(t *testing.T) {
 	assert.Less(t, time.Since(start), 2*time.Second, "answered, not waited out")
 	assert.Equal(t, []string{"1"}, f.tm.keys["harvester"])
 	assert.False(t, f.tm.Has("harvester"))
+}
+
+func TestExplicitFreshBypassesResumePolicyAndSleep(t *testing.T) {
+	f, _, _ := alarmed(t)
+	r, _ := f.s.Role("designer")
+	r.Resume = "always"
+	f.s.State.Role("designer").LastSession = "old-conversation"
+	_, _, err := f.s.Sleep("designer", f.now.Add(time.Hour), "+1h", "review", DownOptions{})
+	require.NoError(t, err)
+	require.NoError(t, f.s.UpWith("designer", UpOptions{Fresh: true}))
+	assert.NotContains(t, f.tm.argv["designer"], "--resume")
+	require.NoError(t, f.s.Down("designer", DownOptions{}))
+	require.NoError(t, f.s.UpWith("designer", UpOptions{Resume: "last"}))
+	assert.Contains(t, strings.Join(f.tm.argv["designer"], " "), "--resume old-conversation")
 }

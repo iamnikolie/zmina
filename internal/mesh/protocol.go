@@ -1,6 +1,7 @@
 package mesh
 
 import (
+	"bufio"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -9,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,15 +27,19 @@ type Deliver func(crew, from, id, body string, sent time.Time) error
 // wire is one line of the protocol, JSON over the stream. A session is: hello (both ways), auth, ok, then any of
 // push → ack, pull → envs → ack → ok, and bye.
 type wire struct {
-	Op    string     `json:"op"`
-	V     int        `json:"v,omitempty"`
-	Cert  *Cert      `json:"cert,omitempty"`
-	Nonce []byte     `json:"nonce,omitempty"`
-	Sig   []byte     `json:"sig,omitempty"`
-	Peers []Peer     `json:"peers,omitempty"`
-	Envs  []Envelope `json:"envs,omitempty"`
-	IDs   []string   `json:"ids,omitempty"`
-	Err   string     `json:"err,omitempty"`
+	ReportsV2       bool       `json:"reports_v2,omitempty"`
+	PublicationsSig []byte     `json:"publications_sig,omitempty"`
+	ReportsV1       bool       `json:"reports_v1,omitempty"`
+	CapsSig         []byte     `json:"caps_sig,omitempty"`
+	Op              string     `json:"op"`
+	V               int        `json:"v,omitempty"`
+	Cert            *Cert      `json:"cert,omitempty"`
+	Nonce           []byte     `json:"nonce,omitempty"`
+	Sig             []byte     `json:"sig,omitempty"`
+	Peers           []Peer     `json:"peers,omitempty"`
+	Envs            []Envelope `json:"envs,omitempty"`
+	IDs             []string   `json:"ids,omitempty"`
+	Err             string     `json:"err,omitempty"`
 	// Wait, on a pull, is how many seconds the peer may hold it for something to arrive.
 	Wait int `json:"wait,omitempty"`
 	// BodyMax, in a hello, is the longest body the node takes (BodyMax); an older node sends none.
@@ -50,13 +56,14 @@ type wire struct {
 }
 
 type conn struct {
+	peer      Peer // Capabilities authenticated on this connection, not a later address-book snapshot.
 	enc       *json.Encoder
-	dec       *json.Decoder
+	dec       *wireDecoder
 	challenge []byte
 }
 
 func newConn(rw io.ReadWriter) *conn {
-	return &conn{enc: json.NewEncoder(rw), dec: json.NewDecoder(rw)}
+	return &conn{enc: json.NewEncoder(rw), dec: &wireDecoder{reader: bufio.NewReader(rw)}}
 }
 
 func (c *conn) send(w wire) error { return c.enc.Encode(w) }
@@ -148,7 +155,7 @@ func (n *Node) ServeTerminals(ctx context.Context, rw io.ReadWriter, deliver Del
 	}
 
 	err = c.send(wire{Op: "hello", V: protocolVersion, Cert: &n.Cert, Nonce: mine,
-		Sig: ed25519.Sign(n.Key, helloMessage("server", hi.Nonce)), Peers: told, BodyMax: BodyMax})
+		Sig: ed25519.Sign(n.Key, helloMessage("server", hi.Nonce)), Peers: told, BodyMax: BodyMax, ReportsV1: true, ReportsV2: true, PublicationsSig: ed25519.Sign(n.Key, publicationCapabilityMessage("server", hi.Nonce, BodyMax, true)), CapsSig: ed25519.Sign(n.Key, capabilityMessage("server", hi.Nonce, BodyMax, true))})
 	if err != nil {
 		return err
 	}
@@ -167,7 +174,14 @@ func (n *Node) ServeTerminals(ctx context.Context, rw io.ReadWriter, deliver Del
 		return fail(errors.New("a node does not call itself"))
 	}
 
-	if err := n.met(*hi.Cert, hi.Peers, hi.BodyMax, now()); err != nil {
+	if hi.ReportsV1 && !ed25519.Verify(hi.Cert.Key, capabilityMessage("client", mine, hi.BodyMax, true), auth.CapsSig) {
+		return fail(errors.New("unauthenticated reports_v1 capability"))
+	}
+	if hi.ReportsV2 && (!hi.ReportsV1 || !ed25519.Verify(hi.Cert.Key, publicationCapabilityMessage("client", mine, hi.BodyMax, hi.ReportsV1), auth.PublicationsSig)) {
+		return fail(errors.New("unauthenticated reports_v2 capability"))
+	}
+	c.peer = Peer{Name: caller, BodyMax: hi.BodyMax, ReportsV1: hi.ReportsV1, ReportsV2: hi.ReportsV2}
+	if err := n.metCapabilities(*hi.Cert, hi.Peers, hi.BodyMax, hi.ReportsV1, now(), hi.ReportsV2); err != nil {
 		return fail(err)
 	}
 
@@ -209,7 +223,7 @@ func (n *Node) ServeTerminals(ctx context.Context, rw io.ReadWriter, deliver Del
 				return fail(err)
 			}
 
-			out := n.handFor(caller, book)
+			out, blocked := n.handFor(c.peer, book)
 
 			// A held pull waits here, looking every half second, until something is for the caller.
 			for end := now().Add(time.Duration(min(w.Wait, 60)) * time.Second); len(out) == 0 && now().Before(end); {
@@ -219,10 +233,10 @@ func (n *Node) ServeTerminals(ctx context.Context, rw io.ReadWriter, deliver Del
 					return fail(err)
 				}
 
-				out = n.handFor(caller, book)
+				out, blocked = n.handFor(c.peer, book)
 			}
 
-			if err := c.send(wire{Op: "envs", Envs: out}); err != nil {
+			if err := c.send(wire{Op: "envs", Envs: out, Err: strings.Join(blocked, "; ")}); err != nil {
 				return err
 			}
 
@@ -318,7 +332,7 @@ func (n *Node) open(c *conn, want string, now func() time.Time) (string, error) 
 	}
 
 	if err := c.send(wire{Op: "hello", V: protocolVersion, Cert: &n.Cert, Nonce: mine, Peers: told,
-		BodyMax: BodyMax}); err != nil {
+		BodyMax: BodyMax, ReportsV1: true, ReportsV2: true}); err != nil {
 		return "", err
 	}
 
@@ -340,11 +354,17 @@ func (n *Node) open(c *conn, want string, now func() time.Time) (string, error) 
 		return "", errors.New("the peer did not prove its key")
 	}
 
+	if hi.ReportsV1 && !ed25519.Verify(hi.Cert.Key, capabilityMessage("server", mine, hi.BodyMax, true), hi.CapsSig) {
+		return "", errors.New("unauthenticated reports_v1 capability")
+	}
+	if hi.ReportsV2 && (!hi.ReportsV1 || !ed25519.Verify(hi.Cert.Key, publicationCapabilityMessage("server", mine, hi.BodyMax, hi.ReportsV1), hi.PublicationsSig)) {
+		return "", errors.New("unauthenticated reports_v2 capability")
+	}
 	if want != "" && hi.Cert.Name != want {
 		return "", fmt.Errorf("this address reaches %s, not %s", hi.Cert.Name, want)
 	}
 
-	if err := c.send(wire{Op: "auth", Sig: ed25519.Sign(n.Key, helloMessage("client", hi.Nonce))}); err != nil {
+	if err := c.send(wire{Op: "auth", Sig: ed25519.Sign(n.Key, helloMessage("client", hi.Nonce)), CapsSig: ed25519.Sign(n.Key, capabilityMessage("client", hi.Nonce, BodyMax, true)), PublicationsSig: ed25519.Sign(n.Key, publicationCapabilityMessage("client", hi.Nonce, BodyMax, true))}); err != nil {
 		return "", err
 	}
 
@@ -352,7 +372,8 @@ func (n *Node) open(c *conn, want string, now func() time.Time) (string, error) 
 		return "", err
 	}
 
-	return hi.Cert.Name, n.met(*hi.Cert, hi.Peers, hi.BodyMax, now())
+	c.peer = Peer{Name: hi.Cert.Name, BodyMax: hi.BodyMax, ReportsV1: hi.ReportsV1, ReportsV2: hi.ReportsV2}
+	return hi.Cert.Name, n.metCapabilities(*hi.Cert, hi.Peers, hi.BodyMax, hi.ReportsV1, now(), hi.ReportsV2)
 }
 
 // round hands the peer what is for it, then takes what it has for this node, the pull waiting up to wait at the
@@ -362,17 +383,19 @@ func (n *Node) round(c *conn, peer string, deliver Deliver, now func() time.Time
 ) {
 	book, err := n.Peers()
 	if err != nil {
-		return 0, 0, nil, err
+		return 0, 0, problems, err
 	}
 
-	if hand := n.handFor(peer, book); len(hand) > 0 {
+	hand, blocked := n.handFor(c.peer, book)
+	problems = append(problems, blocked...)
+	if len(hand) > 0 {
 		if err := c.send(wire{Op: "push", Envs: hand}); err != nil {
-			return 0, 0, nil, err
+			return 0, 0, problems, err
 		}
 
 		ack, err := c.expect("ack")
 		if err != nil {
-			return 0, 0, nil, err
+			return 0, 0, problems, err
 		}
 
 		acked := sent(hand, ack.IDs)
@@ -395,6 +418,9 @@ func (n *Node) round(c *conn, peer string, deliver Deliver, now func() time.Time
 		return out, 0, problems, err
 	}
 
+	if got.Err != "" {
+		problems = append(problems, peer+": "+got.Err)
+	}
 	ids, rerr := n.receive(got.Envs, deliver, now())
 	if rerr != nil {
 		problems = append(problems, rerr.Error())
@@ -451,9 +477,20 @@ func (n *Node) told() ([]Peer, error) {
 // of: a told node is kept only with a certificate this owner signed, and only its ssh addresses. Which told nodes
 // the peer reaches itself decides what this node lets it carry.
 func (n *Node) met(cert Cert, told []Peer, bodyMax int, now time.Time) error {
+	return n.metCapabilities(cert, told, bodyMax, false, now)
+}
+func capabilityMessage(side string, nonce []byte, max int, reports bool) []byte {
+	return []byte(fmt.Sprintf("zmina-caps\x00%s\x00%x\x00%d\x00%t", side, nonce, max, reports))
+}
+func publicationCapabilityMessage(side string, nonce []byte, max int, legacy bool) []byte {
+	return append([]byte("zmina-reports-v2\x00"), capabilityMessage(side, nonce, max, legacy)...)
+}
+func (n *Node) metCapabilities(cert Cert, told []Peer, bodyMax int, reports bool, now time.Time, publications ...bool) error {
 	return n.UpdatePeers(func(ps []Peer) []Peer {
 		ps = upsert(ps, cert, "called", func(p *Peer) {
 			p.OK, p.Err, p.BodyMax = now, "", bodyMax
+			p.ReportsV1 = reports
+			p.ReportsV2 = reports && len(publications) > 0 && publications[0]
 		})
 
 		for i, t := range told {
@@ -512,28 +549,45 @@ func upsert(ps []Peer, cert Cert, source string, fn func(p *Peer)) []Peer {
 
 // handFor is what this node hands peer: the envelopes for it, and those for a node this node cannot reach itself
 // (no address, or its last try failed) when peer said it reaches that node and has not held the envelope yet.
-func (n *Node) handFor(peer string, book []Peer) []Envelope {
+func (n *Node) handFor(peer Peer, book []Peer) ([]Envelope, []string) {
 	all, err := n.Outbox()
 	if err != nil {
-		return nil
+		return nil, []string{err.Error()}
 	}
-
 	byName := map[string]Peer{}
 	for _, p := range book {
 		byName[p.Name] = p
 	}
-
 	var out []Envelope
-
+	var problems []string
 	for _, e := range all {
 		d := byName[e.dest()]
-		if e.dest() == peer || (!d.direct() && slices.Contains(d.Through, peer) && !e.held(peer) &&
-			len(e.Via) < maxHops) {
-			out = append(out, e)
+		if e.dest() != peer.Name && (d.direct() || !slices.Contains(d.Through, peer.Name) || e.held(peer.Name) || len(e.Via) >= maxHops) {
+			continue
 		}
+		if version := ReportWireVersion(e.Body); version > 0 {
+			problem := ""
+			switch {
+			case version > 2:
+				problem = fmt.Sprintf("report %s pending: unsupported reports_v%d format; update this node and the peer", e.ID, version)
+			case version == 2 && !peer.ReportsV2:
+				problem = fmt.Sprintf("report %s pending: %s has no authenticated reports_v2 on this connection; update the peer for publication reports (plain notes remain compatible)", e.ID, peer.Name)
+			case !peer.ReportsV1:
+				problem = fmt.Sprintf("report %s pending: %s has no authenticated reports_v1 on this connection; update the peer and sync (plain notes remain compatible)", e.ID, peer.Name)
+			case len(e.Body) > peer.Takes():
+				problem = fmt.Sprintf("report %s pending: %d bytes exceeds %s negotiated cap %d; shorten the report or update the peer", e.ID, len(e.Body), peer.Name, peer.Takes())
+			}
+			if err := n.setPendingError(e.ID, problem); err != nil {
+				problems = append(problems, err.Error())
+			}
+			if problem != "" {
+				problems = append(problems, problem)
+				continue
+			}
+		}
+		out = append(out, e)
 	}
-
-	return out
+	return out, problems
 }
 
 // receive takes envelopes handed to this node: delivered to a crew when they are for it, kept to carry on when
@@ -753,4 +807,13 @@ func (n *Node) callAt(ctx context.Context, t Transport, a Addr, want string, del
 	}
 
 	return out, in, problems, err
+}
+
+// DeliverLocal applies the same signature, replay and acknowledgement rules to self-addressed envelopes.
+func (n *Node) DeliverLocal(e Envelope, deliver Deliver, now time.Time) ([]string, error) {
+	to, err := ParseAddress(e.To)
+	if err != nil || to.Node != n.Name {
+		return nil, fmt.Errorf("not a local envelope")
+	}
+	return n.receive([]Envelope{e}, deliver, now)
 }

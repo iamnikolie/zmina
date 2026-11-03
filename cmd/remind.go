@@ -188,6 +188,9 @@ func (a *app) remindLsCommand() *cobra.Command {
 					}
 
 					line += al.Text
+					if al.Kind == alarm.Sleep && al.Note != "" {
+						line = strings.TrimSuffix(line, al.Text) + strings.Join(strings.Fields(al.Note), " ")
+					}
 					if al.Later != "" {
 						line = strings.TrimSuffix(line, al.Text) + al.Later + " · " + al.Text
 					}

@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/iamnikolie/zmina/internal/record"
+	"github.com/iamnikolie/zmina/internal/task"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -33,9 +35,12 @@ const (
 
 // Item is one parked thing.
 type Item struct {
-	ID   string `json:"id"`
-	Text string `json:"text"`
-	Note string `json:"note,omitempty"`
+	Checkpoint    *record.Ref         `json:"checkpoint,omitempty"`
+	Incomplete    bool                `json:"incomplete,omitempty"`
+	Conversations []task.Conversation `json:"conversations,omitempty"`
+	ID            string              `json:"id"`
+	Text          string              `json:"text"`
+	Note          string              `json:"note,omitempty"`
 	// State is parked until the item is closed; an unknown state is taken as parked, so nothing is lost.
 	State State `json:"state"`
 	// Task is the task the item became, when it was taken.

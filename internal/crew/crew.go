@@ -53,6 +53,7 @@ var (
 
 // Role is one long-lived named session.
 type Role struct {
+	Handoff *HandoffShape `yaml:"handoff"`
 	// Runtime selects claude (default) or codex.
 	Runtime        string `yaml:"runtime"`
 	Profile        string `yaml:"profile"`
@@ -172,6 +173,7 @@ func (r *Role) Instance(n int) *Role {
 
 // Crew is the whole crew file.
 type Crew struct {
+	Handoff *HandoffShape `yaml:"handoff"`
 	// Path is where the file was read from, made absolute; zmina's state lives next to it.
 	Path string `yaml:"-"`
 	// Warnings are what is wrong with the file without stopping it: unknown keys, a namespace that differs from
@@ -584,10 +586,16 @@ func (c *Crew) check() error {
 		return fmt.Errorf("context_action is %s or %s, not %q", ContextCompact, ContextClear, a)
 	}
 
+	if err := c.Handoff.check(); err != nil {
+		return err
+	}
 	sessions := map[string]string{}
 
 	for _, name := range c.Names() {
 		r := c.Roles[name]
+		if err := r.Handoff.check(); err != nil {
+			return fmt.Errorf("role %s: %w", name, err)
+		}
 
 		if err := r.CheckRuntime(); err != nil {
 			return fmt.Errorf("role %s: %w", name, err)

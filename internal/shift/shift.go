@@ -110,15 +110,18 @@ type Events interface {
 
 // Shift is the crew at work.
 type Shift struct {
-	Crew   *crew.Crew
-	Tmux   Tmux
-	Reg    Registry
-	State  *State
-	Tasks  Tasks
-	Later  Later
-	Alarms Alarms
-	Asks   Asks
-	Events Events
+	CommittedMessageStages map[string]map[string]time.Time
+	ReconcileMessages      func(*Shift) error // Local persistence/outbox only; no network calls.
+	Node                   string             // Local mesh identity, when configured.
+	Crew                   *crew.Crew
+	Tmux                   Tmux
+	Reg                    Registry
+	State                  *State
+	Tasks                  Tasks
+	Later                  Later
+	Alarms                 Alarms
+	Asks                   Asks
+	Events                 Events
 	// Inbox keeps the whole text of a note too long to type; nil cuts it instead.
 	Inbox *inbox.Store
 	Now   func() time.Time
@@ -332,12 +335,16 @@ func (s *Shift) Views() []View {
 		}
 
 		if v.State == PresenceUp {
-			if _, ok, err := s.Tmux.Prompt(name); err == nil && !ok {
+			v.Now, v.NowAt = rs.Now, rs.NowAt
+			if s.isCodex(name) {
+				v.Prompt = sess != nil && sess.Status == "waiting"
+			} else if _, ok, err := s.Tmux.Prompt(name); err == nil && !ok {
 				v.Prompt = true
 			}
 
 			if text, err := s.Tmux.Capture(name, nowLines); err == nil {
-				if v.Now = NowLine(text); v.Now != "" {
+				if line := NowLine(text); line != "" {
+					v.Now = line
 					v.NowAt = rs.NowAt
 					if v.Now != rs.Now || v.NowAt.IsZero() {
 						v.NowAt = s.Now()
@@ -398,6 +405,9 @@ const RemoteRule = "[zmina] Lines from other crews (zmina tell) arrive as `remot
 // BootText is a role's first message: its boot, and for the dispatcher the rule about other crews' lines.
 func (s *Shift) BootText(r *crew.Role) string {
 	text := r.Boot
+	if r.IsCodex() && r.CodexTransport == "shared" {
+		text += fmt.Sprintf("\n[zmina] Shared-runtime tools may not inherit role environment. Your role is %s; pass --crew %s on zmina commands and --role %s on task accept.", r.Name, shellWord(s.Crew.Path), shellWord(r.Name))
+	}
 	for _, role := range s.Crew.Roles {
 		if role.IsCodex() {
 			text = strings.TrimSpace(text + "\n\n" + MixedRuntimeRule)
@@ -406,6 +416,7 @@ func (s *Shift) BootText(r *crew.Role) string {
 	}
 	if r.Name != "" && r.Name == s.Crew.Dispatcher {
 		text = strings.TrimSpace(text + "\n\n" + RemoteRule)
+		text = s.recoveryBoot(text)
 	}
 	return text
 }
@@ -466,6 +477,10 @@ func (s *Shift) Env(r *crew.Role) []string {
 
 // UpOptions tune one start.
 type UpOptions struct {
+	// Continuation freezes the validated scope across restart teardown.
+	Continuation *task.Conversation
+	// Fresh bypasses saved conversation and resume policy.
+	Fresh bool
 	// Resume is a session id to resume, "last" for the role's last one, or empty (resume: always still applies).
 	Resume string
 	// Dir starts the role there instead of its crew dir: a task's worktree.
@@ -512,6 +527,12 @@ func (s *Shift) start(name string, o UpOptions) error {
 			return err
 		}
 	}
+	if c := o.Continuation; c != nil {
+		runtime, home := s.runtimeScope(r)
+		if c.Runtime != runtime || c.Home != home || c.Session != o.Resume || scopePath(c.Cwd) != scopePath(o.Dir) {
+			return fmt.Errorf("%s: continuation scope changed; start a fresh session", name)
+		}
+	}
 	dir := r.Dir
 	if o.Dir != "" {
 		dir = o.Dir
@@ -527,6 +548,13 @@ func (s *Shift) start(name string, o UpOptions) error {
 	rs := s.State.Role(name)
 
 	resume := o.Resume
+	if o.Fresh && resume != "" {
+		return fmt.Errorf("fresh and resume are mutually exclusive")
+	}
+	if !o.Fresh && resume == "" && rs.LastSession != "" && !s.Asleep(name).IsZero() {
+		// A manual wake must preserve the conversation just as the alarm does.
+		resume = "last"
+	}
 	lastRuntime := rs.LastRuntime
 	if lastRuntime == "" {
 		lastRuntime = "claude"
@@ -543,7 +571,7 @@ func (s *Shift) start(name string, o UpOptions) error {
 		if resume = rs.LastSession; resume == "" {
 			return fmt.Errorf("%s: no last session known to resume; zmina up %s starts a fresh one", name, name)
 		}
-	case resume == "" && r.Resume == crew.ResumeAlways:
+	case !o.Fresh && resume == "" && r.Resume == crew.ResumeAlways:
 		if lastRuntime == runtime {
 			resume = rs.LastSession
 		}
@@ -557,6 +585,7 @@ func (s *Shift) start(name string, o UpOptions) error {
 	rs.Releasing, rs.ReleaseTasks, rs.ReleaseIdle = time.Time{}, nil, 0
 	rs.Sent, rs.NoPrompt, rs.BlockedNoted, rs.Trusted = nil, time.Time{}, false, false
 	rs.Instance = isInstance(name)
+	rs.RecoverySession, rs.RecoveryContext, rs.RecoveryDrops = "", 0, 0
 
 	detail := ""
 	if resume != "" {
@@ -820,9 +849,28 @@ func (s *Shift) remember(name string, p tmux.Pane) {
 	}
 
 	if sess, _ := s.registryFor(name).ByPID(p.PID); sess != nil && sess.SessionID != "" {
+		rs := s.State.Role(name)
+		if rs.LastSession != "" && rs.LastSession != sess.SessionID {
+			// A new process may register before it has done any work. Do not lose
+			// the conversation we can still resume if that process ends on boot.
+			turn, err := s.registryFor(name).Last(sess.SessionID)
+			if err != nil || (turn.Context == 0 && !turn.Ended) {
+				return
+			}
+		}
 		s.State.Role(name).LastSession = sess.SessionID
 		r, _ := s.Role(name)
 		s.State.Role(name).LastRuntime = r.Runtime
+		_, s.State.Role(name).LastHome = s.runtimeScope(r)
+		dir := sess.Cwd
+		if dir == "" {
+			dir = s.State.Role(name).Dir
+		}
+		if dir == "" {
+			dir = r.Dir
+		}
+		s.State.Role(name).LastDir = scopePath(dir)
+		s.rememberTaskConversation(name, sess, r)
 	}
 }
 
@@ -924,7 +972,11 @@ func (s *Shift) note(from, text string, ifUp bool) (string, bool, error) {
 	}
 
 	note := from + ": " + text
+	if s.State.SignalCounts == nil {
+		s.State.SignalCounts = map[string]int{}
+	}
 	if slices.Contains(s.State.Signals, note) {
+		s.State.SignalCounts[note] = max(1, s.State.SignalCounts[note]) + 1
 		return note, false, nil
 	}
 
@@ -933,6 +985,7 @@ func (s *Shift) note(from, text string, ifUp bool) (string, bool, error) {
 	}
 
 	s.State.Signals = append(s.State.Signals, note)
+	s.State.SignalCounts[note] = 1
 	s.log(d, "noted", "", note)
 
 	return note, true, nil

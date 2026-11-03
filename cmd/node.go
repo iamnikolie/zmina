@@ -474,6 +474,9 @@ func (a *app) nodeSync() *cobra.Command {
 			}
 			defer release()
 
+			if err := a.pumpLocalReports(); err != nil {
+				return err
+			}
 			me.MarkSync()
 
 			ss := me.Sync(cmd.Context(), mesh.Exec{}, []mesh.Discovery{mesh.Book{Node: me}}, a.deliverFrom(), only,
@@ -555,11 +558,19 @@ type stdioRW struct {
 }
 
 func (a *app) tellCommand() *cobra.Command {
-	return &cobra.Command{
+	var reportKey, reportTask, file string
+	var status bool
+	c := &cobra.Command{
 		Use:   "tell <node>[/<crew>] <text...>",
 		Short: "Send one line to another crew's dispatcher, on this node or another; it waits here until it gets there",
-		Args:  cobra.MinimumNArgs(2),
+		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if reportKey != "" {
+				return a.tellReport(cmd, args, reportKey, reportTask, file, status)
+			}
+			if len(args) < 2 || file != "" || reportTask != "" || status {
+				return fmt.Errorf("plain tell needs text; --file/--task/--status require --report-key")
+			}
 			to, err := mesh.ParseAddress(args[0])
 			if err != nil {
 				return err
@@ -632,6 +643,12 @@ func (a *app) tellCommand() *cobra.Command {
 			return nil
 		},
 	}
+	c.Flags().StringVar(&reportKey, "report-key", "", "send a publication report with stable logical identity (requires reports_v2)")
+	c.Flags().StringVar(&reportTask, "task", "", "related source task; include its latest result/checkpoint reference")
+	c.Flags().StringVar(&file, "file", "", "typed report body file, preserving formatting")
+	c.Flags().BoolVar(&status, "status", false, "allow this status revision to explicitly supersede the preceding status")
+	return c
+
 }
 
 func queued(me *mesh.Node, id string) bool {
@@ -783,6 +800,9 @@ func (a *app) deliverFrom() mesh.Deliver {
 			return fmt.Errorf("%w: %v", mesh.ErrRefused, err)
 		}
 
+		if handled, e := a.deliverReport(c, src, id, body, sent); handled {
+			return e
+		}
 		_, err = a.noteRemote(c.Path, src, mesh.InboxID(id), body, sent)
 
 		return err
@@ -857,6 +877,9 @@ func (a *app) meshTick() {
 		return
 	}
 
+	if err := a.pumpLocalReports(); err != nil {
+		a.printTick([]string{"mesh local reports: " + err.Error()})
+	}
 	if time.Since(me.LastSync()) < syncEvery {
 		return
 	}

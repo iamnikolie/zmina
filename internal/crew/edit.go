@@ -12,7 +12,7 @@ import (
 
 // SeatKeys are the role keys 'zmina seat set' may change.
 var SeatKeys = []string{"runtime", "profile", "codex_transport", "codex_home", "reasoning_effort", "sandbox", "approval_policy", "session", "dir", "boot", "keep", "model", "args", "about", "remote_control", "resume",
-	"schedule", "prompt", "expires", "context_max", "context_action", "drop_tools", "keep_tools",
+	"handoff", "schedule", "prompt", "expires", "context_max", "context_action", "drop_tools", "keep_tools",
 	"release_idle_minutes", "budget"}
 
 // listKeys are the seat keys whose value is a YAML list.
@@ -203,6 +203,17 @@ func setKey(body *yaml.Node, key, value string) error {
 // valueNode is a string for every key but the list keys (args, drop_tools, keep_tools: [--chrome] or
 // --chrome,--verbose), and remote_control, a bool.
 func valueNode(key, value string) (*yaml.Node, error) {
+	if key == "handoff" {
+		var doc yaml.Node
+		if err := yaml.Unmarshal([]byte(value), &doc); err != nil {
+			return nil, err
+		}
+		if len(doc.Content) != 1 || doc.Content[0].Kind != yaml.MappingNode {
+			return nil, fmt.Errorf("handoff: expected a mapping with sections")
+		}
+		return doc.Content[0], nil
+	}
+
 	if key == "remote_control" {
 		if value != "true" && value != "false" {
 			return nil, fmt.Errorf("remote_control: true or false, not %q", value)

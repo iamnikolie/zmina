@@ -15,6 +15,7 @@ import (
 	"github.com/iamnikolie/zmina/internal/events"
 	"github.com/iamnikolie/zmina/internal/inbox"
 	"github.com/iamnikolie/zmina/internal/ledger"
+	"github.com/iamnikolie/zmina/internal/mesh"
 	"github.com/iamnikolie/zmina/internal/registry"
 	"github.com/iamnikolie/zmina/internal/shift"
 	"github.com/iamnikolie/zmina/internal/task"
@@ -70,7 +71,7 @@ Run 'zmina skill' for the full agent reference.`,
 	root.AddCommand(a.taskCommand(), a.todoCommand(), a.laterCommand(), a.remindCommand(), a.sleepCommand(), a.seatCommand(), a.logCommand(), a.noteCommand(), a.inboxCommand(), a.watchCommand(),
 		a.stopCommand(), a.startCommand(), a.queueCommand(), a.stateCommand(), a.tickerCommand(),
 		a.launchdCommand(), a.doctorCommand(), a.usageCommand(), a.skillCommand(), a.versionCommand(), a.uiCommand(),
-		a.nodeCommand(), a.tellCommand(), a.codexCommand(), a.terminalCommand())
+		a.messageCommand(), a.contextCommand(), a.reportCommand(), a.nodeCommand(), a.tellCommand(), a.codexCommand(), a.terminalCommand())
 
 	return root
 }
@@ -142,21 +143,27 @@ func (a *app) newShift() (*shift.Shift, error) {
 		return nil, err
 	}
 
+	node := ""
+	if n, err := mesh.Open(meshDir()); err == nil {
+		node = n.Name
+	}
 	return &shift.Shift{
-		Crew:   c,
-		Tmux:   &lazyTmux{socket: c.Socket(), drop: c.DropEnv},
-		Reg:    &registry.Registry{Namespace: c.Namespace},
-		State:  shift.NewState(),
-		Tasks:  taskStore(c),
-		Later:  laterStore(c),
-		Alarms: alarmStore(c),
-		Asks:   askStore(c),
-		Inbox:  &inbox.Store{Dir: c.Layout().Inbox()},
-		Events: eventLog(c),
-		Now:    time.Now,
-		Path:   os.Getenv("PATH"),
-		By:     by(),
-		Warn:   func(err error) { fmt.Fprintln(a.err, "zmina: warning:", err) },
+		Node:              node,
+		ReconcileMessages: a.reconcileMessages,
+		Crew:              c,
+		Tmux:              &lazyTmux{socket: c.Socket(), drop: c.DropEnv},
+		Reg:               &registry.Registry{Namespace: c.Namespace},
+		State:             shift.NewState(),
+		Tasks:             taskStore(c),
+		Later:             laterStore(c),
+		Alarms:            alarmStore(c),
+		Asks:              askStore(c),
+		Inbox:             &inbox.Store{Dir: c.Layout().Inbox()},
+		Events:            eventLog(c),
+		Now:               time.Now,
+		Path:              os.Getenv("PATH"),
+		By:                by(),
+		Warn:              func(err error) { fmt.Fprintln(a.err, "zmina: warning:", err) },
 	}, nil
 }
 
@@ -193,6 +200,14 @@ func (a *app) withState(fn func(s *shift.Shift) error) error {
 	}
 
 	s.State = l.State
+	s.CommittedMessageStages = map[string]map[string]time.Time{}
+	for key, stages := range s.State.MessageStages {
+		copy := map[string]time.Time{}
+		for stage, at := range stages {
+			copy[stage] = at
+		}
+		s.CommittedMessageStages[key] = copy
+	}
 	s.State.Prune(s.Known)
 	s.PruneWatches()
 

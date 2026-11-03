@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -136,9 +135,10 @@ func contextCell(v shift.View) string {
 
 func (a *app) upCommand() *cobra.Command {
 	var (
-		all            bool
-		as             int
-		resume, taskID string
+		all                 bool
+		fresh, continueTask bool
+		as                  int
+		resume, taskID      string
 	)
 
 	c := &cobra.Command{
@@ -160,11 +160,14 @@ func (a *app) upCommand() *cobra.Command {
 					names[0] = fmt.Sprintf("%s#%d", names[0], as)
 				}
 
-				if (resume != "" || taskID != "") && len(names) != 1 {
+				if (resume != "" || taskID != "" || fresh || continueTask) && len(names) != 1 {
 					return errors.New("--resume and --task start one role")
 				}
 
-				opts := shift.UpOptions{Resume: resume}
+				opts := shift.UpOptions{Resume: resume, Fresh: fresh}
+				if continueTask && taskID == "" {
+					opts.Resume = "last"
+				}
 
 				var t task.Task
 
@@ -189,6 +192,18 @@ func (a *app) upCommand() *cobra.Command {
 				var errs []error
 
 				for _, n := range names {
+					mode := "configured resume policy"
+					if resume != "" {
+						mode = "explicit resume " + resume
+					}
+					if t.ID != "" && resume == "" {
+						var err error
+						opts, mode, err = s.TaskStart(n, t, fresh, continueTask)
+						if err != nil {
+							errs = append(errs, err)
+							continue
+						}
+					}
 					if err := s.UpWith(n, opts); err != nil {
 						errs = append(errs, err)
 
@@ -199,6 +214,7 @@ func (a *app) upCommand() *cobra.Command {
 					fmt.Fprintf(a.out, "%s up as %s · zmina attach %s\n", n, r.Session, n)
 
 					if t.ID != "" {
+						fmt.Fprintf(a.out, "%s conversation: %s\n", n, mode)
 						if err := a.handTask(s, n, t); err != nil {
 							errs = append(errs, err)
 						}
@@ -216,6 +232,9 @@ func (a *app) upCommand() *cobra.Command {
 	c.Flags().Lookup("resume").NoOptDefVal = "last"
 	c.Flags().StringVar(&taskID, "task", "", "start in the task's worktree (when it has one) and queue the task for it")
 
+	c.Flags().BoolVar(&fresh, "fresh", false, "start a new conversation; for tasks, bypass saved task conversation")
+	c.Flags().BoolVar(&continueTask, "continue", false, "require a compatible task conversation (--task) or the last role conversation")
+	c.MarkFlagsMutuallyExclusive("fresh", "continue", "resume")
 	return c
 }
 
@@ -223,17 +242,14 @@ func (a *app) upCommand() *cobra.Command {
 // the task.
 func (a *app) handTask(s *shift.Shift, name string, t task.Task) error {
 	if t.Role != name {
-		if _, err := a.ledger(s).Set(t.ID, ledger.Change{Role: name}); err != nil {
+		updated, err := a.ledger(s).Set(t.ID, ledger.Change{Role: name})
+		if err != nil {
 			return err
 		}
+		t = updated
 	}
 
-	line := "[zmina " + t.ID + "] " + t.Asked
-	if t.Worktree != "" {
-		line += " · you are in its worktree " + t.Worktree + " on branch " + t.Branch
-	}
-
-	if err := s.Queue(name, line); err != nil {
+	if _, err := s.HandTask(name, t); err != nil {
 		return err
 	}
 
@@ -244,12 +260,19 @@ func (a *app) handTask(s *shift.Shift, name string, t task.Task) error {
 
 func (a *app) downCommand() *cobra.Command {
 	var all, force, clear bool
+	var as int
 
 	c := &cobra.Command{
 		Use:   "down [role...]",
 		Short: "End roles with /exit into an empty input line (--all: every role up but the dispatcher)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.downRoles(func(s *shift.Shift) ([]string, error) {
+				if cmd.Flags().Changed("as") {
+					if all || len(args) != 1 || as < 2 || as > 9 || strings.Contains(args[0], "#") {
+						return nil, errors.New("--as ends copy N (2-9) of one role: zmina down dev --as 2 (or zmina down 'dev#2')")
+					}
+					args = []string{fmt.Sprintf("%s#%d", args[0], as)}
+				}
 				return pick(s, args, all, func(v shift.View) bool {
 					return v.State == shift.PresenceUp && v.Role != s.Crew.Dispatcher
 				})
@@ -258,6 +281,7 @@ func (a *app) downCommand() *cobra.Command {
 	}
 
 	c.Flags().BoolVar(&all, "all", false, "every role that is up, but the dispatcher")
+	c.Flags().IntVar(&as, "as", 0, "end copy N (2-9) of one role, as <role>#N")
 	c.Flags().BoolVar(&force, "force", false, "also end the dispatcher")
 	c.Flags().BoolVar(&clear, "clear", false, "drop a draft (C-c) or close a dialog (Escape) first instead of refusing")
 
@@ -329,16 +353,25 @@ func (a *app) downRoles(names func(s *shift.Shift) ([]string, error), o shift.Do
 }
 
 func (a *app) restartCommand() *cobra.Command {
-	var clear bool
+	var clear, fresh, continueLast bool
 
 	c := &cobra.Command{
 		Use:   "restart <role>",
-		Short: "End a role and start it fresh (a new session under the same name)",
+		Short: "End and start a role using its configured resume policy (--fresh or --continue override it)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
+			var opts shift.UpOptions
+			err := a.withState(func(s *shift.Shift) error {
+				var err error
+				opts, err = s.RestartOptions(name, fresh, continueLast)
+				return err
+			})
+			if err != nil {
+				return err
+			}
 
-			err := a.downRoles(func(s *shift.Shift) ([]string, error) {
+			err = a.downRoles(func(s *shift.Shift) ([]string, error) {
 				if _, err := s.Role(name); err != nil {
 					return nil, err
 				}
@@ -350,7 +383,7 @@ func (a *app) restartCommand() *cobra.Command {
 			}
 
 			return a.withState(func(s *shift.Shift) error {
-				if err := s.Up(name); err != nil {
+				if err := s.UpWith(name, opts); err != nil {
 					return err
 				}
 
@@ -362,6 +395,10 @@ func (a *app) restartCommand() *cobra.Command {
 	}
 
 	c.Flags().BoolVar(&clear, "clear", false, "drop a draft (C-c) or close a dialog (Escape) first instead of refusing")
+
+	c.Flags().BoolVar(&fresh, "fresh", false, "start a new conversation, ignoring resume policy")
+	c.Flags().BoolVar(&continueLast, "continue", false, "resume the last known conversation (fail if unknown)")
+	c.MarkFlagsMutuallyExclusive("fresh", "continue")
 
 	return c
 }
@@ -433,36 +470,6 @@ func (a *app) keysCommand() *cobra.Command {
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.withState(func(s *shift.Shift) error { return s.PressKeys(args[0], args[1:]) })
-		},
-	}
-}
-
-func (a *app) attachCommand() *cobra.Command {
-	return &cobra.Command{
-		Use:   "attach <role>",
-		Short: "Attach this terminal to a role (detach with your tmux prefix, then d)",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			s, err := a.newShift()
-			if err != nil {
-				return err
-			}
-
-			if _, err := s.Role(args[0]); err != nil {
-				return err
-			}
-
-			t, err := s.Tmux.(*lazyTmux).client()
-			if err != nil {
-				return err
-			}
-
-			argv := t.AttachArgv(args[0])
-			if fi, _ := os.Stdin.Stat(); fi == nil || fi.Mode()&os.ModeCharDevice == 0 {
-				return fmt.Errorf("no terminal here; run it in one: %s", strings.Join(argv, " "))
-			}
-
-			return syscall.Exec(argv[0], argv, os.Environ())
 		},
 	}
 }

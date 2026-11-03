@@ -223,7 +223,9 @@ type Peer struct {
 	// Direct is what a node tells a peer: it reaches this one itself (only on the wire).
 	Direct bool `json:"direct,omitempty"`
 	// BodyMax is the longest body the peer said it takes in its last hello; 0 for an older zmina, or one not met.
-	BodyMax int `json:"body_max,omitempty"`
+	BodyMax   int  `json:"body_max,omitempty"`
+	ReportsV1 bool `json:"reports_v1,omitempty"`
+	ReportsV2 bool `json:"reports_v2,omitempty"`
 }
 
 // Takes is the longest body the peer takes: what it told, else what an older zmina takes.
@@ -304,6 +306,7 @@ func (n *Node) Unqueue(ids []string) {
 	for _, id := range ids {
 		if ValidID(id) {
 			_ = os.Remove(n.outboxPath(id))
+			_ = n.setPendingError(id, "")
 		}
 	}
 }

@@ -55,12 +55,12 @@ func TestTrimCompactsAnIdleRolePastItsContext(t *testing.T) {
 
 	*f.now = f.now.Add(10 * time.Minute)
 	f.s.Tick()
-	assert.Len(t, f.tm.typed["dispatcher"], 2, "once per pause, even before the next turn shows the new size")
+	assert.Equal(t, 1, compactCount(f.tm.typed["dispatcher"]), "once per pause, even before the next turn shows the new size")
 
 	f.rg.context["sid-dispatcher"] = 40_000
 	*f.now = f.now.Add(time.Hour)
 	f.s.Tick()
-	assert.Len(t, f.tm.typed["dispatcher"], 2, "under the limit")
+	assert.Equal(t, 1, compactCount(f.tm.typed["dispatcher"]), "under the limit")
 }
 
 func TestTrimClearsAndBootsAgainUnlessATaskIsHeld(t *testing.T) {
@@ -184,4 +184,14 @@ func TestTokens(t *testing.T) {
 	assert.Equal(t, "1m", Tokens(1_000_000))
 	assert.Equal(t, "1.2m", Tokens(1_200_000))
 	assert.Equal(t, "900", Tokens(900))
+}
+
+func compactCount(lines []string) int {
+	n := 0
+	for _, line := range lines {
+		if line == "/compact" {
+			n++
+		}
+	}
+	return n
 }

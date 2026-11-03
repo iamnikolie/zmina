@@ -28,7 +28,7 @@ const W = {
   setAside: (n) => n + " set aside by you",
   doneToday: "done today: ", history: "history", historyH: "What happened",
   shift: "shift", kb: "tasks", kbGo: "in progress", kbYou: "waiting on you", kbOthers: "waiting on others", kbLater: "parked", kbNone: "empty", stack: "stack", spread: "spread", moreN: (n) => "+" + n + " more", stackIdle: "stack idle", idleN: (n) => "+" + n + " idle",
-  fullView: "open on the whole screen", close: "close", fvNow: "Now", fvAsked: "Asked", fvLog: "Timeline", fvMove: "Your move",
+  fullView: "open on the whole screen", close: "close", fvNow: "Now", fvAsked: "Asked", fvResult: "Result", fvNoResult: "No result recorded.", fvReported: "Worker report", fvLog: "Timeline", fvMove: "Your move",
   fvDetails: "Details", fvScreen: "Screen", fvHolder: "held by", fvWaits: "waits on", fvProject: "project", fvCrew: "crew",
   fvCreated: "created", fvUpdated: "changed", fvRepo: "repo", fvBranch: "branch", fvWorktree: "worktree", fvLink: "link",
   fvDown: "not up", fvNoScreen: "the session is not up", fvLoading: "…", fvNoLog: "nothing in the log yet", ctxOf: (n, max) => n + " of " + max + " before compact", ctxPast: " · compacts when idle", move: "your move", roDone: "done today", oldest: "oldest · ", nobody: "nobody",
@@ -1266,7 +1266,8 @@ function renderFull() {
   const w = snap.work.find((x) => x.crew === full.crew && x.id === full.id);
   const t = (full.data && full.data.task) || null;
   // A task that changed since it was read is read again.
-  if (w && t && T(w.updated) > T(t.updated) && !full.loading) loadFull();
+  const latest = w || (snap.tasks || []).find((x) => x.crew === full.crew && x.id === full.id);
+  if (latest && t && T(latest.updated) > T(t.updated) && !full.loading) loadFull();
   const title = (w && w.title) || (t && (t.title || t.asked)) || full.id;
   const project = (w && w.project) || (t && t.project);
 
@@ -1287,6 +1288,21 @@ function renderFull() {
   if (now && now !== title) main.append(fvSection(W.fvNow, el("p", "fv-now", now)));
   const asked = (t && t.asked) || (w && w.why);
   if (asked) main.append(fvSection(W.fvAsked, el("p", "fv-asked", asked)));
+  if (full.data && !full.data.error) {
+    const result = full.data.result;
+    const contents = [];
+    if (full.data.result_error) contents.push(el("p", "fv-asked", full.data.result_error));
+    else if (!result) contents.push(el("p", "fv-asked", W.fvNoResult));
+    else {
+      contents.push(el("p", "fv-asked", W.fvReported + " · " + result.role + " · " + when(result.at)));
+      for (const section of result.shape.sections) {
+        const label = section.name.replaceAll("_", " ").replaceAll("-", " ");
+        contents.push(el("h4", "fv-l", label.charAt(0).toUpperCase() + label.slice(1)),
+          el("p", "fv-asked", result.values[section.name] || "—"));
+      }
+    }
+    main.append(fvSection(W.fvResult, ...contents));
+  }
   const log = el("ol", "fv-log");
   if (!full.data) log.append(el("li", "fv-none", W.fvLoading));
   else if (full.data.error) log.append(el("li", "fv-none", full.data.error));
@@ -1317,6 +1333,7 @@ function renderFull() {
   const r = roleOf(full.crew, role);
   const rs = !r ? "" : r.state !== "up" ? W.fvDown : (r.status === "busy" ? W.working : W.free) + (zero(r.since) ? "" : " · " + ago(r.since));
   fact(W.fvHolder, [who(full.crew, role), rs].filter(Boolean).join(" · "));
+  if (t && t.delivery) fact("Handoff", t.delivery.accepted_at ? "Accepted" : t.delivery.sent_at ? "Sent, awaiting acceptance" : "Queued, awaiting acceptance");
   fact(W.fvWaits, (w && w.on) || (t && t.on));
   fact(W.fvProject, project);
   fact(W.fvCost, full.data && full.data.cost);

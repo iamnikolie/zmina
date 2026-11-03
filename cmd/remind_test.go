@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,8 +12,32 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/iamnikolie/zmina/internal/alarm"
 	"github.com/iamnikolie/zmina/internal/crew"
 )
+
+func TestSleepNoteFromStdinAppearsInRemindLs(t *testing.T) {
+	crewFile := testCrew(t, "  designer:\n")
+	var out, errb bytes.Buffer
+	root := NewRoot(&out, &errb)
+	root.SetIn(strings.NewReader("Finish the review.\nThen check the tests.\n"))
+	root.SetArgs([]string{"--crew", crewFile, "sleep", "designer", "--until", "+1h", "--note", "-"})
+	require.NoError(t, root.Execute())
+
+	for _, args := range [][]string{{"remind", "ls"}, {"remind", "ls", "--all"}} {
+		text, _, err := zm(t, crewFile, args...)
+		require.NoError(t, err)
+		assert.Contains(t, text, "Finish the review. Then check the tests.")
+		assert.NotContains(t, text, "you were put to sleep")
+	}
+	text, _, err := zm(t, crewFile, "remind", "ls", "--json")
+	require.NoError(t, err)
+	var list []alarm.Alarm
+	require.NoError(t, json.Unmarshal([]byte(text), &list))
+	require.Len(t, list, 1)
+	assert.Equal(t, "Finish the review.\nThen check the tests.", list[0].Note)
+	assert.Contains(t, list[0].Text, "you were put to sleep", "JSON preserves the stored fields")
+}
 
 // due moves an alarm into the past, as if its time had come while nobody looked.
 func due(t *testing.T, crewFile, id string) {
@@ -129,7 +155,7 @@ func TestRoleAlarmAndSleep(t *testing.T) {
 		out, _, _ := zm(t, crewFile, "peek", "designer")
 
 		return strings.Contains(out, "❯")
-	}, 5*time.Second, 100*time.Millisecond)
+	}, 15*time.Second, 100*time.Millisecond)
 
 	out, _, err = zm(t, crewFile, "sleep", "designer", "--until", "+1h")
 	require.NoError(t, err)

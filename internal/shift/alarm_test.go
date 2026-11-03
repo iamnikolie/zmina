@@ -153,6 +153,20 @@ func TestSleepKeepsTheTasksAndWakesOnTheLastConversation(t *testing.T) {
 	assert.Empty(t, al.Pending())
 }
 
+func TestManualWakeResumesSleepingRole(t *testing.T) {
+	f, al, _ := alarmed(t)
+	require.NoError(t, f.s.Up("designer"))
+	f.status("designer", "idle", *f.now)
+	_, _, err := f.s.Sleep("designer", f.now.Add(time.Hour), "+1h", "finish the review", DownOptions{})
+	require.NoError(t, err)
+	require.NoError(t, f.s.FinishDown("designer"))
+
+	require.NoError(t, f.s.Up("designer"))
+	assert.Contains(t, strings.Join(f.tm.argv["designer"], " "), "--resume sid-designer")
+	assert.Equal(t, "sid-designer", f.s.State.Role("designer").LastSession)
+	assert.Len(t, al.Pending(), 1, "waking early leaves the alarm's note scheduled")
+}
+
 func TestLaterAlarmBringsTheItemBack(t *testing.T) {
 	f, al, _ := alarmed(t)
 	f.lt.list = []later.Item{{ID: "L-1", State: later.Parked, Text: "the one-pager"},

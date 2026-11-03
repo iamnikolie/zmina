@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -15,7 +16,7 @@ const (
 	// dialog (trust this folder, a permission), a login, a screen claude could not draw.
 	blockedAfter = 3 * time.Minute
 	// confirmAfter is how long a typed line has to show that it landed — the role's status changes when it takes
-	// a line — before it is pressed again or typed again.
+	// a line — before its own remaining draft gets Enter again.
 	confirmAfter = 90 * time.Second
 	// excerptMax caps the screen lines a note quotes.
 	excerptMax = 240
@@ -31,6 +32,12 @@ func (s *Shift) watchScreen(name string, now time.Time) []string {
 	rs := s.State.Role(name)
 
 	_, ok, err := s.Tmux.Prompt(name)
+	if s.isCodex(name) {
+		// The bridge hides its input line during normal work. Only a structured
+		// waiting status proves that an approval or question blocks the turn.
+		sess := s.session(name)
+		ok, err = sess == nil || sess.Status != "waiting", nil
+	}
 	if err == nil && !ok && !s.isCodex(name) && s.trust(name) {
 		// Answered at once: the boot goes on.
 		return nil
@@ -38,7 +45,7 @@ func (s *Shift) watchScreen(name string, now time.Time) []string {
 
 	// What the role says it is doing, also while it boots.
 	if text, err := s.Tmux.Capture(name, nowLines); err == nil {
-		if line := NowLine(text); line != rs.Now {
+		if line := NowLine(text); line != "" && line != rs.Now {
 			rs.Now, rs.NowAt = line, now
 		}
 	}
@@ -229,9 +236,9 @@ func clip(s string) string {
 
 // landed reports whether the line typed into a role last has landed, so the next may be typed. A line still in the
 // role's input line has not, whatever its status says (a message through Remote Control moves the status too): after
-// confirmAfter it gets Enter again. One gone from the input line has landed once the status moved; else after
-// confirmAfter it is typed again while the role is at its prompt. After typeTries it is kept as failed and, if it
-// still sits in the input line, cleared from it: a line zmina typed is sent or not left there.
+// confirmAfter it gets Enter again. An empty input without an observed status change is ambiguous: keep the
+// line as failed for inspection instead of replaying a possibly accepted request. After typeTries a remaining
+// own draft is cleared and kept as failed.
 func (s *Shift) landed(name string, now time.Time) bool {
 	rs := s.State.Role(name)
 	if rs.Sent == nil {
@@ -256,34 +263,46 @@ func (s *Shift) landed(name string, now time.Time) bool {
 
 	sent.Tries++
 
-	if sent.Tries >= typeTries {
+	reason := "typed, never taken"
+	if !unsent {
+		reason = "typed, acceptance unconfirmed; inspect before retry"
+	}
+	if !unsent || sent.Tries >= typeTries {
 		if unsent {
 			s.clearInput(name, sent.Line)
 		}
 
-		rs.Failed = append(rs.Failed, Failed{Line: sent.Line, Error: "typed, never taken", At: now})
+		rs.Failed = append(rs.Failed, Failed{Line: sent.Line, Error: reason, At: now})
 		rs.Sent = nil
-		s.log(name, "type-failed", "", "never taken: "+sent.Line)
+		s.log(name, "type-failed", "", reason+": "+sent.Line)
+		s.deliveryFailure(name, sent.Line, reason)
 
 		return true
 	}
 
 	sent.At = now
 
-	if unsent {
-		_ = s.Tmux.Keys(name, "Enter")
-		s.log(name, "pressed-again", "", sent.Line)
-
-		return false
-	}
-
-	if err := s.typeLine(name, sent.Line); err != nil {
-		s.log(name, "type-failed", "", fmt.Sprintf("try %d: %s: %s", sent.Tries, sent.Line, err))
-	} else {
-		s.log(name, "typed-again", "", sent.Line)
-	}
+	_ = s.Tmux.Keys(name, "Enter")
+	s.log(name, "pressed-again", "", sent.Line)
 
 	return false
+}
+
+// deliveryFailure makes a stalled handoff visible without waiting for an idle notice.
+func (s *Shift) deliveryFailure(name, line, reason string) {
+	ids := append([]string(nil), s.held()[name]...)
+	if m := regexp.MustCompile(`\bT-[0-9]+\b`).FindString(line); m != "" && !slices.Contains(ids, m) {
+		ids = append(ids, m)
+	}
+	note := name + ": delivery failed"
+	if len(ids) > 0 {
+		note += " (" + strings.Join(ids, ", ") + ")"
+	}
+	text := note + ": " + reason + "; inspect zmina queue ls"
+	s.addNotes([]string{text})
+	meta := s.State.NoticeMeta[text]
+	meta.Kind, meta.Role, meta.Line = "delivery", name, line
+	s.State.NoticeMeta[text] = meta
 }
 
 const (

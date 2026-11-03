@@ -2,6 +2,7 @@ package mesh
 
 import (
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"io"
@@ -411,4 +412,43 @@ func TestLongBodyAndTheCapInTheHello(t *testing.T) {
 	require.NoError(t, err)
 	_, err = ops.receive([]Envelope{big}, p.inboxes["box-ops"].deliver, time.Now())
 	require.NoError(t, err)
+}
+
+func TestReportCapabilityRequiresSignatureAndLegacyStillConnects(t *testing.T) {
+	for _, advertised := range []bool{false, true} {
+		t.Run(fmt.Sprint(advertised), func(t *testing.T) {
+			owner := newOwner(t, "alpha")
+			clientNode := enroll(t, owner, "beta")
+			client, server := net.Pipe()
+			require.NoError(t, client.SetDeadline(time.Now().Add(5*time.Second)))
+			require.NoError(t, server.SetDeadline(time.Now().Add(5*time.Second)))
+			done := make(chan error, 1)
+			go func() {
+				defer func() { _ = server.Close() }()
+				done <- owner.Serve(server, (&inbox{}).deliver, time.Now)
+			}()
+			c := newConn(client)
+			challenge, err := nonce()
+			require.NoError(t, err)
+			require.NoError(t, c.send(wire{Op: "hello", V: protocolVersion, Cert: &clientNode.Cert, Nonce: challenge, BodyMax: BodyMax, ReportsV1: advertised}))
+			hi, err := c.expect("hello")
+			require.NoError(t, err)
+			// Correct ordinary authentication must not authorize an unsigned capability.
+			require.NoError(t, c.send(wire{Op: "auth", Sig: ed25519.Sign(clientNode.Key, helloMessage("client", hi.Nonce))}))
+			_, err = c.expect("ok")
+			if advertised {
+				require.ErrorContains(t, err, "unauthenticated reports_v1")
+			} else {
+				require.NoError(t, err)
+				require.NoError(t, c.send(wire{Op: "bye"}))
+			}
+			require.NoError(t, client.Close())
+			serveErr := <-done
+			if advertised {
+				require.Error(t, serveErr)
+			} else {
+				require.NoError(t, serveErr)
+			}
+		})
+	}
 }

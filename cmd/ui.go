@@ -29,6 +29,7 @@ import (
 	"github.com/iamnikolie/zmina/internal/events"
 	"github.com/iamnikolie/zmina/internal/later"
 	"github.com/iamnikolie/zmina/internal/ledger"
+	"github.com/iamnikolie/zmina/internal/record"
 	"github.com/iamnikolie/zmina/internal/shift"
 	"github.com/iamnikolie/zmina/internal/task"
 	"github.com/iamnikolie/zmina/internal/ui"
@@ -276,8 +277,10 @@ func (a *app) uiHandler(bound string, loopback bool, token string, allowHosts ..
 	})
 	mux.HandleFunc("GET /api/task", func(w http.ResponseWriter, r *http.Request) {
 		var out struct {
-			Task task.Task      `json:"task"`
-			Log  []events.Event `json:"log"`
+			Task        task.Task        `json:"task"`
+			Result      *record.Document `json:"result,omitempty"`
+			ResultError string           `json:"result_error,omitempty"`
+			Log         []events.Event   `json:"log"`
 			// Cost is the task's cost line (task show's, without its word), empty when no turn is found.
 			Cost string `json:"cost"`
 		}
@@ -291,6 +294,14 @@ func (a *app) uiHandler(bound string, loopback bool, token string, allowHosts ..
 				}
 
 				out.Task = t
+				if t.Result != nil {
+					d, err := record.Load(s.Crew.StateDir(), "result", t.ID, t.Result.Revision)
+					if err != nil {
+						out.ResultError = "Result unavailable: " + err.Error()
+					} else {
+						out.Result = &d
+					}
+				}
 				out.Log, _ = eventLog(s.Crew).Read(events.Filter{Task: t.ID, Last: 50})
 
 				if line := c.taskCost(t, s); !strings.HasSuffix(line, noTurns) {

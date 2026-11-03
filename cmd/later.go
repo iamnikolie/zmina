@@ -226,6 +226,10 @@ func (a *app) laterTakeCommand() *cobra.Command {
 					return err
 				}
 
+				t.Checkpoint, t.HandoffIncomplete, t.Conversations = it.Checkpoint, it.Incomplete, it.Conversations
+				if err := s.Tasks.Put(t); err != nil {
+					return err
+				}
 				it.State, it.Task, it.Updated = later.Taken, t.ID, s.Now()
 				if err := store.Put(it); err != nil {
 					return fmt.Errorf("%s recorded, but %s is still parked: %w", t.ID, it.ID, err)
@@ -249,14 +253,10 @@ func (a *app) laterTakeCommand() *cobra.Command {
 						return fmt.Errorf("%s recorded, but %s did not start on its conversation: %w", t.ID, role, err)
 					}
 
-					// The resumed conversation knows the work, not the task's new id.
-					if err := s.Queue(role, "[zmina "+t.ID+"] back from "+it.ID+": "+it.Text); err != nil {
-						fmt.Fprintln(a.out)
-
-						return err
-					}
-
 					fmt.Fprintf(a.out, " · %s up on %s", role, it.Session)
+				}
+				if _, err := s.HandTask(role, t); err != nil {
+					return err
 				}
 
 				fmt.Fprintln(a.out)

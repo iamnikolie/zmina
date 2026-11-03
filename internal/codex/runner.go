@@ -330,7 +330,7 @@ func (r *runner) handle(m message) error {
 		method := r.pending[id]
 		delete(r.pending, id)
 		if len(m.Error) > 0 && string(m.Error) != "null" {
-			return fmt.Errorf("codex %s: %s", method, m.Error)
+			return r.rpcError(method, m.Error)
 		}
 		switch method {
 		case "initialize":

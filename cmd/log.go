@@ -54,7 +54,7 @@ func (a *app) logCommand() *cobra.Command {
 				}
 
 				for _, e := range evs {
-					line := e.TS.Format(time.DateTime) + "  " + dash(e.Role) + "  " + e.Event
+					line := e.TS.Local().Format(time.DateTime) + "  " + dash(e.Role) + "  " + e.Event
 					if e.Task != "" {
 						line += " " + e.Task
 					}

@@ -88,7 +88,12 @@ func (s *Shift) release(name string, r *crew.Role, now time.Time) (did, note str
 		}
 
 		rs.Releasing, rs.ReleaseTasks = now, ids
-		rs.Inbox = append(rs.Inbox, releaseLine(idle, ids))
+		request, err := s.releaseCheckpointRequest(name, mine)
+		if err != nil {
+			request = releaseLine(idle, ids)
+			s.addNotes([]string{name + ": checkpoint request unavailable: " + err.Error() + "; checkpoint freshness will be checked at release"})
+		}
+		rs.Inbox = append(rs.Inbox, request)
 		s.log(name, "releasing", strings.Join(ids, ","), "idle "+idleFor(idle))
 
 		return fmt.Sprintf("%s: idle %s, released; asked to park %s", name, idleFor(idle), strings.Join(ids, ", ")), ""
@@ -111,8 +116,14 @@ func (s *Shift) release(name string, r *crew.Role, now time.Time) (did, note str
 
 	for _, t := range mine {
 		text := t.Headline()
+		if t.Checkpoint != nil {
+			text += "; checkpoint " + t.Checkpoint.Revision + " (worker-reported)"
+		}
+		if !s.checkpointCurrent(t) {
+			text += "; handoff incomplete: checkpoint missing, stale or unavailable"
+		}
 		if rs.Now != "" {
-			text += "; last: " + rs.Now
+			text += "; last observed status: " + rs.Now
 		}
 
 		if _, err := s.Park(t, text); err != nil {
@@ -209,8 +220,17 @@ func (s *Shift) Park(t task.Task, text string) (later.Item, error) {
 
 	now := s.Now()
 
-	it, err := s.Later.Add(later.Item{Text: text, Note: "from " + t.ID + " (" + t.Role + ")", From: t.ID,
-		Role: t.Role, Session: s.sessionOf(t.Role), By: s.By}, now)
+	session := s.sessionOf(t.Role)
+	current, err := s.Tasks.Get(t.ID)
+	if err != nil {
+		return later.Item{}, err
+	}
+	t = current
+	if !s.State.Role(t.Role).Releasing.IsZero() {
+		t.HandoffIncomplete = !s.checkpointCurrent(t)
+	}
+	it, err := s.Later.Add(later.Item{Checkpoint: t.Checkpoint, Incomplete: t.HandoffIncomplete, Conversations: t.Conversations, Text: text, Note: "from " + t.ID + " (" + t.Role + ")", From: t.ID,
+		Role: t.Role, Session: session, By: s.By}, now)
 	if err != nil {
 		return it, err
 	}

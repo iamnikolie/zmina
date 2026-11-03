@@ -13,6 +13,7 @@ import (
 	"github.com/iamnikolie/zmina/internal/ledger"
 	"github.com/iamnikolie/zmina/internal/shift"
 	"github.com/iamnikolie/zmina/internal/task"
+	"github.com/iamnikolie/zmina/internal/tmux"
 )
 
 func (a *app) taskCommand() *cobra.Command {
@@ -23,7 +24,7 @@ func (a *app) taskCommand() *cobra.Command {
 
 	c.AddCommand(a.taskNewCommand(), a.taskLsCommand(), a.taskShowCommand(), a.taskSetCommand(),
 		a.taskCloseCommand("done", task.Done), a.taskCloseCommand("drop", task.Dropped), a.taskParkCommand(),
-		a.taskGCCommand())
+		a.taskGCCommand(), a.taskHandoffCommand(), a.taskRecordCommand("result"), a.taskRecordCommand("checkpoint"), a.taskAcceptCommand())
 
 	return c
 }
@@ -44,11 +45,26 @@ func (a *app) taskNewCommand() *cobra.Command {
 					return err
 				}
 
+				pane, err := s.Tmux.Probe(args[0])
+				if err != nil {
+					return err
+				}
+
 				n.Role, n.Asked, n.By = args[0], strings.Join(args[1:], " "), s.By
 
 				t, err := a.ledger(s).New(n)
 				if err != nil {
 					return err
+				}
+
+				if pane.State == tmux.Up {
+					if _, err := s.HandTask(t.Role, t); err != nil {
+						return fmt.Errorf("%s recorded, but handoff failed: %w", t.ID, err)
+					}
+					t, err = s.Tasks.Get(t.ID)
+					if err != nil {
+						return err
+					}
 				}
 
 				if asJSON {
@@ -164,7 +180,7 @@ func (a *app) taskShowCommand() *cobra.Command {
 				}
 
 				fmt.Fprintf(a.out, "%s · %s · %s · by %s · %s\n", t.ID, t.Role, t.Status(), dash(t.By),
-					t.Created.Format(time.DateTime))
+					t.Created.Local().Format(time.DateTime))
 				if t.Title != "" {
 					fmt.Fprintln(a.out, "title:", t.Title)
 				}
@@ -191,11 +207,28 @@ func (a *app) taskShowCommand() *cobra.Command {
 					fmt.Fprintln(a.out, "note:", t.Note)
 				}
 
+				if t.Delivery != nil {
+					fmt.Fprintf(a.out, "handoff: %s · %s\n", t.Delivery.ID, t.Delivery.Status())
+				}
+				if t.Checkpoint != nil {
+					if err := a.printTaskRecord(s, t, "checkpoint", t.Checkpoint.Revision); err != nil {
+						return err
+					}
+				}
+				if t.HandoffIncomplete {
+					fmt.Fprintln(a.out, "handoff: incomplete; checkpoint missing, stale or unavailable")
+				}
+				if t.Result != nil {
+					if err := a.printTaskRecord(s, t, "result", t.Result.Revision); err != nil {
+						return err
+					}
+				}
+
 				fmt.Fprintln(a.out, a.taskCost(t, s))
 
 				evs, _ := eventLog(s.Crew).Read(events.Filter{Task: t.ID, Last: 20})
 				for _, e := range evs {
-					fmt.Fprintf(a.out, "  %s  %s  %s  %s\n", e.TS.Format(time.DateTime), e.By, e.Event, e.Detail)
+					fmt.Fprintf(a.out, "  %s  %s  %s  %s\n", e.TS.Local().Format(time.DateTime), e.By, e.Event, e.Detail)
 				}
 
 				return nil
@@ -260,12 +293,24 @@ func (a *app) taskSetCommand() *cobra.Command {
 
 func (a *app) taskCloseCommand(use string, st task.State) *cobra.Command {
 	var o taskChange
+	var resultFile string
 
 	c := &cobra.Command{
 		Use:   use + " <id>",
 		Short: "Close a task as " + string(st) + " (refuses a worktree with uncommitted changes without --force)",
 		Args:  cobra.ExactArgs(1),
-		RunE:  func(cmd *cobra.Command, args []string) error { return a.setTask(args[0], st, o) },
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if resultFile != "" {
+				if err := a.saveRecordFile(args[0], "result", resultFile, cmd); err != nil {
+					return err
+				}
+			}
+			return a.setTask(args[0], st, o)
+		},
+	}
+
+	if st == task.Done {
+		c.Flags().StringVar(&resultFile, "result", "", "save a role-shaped JSON result before closing (file or -)")
 	}
 
 	o.flags(c, false)
@@ -330,6 +375,11 @@ func (a *app) setTask(id string, st task.State, o taskChange) error {
 			return err
 		}
 
+		if o.role != "" && t.State.Active() {
+			if _, err := s.HandTask(t.Role, t); err != nil {
+				return err
+			}
+		}
 		fmt.Fprintf(a.out, "%s · %s · %s\n", t.ID, t.Role, t.Status())
 
 		if st != "" && !st.Active() {
