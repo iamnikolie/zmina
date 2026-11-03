@@ -955,8 +955,8 @@ alone for the beat — never taken as ended; a role being put down is left alone
 5. Watches that are due run (their sources outside the lock), and their news joins the notes.
 6. A role is **booted** once the conversation of this start shows its boot turn over (a turn that
    ended after the start: a resumed conversation's old turns do not count), or once it has been up
-   `boot_grace`, whichever comes first; so its first line goes at the first beat after it read its
-   boot, not minutes later. When the dispatcher is booted and idle, the waiting signals and notes go to it (posted to its
+   `boot_grace`, whichever comes first, and stays booted until its next start (the turn its first line
+   starts is not a boot); so its first line goes at the first beat after it read its boot, not minutes later. When the dispatcher is booted and idle, the waiting signals and notes go to it (posted to its
    own channel, see Delivery, else typed) as one line: `[zmina] mr-watch: !35 … · designer: ended · director: busy for 95 min on
    T-3`. Then each other role that is booted and idle gets its first queued line; a line
    tmux refuses is tried three beats, then kept as failed (`zmina queue`). A typed line is sent or not left

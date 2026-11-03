@@ -57,10 +57,13 @@ func TestLifecycleAndSettings(t *testing.T) {
 	last, err := r.o.Registry.Last(sess.SessionID)
 	require.NoError(t, err)
 	assert.True(t, last.Ended)
+	assert.False(t, last.At.IsZero(), "a turn's end carries its time: the boot is over once one ended after the start")
+	assert.WithinDuration(t, time.Now(), last.At, time.Minute)
 	assert.Equal(t, 123, last.Context)
 	require.NoError(t, r.input("next message"))
 	assert.Equal(t, "busy", r.rec.Status)
 	assert.False(t, r.rec.Turn.Ended)
+	assert.True(t, r.rec.Turn.At.IsZero(), "a new turn clears the time of the last end")
 }
 func TestApprovalNeverConsumesQueuedWork(t *testing.T) {
 	r, wire, out := testRunner(t)

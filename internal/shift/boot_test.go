@@ -97,3 +97,37 @@ func TestBootDialogIsToldAtOnce(t *testing.T) {
 	*f.now = start.Add(16 * time.Minute)
 	assert.True(t, strings.Contains(strings.Join(f.s.watchScreen("designer", *f.now), "|"), "no input line on its screen"))
 }
+
+// Once its boot turn was seen over, a role stays booted for this start: the turn its first line starts is not a
+// boot, so a question in that turn is told as a stuck prompt after blockedAfter, never as a dialog holding the boot.
+func TestBootStaysOverOnceSeen(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	require.NoError(t, f.s.Up("designer"))
+	start := *f.now
+	require.NoError(t, f.s.Queue("designer", "[dispatcher] T-1 packet"))
+	f.status("designer", "idle", start)
+
+	f.rg.endedAt["sid-designer"] = start.Add(25 * time.Second)
+	*f.now = start.Add(30 * time.Second)
+	f.s.Tick()
+	require.Equal(t, []string{"[dispatcher] T-1 packet"}, f.tm.typed["designer"])
+
+	// The packet's turn runs and stops on a question: not over, no input line.
+	delete(f.rg.endedAt, "sid-designer")
+	f.status("designer", "waiting", *f.now)
+	f.tm.drafts["designer"] = "-"
+	f.tm.screen = "Which branch?\n❯ 1. main\n  2. dev"
+
+	*f.now = start.Add(time.Minute)
+	assert.True(t, f.s.booted("designer", *f.now))
+	assert.Empty(t, f.s.watchScreen("designer", *f.now), "not a dialog holding the boot")
+
+	*f.now = start.Add(5 * time.Minute)
+	assert.Contains(t, strings.Join(f.s.watchScreen("designer", *f.now), "|"), "no input line on its screen for 4 min")
+
+	// The next start boots again.
+	require.NoError(t, f.s.Down("designer", DownOptions{Clear: true}))
+	require.NoError(t, f.s.Up("designer"))
+	assert.Zero(t, f.s.State.Role("designer").Booted)
+	assert.False(t, f.s.booted("designer", *f.now))
+}

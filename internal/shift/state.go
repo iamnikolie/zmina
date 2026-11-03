@@ -84,6 +84,9 @@ type RoleState struct {
 	Up bool `json:"up,omitempty"`
 	// Started is when zmina last started (or tried to start) it.
 	Started time.Time `json:"started,omitzero"`
+	// Booted is when this start's boot turn was seen over: once set, the role stays booted until its next start,
+	// whatever its later turns are doing.
+	Booted time.Time `json:"booted,omitzero"`
 	// StuckAt and IdleAt are the busy and idle stretches (their statusUpdatedAt) already reported.
 	StuckAt int64 `json:"stuck_at,omitempty"`
 	IdleAt  int64 `json:"idle_at,omitempty"`
