@@ -180,12 +180,18 @@ func postable(line string) bool { return !strings.HasPrefix(strings.TrimSpace(li
 // unavailable reports a post that never started.
 func unavailable(err error) bool { return errors.Is(err, peer.ErrUnavailable) }
 
-// TurnOver reports whether a role's session is the one a Stop hook ran for and its turn is over (status idle), so a
-// line posted now starts a turn of its own.
+// TurnOver reports whether a role's session is the one a Stop hook ran for and its turn is over: status idle and
+// the transcript showing the turn closed. Claude Code reports idle while its Stop hooks run, before the turn's last
+// lines reach the transcript; read then, a boot turn looks unfinished and its first line would wait for the beat.
 func (s *Shift) TurnOver(name, sessionID string) bool {
 	sess := s.session(name)
+	if sess == nil || sess.SessionID != sessionID || sess.Status != "idle" {
+		return false
+	}
 
-	return sess != nil && sess.SessionID == sessionID && sess.Status == "idle"
+	turn, err := s.registryFor(name).Last(sessionID)
+
+	return err == nil && turn.Ended
 }
 
 // TurnEnd posts what waits for a role whose turn just ended (its Stop hook), the way a beat would post it: only to
