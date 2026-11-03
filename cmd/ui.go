@@ -74,10 +74,23 @@ func (a *app) uiCommand() *cobra.Command {
 					"it needs --token (or $ZMINA_UI_TOKEN) there", addr)
 			}
 
+			// One cockpit per machine: plain zmina ui opens the one that runs, wherever it listens.
+			if !cmd.Flags().Changed("addr") {
+				if url, ok := runningCockpit(); ok {
+					fmt.Fprintln(a.out, "zmina ui already runs on", strings.SplitN(url, "?", 2)[0])
+
+					if !noOpen {
+						openBrowser(url)
+					}
+
+					return nil
+				}
+			}
+
 			ln, err := net.Listen("tcp", addr)
 			if err != nil {
 				// One page for every crew: a second zmina ui opens the one that runs.
-				if url := runningUI(addr, loopback, token); url != "" {
+				if url := runningUI(addr, token); url != "" {
 					fmt.Fprintln(a.out, "zmina ui already runs on", url)
 
 					if !noOpen {
@@ -90,18 +103,26 @@ func (a *app) uiCommand() *cobra.Command {
 				return err
 			}
 
+			a.uiLogins = newUILogins()
 			srv := &http.Server{Handler: a.uiHandler(ln.Addr().String(), loopback, token, allowHosts...),
 				ReadHeaderTimeout: 10 * time.Second}
 
 			url := "http://" + ln.Addr().String() + "/"
-			if !loopback {
-				url += "?token=" + token
+
+			if err := writeUIState(url, a.uiLogins); err != nil {
+				fmt.Fprintln(a.err, "zmina: warning: a second zmina ui will not find this one:", err)
 			}
+			defer dropUIState()
 
 			fmt.Fprintln(a.out, "zmina ui on", url, "(Ctrl-C stops it)")
 
 			if !noOpen {
-				openBrowser(url)
+				open := url
+				if token != "" {
+					open += "?login=" + a.uiLogins.code()
+				}
+
+				openBrowser(open)
 			}
 
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
@@ -144,11 +165,9 @@ func isLoopback(host string) bool {
 }
 
 // runningUI is the page's address when a zmina ui already answers on addr, else empty.
-func runningUI(addr string, loopback bool, token string) string {
+func runningUI(addr, token string) string {
+	// The token never goes into the address opened: a browser signed in has the cookie, another signs in once.
 	url := "http://" + addr + "/"
-	if !loopback {
-		url += "?token=" + token
-	}
 
 	client := http.Client{Timeout: 2 * time.Second}
 
@@ -406,7 +425,7 @@ func (a *app) uiHandler(bound string, loopback bool, token string, allowHosts ..
 		writeJSON(w, map[string]string{"done": line})
 	})
 
-	return guard(mux, bound, loopback, token, allowHosts...)
+	return guardLogins(mux, bound, loopback, token, a.uiLogins, allowHosts...)
 }
 
 // alarmAction is the page's set, move and off; the caller holds the lock. set is a reminder for the owner, or for a
@@ -472,6 +491,13 @@ func (a *app) takeBack(s *shift.Shift, id string) (string, error) {
 // one of them. A write must carry X-Zmina, which a cross-site form or fetch cannot send without a preflight this
 // server never answers.
 func guard(next http.Handler, bound string, loopback bool, token string, allowHosts ...string) http.Handler {
+	return guardLogins(next, bound, loopback, token, nil, allowHosts...)
+}
+
+// guardLogins is guard that also takes one-time login codes (?login=) and hands them out to a second zmina ui
+// that shows the handoff secret (POST /api/handoff), when logins is set.
+func guardLogins(next http.Handler, bound string, loopback bool, token string, logins *uiLogins,
+	allowHosts ...string) http.Handler {
 	_, port, _ := net.SplitHostPort(bound)
 	hosts := map[string]bool{bound: true, "localhost:" + port: true, "127.0.0.1:" + port: true, "[::1]:" + port: true}
 	if token != "" {
@@ -484,6 +510,10 @@ func guard(next http.Handler, bound string, loopback bool, token string, allowHo
 		if loopback && !hosts[r.Host] {
 			http.Error(w, "unknown host", http.StatusForbidden)
 
+			return
+		}
+
+		if serveLogin(w, r, logins, token, allowHosts) {
 			return
 		}
 
@@ -505,10 +535,7 @@ func guard(next http.Handler, bound string, loopback bool, token string, allowHo
 
 			page := r.Method == http.MethodGet && (r.URL.Path == "/" || strings.HasSuffix(r.URL.Path, ".html"))
 			if r.URL.Query().Get("token") != "" || page {
-				const lifetime = 90 * 24 * time.Hour
-				http.SetCookie(w, &http.Cookie{Name: uiCookie, Value: token, Path: "/", HttpOnly: true,
-					MaxAge: int(lifetime / time.Second), Expires: time.Now().Add(lifetime).UTC(),
-					Secure: secureUIRequest(r, allowHosts), SameSite: http.SameSiteStrictMode})
+				setUICookie(w, r, token, allowHosts)
 			}
 		}
 
@@ -524,6 +551,14 @@ func guard(next http.Handler, bound string, loopback bool, token string, allowHo
 			"img-src 'self' data:; frame-ancestors 'none'")
 		next.ServeHTTP(w, r)
 	})
+}
+
+// setUICookie signs the browser in for 90 days (renewed on every page load).
+func setUICookie(w http.ResponseWriter, r *http.Request, token string, allowHosts []string) {
+	const lifetime = 90 * 24 * time.Hour
+	http.SetCookie(w, &http.Cookie{Name: uiCookie, Value: token, Path: "/", HttpOnly: true,
+		MaxAge: int(lifetime / time.Second), Expires: time.Now().Add(lifetime).UTC(),
+		Secure: secureUIRequest(r, allowHosts), SameSite: http.SameSiteStrictMode})
 }
 
 // Forwarded TLS is trusted only from a local proxy using an explicitly allowed
