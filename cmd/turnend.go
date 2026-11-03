@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"io"
 	"os/exec"
 	"syscall"
 	"time"
@@ -42,7 +43,14 @@ func (a *app) turnEndCommand() *cobra.Command {
 				return nil
 			}
 
-			sid := readHook(cmd.InOrStdin()).SessionID
+			in := cmd.InOrStdin()
+			sid := readHook(in).SessionID
+
+			// Whatever is left is read too, so Claude Code never writes into a closed pipe.
+			if piped(in) {
+				_, _ = io.Copy(io.Discard, in)
+			}
+
 			if role == "" || sid == "" {
 				return nil
 			}

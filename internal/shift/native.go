@@ -206,6 +206,10 @@ func (s *Shift) TurnEnd(name, sessionID string) []string {
 		}
 	}
 
+	// Pruned first, as deliverInbox prunes: an obsolete task packet must not leave a slash command at the head
+	// for deliverInbox to type.
+	s.pruneTaskInbox(name)
+
 	rs := s.State.Role(name)
 	if rs.Sent != nil || len(rs.Inbox) == 0 || !postable(rs.Inbox[0]) {
 		return nil

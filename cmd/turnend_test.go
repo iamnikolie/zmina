@@ -47,6 +47,26 @@ func TestTurnEndHookIsSilent(t *testing.T) {
 	}
 }
 
+// A Stop input of any length is read whole: a long last reply neither hides the session id nor is left unread.
+func TestTurnEndHookReadsALongInput(t *testing.T) {
+	crewFile := testCrew(t, "")
+	reply := strings.Repeat("x", 300<<10)
+	in := strings.NewReader(`{"hook_event_name":"Stop","last_assistant_message":"` + reply + `","session_id":"s-1"}` + "\n")
+
+	var out, errb bytes.Buffer
+
+	var spawned []string
+
+	root := newRoot(&app{out: &out, err: &errb, spawn: func(args []string) error { spawned = args; return nil }})
+	root.SetIn(in)
+	root.SetArgs([]string{"--crew", crewFile, "_turn-end", "--role", "dev"})
+	require.NoError(t, root.Execute())
+
+	assert.Equal(t, []string{"--crew", crewFile, "_turn-end", "--role", "dev", "--session", "s-1", "--wait"}, spawned)
+	assert.Zero(t, in.Len(), "stdin read to its end")
+	assert.Empty(t, out.String()+errb.String())
+}
+
 // The detached copy gives up silently when the role's session is not the one the hook ran for.
 func TestTurnEndWaitForAnotherSessionPostsNothing(t *testing.T) {
 	crewFile := testCrew(t, "")

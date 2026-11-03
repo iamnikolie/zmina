@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/iamnikolie/zmina/internal/crew"
+	"github.com/iamnikolie/zmina/internal/task"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -47,6 +48,25 @@ func TestTurnEndPostsWhatABeatWould(t *testing.T) {
 	f.s.State.Role("designer").Inbox = []string{"/compact"}
 	assert.Empty(t, f.s.TurnEnd("designer", "sid-designer"), "a slash command is typed by the beat")
 	assert.Empty(t, f.tm.typed["designer"], "nothing typed")
+}
+
+// An obsolete task packet pruned from the head never leaves a slash command for the turn's end to type.
+func TestTurnEndTypesNoSlashCommandBehindAPrunedPacket(t *testing.T) {
+	f, p := nativeFixture(t, crewYAML)
+	require.NoError(t, f.s.Up("designer"))
+	start := *f.now
+	f.status("designer", "idle", start)
+	f.rg.endedAt["sid-designer"] = start.Add(5 * time.Second)
+	*f.now = start.Add(10 * time.Second)
+
+	f.tk.list = []task.Task{{ID: "T-1", Role: "designer", State: task.Done}}
+	rs := f.s.State.Role("designer")
+	rs.Inbox = []string{"[zmina T-1] Read handoff packet t-1.json; before work run: zmina task accept T-1", "/compact"}
+
+	assert.Empty(t, f.s.TurnEnd("designer", "sid-designer"))
+	assert.Empty(t, f.tm.typed["designer"], "nothing typed")
+	assert.Empty(t, p.posted["sid-designer"])
+	assert.Equal(t, []string{"/compact"}, rs.Inbox, "the slash command waits for the beat")
 }
 
 // A role whose lines are typed gets nothing at a turn's end: typing waits for the beat.

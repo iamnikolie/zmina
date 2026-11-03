@@ -137,19 +137,30 @@ type hookInput struct {
 	SessionID string `json:"session_id"`
 }
 
-// readHook reads a hook's input: empty when run by hand (a terminal on stdin) or when it is not JSON.
+// readHook reads a hook's input: empty when run by hand (a terminal on stdin) or when it is not JSON. The whole
+// object is read, however long: a Stop hook's carries the turn's last reply (last_assistant_message).
 func readHook(in io.Reader) hookInput {
-	if f, ok := in.(*os.File); ok {
-		if st, err := f.Stat(); err != nil || st.Mode()&os.ModeCharDevice != 0 {
-			return hookInput{}
-		}
+	if !piped(in) {
+		return hookInput{}
 	}
 
 	var hook hookInput
 
-	_ = json.NewDecoder(io.LimitReader(in, 1<<16)).Decode(&hook)
+	_ = json.NewDecoder(in).Decode(&hook)
 
 	return hook
+}
+
+// piped reports whether a reader is not a terminal: a hook's stdin, a pipe or a file.
+func piped(in io.Reader) bool {
+	f, ok := in.(*os.File)
+	if !ok {
+		return true
+	}
+
+	st, err := f.Stat()
+
+	return err == nil && st.Mode()&os.ModeCharDevice == 0
 }
 
 // trimmed reports a session-start source after which the boot line may be gone.
