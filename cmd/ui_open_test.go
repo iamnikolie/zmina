@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -234,4 +235,69 @@ func TestOlderUIPingCarriesNoToken(t *testing.T) {
 	assert.Equal(t, "/api/ping", seen.URL.Path)
 	assert.Empty(t, seen.URL.RawQuery, "no token in the address")
 	assert.Empty(t, runningUI(addr, "wrong"))
+}
+
+// TestNoCredentialFollowsARedirect: the handoff secret and the token go to the address asked and nowhere else. A
+// redirect from there (a proxy, an unrelated service on the port) is not that cockpit's answer: the address it names,
+// on another port or another host name, gets no request, and nothing opens as if signed in.
+func TestNoCredentialFollowsARedirect(t *testing.T) {
+	uiHome(t)
+
+	var reached atomic.Int32
+
+	collect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached.Add(1)
+
+		if r.URL.Path == "/collect/api/ping" {
+			_, _ = io.WriteString(w, "zmina")
+
+			return
+		}
+
+		writeJSON(w, map[string]any{"code": "collected", "login": true})
+	}))
+	t.Cleanup(collect.Close)
+
+	port := collect.URL[strings.LastIndex(collect.URL, ":")+1:]
+	targets := map[string]string{"another port": collect.URL, "another host name": "http://localhost:" + port}
+
+	for name, target := range targets {
+		for _, status := range []int{http.StatusMovedPermanently, http.StatusFound, http.StatusSeeOther,
+			http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+			redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, target+"/collect"+r.URL.Path, status)
+			}))
+			addr := strings.TrimPrefix(redirect.URL, "http://")
+			what := name + " " + http.StatusText(status)
+
+			// Recorded at this address: the handoff secret (and the token) are shown to it alone.
+			l := newUILogins()
+			require.NoError(t, writeUIState(redirect.URL+"/", l))
+
+			_, ok := runningCockpit()
+			assert.False(t, ok, what+": recorded cockpit")
+
+			_, ok = runningCockpitAt(addr, "example-token")
+			assert.False(t, ok, what+": --addr with the token")
+
+			assert.Empty(t, runningUI(addr, "example-token"), what+": older-UI ping")
+
+			// The command: the address is taken, nothing there signs in, so it fails and opens nothing.
+			require.NoError(t, os.Remove(uiStatePath()))
+
+			var opened []string
+			openBrowserWas := openBrowser
+			openBrowser = func(url string) { opened = append(opened, url) }
+
+			root := NewRoot(io.Discard, io.Discard)
+			root.SetArgs([]string{"ui", "--addr", addr, "--token", "example-token"})
+			assert.Error(t, root.Execute(), what+": the command")
+			assert.Empty(t, opened, what+": nothing opened")
+
+			openBrowser = openBrowserWas
+			redirect.Close()
+		}
+	}
+
+	assert.Zero(t, reached.Load(), "the redirect's target got no request")
 }

@@ -194,9 +194,7 @@ func runningUI(addr, token string) string {
 		req.AddCookie(&http.Cookie{Name: uiCookie, Value: token})
 	}
 
-	client := http.Client{Timeout: 2 * time.Second}
-
-	resp, err := client.Do(req)
+	resp, err := uiProbe().Do(req)
 	if err != nil {
 		return ""
 	}

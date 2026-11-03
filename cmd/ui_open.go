@@ -145,6 +145,13 @@ func runningCockpitAt(addr, token string) (string, bool) {
 	return cockpitHandoff(url, secret, token)
 }
 
+// uiProbe is the client for the calls that carry the handoff secret or the token (as the cookie) to a cockpit: it
+// follows no redirect, so neither reaches another address; a 3xx is not that cockpit's answer and fails as one.
+func uiProbe() *http.Client {
+	return &http.Client{Timeout: 2 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+}
+
 func recordedCockpit() (uiRunning, bool) {
 	var r uiRunning
 
@@ -174,9 +181,7 @@ func cockpitHandoff(url, secret, token string) (string, bool) {
 		req.AddCookie(&http.Cookie{Name: uiCookie, Value: token})
 	}
 
-	client := http.Client{Timeout: 2 * time.Second}
-
-	resp, err := client.Do(req)
+	resp, err := uiProbe().Do(req)
 	if err != nil {
 		return "", false
 	}

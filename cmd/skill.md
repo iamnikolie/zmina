@@ -625,7 +625,8 @@ A machine without peers is a mesh of one. It opens the page in the browser.
   shell's history or a process's arguments. With `--addr` it binds that address as before; when a cockpit already
   answers there, it opens that one signed in the same way: the handoff secret goes only to the cockpit `ui.json`
   records at that very address, any other is asked with `--token` (or `$ZMINA_UI_TOKEN`), sent as the page's
-  cookie, never in an address. An older `zmina ui` there, without login codes, opens unsigned: a browser not signed
+  cookie, never in an address. These calls follow no redirect: a 3xx there is not a cockpit, and neither the
+  secret nor the token reaches the address it names. An older `zmina ui` there, without login codes, opens unsigned: a browser not signed
   in uses `?token=` once.
 
 One screen, top to bottom by what a delay costs:
