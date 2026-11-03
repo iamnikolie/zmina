@@ -1076,7 +1076,7 @@ and exists nowhere else. It is written whole (rename) and never over a file zmin
 
 A queued role delivery failure immediately queues a dispatcher health note with the role, related task IDs and reason, even while delivery retries remain. Inspect `zmina queue ls` to recover the line.
 
-Task handoffs from `up --task` queue only a short packet locator. The immutable JSON under `<crew>/handoffs/T-n/<content-hash>.json` preserves the full request, latest Note and checkout metadata; read it before working. Multiline task bodies never pass through terminal input. The packet tells the worker how to report: save the result with `zmina task result T-n --file <json>` (that notifies the dispatcher); a message to the dispatcher besides is one line, the gist and `zmina task result T-n`, never the result again.
+Task handoffs from `up --task` queue only a short packet locator. The immutable JSON under `<crew>/handoffs/T-n/<content-hash>.json` preserves the full request, latest Note and checkout metadata; read it before working. Multiline task bodies never pass through terminal input. The packet tells the worker how to report: save the result with `zmina task result T-n --file <json>` (that notifies the dispatcher with the gist and the command that shows it), and no message of the worker's own about the result besides: it would reach the dispatcher as a second line with its own ack.
 
 ### Role-shaped handoffs
 
