@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"cmp"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -114,7 +115,7 @@ func nextLine(dir string) (*line, string, error) {
 		na, _ := strconv.ParseInt(strings.SplitN(filepath.Base(a), "-", 2)[0], 10, 64)
 		nb, _ := strconv.ParseInt(strings.SplitN(filepath.Base(b), "-", 2)[0], 10, 64)
 
-		return int(na - nb)
+		return cmp.Compare(na, nb)
 	})
 
 	raw, err := os.ReadFile(files[0])
@@ -136,6 +137,12 @@ func nextLine(dir string) (*line, string, error) {
 // take marks a line as started in a turn.
 func take(dir, path, id string) error {
 	if err := os.WriteFile(filepath.Join(dir, "taken", id), nil, 0o600); err != nil {
+		// The turn has started: the line must not start another. Set aside, it is never read again; zmina, seeing
+		// no mark, keeps it as failed after a while, for the owner to look at.
+		if rerr := os.Rename(path, strings.TrimSuffix(path, ".line")+".take-failed"); rerr != nil {
+			return errors.Join(err, rerr)
+		}
+
 		return err
 	}
 

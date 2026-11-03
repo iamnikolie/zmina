@@ -562,8 +562,6 @@ func parseRelease(v string) (time.Duration, error) {
 	return time.Duration(n) * time.Minute, nil
 }
 
-// ownsTools reports whether the role's args already pass --disallowedTools, as crew files before drop_tools did;
-// zmina then adds no second one.
 // ownsSettings reports a role whose args pass their own --settings.
 func (r *Role) ownsSettings() bool {
 	for _, a := range r.Args {
@@ -575,6 +573,8 @@ func (r *Role) ownsSettings() bool {
 	return false
 }
 
+// ownsTools reports whether the role's args already pass --disallowedTools, as crew files before drop_tools did;
+// zmina then adds no second one.
 func (r *Role) ownsTools() bool {
 	for _, a := range r.Args {
 		if strings.HasPrefix(a, "--disallowedTools") || strings.HasPrefix(a, "--disallowed-tools") {

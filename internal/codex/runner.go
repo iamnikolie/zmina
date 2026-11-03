@@ -330,7 +330,18 @@ func (r *runner) drainInbox() error {
 		return err
 	}
 
-	return take(r.rec.Inbox, path, l.ID)
+	// A line that could not be marked taken does not end the bridge: take sets it aside, and if even that failed
+	// the inbox is left alone from here on rather than start the same turn every second.
+	if err := take(r.rec.Inbox, path, l.ID); err != nil {
+		fmt.Fprintln(r.out, "zmina inbox: "+err.Error())
+
+		if _, serr := os.Stat(path); serr == nil {
+			fmt.Fprintln(r.out, "zmina inbox: the line is still there; this bridge reads its inbox no more")
+			r.rec.Inbox = ""
+		}
+	}
+
+	return nil
 }
 
 func (r *runner) startTurn(text string) error {

@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -81,6 +82,29 @@ func TestDrainInboxWaitsForIdle(t *testing.T) {
 	ok, err := Inbox{}.Delivered(r.rec.Inbox, "", id)
 	require.NoError(t, err)
 	assert.True(t, ok)
+}
+
+func TestDrainInboxSurvivesAFailedTake(t *testing.T) {
+	r, wire, out := testRunner(t)
+	r.rec.Inbox = InboxDir(t.TempDir(), "zm-dev")
+	require.NoError(t, openInbox(r.rec.Inbox))
+	r.rec.SessionID, r.rec.Status = "thread", "idle"
+
+	_, err := Inbox{}.Post("", &registry.Session{Inbox: r.rec.Inbox}, "[zmina] T-5 result ready")
+	require.NoError(t, err)
+	require.NoError(t, os.Chmod(filepath.Join(r.rec.Inbox, "taken"), 0o500))
+	t.Cleanup(func() { _ = os.Chmod(filepath.Join(r.rec.Inbox, "taken"), 0o700) })
+
+	require.NoError(t, r.drainInbox(), "a failed mark does not end the bridge")
+	assert.Contains(t, out.String(), "zmina inbox: ")
+	assert.Equal(t, 1, strings.Count(wire.String(), `"method":"turn/start"`))
+
+	l, _, err := nextLine(r.rec.Inbox)
+	require.NoError(t, err)
+	assert.Nil(t, l, "set aside: never a second turn with it")
+
+	files, _ := filepath.Glob(filepath.Join(r.rec.Inbox, "*.take-failed"))
+	assert.Len(t, files, 1)
 }
 
 func TestRunSubprocessTakesItsInbox(t *testing.T) {
