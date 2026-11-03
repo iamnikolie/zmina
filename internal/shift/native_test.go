@@ -1,10 +1,12 @@
 package shift
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -346,4 +348,49 @@ func TestNativeCodexInboxDelivery(t *testing.T) {
 	assert.Equal(t, "posted to dev: [dispatcher] look at T-1 (zmina S-1)", f.s.deliverInbox("dev", *f.now))
 	assert.Equal(t, []string{"[dispatcher] look at T-1 (zmina S-1)"}, cp.posted["thread-1"])
 	assert.Empty(t, f.tm.typed["dev"], "nothing typed into the bridge's console")
+}
+
+func TestNativeClearKeepsTheTagOutOfLinesAndLogs(t *testing.T) {
+	f, p := nativeFixture(t, trimCrew)
+	require.NoError(t, f.s.Up("dev"))
+	tag := f.s.State.Role("dev").Tag
+	require.NotEmpty(t, tag)
+
+	*f.now = f.now.Add(3 * time.Minute)
+	f.rg.context["sid-dev"] = 120_000
+	f.status("dev", "idle", f.now.Add(-time.Hour))
+	f.s.Tick()
+	require.Equal(t, []string{"/clear"}, f.tm.typed["dev"])
+
+	rs := f.s.State.Role("dev")
+	require.Len(t, rs.Inbox, 1)
+	assert.Contains(t, rs.Inbox[0], "`[zmina:<tag>]`", "the queued boot leaves the tag to the clear's hook")
+
+	views := func() string {
+		raw, err := json.Marshal(f.s.Queues())
+		require.NoError(t, err)
+
+		return string(raw)
+	}
+	assert.NotContains(t, views(), tag)
+
+	f.s.Tick()
+	require.Len(t, p.raw, 1, "posted, behind the tag on the wire only")
+	assert.True(t, strings.HasPrefix(p.raw[0], tagMark(tag)+" "))
+	assert.NotContains(t, strings.TrimPrefix(p.raw[0], tagMark(tag)), tag)
+	assert.NotContains(t, views(), tag)
+
+	_, pack, err := f.s.RecoveryPack()
+	require.NoError(t, err)
+	raw, err := json.Marshal(pack)
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), tag)
+
+	p.showAll()
+	f.s.Tick()
+
+	for _, e := range f.ev.list {
+		assert.NotContains(t, e.Detail, tag, e.Event)
+	}
+
 }

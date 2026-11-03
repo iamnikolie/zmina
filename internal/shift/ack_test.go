@@ -117,8 +117,37 @@ func TestAckLinesSkipsWhatItCannotAck(t *testing.T) {
 	_, err = f.s.QueueTracked("designer", "[dispatcher] T-4")
 	require.NoError(t, err)
 
+	acked, warn = f.s.AckLines(nil, true, "designer", "dispatcher")
+	assert.Empty(t, acked, "--all of another role: only the owner")
+	assert.Len(t, warn, 2)
+
 	acked, _ = f.s.AckLines(nil, true, "designer", "designer")
 	assert.Equal(t, []string{"S-3", "S-4"}, acked)
+}
+
+func TestAckBriefNamesOnlyTheCurrentTag(t *testing.T) {
+	f, _ := nativeFixture(t, crewYAML)
+	upNative(t, f, "designer")
+	first := f.s.State.Role("designer").Tag
+
+	// The next start: a new tag in its argv, while the saved state may still hold the old one when its startup
+	// hook runs.
+	f.s.State.Role("designer").Tag = ""
+	r, err := f.s.Role("designer")
+	require.NoError(t, err)
+	argv := strings.Join(f.s.Command(r, ""), " ")
+	now := f.s.State.Role("designer").Tag
+	require.NotEqual(t, first, now)
+	assert.Contains(t, argv, tagMark(now))
+	assert.NotContains(t, argv, first)
+
+	f.s.State.Role("designer").Tag = first // the state the startup hook reads
+	assert.NotContains(t, f.s.PendingBrief("designer", false), "[zmina:", "at a start: the boot line names the tag")
+
+	f.s.State.Role("designer").Tag = now
+	brief := f.s.PendingBrief("designer", true)
+	assert.Contains(t, brief, tagMark(now), "after a trim: the tag of this start")
+	assert.NotContains(t, brief, first)
 }
 
 func TestAckBriefIsCappedAndTellsTheTag(t *testing.T) {
@@ -133,14 +162,14 @@ func TestAckBriefIsCappedAndTellsTheTag(t *testing.T) {
 		f.s.deliverInbox("designer", *f.now)
 	}
 
-	brief := f.s.PendingBrief("designer")
+	brief := f.s.PendingBrief("designer", true)
 	assert.Contains(t, brief, "`"+tagMark(f.s.State.Role("designer").Tag)+"`", "a trim may have lost the boot line")
 	assert.Equal(t, briefMax, strings.Count(brief, "\n- S-"), "the newest briefMax")
 	assert.Contains(t, brief, "S-25 (since")
 	assert.NotContains(t, brief, "S-5 (since")
 	assert.Contains(t, brief, "and 5 older ones: zmina pending")
 
-	assert.Empty(t, f.s.PendingBrief("dispatcher"), "not up: nothing to tell")
+	assert.Empty(t, f.s.PendingBrief("dispatcher", true), "not up: nothing to tell")
 }
 
 func TestAckQueuedLineToARole(t *testing.T) {
@@ -165,7 +194,7 @@ func TestAckQueuedLineToARole(t *testing.T) {
 	assert.Equal(t, []string{"[dispatcher] look at T-1 (zmina S-1, still pending since " + since +
 		")"}, f.s.State.Role("designer").Inbox)
 
-	assert.Contains(t, f.s.PendingBrief("designer"), "S-1 (since "+since+") [dispatcher] look at T-1")
+	assert.Contains(t, f.s.PendingBrief("designer", true), "S-1 (since "+since+") [dispatcher] look at T-1")
 }
 
 func TestAckOldRoleIsLeftAsItWas(t *testing.T) {

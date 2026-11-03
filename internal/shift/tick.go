@@ -293,7 +293,9 @@ func (s *Shift) trim(name string, r *crew.Role, now time.Time, tasks []string) s
 		return fmt.Sprintf("%s: /%s (%s): %s", name, do, detail, err)
 	}
 
-	if boot := s.BootText(r); do == crew.ContextClear && !r.IsCodex() && boot != "" {
+	// The boot again, without the tag: queued, it is a line the log, the queue and the recovery pack show; the
+	// clear's hook gives the tag.
+	if boot := s.bootText(r, false); do == crew.ContextClear && !r.IsCodex() && boot != "" {
 		rs.Inbox = append(rs.Inbox, boot)
 	}
 

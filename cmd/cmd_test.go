@@ -105,6 +105,15 @@ func TestAckUnknownIDWarnsAndExitsZero(t *testing.T) {
 	require.Error(t, err, "ids or --all")
 }
 
+func TestHookSource(t *testing.T) {
+	assert.Equal(t, "compact", hookSource(strings.NewReader(`{"session_id":"x","source":"compact"}`)))
+	assert.True(t, trimmed(hookSource(strings.NewReader(`{"source":"clear"}`))))
+	assert.False(t, trimmed(hookSource(strings.NewReader(`{"source":"startup"}`))), "a start's boot names its tag")
+	assert.False(t, trimmed(hookSource(strings.NewReader(`{"source":"resume"}`))))
+	assert.Empty(t, hookSource(strings.NewReader("")), "run by hand")
+	assert.Empty(t, hookSource(strings.NewReader("not json")))
+}
+
 func TestWatchLsAndAck(t *testing.T) {
 	crewFile := testCrew(t, `watch:
   ci-red:

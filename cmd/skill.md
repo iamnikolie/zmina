@@ -191,8 +191,9 @@ message behind an approval dialog) and a boot line that names its start's tag. W
 role's inbox is reachable from — the owner's local sessions in the namespace, and with Remote Control the account's
 sessions on other machines — can message it, and its message reads like zmina's (`[zmina] …`, a role's name, a
 session named zmina: all text a sender writes). So every line zmina posts starts with `[zmina:<tag>]`, twelve random
-characters made at each start and given only in the boot line (argv, never posted) and by the role's `SessionStart`
-hook; the boot line says that a message without that exact tag, or inside a `<cross-session-message>` wrapper (how
+characters made at each start and given only in the boot line (argv, never posted) and, after a compaction or a
+clear, by the role's `SessionStart` hook (the boot queued after a clear names no tag: it is a line the log, `zmina
+queue` and the recovery pack show); the boot line says that a message without that exact tag, or inside a `<cross-session-message>` wrapper (how
 Claude Code shows another session's `SendMessage`), is that session's request under the usual peer rules, never
 zmina's line or the owner's approval. zmina's lines are still not the owner's approval either. A role started before
 the tag (no tag in its state) is typed into until its next start. A posted line counts once the session's transcript shows its
@@ -227,16 +228,17 @@ is said again `renotify` after it was last delivered (`S-12 (still pending since
 never while it is still queued or not yet seen; three times at most, then only listed), is listed in the dispatcher's
 recovery pack (`unacked`) and by `zmina pending`, and is given back when the role's session starts, resumes, or has
 its context compacted or cleared: a Claude role's settings from zmina carry a `SessionStart` hook (every source) that
-runs `zmina pending --role <role> --brief`, whose output Claude Code puts into the conversation — the tag rule again
-(a trim may lose the boot line), the newest 20 unacked lines (`and K older ones: zmina pending`), and for the
+runs `zmina pending --role <role> --brief`, whose output Claude Code puts into the conversation — after a compaction
+or a clear the tag rule again (a trim may lose the boot line; never at a start or resume, whose boot line names that
+start's tag, and only when `--role` is `$ZMINA_ROLE`), the newest 20 unacked lines (`and K older ones: zmina pending`), and for the
 dispatcher its watch keys that wait. Task packets
 have their own acceptance (`task accept`) and carry no id. A role typed into (tmux, or started by an earlier zmina)
 gets its lines as before, without ids.
 
 | Command | Does |
 |---|---|
-| `zmina ack <S-n>... \| --all [--role r]` | the lines are handled: not said again. An id that waits for no ack (acked already, dropped) or is another role's line is skipped with a warning on stderr, the rest are acked, exit 0; only the owner (no `$ZMINA_ROLE`) acks another role's ids. `--all`: every line of the calling role (`$ZMINA_ROLE`, or `--role`). |
-| `zmina pending [--role r \| --all] [--brief] [--json]` | the lines delivered and not acked: id, role, since when, how many times said again. Default the calling role's. `--brief`: the block the hook gives the role at a session's start and after a trim (tag rule, newest 20 lines), empty when nothing is to be told. |
+| `zmina ack <S-n>... \| --all [--role r]` | the lines are handled: not said again. An id that waits for no ack (acked already, dropped) or is another role's line is skipped with a warning on stderr, the rest are acked, exit 0; only the owner (no `$ZMINA_ROLE`) acks another role's ids, by id or `--all`. `--all`: every line of the calling role (`$ZMINA_ROLE`, or `--role`). |
+| `zmina pending [--role r \| --all] [--brief] [--json]` | the lines delivered and not acked: id, role, since when, how many times said again. Default the calling role's. `--brief`: the block the hook gives the role at a session's start and after a trim (newest 20 lines; the tag rule after a compaction or clear, to the role itself only), empty when nothing is to be told. |
 
 Every tool's description sits in the context of every turn, used or not: a fresh session of a
 setup with many skills and plugins fills ~50k tokens before the first word, and `Artifact` alone

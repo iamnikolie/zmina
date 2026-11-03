@@ -1,8 +1,11 @@
 package cmd
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -75,8 +78,11 @@ func (a *app) pendingCommand() *cobra.Command {
 
 			return a.readState(func(s *shift.Shift) error {
 				if brief {
-					// The hook a socket role runs at a session's start and after a trim: what it prints goes into the context.
-					if text := s.PendingBrief(role); text != "" {
+					// The hook a socket role runs at a session's start and after a trim: what it prints goes into the
+					// context. The tag rule only after a trim (a start's boot line names its own tag), and only to
+					// the role itself — another seat could be asked to run this and pass the tag on.
+					rule := trimmed(hookSource(cmd.InOrStdin())) && role != "" && role == os.Getenv("ZMINA_ROLE")
+					if text := s.PendingBrief(role, rule); text != "" {
 						fmt.Fprintln(a.out, text)
 					}
 
@@ -118,3 +124,24 @@ func (a *app) pendingCommand() *cobra.Command {
 
 	return c
 }
+
+// hookSource is the source a SessionStart hook is run for (startup, resume, clear, compact), from the JSON Claude
+// Code gives it on stdin; "" when run by hand.
+func hookSource(in io.Reader) string {
+	if f, ok := in.(*os.File); ok {
+		if st, err := f.Stat(); err != nil || st.Mode()&os.ModeCharDevice != 0 {
+			return ""
+		}
+	}
+
+	var hook struct {
+		Source string `json:"source"`
+	}
+
+	_ = json.NewDecoder(io.LimitReader(in, 1<<16)).Decode(&hook)
+
+	return hook.Source
+}
+
+// trimmed reports a session-start source after which the boot line may be gone.
+func trimmed(source string) bool { return source == "compact" || source == "clear" }

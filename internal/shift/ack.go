@@ -206,7 +206,8 @@ func (s *Shift) inFlight(a *Ack) bool {
 
 // AckLines acks lines by id, or with all every line of the role. An id that waits for no ack (acked already, said
 // again after a compaction, dropped) or that is another role's line is skipped with a warning, so the rest are acked
-// all the same; caller is who acks, and only "hand" (the owner, at a shell) acks another role's lines. It returns the
+// all the same; caller is who acks, and only "hand" (the owner, at a shell) acks another role's lines, by id or
+// with all. It returns the
 // ids acked and the warnings.
 func (s *Shift) AckLines(ids []string, all bool, role, caller string) ([]string, []string) {
 	if all {
@@ -232,7 +233,7 @@ func (s *Shift) AckLines(ids []string, all bool, role, caller string) ([]string,
 		switch {
 		case a == nil:
 			warn = append(warn, id+" waits for no ack: acked already, or dropped (zmina pending lists the ones that do)")
-		case !all && caller != "hand" && caller != "" && a.Role != caller:
+		case caller != "hand" && caller != "" && a.Role != caller:
 			warn = append(warn, id+" is "+a.Role+"'s line, not "+caller+"'s: left for "+a.Role+" to ack")
 		case !slices.Contains(acked, id):
 			acked = append(acked, id)
@@ -268,10 +269,11 @@ func (s *Shift) Pending(role string) []Ack {
 // briefMax is how many unacked lines a brief lists, the newest; the rest are counted.
 const briefMax = 20
 
-// PendingBrief is what a role is told when its session starts, resumes, or has its context compacted or cleared: the
-// rule of its start's tag (a trim may have lost the boot line), the lines it has not acked — the newest briefMax —
-// and for the dispatcher the watch keys that wait. Empty when nothing is to be told.
-func (s *Shift) PendingBrief(role string) string {
+// PendingBrief is what a role is told when its session starts, resumes, or has its context compacted or cleared: with
+// tagRule the rule of its start's tag (after a trim, which may have lost the boot line — never at a start, whose own
+// boot line names the tag of that start, while the state may still hold the one before), the lines it has not acked
+// — the newest briefMax — and for the dispatcher the watch keys that wait. Empty when nothing is to be told.
+func (s *Shift) PendingBrief(role string, tagRule bool) string {
 	var parts []string
 
 	for _, a := range s.Pending(role) {
@@ -295,7 +297,7 @@ func (s *Shift) PendingBrief(role string) string {
 
 	var out []string
 
-	if rs := s.State.Roles[role]; rs != nil && rs.Inbound && rs.Tag != "" && role != "" {
+	if rs := s.State.Roles[role]; tagRule && rs != nil && rs.Inbound && rs.Tag != "" && role != "" {
 		out = append(out, InboxRule(rs.Tag))
 	}
 
