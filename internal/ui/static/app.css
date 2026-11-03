@@ -44,6 +44,26 @@ body.sk .ph { animation: shimmer 1.4s ease-in-out infinite alternate; }
 .chips { display: flex; gap: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 3px; }
 .chips button { font: 500 13px var(--sans); color: var(--muted); background: none; border: 0; border-radius: 6px; padding: 4px 11px; white-space: nowrap; flex: none; }
 .chips .on { background: var(--panel2); color: var(--ink); }
+/* the crew switch across a mesh: one group per node (the node, then its crews), and the stopped crews as a muted line.
+   A node's state is a dot: green fresh, hollow stale, red offline; never amber (amber is what waits on you) */
+.chips .ng { display: flex; align-items: center; gap: 4px; flex: none; margin-left: 2px; padding-left: 6px; border-left: 1px solid var(--line2); }
+.chips .ng.off { font: 12px var(--sans); color: var(--faint); }
+.chips .ng.off button { font-weight: 400; color: var(--faint); }
+.chips .ng.off button.on { color: var(--ink); }
+.chips .nd { display: inline-flex; align-items: center; gap: 6px; }
+.chips .nsd { width: 7px; height: 7px; box-sizing: border-box; flex: none; border-radius: 50%; background: var(--ok); }
+.chips .nsd.hollow { background: none; border: 1.5px solid var(--faint); }
+.chips .nsd.bad { background: var(--late); }
+.chips .ns { font-weight: 400; font-size: .86em; color: var(--muted); }
+.chips .ns.bad { color: var(--late); }
+.chips button:not(.nd) .ns { margin-left: 6px; }
+.chips.mesh { min-width: 0; max-width: 60vw; overflow-x: auto; scrollbar-width: none; }
+.chips.mesh::-webkit-scrollbar { display: none; }
+.chips.mesh.over { -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 24px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 24px), transparent); }
+/* a crew's node/crew label, quiet and mono; a peer's crew is read-only, a stale read is dimmed */
+.cl { font-family: var(--mono); font-size: .92em; font-weight: 400; color: var(--faint); }
+.onpeer { margin: 0; font-size: .8rem; color: var(--muted); }
+.row.stale { opacity: .6; }
 .clock { font: 500 13px var(--mono); color: var(--muted); display: flex; gap: 8px; align-items: center; white-space: nowrap; }
 .clock i { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); animation: ping 2s ease-out infinite; }
 .clock.dead i { background: var(--late); animation: none; }
@@ -211,6 +231,7 @@ body.hp .rows > .row:not(.lit), body.hp .sub .row:not(.lit) { opacity: .55; }
   .tools { display: flex; align-items: center; gap: 10px; flex: 1 1 100%; min-width: 0; }
   .mark { order: 0; }
   .chips { min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  .chips.mesh { max-width: none; }
   .chips.over { -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 24px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 24px), transparent); }
   .chips::-webkit-scrollbar { display: none; }
   .clock { margin-left: auto; }
@@ -329,6 +350,8 @@ body.hidden *, body.hidden *::before, body.hidden *::after { animation-play-stat
   .tick i { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
   .tick.dead { color: var(--late); }
   .tick.dead i { background: var(--late); }
+  .tick.stale i { background: none; border: 1px solid var(--faint); box-sizing: border-box; }
+  .card.stale { opacity: .6; }
   .band { display: grid; grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr)); gap: .6rem; padding: 0 1.5rem 1.1rem; }
   .card { min-width: 0; padding: .75rem .9rem .8rem; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; transition: opacity 160ms var(--ease); }
   /* a working session is lit: a teal edge and a soft glow, still (D-03: no pulse beyond the lamp) */
