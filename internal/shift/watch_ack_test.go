@@ -168,7 +168,7 @@ func TestWatchDryRunShowsRenote(t *testing.T) {
 	assert.Zero(t, f.s.State.Watch["ci-red"].Keys["acme/site!12:approved"].Renotes, "a dry run writes nothing")
 }
 
-// Review T-171 #1: a url is matched whole — MR 1's url is a prefix of MR 12's.
+// a url is matched whole — MR 1's url is a prefix of MR 12's.
 func TestWatchTaskURLMatchesWhole(t *testing.T) {
 	f := fixtureWith(t, watchYAML)
 	mr1 := watch.Event{Key: "acme/site!1:approved", Fingerprint: "x", Text: "acme/site!1 approved",
@@ -183,7 +183,7 @@ func TestWatchTaskURLMatchesWhole(t *testing.T) {
 	assert.Empty(t, watchKeys(t, f), "the url as a whole word, punctuation around it aside, does")
 }
 
-// Review T-171 #2: a short bare key is a word any task may say; only its qualified form acks.
+// a short bare key is a word any task may say; only its qualified form acks.
 func TestWatchShortKeyNeedsTheQualifiedForm(t *testing.T) {
 	f := fixtureWith(t, watchYAML)
 
@@ -196,7 +196,7 @@ func TestWatchShortKeyNeedsTheQualifiedForm(t *testing.T) {
 	assert.Empty(t, watchKeys(t, f), "<watch>/<key> does")
 }
 
-// Review T-171 #3: the note is compared exactly as it was queued — folded whitespace included.
+// the note is compared exactly as it was queued — folded whitespace included.
 func TestWatchStillQueuedMatchesTheQueuedNote(t *testing.T) {
 	f := fixtureWith(t, watchYAML)
 	e := watch.Event{Key: "k", Fingerprint: "1", Text: "disk  full\non /data"}
@@ -213,7 +213,7 @@ func TestWatchStillQueuedMatchesTheQueuedNote(t *testing.T) {
 	assert.Len(t, f.s.State.Signals, 1, "typed and lost: said again")
 }
 
-// Review T-171 #4: one empty run does not end the wait; the key comes back waiting from the same Since.
+// one empty run does not end the wait; the key comes back waiting from the same Since.
 func TestWatchEmptyRunDoesNotEndTheWait(t *testing.T) {
 	f := fixtureWith(t, watchYAML)
 
@@ -230,7 +230,7 @@ func TestWatchEmptyRunDoesNotEndTheWait(t *testing.T) {
 	assert.Len(t, f.s.State.Signals, 1, "said again")
 }
 
-// Review T-171 #5, dispatcher's decision: renotify off means off — nothing waits.
+// renotify off means off — nothing waits.
 func TestWatchRenotifyOffNothingWaits(t *testing.T) {
 	f := fixtureWith(t, watchYAML+"    renotify: \"off\"\n")
 
@@ -243,7 +243,7 @@ func TestWatchRenotifyOffNothingWaits(t *testing.T) {
 	assert.Zero(t, f.s.WatchViews()[0].Unacked, "not pending")
 }
 
-// Review T-171 #6: one unknown target fails the ack and acks nothing.
+// one unknown target fails the ack and acks nothing.
 func TestWatchAckUnknownTargetChangesNothing(t *testing.T) {
 	f := fixtureWith(t, watchYAML)
 
@@ -258,11 +258,51 @@ func TestWatchAckUnknownTargetChangesNothing(t *testing.T) {
 	assert.Equal(t, []string{"a", "b"}, acked, "each key once")
 }
 
-// Review T-171 #8: the pack lists watch keys oldest first, so the longest waits are the ones it keeps.
+// the pack lists watch keys oldest first, so the longest waits are the ones it keeps.
 func TestWatchKeysInThePackOldestFirst(t *testing.T) {
 	f := fixtureWith(t, watchYAML)
 
 	runFor(t, f, 5*time.Minute, ev("z-old", "1"))
 	runFor(t, f, 5*time.Minute, ev("z-old", "1"), ev("a-new", "1"))
 	assert.Equal(t, []string{"ci-red/z-old", "ci-red/a-new"}, watchKeys(t, f))
+}
+
+// a url acks in a markdown link and with a fragment; another MR's url still does not.
+func TestWatchTaskURLInMarkdownOrWithFragment(t *testing.T) {
+	f := fixtureWith(t, watchYAML)
+
+	runFor(t, f, 5*time.Minute, approved())
+	f.tk.list = []task.Task{{ID: "T-9", Role: "dev", State: task.Open, Created: *f.now,
+		Asked: "merge [the MR](" + mrURL + ") today"}}
+	assert.Empty(t, watchKeys(t, f), "a markdown link carries it")
+
+	f.tk.list[0].Asked = "answer " + mrURL + "#note_42 please"
+	assert.Empty(t, watchKeys(t, f), "a fragment aside")
+
+	f.tk.list[0].Asked, f.tk.list[0].URL = "nothing here", mrURL+"#note_1"
+	assert.Empty(t, watchKeys(t, f), "the task's url with a fragment")
+
+	f.tk.list[0].URL, f.tk.list[0].Asked = "", "see [MR 120]("+mrURL+"0)"
+	assert.Len(t, watchKeys(t, f), 1, "MR 120 is not MR 12")
+}
+
+// renotify equal to every says it again on the next run, not one later, even when the run that noted
+// it took its source a while.
+func TestWatchRenotifyEqualToEvery(t *testing.T) {
+	f := fixtureWith(t, watchYAML+"    renotify: 5m\n")
+
+	slow := func(took time.Duration) {
+		runs := f.s.DueWatches()
+		require.Len(t, runs, 1)
+		*f.now = f.now.Add(took)
+		f.s.FinishWatch(runs[0], watch.Result{Events: []watch.Event{approved()}}, false)
+	}
+
+	slow(20 * time.Second) // noted when the source answered, 20 s after the run began
+	require.Len(t, f.s.State.Signals, 1)
+	f.s.State.Signals = nil
+
+	*f.now = f.now.Add(5*time.Minute - 20*time.Second) // the next run is due
+	slow(0)
+	assert.Len(t, f.s.State.Signals, 1, "said again on the next run")
 }

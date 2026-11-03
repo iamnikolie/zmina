@@ -547,10 +547,12 @@ Rules, every kind:
   `forget_after` is not news.
 - **At least once.** A noted key waits on an ack: a note typed into a dispatcher that then compacted, or that was
   busy, is not lost. While the source still reports the key with the same fingerprint and nobody acked it, the
-  first run once `renotify` has passed since it was last said says it again (never while that earlier note, as it
+  first run once `renotify` has passed since it was last said (a minute's slack, so `renotify` equal to `every` is
+  the next run) says it again (never while that earlier note, as it
   was queued, still waits to be typed): `mrs: group/repo!12 — approved https://…/12 (still pending since Mon 2 Nov
   11:55; ack: zmina watch ack mrs 'https://…/12')`. The wait ends with `zmina watch ack`, or with a task made since
-  the note that carries it: its url as the task's `--url` or as a whole word of its asked text, title or note; or
+  the note that carries it: its url as the task's `--url` or in its asked text, title or note (a markdown link's target
+  too; a `#fragment` aside), never a longer url it starts; or
   its key as a whole word, `<watch>/<key>` always, the bare key only when it is structured (six characters at
   least, with `:`, `!`, `/` or `#`: `group/repo!12:review`, `disk:/data`) — a short key such as `main` is a word
   any task may say. A key the source stops reporting (merged, fixed) does not wait while it is gone; back with the

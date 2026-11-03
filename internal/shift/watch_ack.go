@@ -2,6 +2,7 @@ package shift
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -64,7 +65,7 @@ func carrier(name, key string, k *watch.Key, tasks []task.Task) string {
 		text := t.Asked + " " + t.Title + " " + t.Note
 
 		switch {
-		case k.URL != "" && (t.URL == k.URL || hasWord(text, k.URL)),
+		case k.URL != "" && (sameURL(t.URL, k.URL) || hasURL(text, k.URL)),
 			hasWord(text, name+"/"+key),
 			structuredKey(key) && (t.URL == key || hasWord(text, key)):
 			return t.ID
@@ -72,6 +73,31 @@ func carrier(name, key string, k *watch.Key, tasks []task.Task) string {
 	}
 
 	return ""
+}
+
+// urlRe finds the urls in a text: a markdown link's target too, [MR](https://…).
+var urlRe = regexp.MustCompile(`https?://[^\s<>()\[\]"'` + "`" + `]+`)
+
+// hasURL reports whether text names the url, a fragment (#note_12) or trailing punctuation aside.
+func hasURL(text, url string) bool {
+	for _, u := range urlRe.FindAllString(text, -1) {
+		if sameURL(u, url) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// sameURL compares two urls without their fragment and trailing punctuation.
+func sameURL(a, b string) bool {
+	norm := func(u string) string {
+		u, _, _ = strings.Cut(u, "#")
+
+		return strings.TrimRight(u, ".,;:!?/")
+	}
+
+	return a != "" && b != "" && norm(a) == norm(b)
 }
 
 // structuredKey reports a key no plain word is: six characters at least, with a separator (group/repo!12:review,

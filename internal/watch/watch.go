@@ -277,7 +277,10 @@ func Apply(st *State, events []Event, cfg Config, now time.Time, queue func(Even
 		switch {
 		case k != nil && k.Fingerprint == e.Fingerprint:
 			// The dispatcher was told and has not acked: past renotify it is said again, never dropped as a dup.
-			if cfg.Renotify > 0 && k.Waiting() && now.Sub(k.NotedAt) >= cfg.Renotify && (!e.Info || cfg.Info) {
+			// A minute's slack: a run lands on a beat, so with renotify equal to every the run that is due is
+			// never a moment early by its source's own run time.
+			if cfg.Renotify > 0 && k.Waiting() && now.Sub(k.NotedAt) >= cfg.Renotify-time.Minute &&
+				(!e.Info || cfg.Info) {
 				e.Since = k.Since
 				due = append(due, len(out))
 				out = append(out, Outcome{Event: e, Fate: Renoted})
