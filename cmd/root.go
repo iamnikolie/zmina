@@ -12,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/iamnikolie/zmina/internal/codex"
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/events"
 	"github.com/iamnikolie/zmina/internal/inbox"
@@ -161,6 +162,7 @@ func (a *app) newShift() (*shift.Shift, error) {
 		Tmux:              &lazyTmux{socket: c.Socket(), drop: c.DropEnv},
 		Reg:               &registry.Registry{Namespace: c.Namespace},
 		Peer:              peer.Inbox{},
+		CodexInbox:        codex.Inbox{},
 		Self:              self(),
 		State:             shift.NewState(),
 		Tasks:             taskStore(c),

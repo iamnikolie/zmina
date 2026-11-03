@@ -2,9 +2,11 @@ package shift
 
 import (
 	"errors"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/iamnikolie/zmina/internal/codex"
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/peer"
 	"github.com/iamnikolie/zmina/internal/registry"
@@ -17,15 +19,39 @@ const postedWait = 10 * time.Minute
 // postedNever is the failure of a posted line the conversation never showed.
 const postedNever = "posted to its inbox socket, never seen in its conversation (held or dropped); inspect before retry"
 
-// inbound reports whether a role starts with zmina's settings, its lines posted to its inbox socket.
-func (s *Shift) inbound(r *crew.Role) bool {
-	return s.Peer != nil && s.Crew.DeliveryFor(r) == crew.DeliverySocket
+// channel is a role's agent's own channel and the place its deliveries are looked up in: a Claude session's inbox
+// socket (the namespace), a Codex bridge's inbox (its directory). Nil: lines are typed.
+func (s *Shift) channel(r *crew.Role) (Peer, string) {
+	if r.IsCodex() {
+		return s.CodexInbox, codex.InboxDir(filepath.Join(s.Crew.StateDir(), "codex"), r.Session)
+	}
+
+	return s.Peer, s.Crew.Namespace
 }
 
-// native is the session a role's lines are posted to: a Claude role started with zmina's settings, past its boot
-// grace, whose session has an inbox socket zmina can write. Nil: its lines are typed.
+// peerFor is channel by role name.
+func (s *Shift) peerFor(name string) (Peer, string) {
+	r, err := s.Role(name)
+	if err != nil {
+		return nil, ""
+	}
+
+	return s.channel(r)
+}
+
+// inbound reports whether a role's lines go to its own channel: a Claude role starts with zmina's settings, and
+// either is told so at boot.
+func (s *Shift) inbound(r *crew.Role) bool {
+	p, _ := s.channel(r)
+
+	return p != nil && s.Crew.DeliveryFor(r) == crew.DeliveryNative
+}
+
+// native is the session a role's lines are posted to: a role started on its own channel, past its boot grace, whose
+// session takes posts (a Claude inbox socket zmina can write, a bridge with an inbox). Nil: its lines are typed.
 func (s *Shift) native(name string, now time.Time) *registry.Session {
-	if s.Peer == nil || s.isCodex(name) {
+	p, _ := s.peerFor(name)
+	if p == nil {
 		return nil
 	}
 
@@ -35,7 +61,7 @@ func (s *Shift) native(name string, now time.Time) *registry.Session {
 	}
 
 	sess := s.session(name)
-	if sess == nil || !s.Peer.Usable(sess) {
+	if sess == nil || !p.Usable(sess) {
 		return nil
 	}
 
@@ -60,7 +86,8 @@ func (s *Shift) quiet(name string, sess *registry.Session) bool {
 // post posts a line to the role's inbox socket and follows it until its conversation shows it. An error wrapping
 // peer.ErrUnavailable means nothing reached the session.
 func (s *Shift) post(name string, sess *registry.Session, line string, now time.Time) error {
-	id, err := s.Peer.Post(s.Crew.Namespace, sess, line)
+	p, ns := s.peerFor(name)
+	id, err := p.Post(ns, sess, line)
 	if err != nil {
 		return err
 	}
@@ -77,7 +104,9 @@ func (s *Shift) post(name string, sess *registry.Session, line string, now time.
 // postedWait is kept as failed (zmina queue). It reports whether a posted line is still unseen.
 func (s *Shift) followPosted(name string, now time.Time) bool {
 	rs := s.State.Role(name)
-	if len(rs.Posted) == 0 || s.Peer == nil {
+	ch, ns := s.peerFor(name)
+
+	if len(rs.Posted) == 0 || ch == nil {
 		return false
 	}
 
@@ -86,7 +115,7 @@ func (s *Shift) followPosted(name string, now time.Time) bool {
 	var keep, back []Posted
 
 	for _, p := range rs.Posted {
-		seen, err := s.Peer.Delivered(s.Crew.Namespace, p.Session, p.MsgID)
+		seen, err := ch.Delivered(ns, p.Session, p.MsgID)
 
 		switch {
 		case err == nil && seen:

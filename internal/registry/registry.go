@@ -25,6 +25,8 @@ type Session struct {
 	PeerProtocol        int    `json:"peerProtocol,omitempty"`
 	ProcStart           string `json:"procStart,omitempty"`
 	Version             string `json:"version,omitempty"`
+	// Inbox is a zmina Codex bridge's queue of lines (codex.Inbox), empty for a claude.
+	Inbox string `json:"zminaInbox,omitempty"`
 }
 
 // StatusSince is when the status last changed.

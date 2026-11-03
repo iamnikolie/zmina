@@ -2,12 +2,14 @@ package shift
 
 import (
 	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/iamnikolie/zmina/internal/codex"
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/peer"
 	"github.com/iamnikolie/zmina/internal/registry"
@@ -248,11 +250,42 @@ func TestNativeDirectSend(t *testing.T) {
 	assert.Equal(t, []string{"/compact"}, f.tm.typed["designer"], "a slash command is typed")
 }
 
-func TestNativeCodexIsTyped(t *testing.T) {
-	f, _ := nativeFixture(t, crewYAML)
-	r := &crew.Role{Runtime: "codex"}
-	assert.Equal(t, crew.DeliveryTmux, f.s.Crew.DeliveryFor(r))
+func TestNativeCodexGoesToItsBridgeInbox(t *testing.T) {
+	f, _ := nativeFixture(t, crewYAML+"  dev:\n    runtime: codex\n")
+	cp := newFakePeer()
+	f.s.CodexInbox = cp
+
+	r, err := f.s.Role("dev")
+	require.NoError(t, err)
+	assert.Equal(t, crew.DeliveryNative, f.s.Crew.DeliveryFor(r))
+	assert.NotContains(t, f.s.Command(r, ""), "--settings", "a bridge takes no Claude settings")
+
+	_, dir := f.s.channel(r)
+	assert.Equal(t, codex.InboxDir(filepath.Join(f.s.Crew.StateDir(), "codex"), r.Session), dir)
 
 	r = &crew.Role{Args: []string{"--settings", "/x.json"}}
-	assert.Equal(t, crew.DeliveryTmux, f.s.Crew.DeliveryFor(r), "own --settings: typed")
+	assert.Equal(t, crew.DeliveryTmux, f.s.Crew.DeliveryFor(r), "a Claude role with its own --settings: typed")
+}
+
+func TestNativeCodexInboxDelivery(t *testing.T) {
+	f, _ := nativeFixture(t, crewYAML+"  dev:\n    runtime: codex\n")
+	cp := newFakePeer()
+	f.s.CodexInbox = cp
+
+	require.NoError(t, f.s.Up("dev"))
+	assert.True(t, f.s.State.Role("dev").Inbound)
+
+	// A Codex role's status comes from its bridge's own record.
+	reg := &codex.Registry{Dir: filepath.Join(f.s.Crew.StateDir(), "codex")}
+	require.NoError(t, reg.Save(codex.Record{Session: registry.Session{PID: f.tm.up["dev"], SessionID: "thread-1",
+		Status: "idle", StatusUpdatedAt: f.now.UnixMilli(), Inbox: "/x"}}))
+	*f.now = f.now.Add(3 * time.Minute)
+
+	id, err := f.s.QueueTracked("dev", "[dispatcher] look at T-1")
+	require.NoError(t, err)
+	assert.Equal(t, "S-1", id)
+
+	assert.Equal(t, "posted to dev: [dispatcher] look at T-1 (zmina S-1)", f.s.deliverInbox("dev", *f.now))
+	assert.Equal(t, []string{"[dispatcher] look at T-1 (zmina S-1)"}, cp.posted["thread-1"])
+	assert.Empty(t, f.tm.typed["dev"], "nothing typed into the bridge's console")
 }

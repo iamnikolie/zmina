@@ -207,8 +207,8 @@ type Crew struct {
 	RemoteControl *bool `yaml:"remote_control"`
 	// Renotify is how long a delivered line waits for its reader's ack before it is said again (default 30m; off).
 	Renotify string `yaml:"renotify"`
-	// Delivery is how lines reach a Claude role: socket (the default: its inbox socket, a message from another
-	// session) or tmux (typed into its input line).
+	// Delivery is how lines reach a role: native (the default: its agent's own channel — a Claude session's inbox
+	// socket, a Codex bridge's inbox) or tmux (typed into its input line).
 	Delivery string `yaml:"delivery"`
 	// BootGrace is how long a started role is left to boot before lines are typed into it (default 2m).
 	BootGrace string `yaml:"boot_grace"`
@@ -429,18 +429,18 @@ func (c *Crew) RemoteControlFor(r *Role) bool {
 
 // The values of delivery.
 const (
-	DeliverySocket = "socket"
+	DeliveryNative = "native"
 	DeliveryTmux   = "tmux"
 )
 
-// DeliveryFor is how lines reach a role: its own delivery, else the crew's, else socket. A Codex role is typed into
-// its bridge; a role whose args pass their own --settings is typed into too, since zmina's settings open the socket.
+// DeliveryFor is how lines reach a role: its own delivery, else the crew's, else native. A Claude role whose args
+// pass their own --settings is typed into, since zmina's settings open its inbox socket.
 func (c *Crew) DeliveryFor(r *Role) string {
-	if r.IsCodex() || r.ownsSettings() {
+	if !r.IsCodex() && r.ownsSettings() {
 		return DeliveryTmux
 	}
 
-	return or(r.Delivery, or(c.Delivery, DeliverySocket))
+	return or(r.Delivery, or(c.Delivery, DeliveryNative))
 }
 
 // SystemdUnit is the crew's ticker on Linux: zmina (.service and .timer), or zmina-<name>.
@@ -536,7 +536,7 @@ func (c *Crew) complete() {
 			r.Boot = c.defaultBoot(r)
 		}
 
-		if r.ownsSettings() && !r.IsCodex() && or(r.Delivery, or(c.Delivery, DeliverySocket)) == DeliverySocket {
+		if r.ownsSettings() && !r.IsCodex() && or(r.Delivery, or(c.Delivery, DeliveryNative)) == DeliveryNative {
 			c.Warnings = append(c.Warnings, fmt.Sprintf("role %s: args has --settings, so zmina's own settings "+
 				"are not passed and lines are typed into it (delivery tmux)", name))
 		}
@@ -920,8 +920,8 @@ func or(v, fallback string) string {
 }
 
 func checkDelivery(v string) error {
-	if v != "" && v != DeliverySocket && v != DeliveryTmux {
-		return fmt.Errorf("delivery is %s or %s, not %q", DeliverySocket, DeliveryTmux, v)
+	if v != "" && v != DeliveryNative && v != DeliveryTmux {
+		return fmt.Errorf("delivery is %s or %s, not %q", DeliveryNative, DeliveryTmux, v)
 	}
 
 	return nil

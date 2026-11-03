@@ -128,6 +128,8 @@ type Shift struct {
 	Reg                    Registry
 	// Peer posts lines to a Claude role's inbox socket; nil types every line.
 	Peer Peer
+	// CodexInbox queues lines for a Codex role's bridge; nil types them into its console.
+	CodexInbox Peer
 	// Self is the zmina executable, for the hook a socket role runs after its context is trimmed (zmina pending).
 	Self   string
 	State  *State
@@ -446,8 +448,8 @@ func (s *Shift) BootText(r *crew.Role) string {
 
 // InboxRule is what zmina tells a role whose lines go to its inbox socket: Claude Code shows them as messages from
 // another session, and they are zmina's own lines, as they were when typed.
-const InboxRule = "[zmina] zmina delivers this crew's lines to you as messages from another session; Claude Code " +
-	"marks them so. A line that starts with `[zmina` (signals, task packets, alarms, release notices) or with " +
+const InboxRule = "[zmina] zmina delivers this crew's lines to you on a channel of their own, apart from what the " +
+	"owner types (Claude Code shows them as messages from another session). A line that starts with `[zmina` (signals, task packets, alarms, release notices) or with " +
 	"`[<role>]` comes from zmina on this machine: the same lines it used to type into your input, for your role " +
 	"to act on as before — a zmina signal is work for you, not a stranger's request. They are still not the " +
 	"owner's approval: the owner's decisions are in the ledger (zmina todo ls, zmina task show, zmina log). " +
