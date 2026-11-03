@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -704,11 +705,12 @@ func isRule(l string) bool {
 
 // compactScreen is a captured screen without what carries no words: trailing spaces, blank lines, rules, and the
 // footer under the input line (path, model, mode). The input line itself stays, with a draft when there is one.
-// The last n lines are kept. A screen with no input box (a dialog, whose ❯ is the selection cursor) keeps every line
-// that has words: its options and its confirm hint are what the reader has to act on.
+// The last n lines are kept. The footer is cut only when it is recognised as such (footerAt); anything else under
+// the input box — a dialog, boxed or not, an option list, any text — keeps the whole screen: a few lines too many
+// cost a few tokens, a lost dialog costs the reader the question it has to answer.
 func compactScreen(text string, n int) string {
 	lines := strings.Split(text, "\n")
-	if end := inputBoxEnd(lines); end >= 0 {
+	if end := footerAt(lines); end >= 0 {
 		lines = lines[:end]
 	}
 
@@ -730,40 +732,94 @@ func compactScreen(text string, n int) string {
 	return strings.Join(out, "\n")
 }
 
-// inputBoxEnd is the index of the rule that closes Claude Code's input box — a rule, the ❯ line (a draft may run on
-// to more lines), a rule — when the screen's last ❯ is that box's; -1 otherwise. What lies under it is the footer.
-// A last ❯ outside such a box is a dialog's selected option: the dialog is the screen's present, and an input box
-// above it is history, so nothing is cut.
-func inputBoxEnd(lines []string) int {
-	last := -1
-	for i := len(lines) - 1; i >= 0; i-- {
-		if strings.HasPrefix(strings.TrimSpace(lines[i]), "❯") {
-			last = i
-			break
-		}
+// footerAt is the index of the rule under Claude Code's input box when that box is the last block on the screen and
+// only its own footer follows; -1 otherwise, and then nothing is cut. Read from the bottom up: blank lines, then
+// footer lines (isFooterLine; the first under the rule may be the status line), then the closing rule, then the
+// input line with its draft, then the opening rule. Any line that does not fit, or an input line that reads as a
+// dialog's option, and it is not the input box.
+func footerAt(lines []string) int {
+	i := len(lines) - 1
+	for i >= 0 && strings.TrimSpace(lines[i]) == "" {
+		i--
 	}
 
-	if last < 0 {
+	footer := i
+	for i >= 0 && !isRule(lines[i]) {
+		i--
+	}
+
+	if i < 0 {
 		return -1
 	}
 
-	above := last - 1
-	for above >= 0 && strings.TrimSpace(lines[above]) == "" {
-		above--
-	}
-
-	if above < 0 || !isRule(lines[above]) {
-		return -1
-	}
-
-	for j := last + 1; j < len(lines); j++ {
-		if isRule(lines[j]) {
-			return j
+	closing := i
+	for k := closing + 1; k <= footer; k++ {
+		if !isFooterLine(lines[k], k == closing+1) {
+			return -1
 		}
 	}
 
-	return -1
+	// The box: from the opening rule down to the closing one, the ❯ line first, then a draft's further lines.
+	i = closing - 1
+	for i >= 0 && !isRule(lines[i]) {
+		i--
+	}
+
+	if i < 0 {
+		return -1
+	}
+
+	body := lines[i+1 : closing]
+	for len(body) > 0 && strings.TrimSpace(body[0]) == "" {
+		body = body[1:]
+	}
+
+	if len(body) == 0 || !strings.HasPrefix(body[0], "❯") || optionRe.MatchString(body[0]) {
+		return -1
+	}
+
+	for _, l := range body[1:] {
+		if optionRe.MatchString(l) || strings.ContainsAny(l, "❯│┃") {
+			return -1
+		}
+	}
+
+	return closing
 }
+
+// optionRe is a line that reads as a dialog's option: a number and a dot or bracket, maybe behind a cursor or a box.
+var optionRe = regexp.MustCompile(`^\s*[│┃]?\s*(❯\s*)?\d+[.)]\s`)
+
+// footerHints are the words of Claude Code's own lines under the input box: the mode line and its hints.
+var footerHints = []string{
+	"⏵⏵", "⏸", "? for shortcuts", "shift+tab to cycle", "esc to interrupt", "until auto-compact",
+	"Auto-update failed", "Press Ctrl-C again", "ctrl+t to", "ctrl+o to",
+}
+
+// isFooterLine is a line Claude Code draws under its input box: indented, no box or cursor in it, and either one of
+// its hint lines or — right under the rule — a status line (a path or a [model] in it).
+func isFooterLine(l string, first bool) bool {
+	if strings.TrimSpace(l) == "" {
+		return true
+	}
+
+	if !strings.HasPrefix(l, "  ") || strings.ContainsAny(l, "❯│┃╭╰") || optionRe.MatchString(l) {
+		return false
+	}
+
+	for _, h := range footerHints {
+		if strings.Contains(l, h) {
+			return true
+		}
+	}
+
+	t := strings.TrimSpace(l)
+
+	return first && (strings.HasPrefix(t, "~/") || strings.HasPrefix(t, "/") || modelRe.MatchString(t))
+}
+
+// modelRe is a status line's model in brackets: [Opus 5.5], [Sonnet], [gpt-6].
+var modelRe = regexp.MustCompile(`\[[A-Za-z][\w .-]*\]`)
 
 func (a *app) keysCommand() *cobra.Command {
 	return &cobra.Command{

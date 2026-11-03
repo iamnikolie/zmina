@@ -87,26 +87,11 @@ func TestCompactScreen(t *testing.T) {
 		"❯ a draft",
 		"────────────────────────────────",
 		"  ~/work (main) [Opus] ctx:44%",
-		"  ⏵⏵ bypass permissions on",
+		"  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 1 agent",
 	}, "\n")
 
 	assert.Equal(t, "⏺ Done: the fix is in.\n  - tests green\n✻ Baked for 2m\n❯ a draft", compactScreen(screen, 20))
 	assert.Equal(t, "✻ Baked for 2m\n❯ a draft", compactScreen(screen, 2))
-
-	dialog := "Do you trust this folder?\n\n❯ 1. Yes, proceed\n  2. No, exit\n\nEnter to confirm"
-	assert.Equal(t, "Do you trust this folder?\n❯ 1. Yes, proceed\n  2. No, exit\nEnter to confirm", compactScreen(dialog, 20),
-		"a dialog's ❯ is its cursor: every option and the confirm hint stay")
-
-	boxed := strings.Join([]string{
-		"╭──────────────────────────────╮",
-		"│ Allow this command?          │",
-		"│ ❯ 1. Yes                     │",
-		"│   2. No, and tell Claude why │",
-		"╰──────────────────────────────╯",
-		"  Esc to cancel",
-	}, "\n")
-	assert.Equal(t, "│ Allow this command?          │\n│ ❯ 1. Yes                     │\n"+
-		"│   2. No, and tell Claude why │\n  Esc to cancel", compactScreen(boxed, 20), "a boxed dialog stays whole")
 
 	inline := strings.Join([]string{
 		"⏺ Which one?",
@@ -115,27 +100,94 @@ func TestCompactScreen(t *testing.T) {
 		"────────────────────────────────",
 		"❯ ",
 		"────────────────────────────────",
-		"  ~/work (main) [Opus]",
+		"  [Sonnet] ctx:10%",
+		"  ? for shortcuts",
 	}, "\n")
 	assert.Equal(t, "⏺ Which one?\n❯ 1. the first\n  2. the second\n❯", compactScreen(inline, 20),
-		"only the input box's footer goes")
+		"options above the input box are history; the box's own footer goes")
 
-	history := strings.Join([]string{
+	draft := "──────\n❯ first line\n  second line\n──────\n  ~/work [Opus]\n  ⏸ plan mode on (shift+tab to cycle)"
+	assert.Equal(t, "❯ first line\n  second line", compactScreen(draft, 20), "a draft on two lines stays whole")
+
+	unknown := "──────\n❯ \n──────\n  something we do not know"
+	assert.Equal(t, "❯\n  something we do not know", compactScreen(unknown, 20), "a line not known as footer stays")
+
+	assert.Equal(t, "a\nb", compactScreen("a\n\n\nb\n", 20), "no input line: only blank lines go")
+}
+
+// A dialog on screen is never cut, whatever its shape and whatever input boxes the history above it holds: the
+// question, every option and the confirm hint stay.
+func TestCompactScreenKeepsDialogs(t *testing.T) {
+	history := []string{
 		"────────────────────────────────",
 		"❯ previous request",
 		"────────────────────────────────",
+		"  ~/work (main) [Opus] ctx:44%",
+		"  ⏵⏵ bypass permissions on (shift+tab to cycle)",
 		"⏺ Working",
-		"Do you trust this folder?",
-		"❯ 1. Yes, proceed",
-		"  2. No, exit",
-		"Enter to confirm",
-	}, "\n")
-	assert.Equal(t, "❯ previous request\n⏺ Working\nDo you trust this folder?\n❯ 1. Yes, proceed\n  2. No, exit\nEnter to confirm",
-		compactScreen(history, 20), "an input box in history does not cut the dialog under it")
+	}
+	plain := []string{"Do you trust this folder?", "", "❯ 1. Yes, proceed", "  2. No, exit", "", "Enter to confirm"}
+	boxed := []string{
+		"╭──────────────────────────────╮",
+		"│ Allow this command?          │",
+		"│ ❯ 1. Yes                     │",
+		"│   2. No, and tell Claude why │",
+		"╰──────────────────────────────╯",
+		"  Esc to cancel",
+	}
+	ruled := []string{
+		"────────────────────────────────",
+		" Bash command",
+		"   rm -rf build",
+		" Do you want to proceed?",
+		" ❯ 1. Yes",
+		"   2. Yes, and don't ask again",
+		"   3. No (esc)",
+		"────────────────────────────────",
+		"  Esc to cancel · Tab to amend",
+	}
+	numbered := []string{
+		"────────────────────────────────",
+		"❯ 1. Keep the old name",
+		"  2. Rename it",
+		"────────────────────────────────",
+		"  Enter to select · ↑/↓ to navigate",
+	}
+	cat := func(parts ...[]string) string {
+		var all []string
+		for _, p := range parts {
+			all = append(all, p...)
+		}
 
-	draft := "──────\n❯ first line\n  second line\n──────\n  footer"
-	assert.Equal(t, "❯ first line\n  second line", compactScreen(draft, 20), "a draft on two lines stays whole")
-	assert.Equal(t, "a\nb", compactScreen("a\n\n\nb\n", 20), "no input line: only blank lines go")
+		return strings.Join(all, "\n")
+	}
+
+	cases := map[string]struct {
+		screen string
+		keep   []string
+	}{
+		"plain":                     {cat(plain), []string{"Do you trust this folder?", "2. No, exit", "Enter to confirm"}},
+		"boxed":                     {cat(boxed), []string{"Allow this command?", "2. No, and tell Claude why", "Esc to cancel"}},
+		"ruled":                     {cat(ruled), []string{"Do you want to proceed?", "3. No (esc)", "Esc to cancel"}},
+		"numbered":                  {cat(numbered), []string{"1. Keep the old name", "2. Rename it", "Enter to select"}},
+		"plain after history":       {cat(history, plain), []string{"Do you trust this folder?", "2. No, exit", "Enter to confirm"}},
+		"boxed after history":       {cat(history, boxed), []string{"Allow this command?", "2. No, and tell Claude why", "Esc to cancel"}},
+		"ruled after history":       {cat(history, ruled), []string{"Do you want to proceed?", "3. No (esc)", "Esc to cancel"}},
+		"numbered after history":    {cat(history, numbered), []string{"1. Keep the old name", "2. Rename it", "Enter to select"}},
+		"boxed after two histories": {cat(history, history, boxed), []string{"Allow this command?", "2. No, and tell Claude why", "Esc to cancel"}},
+		"plain after two histories": {cat(history, history, plain), []string{"Do you trust this folder?", "2. No, exit", "Enter to confirm"}},
+		"T-158 fixture": {cat([]string{"────", "❯ previous request", "────", "⏺ Working"}, boxed),
+			[]string{"Allow this command?", "2. No, and tell Claude why", "Esc to cancel"}},
+	}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := compactScreen(c.screen, 40)
+			for _, k := range c.keep {
+				assert.Contains(t, got, k)
+			}
+		})
+	}
 }
 
 func TestTaskShowCompactIsSmall(t *testing.T) {
