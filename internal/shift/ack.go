@@ -314,16 +314,25 @@ func (s *Shift) PendingBrief(role string, tagRule bool) string {
 	return strings.Join(out, "\n\n")
 }
 
-// roleSettings are the settings a socket role starts with: other sessions' messages let in, and a hook that tells it
+// turnEndTimeout is the Stop hook's timeout in seconds; the hook itself returns in milliseconds (TurnEnd).
+const turnEndTimeout = 5
+
+// roleSettings are the settings a socket role starts with: other sessions' messages let in, a hook that tells it
 // its tag and the lines it has not acked whenever its session starts, resumes, or is compacted or cleared (zmina
-// pending --brief).
+// pending --brief), and a Stop hook that has what waits for it posted once the turn is over instead of at the next
+// beat (zmina _turn-end). That one is silent and always exits 0, so a turn's end puts nothing into the context.
 func (s *Shift) roleSettings(name string) string {
 	settings := map[string]any{"crossSessionInbound": "accept"}
 
 	if s.Self != "" {
-		cmd := shellWord(s.Self) + " --crew " + shellWord(s.Crew.Path) + " pending --role " + shellWord(name) + " --brief"
-		hook := []any{map[string]any{"type": "command", "command": cmd}}
-		settings["hooks"] = map[string]any{"SessionStart": []any{map[string]any{"hooks": hook}}}
+		base := shellWord(s.Self) + " --crew " + shellWord(s.Crew.Path)
+		start := []any{map[string]any{"type": "command", "command": base + " pending --role " + shellWord(name) + " --brief"}}
+		stop := []any{map[string]any{"type": "command", "timeout": turnEndTimeout,
+			"command": base + " _turn-end --role " + shellWord(name) + " >/dev/null 2>&1 || true"}}
+		settings["hooks"] = map[string]any{
+			"SessionStart": []any{map[string]any{"hooks": start}},
+			"Stop":         []any{map[string]any{"hooks": stop}},
+		}
 	}
 
 	raw, _ := json.Marshal(settings)
