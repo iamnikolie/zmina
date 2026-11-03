@@ -704,16 +704,12 @@ func isRule(l string) bool {
 
 // compactScreen is a captured screen without what carries no words: trailing spaces, blank lines, rules, and the
 // footer under the input line (path, model, mode). The input line itself stays, with a draft when there is one.
-// The last n lines are kept.
+// The last n lines are kept. A screen with no input box (a dialog, whose ❯ is the selection cursor) keeps every line
+// that has words: its options and its confirm hint are what the reader has to act on.
 func compactScreen(text string, n int) string {
 	lines := strings.Split(text, "\n")
-
-	for i := len(lines) - 1; i >= 0; i-- {
-		if strings.HasPrefix(strings.TrimSpace(lines[i]), "❯") {
-			lines = lines[:i+1]
-
-			break
-		}
+	if end := inputBoxEnd(lines); end >= 0 {
+		lines = lines[:end]
 	}
 
 	var out []string
@@ -732,6 +728,40 @@ func compactScreen(text string, n int) string {
 	}
 
 	return strings.Join(out, "\n")
+}
+
+// inputBoxEnd is the index of the rule that closes Claude Code's input box — a rule, the ❯ line (a draft may run on
+// to more lines), a rule — the last such box on the screen; -1 when there is none. What lies under it is the footer.
+// A ❯ outside such a box (a dialog's selected option) is no input line.
+func inputBoxEnd(lines []string) int {
+	blank := func(i int) bool { return strings.TrimSpace(lines[i]) == "" }
+
+	for i := len(lines) - 1; i >= 0; i-- {
+		if !strings.HasPrefix(strings.TrimSpace(lines[i]), "❯") {
+			continue
+		}
+
+		above := i - 1
+		for above >= 0 && blank(above) {
+			above--
+		}
+
+		if above < 0 || !isRule(lines[above]) {
+			continue
+		}
+
+		for j := i + 1; j < len(lines); j++ {
+			if isRule(lines[j]) {
+				return j
+			}
+
+			if strings.HasPrefix(strings.TrimSpace(lines[j]), "❯") {
+				break
+			}
+		}
+	}
+
+	return -1
 }
 
 func (a *app) keysCommand() *cobra.Command {

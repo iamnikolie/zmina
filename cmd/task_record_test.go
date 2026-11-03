@@ -36,7 +36,7 @@ func TestRoleResultSavedShownAndNotifiedOnce(t *testing.T) {
 	assert.Contains(t, out, "zmina task result T-1")
 	out, _, err = zm(t, file, "queue", "ls")
 	require.NoError(t, err)
-	assert.Equal(t, 1, strings.Count(out, "T-1 result ready (worker-reported): Reply in Russian: ответ. (zmina task result T-1)"))
+	assert.Equal(t, 1, strings.Count(out, "T-1 result ready (worker-reported): Reply in Russian: ответ. (zmina task result T-1 --revision "))
 	require.NoError(t, os.WriteFile(body, []byte(`{"draft":"Revised response"}`), 0600))
 	_, _, err = zm(t, file, "task", "done", "1", "--result", body)
 	require.NoError(t, err)

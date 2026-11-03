@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/iamnikolie/zmina/internal/crew"
@@ -35,6 +36,59 @@ type Document struct {
 
 var taskID = regexp.MustCompile(`^T-[0-9]+$`)
 var revisionID = regexp.MustCompile(`^[a-f0-9]{64}$`)
+
+// revisionPrefix is what --revision takes: the whole hash or its start, eight hex digits at least.
+var revisionPrefix = regexp.MustCompile(`^[a-f0-9]{8,64}$`)
+
+// ShortLen is how many hex digits a revision is shown with: enough to tell it apart, short enough to read.
+const ShortLen = 12
+
+// Short is rev cut to ShortLen hex digits, or longer while another of revs starts the same: what a line shows of it
+// still names that one revision.
+func Short(revs []string, rev string) string {
+	n := min(ShortLen, len(rev))
+	for ; n < len(rev); n++ {
+		clash := false
+		for _, o := range revs {
+			if o != rev && strings.HasPrefix(o, rev[:n]) {
+				clash = true
+				break
+			}
+		}
+		if !clash {
+			break
+		}
+	}
+	return rev[:n]
+}
+
+// Resolve is the whole revision of task id's record that prefix names: the hash itself, or a start of it (at least
+// eight hex digits) that only one of the task's revisions has.
+func Resolve(dir, kind, id, prefix string) (string, error) {
+	if !revisionPrefix.MatchString(prefix) {
+		return "", fmt.Errorf("invalid revision %q: a hash or its first 8 or more hex digits", prefix)
+	}
+	if _, err := path(dir, kind, id, strings.Repeat("0", 64)); err != nil {
+		return "", err
+	}
+	paths, err := filepath.Glob(filepath.Join(dir, kind+"s", id, prefix+"*.json"))
+	if err != nil {
+		return "", err
+	}
+	var found []string
+	for _, p := range paths {
+		if rev := strings.TrimSuffix(filepath.Base(p), ".json"); revisionID.MatchString(rev) {
+			found = append(found, rev)
+		}
+	}
+	switch len(found) {
+	case 0:
+		return "", fmt.Errorf("no %s revision %s for %s", kind, prefix, id)
+	case 1:
+		return found[0], nil
+	}
+	return "", fmt.Errorf("revision %s of %s names %d %ss; give more of it", prefix, id, len(found), kind)
+}
 
 func path(dir, kind, id, revision string) (string, error) {
 	if (kind != "result" && kind != "checkpoint") || !taskID.MatchString(id) || !revisionID.MatchString(revision) {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -92,8 +93,34 @@ func TestCompactScreen(t *testing.T) {
 	assert.Equal(t, "✻ Baked for 2m\n❯ a draft", compactScreen(screen, 2))
 
 	dialog := "Do you trust this folder?\n\n❯ 1. Yes, proceed\n  2. No, exit\n\nEnter to confirm"
-	assert.Equal(t, "Do you trust this folder?\n❯ 1. Yes, proceed", compactScreen(dialog, 20),
-		"what follows the last ❯ is the footer")
+	assert.Equal(t, "Do you trust this folder?\n❯ 1. Yes, proceed\n  2. No, exit\nEnter to confirm", compactScreen(dialog, 20),
+		"a dialog's ❯ is its cursor: every option and the confirm hint stay")
+
+	boxed := strings.Join([]string{
+		"╭──────────────────────────────╮",
+		"│ Allow this command?          │",
+		"│ ❯ 1. Yes                     │",
+		"│   2. No, and tell Claude why │",
+		"╰──────────────────────────────╯",
+		"  Esc to cancel",
+	}, "\n")
+	assert.Equal(t, "│ Allow this command?          │\n│ ❯ 1. Yes                     │\n"+
+		"│   2. No, and tell Claude why │\n  Esc to cancel", compactScreen(boxed, 20), "a boxed dialog stays whole")
+
+	inline := strings.Join([]string{
+		"⏺ Which one?",
+		"❯ 1. the first",
+		"  2. the second",
+		"────────────────────────────────",
+		"❯ ",
+		"────────────────────────────────",
+		"  ~/work (main) [Opus]",
+	}, "\n")
+	assert.Equal(t, "⏺ Which one?\n❯ 1. the first\n  2. the second\n❯", compactScreen(inline, 20),
+		"only the input box's footer goes")
+
+	draft := "──────\n❯ first line\n  second line\n──────\n  footer"
+	assert.Equal(t, "❯ first line\n  second line", compactScreen(draft, 20), "a draft on two lines stays whole")
 	assert.Equal(t, "a\nb", compactScreen("a\n\n\nb\n", 20), "no input line: only blank lines go")
 }
 
@@ -129,8 +156,8 @@ func TestTaskShowCompactIsSmall(t *testing.T) {
 	res, _, err := zm(t, file, "task", "result", "1")
 	require.NoError(t, err)
 	assert.Contains(t, res, "summary:\nShipped. Detail.", "the summary whole")
-	assert.LessOrEqual(t, utf8.RuneCountInString(res), 2200)
-	assert.Contains(t, res, "full: zmina task result T-1 --full\n")
+	assert.LessOrEqual(t, utf8.RuneCountInString(res), 2300, "the full hint carries the crew path, a long temp path here")
+	assert.Regexp(t, `full: zmina --crew '[^']+' task result T-1 --revision [0-9a-f]{12} --full\n`, res)
 
 	res, _, err = zm(t, file, "task", "result", "1", "--full")
 	require.NoError(t, err)
@@ -138,8 +165,8 @@ func TestTaskShowCompactIsSmall(t *testing.T) {
 
 	q, _, err := zm(t, file, "queue", "ls")
 	require.NoError(t, err)
-	assert.Contains(t, q, "T-1 result ready (worker-reported): Shipped. (zmina task result T-1)")
-	assert.NotRegexp(t, `[0-9a-f]{40}`, q, "no revision hash in the notice")
+	assert.Regexp(t, `T-1 result ready \(worker-reported\): Shipped\. \(zmina task result T-1 --revision [0-9a-f]{12}\)`, q)
+	assert.NotRegexp(t, `[0-9a-f]{40}`, q, "the revision is short in the notice")
 }
 
 func TestLogAndListsAreOneLineEach(t *testing.T) {
@@ -179,4 +206,73 @@ func TestPacketAsksForAOneLineReport(t *testing.T) {
 	assert.Contains(t, out, "task result T-1 --file")
 	assert.Contains(t, out, "that tells the dispatcher")
 	assert.Contains(t, out, "never the result again")
+}
+
+// Two results of one task whose summaries start the same are two notices, each naming its own revision, and the
+// command in each opens that revision rather than the latest.
+func TestResultRevisionsWithTheSameGistAreTwoNotices(t *testing.T) {
+	file := testCrew(t, "  dev: {}\n")
+	_, _, err := zm(t, file, "task", "new", "dev", "fix it")
+	require.NoError(t, err)
+
+	body := filepath.Join(t.TempDir(), "result.json")
+	for _, done := range []string{"first pass", "second pass"} {
+		require.NoError(t, os.WriteFile(body, []byte(`{"summary":"Fixed. More words.","done":"`+done+`",`+
+			`"remaining":"none","open_questions":"none","artifacts":"none","next_step":"none"}`), 0o600))
+		_, _, err = zm(t, file, "task", "result", "1", "--file", body)
+		require.NoError(t, err)
+	}
+
+	q, _, err := zm(t, file, "queue", "ls", "--full")
+	require.NoError(t, err)
+	revs := regexp.MustCompile(`T-1 result ready \(worker-reported\): Fixed\. \(zmina task result T-1 --revision ([0-9a-f]{12})\)`).
+		FindAllStringSubmatch(q, -1)
+	require.Len(t, revs, 2, q)
+	assert.NotEqual(t, revs[0][1], revs[1][1])
+
+	seen := map[string]bool{}
+	for _, r := range revs {
+		out, _, err := zm(t, file, "task", "result", "1", "--revision", r[1])
+		require.NoError(t, err)
+		assert.Contains(t, out, "result: "+r[1])
+		for _, done := range []string{"first pass", "second pass"} {
+			if strings.Contains(out, "done: "+done) {
+				seen[done] = true
+			}
+		}
+	}
+	assert.Len(t, seen, 2, "each notice opens its own revision")
+}
+
+// task result --revision <old> with a long section prints a full hint that opens <old> in this crew, not the latest.
+func TestHistoricalResultHintKeepsRevision(t *testing.T) {
+	for _, kind := range []string{"result", "checkpoint"} {
+		t.Run(kind, func(t *testing.T) {
+			file := testCrew(t, "  dev: {}\n")
+			_, _, err := zm(t, file, "task", "new", "dev", "fix it")
+			require.NoError(t, err)
+
+			body := filepath.Join(t.TempDir(), "record.json")
+			var revs []string
+			for _, done := range []string{"OLD " + strings.Repeat("o", 400), "NEW " + strings.Repeat("n", 400)} {
+				require.NoError(t, os.WriteFile(body, []byte(`{"summary":"Step.","done":"`+done+`",`+
+					`"remaining":"none","open_questions":"none","artifacts":"none","next_step":"none"}`), 0o600))
+				out, _, err := zm(t, file, "task", kind, "1", "--file", body)
+				require.NoError(t, err)
+				revs = append(revs, strings.Fields(out)[2])
+			}
+
+			old, _, err := zm(t, file, "task", kind, "1", "--revision", revs[0][:10])
+			require.NoError(t, err)
+			m := regexp.MustCompile(`full: zmina --crew (\S+) task ` + kind + ` T-1 --revision ([0-9a-f]+) --full\n`).FindStringSubmatch(old)
+			require.NotNil(t, m, old)
+			assert.Equal(t, quoteCommandArg(file), m[1], "the hint names this crew")
+			assert.True(t, strings.HasPrefix(revs[0], m[2]), "the hint names the revision shown")
+
+			full, _, err := zm(t, file, "task", kind, "1", "--revision", m[2], "--full")
+			require.NoError(t, err)
+			assert.Contains(t, full, "OLD "+strings.Repeat("o", 400))
+			assert.NotContains(t, full, "NEW ")
+		})
+	}
 }

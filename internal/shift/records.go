@@ -25,6 +25,10 @@ func (s *Shift) NotifyRecords() {
 	sort.Strings(ids)
 	for _, id := range ids {
 		list := refs[id]
+		revs := make([]string, len(list))
+		for i, ref := range list {
+			revs[i] = ref.Revision
+		}
 		for _, ref := range list {
 			key := "result/" + id + "/" + ref.Revision
 			if s.State.RecordNotified[key] {
@@ -38,7 +42,9 @@ func (s *Shift) NotifyRecords() {
 			if g := resultGist(d); g != "" {
 				text += ": " + g
 			}
-			text += " (zmina task result " + id + ")"
+			// The revision is in the notice itself: it is what the queue keeps and what tells two results of one
+			// task apart when their gists are the same, and the command opens that one, not the latest.
+			text += " (zmina task result " + id + " --revision " + record.Short(revs, ref.Revision) + ")"
 			if _, err := s.Note(d.Role, text, false); err != nil {
 				return
 			}

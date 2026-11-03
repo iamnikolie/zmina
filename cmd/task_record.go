@@ -35,8 +35,12 @@ func (a *app) taskRecordCommand(kind string) *cobra.Command {
 				}
 				rev = ref.Revision
 			}
+			src, rev, err := resolveRecord(s, t, kind, rev)
+			if err != nil {
+				return err
+			}
 			if asJSON {
-				d, err := record.Load(s.Crew.StateDir(), kind, recordTask(t, kind, rev), rev)
+				d, err := record.Load(s.Crew.StateDir(), kind, src, rev)
 				if err != nil {
 					return err
 				}
@@ -46,7 +50,7 @@ func (a *app) taskRecordCommand(kind string) *cobra.Command {
 			if full {
 				view = recordFull
 			}
-			return a.printTaskRecord(s, t, kind, rev, view)
+			return a.printRecord(s, t, kind, src, rev, view)
 		})
 	}}
 	c.Flags().StringVar(&file, "file", "", "JSON file mapping role section names to strings; - reads stdin")
@@ -122,7 +126,12 @@ const (
 )
 
 func (a *app) printTaskRecord(s *shift.Shift, t task.Task, kind, revision string, view int) error {
-	d, err := record.Load(s.Crew.StateDir(), kind, recordTask(t, kind, revision), revision)
+	return a.printRecord(s, t, kind, recordTask(t, kind, revision), revision, view)
+}
+
+// printRecord prints revision of the record kept under task src (t's own id, or the task it was carried from).
+func (a *app) printRecord(s *shift.Shift, t task.Task, kind, src, revision string, view int) error {
+	d, err := record.Load(s.Crew.StateDir(), kind, src, revision)
 	if err != nil {
 		return err
 	}
@@ -153,7 +162,9 @@ func (a *app) printTaskRecord(s *shift.Shift, t task.Task, kind, revision string
 		fmt.Fprintf(a.out, "%s: %s\n", section.Name, short)
 	}
 	if clipped {
-		fmt.Fprintf(a.out, "full: zmina task %s %s --full\n", kind, t.ID)
+		// The hint opens this revision of this crew's record, not whatever is latest by the time it is run.
+		fmt.Fprintf(a.out, "full: zmina --crew %s task %s %s --revision %s --full\n",
+			quoteCommandArg(s.Crew.Path), kind, t.ID, revision[:min(record.ShortLen, len(revision))])
 	}
 	return nil
 }
@@ -177,6 +188,33 @@ func recordGist(d record.Document) string {
 
 // oneLine folds every run of whitespace, newlines too, into one space.
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// resolveRecord is the task whose records hold rev (t itself, or the task its current record was carried from) and
+// rev whole: --revision takes a hash's start as well as the hash.
+func resolveRecord(s *shift.Shift, t task.Task, kind, rev string) (string, string, error) {
+	ref := t.Result
+	if kind == "checkpoint" {
+		ref = t.Checkpoint
+	}
+	srcs := []string{t.ID}
+	if ref != nil && ref.Task != "" && ref.Task != t.ID {
+		srcs = []string{ref.Task, t.ID}
+		if !strings.HasPrefix(ref.Revision, rev) {
+			srcs = []string{t.ID, ref.Task}
+		}
+	}
+	var first error
+	for _, src := range srcs {
+		whole, err := record.Resolve(s.Crew.StateDir(), kind, src, rev)
+		if err == nil {
+			return src, whole, nil
+		}
+		if first == nil {
+			first = err
+		}
+	}
+	return "", "", first
+}
 
 func recordTask(t task.Task, kind, revision string) string {
 	ref := t.Result

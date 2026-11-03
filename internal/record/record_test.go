@@ -40,3 +40,39 @@ func TestRoleRecordIdempotencyRevisionAndCorruption(t *testing.T) {
 	_, err = Load(dir, "result", "../x", ref.Revision)
 	require.Error(t, err)
 }
+
+func TestResolveAndShortName(t *testing.T) {
+	dir := t.TempDir()
+	d := Document{Version: 1, Kind: "result", Task: "T-1", Role: "dev", Shape: crew.HandoffShape{Sections: []crew.Section{{Name: "summary"}}}, Values: map[string]string{"summary": "one"}}
+	ref, err := Save(dir, d)
+	require.NoError(t, err)
+
+	got, err := Resolve(dir, "result", "T-1", ref.Revision[:8])
+	require.NoError(t, err)
+	assert.Equal(t, ref.Revision, got)
+	got, err = Resolve(dir, "result", "T-1", ref.Revision)
+	require.NoError(t, err)
+	assert.Equal(t, ref.Revision, got)
+
+	_, err = Resolve(dir, "result", "T-1", ref.Revision[:7])
+	require.ErrorContains(t, err, "8 or more")
+	_, err = Resolve(dir, "result", "T-1", "../../x")
+	require.ErrorContains(t, err, "invalid revision")
+	_, err = Resolve(dir, "result", "T-2", ref.Revision[:12])
+	require.ErrorContains(t, err, "no result revision")
+
+	// Two files that share a start: the short form grows until it names one, and a short prefix is ambiguous.
+	twin := ref.Revision[:20] + "0000000000000000000000000000000000000000000f"
+	if twin == ref.Revision {
+		twin = twin[:63] + "e"
+	}
+	require.NoError(t, os.WriteFile(dir+"/results/T-1/"+twin+".json", []byte("{}"), 0o600))
+	_, err = Resolve(dir, "result", "T-1", ref.Revision[:12])
+	require.ErrorContains(t, err, "names 2 results")
+
+	revs := []string{ref.Revision, twin}
+	short := Short(revs, ref.Revision)
+	assert.Greater(t, len(short), 20)
+	assert.True(t, len(short) < 64 || twin == ref.Revision)
+	assert.Equal(t, ref.Revision[:ShortLen], Short([]string{ref.Revision}, ref.Revision))
+}
