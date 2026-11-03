@@ -33,7 +33,7 @@ dispatcher: dispatcher                   # this role is always kept up
 stuck_minutes: 90                        # busy longer -> the dispatcher hears of it
 idle_minutes: 30                         # idle longer with no active task -> the dispatcher hears of it
 release_idle_minutes: 30                 # a keep: manual role idle longer is released: tasks to later, down (default off)
-boot_grace: 2m                           # a started role is left this long before lines are typed into it
+boot_grace: 2m                           # the longest a started role is left to boot: its lines go once its boot turn is over, at most this long after the start
 remote_control: true                     # open roles to Remote Control (per role too); default true
 delivery: native                         # how lines reach roles: native (default: the agent's own channel) | tmux (per role too)
 renotify: 30m                            # an unacked line is said again this often (default 30m; off)
@@ -290,8 +290,8 @@ line; control characters are dropped — every line zmina types goes without the
 pane is a key). A text over 1000 characters is never cut: its whole text goes to the crew's inbox and the note is its
 head and `… (+N chars, full: zmina inbox show in-<id>)`. Notes from `zmina note` and the watches are **signals**: a queue of their own, refused at
 intake when 20 wait and never dropped once accepted. The ticker's health notes are a second queue,
-deduplicated and capped at 20 on their own. Once the dispatcher is idle and has been up
-`boot_grace`, with nothing typed in its input line (a dim suggestion of Claude Code's counts as empty; a draft
+deduplicated and capped at 20 on their own. Once the dispatcher is booted (below) and idle,
+with nothing typed in its input line (a dim suggestion of Claude Code's counts as empty; a draft
 holds the queue until it is sent or cleared), everything waiting goes as one line, signals first —
 `[zmina] mr-watch: !35 — 4 new threads (reviewer X) · dev: ended`. A note still waiting with the
 same source and text is not queued twice; once told, the same note is news again. Event `noted`
@@ -953,9 +953,12 @@ alone for the beat — never taken as ended; a role being put down is left alone
    dialog or an attached terminal makes it wait. The dispatcher hears `released dev2 after 45m idle
    → L-15, L-16`; the log has `releasing`, `released` and a `down`.
 5. Watches that are due run (their sources outside the lock), and their news joins the notes.
-6. When the dispatcher is idle and has been up `boot_grace`, the waiting signals and notes go to it (posted to its
+6. A role is **booted** once the conversation of this start shows its boot turn over (a turn that
+   ended after the start: a resumed conversation's old turns do not count), or once it has been up
+   `boot_grace`, whichever comes first; so its first line goes at the first beat after it read its
+   boot, not minutes later. When the dispatcher is booted and idle, the waiting signals and notes go to it (posted to its
    own channel, see Delivery, else typed) as one line: `[zmina] mr-watch: !35 … · designer: ended · director: busy for 95 min on
-   T-3`. Then each other role that is up `boot_grace` and idle gets its first queued line; a line
+   T-3`. Then each other role that is booted and idle gets its first queued line; a line
    tmux refuses is tried three beats, then kept as failed (`zmina queue`). A typed line is sent or not left
    typed: Claude Code can take a long line typed in one burst, its Enter with it, as a paste and keep it in the
    input line, so a line still there a moment after its Enter gets Enter again (twice), and one that stays is
@@ -985,7 +988,9 @@ alone for the beat — never taken as ended; a role being put down is left alone
    hears `<role>: fills 60k right after a trim, over its context_max 50k …`.
 8. Screens: each up role's screen and transcript end are read. No input line for 3 min (a dialog,
    a login, a permission question) → `<role>: no input line on its screen for 3 min, waiting on:
-   <the screen's last lines>` (once per stretch). A last turn that ended in an API error →
+   <the screen's last lines>` (once per stretch); a role still booting with no input line 45 s after
+   its start is held by a dialog and nothing queued reaches it → `<role>: up 60 s and still no input
+   line, a dialog holds its boot and its queued lines wait: <the screen's last lines>` (once). A last turn that ended in an API error →
    `<role>: its last turn ended in an API error: …` (once per error). A usage-limit notice at the
    bottom of the screen → `<role>: stopped by a usage limit: …` (once per notice). Folder trust in
    a role's own task worktree is answered (`trusted` in the log).
@@ -1037,7 +1042,7 @@ and exists nowhere else. It is written whole (rename) and never over a file zmin
 - A second piece of code work while `dev` holds one: `zmina up dev --as 2` (after the owner's OK).
 - A seat for a recorded task: `zmina up dev --as 2 --task T-14` starts it in the task's worktree and
   hands it the task; no `SendMessage` needed for the ask itself.
-- `<role>: no input line …` — a stuck prompt (folder trust elsewhere, a question, a login):
+- `<role>: no input line …` or `<role>: up … still no input line, a dialog holds its boot` — a stuck prompt (folder trust elsewhere, a question, a login; at boot, its queued lines wait behind it):
   `zmina peek <role>` (`--raw` when the cleaned screen hides what you need), then `zmina keys <role> …`, or ask the owner. `stopped by a usage limit` —
   nothing to press; say when it resets and hold its work.
 - A zmina line with ids (`S-12 …`) and a line ending `(zmina S-14)` wait for your ack: once each is handled — a task recorded, routed, answered, or nothing to do — `zmina ack S-12 S-14`, one

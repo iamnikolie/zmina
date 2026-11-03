@@ -186,12 +186,16 @@ type fakeReg struct {
 	outside map[string]*registry.Session
 	context map[string]int
 	errors  map[string]string
-	// ended marks a session whose last turn is over.
-	ended map[string]bool
+	// ended marks a session whose last turn is over; endedAt one whose last turn ended at that time.
+	ended   map[string]bool
+	endedAt map[string]time.Time
 }
 
 func (f *fakeReg) Last(id string) (registry.Turn, error) {
 	t := registry.Turn{Context: f.context[id], Ended: f.ended[id]}
+	if at, ok := f.endedAt[id]; ok {
+		t.Ended, t.At = true, at
+	}
 	if e := f.errors[id]; e != "" {
 		t.Error, t.ErrorID = e, "e-"+e
 	}
@@ -350,7 +354,7 @@ func fixtureWith(t *testing.T, body string) fix {
 	f := fix{
 		s:   s,
 		tm:  &fakeTmux{attached: map[string]bool{}, drafts: map[string]string{}, suggestions: map[string]string{}, up: map[string]int{}, dead: map[string]bool{}, typed: map[string][]string{}, keys: map[string][]string{}, argv: map[string][]string{}, probeErr: map[string]error{}},
-		rg:  &fakeReg{byPID: map[int]*registry.Session{}, outside: map[string]*registry.Session{}, context: map[string]int{}, errors: map[string]string{}},
+		rg:  &fakeReg{byPID: map[int]*registry.Session{}, outside: map[string]*registry.Session{}, context: map[string]int{}, errors: map[string]string{}, endedAt: map[string]time.Time{}},
 		tk:  &fakeTasks{},
 		lt:  &fakeLater{},
 		ev:  &fakeEvents{},

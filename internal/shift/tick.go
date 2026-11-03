@@ -589,9 +589,28 @@ func (s *Shift) session(name string) *registry.Session {
 	return sess
 }
 
+// booted reports whether a role's start is over: the conversation of this start's session shows a turn that ended
+// at or after the start (its boot turn), or the role has been up boot_grace, the longest a boot is waited for. So a
+// queued line goes as soon as the boot is read, not a fixed time after the start.
+func (s *Shift) booted(name string, now time.Time) bool {
+	rs := s.State.Role(name)
+	if now.Sub(rs.Started) >= s.Crew.BootGraceD() {
+		return true
+	}
+
+	sess := s.session(name)
+	if sess == nil {
+		return false
+	}
+
+	turn, err := s.registryFor(name).Last(sess.SessionID)
+
+	return err == nil && turn.Ended && !turn.At.IsZero() && !turn.At.Before(rs.Started)
+}
+
 // ready reports whether a role is up, booted and idle, so a typed line lands at its prompt.
 func (s *Shift) ready(name string, now time.Time) bool {
-	if now.Sub(s.State.Role(name).Started) < s.Crew.BootGraceD() {
+	if !s.booted(name, now) {
 		return false
 	}
 
@@ -609,7 +628,7 @@ func (s *Shift) atPrompt(name string, now time.Time) bool {
 		return true
 	}
 
-	if now.Sub(s.State.Role(name).Started) < s.Crew.BootGraceD() {
+	if !s.booted(name, now) {
 		return false
 	}
 
