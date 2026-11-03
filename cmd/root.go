@@ -38,11 +38,16 @@ type app struct {
 	cockpitPeers *uiPeerCache
 	// uiLogins hands out one-time login codes for zmina ui (nil: none).
 	uiLogins *uiLogins
+	// spawn starts a detached zmina with these arguments (nil: spawnDetached; tests set a fake).
+	spawn func(args []string) error
 }
 
 // NewRoot builds the whole command tree writing to out and errw.
-func NewRoot(out, errw io.Writer) *cobra.Command {
-	a := &app{out: out, err: errw}
+func NewRoot(out, errw io.Writer) *cobra.Command { return newRoot(&app{out: out, err: errw}) }
+
+// newRoot builds the command tree over an app (tests set its fakes).
+func newRoot(a *app) *cobra.Command {
+	out, errw := a.out, a.err
 
 	root := &cobra.Command{
 		Use:   "zmina",
@@ -79,7 +84,7 @@ Run 'zmina skill' for the full agent reference.`,
 		a.stopCommand(), a.startCommand(), a.queueCommand(), a.stateCommand(), a.tickerCommand(),
 		a.launchdCommand(), a.doctorCommand(), a.usageCommand(), a.skillCommand(), a.versionCommand(), a.uiCommand(),
 		a.messageCommand(), a.contextCommand(), a.reportCommand(), a.nodeCommand(), a.tellCommand(), a.codexCommand(), a.terminalCommand(),
-		a.ackCommand(), a.pendingCommand())
+		a.ackCommand(), a.pendingCommand(), a.turnEndCommand())
 
 	return root
 }

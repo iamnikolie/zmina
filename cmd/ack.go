@@ -128,19 +128,28 @@ func (a *app) pendingCommand() *cobra.Command {
 // hookSource is the source a SessionStart hook is run for (startup, resume, clear, compact), from the JSON Claude
 // Code gives it on stdin; "" when run by hand.
 func hookSource(in io.Reader) string {
+	return readHook(in).Source
+}
+
+// hookInput is the part of the JSON Claude Code gives a hook on stdin that zmina reads.
+type hookInput struct {
+	Source    string `json:"source"`
+	SessionID string `json:"session_id"`
+}
+
+// readHook reads a hook's input: empty when run by hand (a terminal on stdin) or when it is not JSON.
+func readHook(in io.Reader) hookInput {
 	if f, ok := in.(*os.File); ok {
 		if st, err := f.Stat(); err != nil || st.Mode()&os.ModeCharDevice != 0 {
-			return ""
+			return hookInput{}
 		}
 	}
 
-	var hook struct {
-		Source string `json:"source"`
-	}
+	var hook hookInput
 
 	_ = json.NewDecoder(io.LimitReader(in, 1<<16)).Decode(&hook)
 
-	return hook.Source
+	return hook
 }
 
 // trimmed reports a session-start source after which the boot line may be gone.

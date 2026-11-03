@@ -200,6 +200,16 @@ the tag (no tag in its state) is typed into until its next start. A posted line 
 message id (`origin.msg_id`); until then the next one waits, as a typed line waits to land. Posted lines go, like typed
 ones, when the role is between turns, never into a dialog.
 
+A posted line does not wait for the beat: zmina's settings also carry a `Stop` hook, `zmina _turn-end --role <role>`
+(timeout 5 s, output to `/dev/null`, `|| true`). It reads the session id, starts a detached copy of itself and returns
+in milliseconds; the copy waits up to 10 s for that session to go idle, then posts under the lock what the beat would
+post now — the dispatcher's signals, then the role's first queued line — by the same rules (booted, between turns,
+the line before it shown). It never types: a slash command, a role typed into, a session that stays busy (a
+background shell) wait for the beat as before. So a role's next line, its first after the boot included, goes about a
+second after its turn ends (`posted … by turn-end` in the log). The hook prints nothing and never blocks or continues
+a turn, so it adds no tokens: Claude Code records only a `stop_hook_summary` line, which is not sent to the model. A
+role started by an earlier zmina has no such hook until its next start.
+
 Typed into the input line as before: a slash command (a posted one is plain text), a role whose `args`
 pass their own `--settings` (zmina's are not passed: a warning), a role with `delivery: tmux`, a role started by an
 earlier zmina (no settings: until its next start), and a session with no inbox socket or another `peerProtocol`.

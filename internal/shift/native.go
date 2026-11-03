@@ -179,3 +179,41 @@ func postable(line string) bool { return !strings.HasPrefix(strings.TrimSpace(li
 
 // unavailable reports a post that never started.
 func unavailable(err error) bool { return errors.Is(err, peer.ErrUnavailable) }
+
+// TurnOver reports whether a role's session is the one a Stop hook ran for and its turn is over (status idle), so a
+// line posted now starts a turn of its own.
+func (s *Shift) TurnOver(name, sessionID string) bool {
+	sess := s.session(name)
+
+	return sess != nil && sess.SessionID == sessionID && sess.Status == "idle"
+}
+
+// TurnEnd posts what waits for a role whose turn just ended (its Stop hook), the way a beat would post it: only to
+// its own channel, only past its boot and between turns, each line once the one before it showed, the dispatcher's
+// signals before its queue. Nothing is typed: a slash command, or a role whose lines are typed, waits for the beat.
+// It returns the lines for the log.
+func (s *Shift) TurnEnd(name, sessionID string) []string {
+	now := s.Now()
+
+	sess := s.native(name, now)
+	if sess == nil || sess.SessionID != sessionID {
+		return nil
+	}
+
+	if name == s.Crew.Dispatcher {
+		if line := s.deliver(now); line != "" {
+			return []string{"told the dispatcher: " + line}
+		}
+	}
+
+	rs := s.State.Role(name)
+	if rs.Sent != nil || len(rs.Inbox) == 0 || !postable(rs.Inbox[0]) {
+		return nil
+	}
+
+	if line := s.deliverInbox(name, now); line != "" {
+		return []string{line}
+	}
+
+	return nil
+}
