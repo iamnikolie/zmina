@@ -262,7 +262,7 @@ func TestLogAndListsAreOneLineEach(t *testing.T) {
 	assert.Contains(t, out, "a short title")
 }
 
-func TestPacketAsksForAOneLineReport(t *testing.T) {
+func TestPacketAsksForTheResultAlone(t *testing.T) {
 	file := testCrew(t, "  dev: {}\n")
 	_, _, err := zm(t, file, "task", "new", "dev", "fix the login")
 	require.NoError(t, err)
@@ -271,7 +271,8 @@ func TestPacketAsksForAOneLineReport(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, "task result T-1 --file")
 	assert.Contains(t, out, "that tells the dispatcher")
-	assert.Contains(t, out, "never the result again")
+	assert.Contains(t, out, "no message of your own about the result")
+	assert.NotContains(t, out, "A message to the dispatcher besides", "a line of the worker's own reaches the dispatcher next to the result notice")
 }
 
 // Two results of one task whose summaries start the same are two notices, each naming its own revision, and the

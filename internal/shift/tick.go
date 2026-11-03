@@ -224,6 +224,11 @@ func (s *Shift) trim(name string, r *crew.Role, now time.Time, tasks []string) s
 		}
 
 		rs.TrimPending, rs.TrimSession, rs.TrimBase = false, sess.SessionID, used
+		// The trim queued its own recovery line: the drop it caused is the new baseline, not a native compaction
+		// for observeRecovery to post a second line for.
+		if rs.RecoverySession == sess.SessionID {
+			rs.RecoveryContext, rs.RecoveryDrops = used, 0
+		}
 		if used > limit {
 			note := fmt.Sprintf("%s: fills %s right after a trim, over its context_max %s; not trimmed again in "+
 				"this conversation — raise context_max", name, Tokens(used), Tokens(limit))

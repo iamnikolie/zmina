@@ -1076,7 +1076,7 @@ and exists nowhere else. It is written whole (rename) and never over a file zmin
 
 A queued role delivery failure immediately queues a dispatcher health note with the role, related task IDs and reason, even while delivery retries remain. Inspect `zmina queue ls` to recover the line.
 
-Task handoffs from `up --task` queue only a short packet locator. The immutable JSON under `<crew>/handoffs/T-n/<content-hash>.json` preserves the full request, latest Note and checkout metadata; read it before working. Multiline task bodies never pass through terminal input. The packet tells the worker how to report: save the result with `zmina task result T-n --file <json>` (that notifies the dispatcher); a message to the dispatcher besides is one line, the gist and `zmina task result T-n`, never the result again.
+Task handoffs from `up --task` queue only a short packet locator. The immutable JSON under `<crew>/handoffs/T-n/<content-hash>.json` preserves the full request, latest Note and checkout metadata; read it before working. Multiline task bodies never pass through terminal input. The packet tells the worker how to report: save the result with `zmina task result T-n --file <json>` (that notifies the dispatcher with the gist and the command that shows it), and no message of the worker's own about the result besides: it would reach the dispatcher as a second line with its own ack.
 
 ### Role-shaped handoffs
 
@@ -1134,7 +1134,7 @@ Task JSON optionally retains `conversations`: node/crew/config path, role or cop
 
 `context followup add <text> [--task T-1] [--source reference]` records an unresolved promise in optional `<crew>/dispatcher.json`; `followup resolve F-1`, `followup ls [--all]` manage it. `context read T-1 [--revision hash]` marks a result read by the dispatcher, not relayed to the owner. Follow-ups/read cursors are durable source data; recovery files are disposable projections. Corrupt or future dispatcher state is reported, never overwritten by these commands.
 
-Dispatcher boot includes a recovery locator when there is open data. Zmina-managed compaction/clear generates a pack first and restores a locator before routine notices; native session changes or a context reduction below half the last known value on two positive observations trigger opportunistic refresh on a later tick. Unknown context readings leave the baseline unchanged; a rebound cancels a pending reduction. Native compaction cannot always be intercepted before it happens. A snapshot failure prevents managed trimming rather than silently discarding recorded threads. Unrecorded promises still require the dispatcher to record a follow-up or task note.
+Dispatcher boot includes a recovery locator when there is open data. Zmina-managed compaction/clear generates a pack first and restores a locator before routine notices; native session changes or a context reduction below half the last known value on two positive observations trigger opportunistic refresh on a later tick; the reduction a managed trim causes is not one (its size once the trim shows is the new baseline), so one compaction gives one recovery line. Unknown context readings leave the baseline unchanged; a rebound cancels a pending reduction. Native compaction cannot always be intercepted before it happens. A snapshot failure prevents managed trimming rather than silently discarding recorded threads. Unrecorded promises still require the dispatcher to record a follow-up or task note.
 
 ### Explicit task acceptance
 
