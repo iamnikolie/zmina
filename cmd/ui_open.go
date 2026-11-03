@@ -120,20 +120,59 @@ func dropUIState() {
 // runningCockpit is the address to open when a cockpit already runs on this machine: its page with a one-time
 // login when it needs one. ok is false when none answers.
 func runningCockpit() (string, bool) {
+	r, ok := recordedCockpit()
+	if !ok {
+		return "", false
+	}
+
+	return cockpitHandoff(r.URL, r.Handoff, "")
+}
+
+// runningCockpitAt is runningCockpit for an explicit --addr: the handoff secret goes only to the cockpit recorded
+// at that very address; any other one there is asked with the token. ok is false when neither signs in.
+func runningCockpitAt(addr, token string) (string, bool) {
+	url := "http://" + addr + "/"
+
+	secret := ""
+	if r, ok := recordedCockpit(); ok && r.URL == url {
+		secret = r.Handoff
+	}
+
+	if secret == "" && token == "" {
+		return "", false
+	}
+
+	return cockpitHandoff(url, secret, token)
+}
+
+func recordedCockpit() (uiRunning, bool) {
 	var r uiRunning
 
 	raw, err := os.ReadFile(uiStatePath())
 	if err != nil || json.Unmarshal(raw, &r) != nil || r.URL == "" || r.Handoff == "" {
-		return "", false
+		return uiRunning{}, false
 	}
 
-	req, err := http.NewRequest(http.MethodPost, strings.TrimSuffix(r.URL, "/")+"/api/handoff", nil)
+	return r, true
+}
+
+// cockpitHandoff asks the cockpit at url for a one-time login code, showing the handoff secret or the token
+// (as the page's cookie, never in the address).
+func cockpitHandoff(url, secret, token string) (string, bool) {
+	req, err := http.NewRequest(http.MethodPost, strings.TrimSuffix(url, "/")+"/api/handoff", nil)
 	if err != nil {
 		return "", false
 	}
 
 	req.Header.Set("X-Zmina", "1")
-	req.Header.Set("X-Zmina-Handoff", r.Handoff)
+
+	if secret != "" {
+		req.Header.Set("X-Zmina-Handoff", secret)
+	}
+
+	if token != "" {
+		req.AddCookie(&http.Cookie{Name: uiCookie, Value: token})
+	}
 
 	client := http.Client{Timeout: 2 * time.Second}
 
@@ -154,10 +193,10 @@ func runningCockpit() (string, bool) {
 	}
 
 	if got.Login {
-		return r.URL + "?login=" + got.Code, true
+		return url + "?login=" + got.Code, true
 	}
 
-	return r.URL, true
+	return url, true
 }
 
 // serveLogin answers the handoff call and spends ?login= codes; it reports whether it answered the request.
@@ -174,6 +213,13 @@ func serveLogin(w http.ResponseWriter, r *http.Request, l *uiLogins, token strin
 		}
 
 		code, ok := l.mint(r.Header.Get("X-Zmina-Handoff"))
+		if !ok && token != "" {
+			// A zmina ui that knows the token (--addr of a cockpit it did not record) signs in the same way.
+			if c, err := r.Cookie(uiCookie); err == nil && subtle.ConstantTimeCompare([]byte(c.Value), []byte(token)) == 1 {
+				code, ok = l.code(), true
+			}
+		}
+
 		if !ok {
 			http.Error(w, "forbidden", http.StatusForbidden)
 

@@ -89,9 +89,23 @@ func (a *app) uiCommand() *cobra.Command {
 
 			ln, err := net.Listen("tcp", addr)
 			if err != nil {
-				// One page for every crew: a second zmina ui opens the one that runs.
+				// One page for every crew: a second zmina ui opens the one that runs, signed in.
+				if url, ok := runningCockpitAt(addr, token); ok {
+					fmt.Fprintln(a.out, "zmina ui already runs on", strings.SplitN(url, "?", 2)[0])
+
+					if !noOpen {
+						openBrowser(url)
+					}
+
+					return nil
+				}
+
 				if url := runningUI(addr, token); url != "" {
 					fmt.Fprintln(a.out, "zmina ui already runs on", url)
+					if token != "" {
+						fmt.Fprintln(a.err, "zmina: it is an older zmina ui with no login codes: a browser not signed in "+
+							"there opens it with ?token= once")
+					}
 
 					if !noOpen {
 						openBrowser(url)
@@ -164,14 +178,25 @@ func isLoopback(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// runningUI is the page's address when a zmina ui already answers on addr, else empty.
+// runningUI is the page's address when a zmina ui already answers on addr, else empty: an older one, which hands out
+// no login codes.
 func runningUI(addr, token string) string {
-	// The token never goes into the address opened: a browser signed in has the cookie, another signs in once.
+	// The token goes in no address, this ping's or the one opened: a browser signed in has the cookie, another
+	// signs in once.
 	url := "http://" + addr + "/"
+
+	req, err := http.NewRequest(http.MethodGet, url+"api/ping", nil)
+	if err != nil {
+		return ""
+	}
+
+	if token != "" {
+		req.AddCookie(&http.Cookie{Name: uiCookie, Value: token})
+	}
 
 	client := http.Client{Timeout: 2 * time.Second}
 
-	resp, err := client.Get("http://" + addr + "/api/ping?token=" + token)
+	resp, err := client.Do(req)
 	if err != nil {
 		return ""
 	}
@@ -249,7 +274,8 @@ func (a *app) extraCrew() string {
 	return os.Getenv("ZMINA_CREW")
 }
 
-func openBrowser(url string) {
+// openBrowser opens url in the browser; a test replaces it to see what would be opened.
+var openBrowser = func(url string) {
 	name := "xdg-open"
 	if runtime.GOOS == "darwin" {
 		name = "open"

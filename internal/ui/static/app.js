@@ -591,6 +591,9 @@ function itemWords(it, holds) {
   const words = el("div", "words");
   if (it.project) words.append(el("span", "pj", it.project));
   words.append(el("span", "tt", it.title || it.text));
+  // Whose it is, while the switch shows more than one crew: the same question from two nodes reads apart.
+  const cl = crewTag(it.crew, true);
+  if (cl) words.append(cl);
   // What the owner holds says what to do: the latest note, else the why; who waits is in the opened row.
   if (holds) words.append(el("span", "gr", it.note || (it.text !== it.title ? it.text : "")));
   else if (!it.rec && it.note) words.append(el("span", "gr", it.note));
@@ -1080,6 +1083,9 @@ function moveRow(it, holds) {
     if (it.project) meta.append(el("span", "", it.project));
     words.append(meta);
   } else {
+    // A question carries its node/crew too: the same title from two nodes reads apart.
+    const cl = crewTag(it.crew, true);
+    if (cl) words.append(cl);
     const why = it.kind === "decision" ? it.reason : it.note;
     if (why) words.append(el("span", "gr", why));
   }

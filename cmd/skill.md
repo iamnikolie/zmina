@@ -612,8 +612,8 @@ A machine without peers is a mesh of one. It opens the page in the browser.
   shows when it was last seen: `fresh`, `stale` (no good read for 2 min: its last read stays on the page, marked) or
   `offline` (never read; the error in its tooltip). Off the owner's node peers are listed, not read. Update zmina on
   every peer: an older one answers `update zmina on this node`.
-- **One view**: «All» merges every node's crews; every item is labelled `node/crew` once there is more than one
-  node (a crew's key on a peer is `<node>/<crew>`; the label is dropped once the switch narrows to that node or
+- **One view**: «All» merges every node's crews; every item, a question too, is labelled `node/crew` once there is more
+  than one node (a crew's key on a peer is `<node>/<crew>`; the label is dropped once the switch narrows to that node or
   crew); the switch filters by node or by crew. A peer's items open in place read-only, `answer on <node>` where
   the actions would be (answer on that node's cockpit or through its dispatcher).
 - **Stopped crews**: a crew stopped on purpose (`zmina stop`) with nothing waiting on the owner leaves «All»: one
@@ -622,7 +622,11 @@ A machine without peers is a mesh of one. It opens the page in the browser.
 - **One cockpit per machine**: a running `zmina ui` records itself in `~/.zmina/ui.json` (0600: its address, pid and
   a handoff secret). A second plain `zmina ui` asks it for a one-time login code (one use, one minute) and opens
   `…/?login=<code>`, which signs the browser in and leaves the address bar; the token is never put in a URL, a
-  shell's history or a process's arguments. With `--addr` it binds that address as before.
+  shell's history or a process's arguments. With `--addr` it binds that address as before; when a cockpit already
+  answers there, it opens that one signed in the same way: the handoff secret goes only to the cockpit `ui.json`
+  records at that very address, any other is asked with `--token` (or `$ZMINA_UI_TOKEN`), sent as the page's
+  cookie, never in an address. An older `zmina ui` there, without login codes, opens unsigned: a browser not signed
+  in uses `?token=` once.
 
 One screen, top to bottom by what a delay costs:
 

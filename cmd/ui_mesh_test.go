@@ -33,11 +33,14 @@ func (f *fakeMesh) cache() *uiPeerCache {
 		return "node-a", []mesh.Peer{{Name: "node-b"}, {Name: "node-c", OK: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)}}, f.why
 	}
 	c.fetch = func(ctx context.Context, node, kind string) ([]byte, error) {
+		// The callback is copied under the lock (a test swaps it) and called outside it:
+		// a read the test blocks must not hold the fake's other readers.
 		f.mu.Lock()
 		f.reads[node+"/"+kind]++
+		fetch := f.fetch
 		f.mu.Unlock()
 
-		return f.fetch(node, kind)
+		return fetch(node, kind)
 	}
 
 	return c
