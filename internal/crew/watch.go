@@ -32,7 +32,7 @@ const (
 const (
 	defaultWatchTimeout = 2 * time.Minute
 	defaultForgetAfter  = 14 * 24 * time.Hour
-	defaultRenotify     = 2 * time.Hour
+	defaultRenotify     = 30 * time.Minute
 	defaultCommand      = "/agent"
 	minEvery            = time.Minute
 )
@@ -49,7 +49,8 @@ type Watch struct {
 	Quiet       string `yaml:"quiet"`
 	Timeout     string `yaml:"timeout"`
 	ForgetAfter string `yaml:"forget_after"`
-	// Renotify (default 2h; off) says a noted key again while the source still reports it and nobody acked it.
+	// Renotify (default 30m, or every when that is longer; off) says a noted key again while the source still
+	// reports it and nobody acked it.
 	Renotify string `yaml:"renotify,omitempty"`
 	// Enabled false skips the watch and keeps its state.
 	Enabled *bool `yaml:"enabled"`
@@ -242,7 +243,7 @@ func (w *Watch) Check(c *Crew) error {
 	case "off", "0":
 		w.renotify = 0
 	default:
-		if w.renotify, err = span("renotify", w.Renotify, defaultRenotify); err != nil {
+		if w.renotify, err = span("renotify", w.Renotify, max(defaultRenotify, w.every)); err != nil {
 			return fmt.Errorf("%w, or off", err)
 		}
 

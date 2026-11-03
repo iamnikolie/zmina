@@ -2,9 +2,11 @@ package shift
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/task"
 	"github.com/iamnikolie/zmina/internal/watch"
 )
@@ -49,9 +51,11 @@ func (s *Shift) allTasks() []task.Task {
 	return all
 }
 
-// carrier is the task, made since the key's note went out, that carries its url or its key: the dispatcher turned
-// the note into work, which acks it.
-func carrier(key string, k *watch.Key, tasks []task.Task) string {
+// carrier is the task, made since the key's note went out, that carries it — the dispatcher turned the note into
+// work, which acks it: the note's url as the task's url or as a whole word of its asked text, title or note; or the
+// key as a whole word, qualified "<watch>/<key>", or bare when it is structured (structuredKey). A short bare key
+// (main, prod) is a word any task may say, so it never acks.
+func carrier(name, key string, k *watch.Key, tasks []task.Task) string {
 	for _, t := range tasks {
 		if t.Created.Before(k.Since) {
 			continue
@@ -59,16 +63,21 @@ func carrier(key string, k *watch.Key, tasks []task.Task) string {
 
 		text := t.Asked + " " + t.Title + " " + t.Note
 
-		if k.URL != "" && (t.URL == k.URL || strings.Contains(text, k.URL)) {
-			return t.ID
-		}
-
-		if hasWord(text, key) || t.URL == key {
+		switch {
+		case k.URL != "" && (t.URL == k.URL || hasWord(text, k.URL)),
+			hasWord(text, name+"/"+key),
+			structuredKey(key) && (t.URL == key || hasWord(text, key)):
 			return t.ID
 		}
 	}
 
 	return ""
+}
+
+// structuredKey reports a key no plain word is: six characters at least, with a separator (group/repo!12:review,
+// disk:/data).
+func structuredKey(key string) bool {
+	return len([]rune(key)) >= 6 && strings.ContainsAny(key, ":!/#")
 }
 
 // hasWord reports whether text holds word as a whole word, punctuation around it aside.
@@ -83,12 +92,12 @@ func hasWord(text, word string) bool {
 }
 
 // ackByTasks acks the waiting keys a task carries now and returns them, each as "<key> by task <id>".
-func ackByTasks(st *watch.State, tasks []task.Task, now time.Time) []string {
+func ackByTasks(name string, st *watch.State, tasks []task.Task, now time.Time) []string {
 	var acked []string
 
 	for _, key := range st.Waiting() {
 		k := st.Keys[key]
-		if id := carrier(key, k, tasks); id != "" {
+		if id := carrier(name, key, k, tasks); id != "" {
 			k.Ack("task "+id, now)
 			acked = append(acked, key+" by task "+id)
 		}
@@ -102,27 +111,34 @@ func (s *Shift) DryApply(name string, events []watch.Event) []watch.Outcome {
 	w := s.Crew.Watches[name]
 	st := s.State.Watch[name].Clone()
 	now := s.Now()
-	ackByTasks(st, s.allTasks(), now)
+	ackByTasks(name, st, s.allTasks(), now)
 
 	cfg := watch.Config{Quiet: w.QuietD(), ForgetAfter: w.ForgetAfterD(), Baseline: w.Baselines(), Info: w.Info,
 		Renotify: w.RenotifyD()}
 
-	return watch.Apply(st, events, cfg, now, func(e watch.Event) error {
-		if !e.Since.IsZero() && s.stillQueued(name, st.Keys[e.Key]) {
-			return watch.ErrStillQueued
+	return watch.Apply(st, events, cfg, now, func(e watch.Event) (string, error) {
+		if !e.Since.IsZero() && s.stillQueued(st.Keys[e.Key]) {
+			return "", watch.ErrStillQueued
 		}
 
-		return nil
+		return "", nil
 	})
 }
 
-// waitingKeys are a watch's keys that still wait on an ack, the ones a task carries left out; nothing is changed.
-func waitingKeys(name string, st *watch.State, tasks []task.Task) []WaitingKey {
+// waitingKeys are a watch's keys that still wait on an ack, the ones a task carries left out; none while its
+// renotify is off. Nothing is changed.
+func waitingKeys(w *crew.Watch, st *watch.State, tasks []task.Task) []WaitingKey {
+	if w == nil || st == nil || w.RenotifyD() == 0 {
+		return nil
+	}
+
+	name := w.Name
+
 	var out []WaitingKey
 
 	for _, key := range st.Waiting() {
 		k := st.Keys[key]
-		if carrier(key, k, tasks) != "" {
+		if carrier(name, key, k, tasks) != "" {
 			continue
 		}
 
@@ -140,9 +156,7 @@ func (s *Shift) WaitingKeys() []WaitingKey {
 	var out []WaitingKey
 
 	for _, name := range s.Crew.WatchNames() {
-		if st := s.State.Watch[name]; st != nil {
-			out = append(out, waitingKeys(name, st, tasks)...)
-		}
+		out = append(out, waitingKeys(s.Crew.Watches[name], s.State.Watch[name], tasks)...)
 	}
 
 	return out
@@ -162,20 +176,26 @@ func (s *Shift) AckWatch(name string, targets []string, all bool, by string) ([]
 		targets = st.Waiting()
 	}
 
+	// Every target is resolved before any is acked: one that names nothing fails the call and changes nothing.
 	var acked []string
 
 	for _, target := range targets {
-		keys := st.Ack(target, by, now)
-		if len(keys) == 0 && !all {
-			return acked, fmt.Errorf("watch %s: no key or url %q waits on an ack (zmina watch ls shows the waiting ones)",
+		keys := st.Match(target)
+		if len(keys) == 0 {
+			return nil, fmt.Errorf("watch %s: no key or url %q waits on an ack (zmina watch ls shows the waiting ones)",
 				name, target)
 		}
 
 		for _, key := range keys {
-			s.log("watch:"+name, "watch-ack", "", "key="+key+" by "+by)
+			if !slices.Contains(acked, key) {
+				acked = append(acked, key)
+			}
 		}
+	}
 
-		acked = append(acked, keys...)
+	for _, key := range acked {
+		st.Keys[key].Ack(by, now)
+		s.log("watch:"+name, "watch-ack", "", "key="+key+" by "+by)
 	}
 
 	return acked, nil
@@ -189,20 +209,8 @@ func (s *Shift) renoteLine(name string, e watch.Event) string {
 		"; ack: " + k.AckCommand() + ")"
 }
 
-// stillQueued reports whether the key's last note still waits in the dispatcher's signals, not typed yet.
-func (s *Shift) stillQueued(name string, k *watch.Key) bool {
-	if k == nil {
-		return false
-	}
-
-	head := []rune(name + ": " + watch.Event{Text: k.Text, URL: k.URL}.Line())
-	head = head[:min(len(head), 80)]
-
-	for _, sig := range s.State.Signals {
-		if strings.HasPrefix(sig, string(head)) {
-			return true
-		}
-	}
-
-	return false
+// stillQueued reports whether the key's last note, exactly as it was queued, still waits in the dispatcher's
+// signals, not typed yet.
+func (s *Shift) stillQueued(k *watch.Key) bool {
+	return k != nil && k.Queued != "" && slices.Contains(s.State.Signals, k.Queued)
 }

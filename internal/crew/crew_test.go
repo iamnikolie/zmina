@@ -369,7 +369,7 @@ func TestWatchValidation(t *testing.T) {
 	assert.True(t, mrs.Baselines())
 	assert.Equal(t, 14*24*time.Hour, mrs.ForgetAfterD())
 	assert.Equal(t, 2*time.Minute, mrs.TimeoutD())
-	assert.Equal(t, 2*time.Hour, mrs.RenotifyD(), "a noted key is said again after 2h by default")
+	assert.Equal(t, 30*time.Minute, mrs.RenotifyD(), "a noted key is said again after 30m by default")
 	assert.Equal(t, []string{"/bin/sh", "-c", "my-detector --json | tail -5"}, c.Watches["ci"].Run.Line())
 
 	c, err = Load(write(t, base+"  a:\n    kind: exec\n    every: 5m\n    run: [a]\n    renotify: off\n"+
@@ -377,6 +377,10 @@ func TestWatchValidation(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, c.Watches["a"].RenotifyD())
 	assert.Equal(t, 24*time.Hour, c.Watches["b"].RenotifyD())
+
+	c, err = Load(write(t, base+"  slow:\n    kind: exec\n    every: 1h\n    run: [a]\n"))
+	require.NoError(t, err)
+	assert.Equal(t, time.Hour, c.Watches["slow"].RenotifyD(), "the default is every when every is longer than 30m")
 }
 
 func TestDropTools(t *testing.T) {

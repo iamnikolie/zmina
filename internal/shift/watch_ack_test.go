@@ -61,13 +61,13 @@ func TestWatchNoteLostIsSaidAgainUntilAcked(t *testing.T) {
 	assert.Equal(t, "zmina watch ack ci-red '"+mrURL+"'", p.Entries["watch_keys"][0].Ref)
 
 	since := f.s.State.Watch["ci-red"].Keys["acme/site!12:approved"].Since
-	runFor(t, f, 2*time.Hour, approved())
-	require.Len(t, f.s.State.Signals, 1, "said again within renotify")
+	runFor(t, f, 30*time.Minute, approved())
+	require.Len(t, f.s.State.Signals, 1, "said again within renotify (default 30m)")
 	assert.Equal(t, "ci-red: acme/site!12 approved, not merged "+mrURL+" (still pending since "+
 		since.In(f.s.Crew.Location()).Format("Mon 2 Jan 15:04")+"; ack: zmina watch ack ci-red '"+mrURL+"')",
 		f.s.State.Signals[0])
 	assert.LessOrEqual(t, f.s.State.Watch["ci-red"].Keys["acme/site!12:approved"].NotedAt.Sub(start),
-		2*time.Hour+5*time.Minute)
+		30*time.Minute+5*time.Minute)
 	assert.True(t, f.ev.has("watch:ci-red", "watch-renoted"))
 	assert.Equal(t, []string{"ci-red/acme/site!12:approved"}, watchKeys(t, f), "still in the pack")
 
@@ -166,4 +166,103 @@ func TestWatchDryRunShowsRenote(t *testing.T) {
 	outs := f.s.DryApply("ci-red", []watch.Event{approved()})
 	assert.Equal(t, watch.Renoted, outs[0].Fate)
 	assert.Zero(t, f.s.State.Watch["ci-red"].Keys["acme/site!12:approved"].Renotes, "a dry run writes nothing")
+}
+
+// Review T-171 #1: a url is matched whole — MR 1's url is a prefix of MR 12's.
+func TestWatchTaskURLMatchesWhole(t *testing.T) {
+	f := fixtureWith(t, watchYAML)
+	mr1 := watch.Event{Key: "acme/site!1:approved", Fingerprint: "x", Text: "acme/site!1 approved",
+		URL: "https://example.com/acme/site/-/merge_requests/1"}
+
+	runFor(t, f, 5*time.Minute, mr1)
+	f.tk.list = []task.Task{{ID: "T-9", Role: "dev", State: task.Open, Created: *f.now,
+		Asked: "fix review on https://example.com/acme/site/-/merge_requests/12 please"}}
+	assert.Len(t, watchKeys(t, f), 1, "a task for MR 12 does not carry MR 1")
+
+	f.tk.list[0].Asked = "merge it (https://example.com/acme/site/-/merge_requests/1)."
+	assert.Empty(t, watchKeys(t, f), "the url as a whole word, punctuation around it aside, does")
+}
+
+// Review T-171 #2: a short bare key is a word any task may say; only its qualified form acks.
+func TestWatchShortKeyNeedsTheQualifiedForm(t *testing.T) {
+	f := fixtureWith(t, watchYAML)
+
+	runFor(t, f, 5*time.Minute, ev("main", "1"))
+	f.tk.list = []task.Task{{ID: "T-9", Role: "dev", State: task.Open, Created: *f.now,
+		Asked: "rebase the feature branch on main"}}
+	assert.Len(t, watchKeys(t, f), 1, "'main' in a task does not ack the key main")
+
+	f.tk.list[0].Asked = "pipeline red, see ci-red/main"
+	assert.Empty(t, watchKeys(t, f), "<watch>/<key> does")
+}
+
+// Review T-171 #3: the note is compared exactly as it was queued — folded whitespace included.
+func TestWatchStillQueuedMatchesTheQueuedNote(t *testing.T) {
+	f := fixtureWith(t, watchYAML)
+	e := watch.Event{Key: "k", Fingerprint: "1", Text: "disk  full\non /data"}
+
+	runFor(t, f, 5*time.Minute, e)
+	require.Equal(t, []string{"ci-red: disk full on /data"}, f.s.State.Signals)
+	assert.Equal(t, "ci-red: disk full on /data", f.s.State.Watch["ci-red"].Keys["k"].Queued)
+
+	runFor(t, f, 3*time.Hour, e)
+	assert.Len(t, f.s.State.Signals, 1, "the first note still waits to be typed: not said twice")
+
+	f.s.State.Signals = nil
+	runFor(t, f, 30*time.Minute, e)
+	assert.Len(t, f.s.State.Signals, 1, "typed and lost: said again")
+}
+
+// Review T-171 #4: one empty run does not end the wait; the key comes back waiting from the same Since.
+func TestWatchEmptyRunDoesNotEndTheWait(t *testing.T) {
+	f := fixtureWith(t, watchYAML)
+
+	runFor(t, f, 5*time.Minute, approved())
+	since := f.s.State.Watch["ci-red"].Keys["acme/site!12:approved"].Since
+	f.s.State.Signals = nil
+
+	runFor(t, f, 5*time.Minute) // a glitch: the source answers, empty
+	assert.Empty(t, watchKeys(t, f), "gone: not waiting while it is gone")
+
+	runFor(t, f, time.Hour, approved())
+	assert.Equal(t, []string{"ci-red/acme/site!12:approved"}, watchKeys(t, f))
+	assert.Equal(t, since, f.s.State.Watch["ci-red"].Keys["acme/site!12:approved"].Since)
+	assert.Len(t, f.s.State.Signals, 1, "said again")
+}
+
+// Review T-171 #5, dispatcher's decision: renotify off means off — nothing waits.
+func TestWatchRenotifyOffNothingWaits(t *testing.T) {
+	f := fixtureWith(t, watchYAML+"    renotify: \"off\"\n")
+
+	runFor(t, f, 5*time.Minute, approved())
+	f.s.State.Signals = nil
+	runFor(t, f, 6*time.Hour, approved())
+
+	assert.Empty(t, f.s.State.Signals, "never said again")
+	assert.Empty(t, watchKeys(t, f), "not in the pack")
+	assert.Zero(t, f.s.WatchViews()[0].Unacked, "not pending")
+}
+
+// Review T-171 #6: one unknown target fails the ack and acks nothing.
+func TestWatchAckUnknownTargetChangesNothing(t *testing.T) {
+	f := fixtureWith(t, watchYAML)
+
+	runFor(t, f, 5*time.Minute, ev("a", "1"), ev("b", "1"))
+
+	_, err := f.s.AckWatch("ci-red", []string{"a", "nope"}, false, "hand")
+	require.Error(t, err)
+	assert.Equal(t, []string{"a", "b"}, f.s.State.Watch["ci-red"].Waiting(), "nothing acked")
+
+	acked, err := f.s.AckWatch("ci-red", []string{"a", "a", "b"}, false, "hand")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a", "b"}, acked, "each key once")
+}
+
+// Review T-171 #8: the pack lists watch keys oldest first, so the longest waits are the ones it keeps.
+func TestWatchKeysInThePackOldestFirst(t *testing.T) {
+	f := fixtureWith(t, watchYAML)
+
+	runFor(t, f, 5*time.Minute, ev("z-old", "1"))
+	runFor(t, f, 5*time.Minute, ev("z-old", "1"), ev("a-new", "1"))
+	assert.Equal(t, []string{"ci-red/z-old", "ci-red/a-new"}, watchKeys(t, f))
 }

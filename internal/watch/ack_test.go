@@ -69,17 +69,54 @@ func TestAckStopsRenotify(t *testing.T) {
 	assert.Equal(t, t0.Add(6*time.Hour), st.Keys["g/r!2:review"].Since)
 }
 
-func TestKeyNoLongerReportedClears(t *testing.T) {
+func TestKeyNoLongerReportedClearsAndComesBackWaiting(t *testing.T) {
 	st, q := NewState(), &queue{}
 
 	Apply(st, []Event{ev("a", "1")}, renotify, t0, q.add)
 	Apply(st, nil, renotify, t0.Add(time.Hour), q.add)
-	assert.Empty(t, st.Waiting(), "a key the source stops reporting clears")
-	assert.Equal(t, "gone", st.Keys["a"].AckedBy)
+	assert.Empty(t, st.Waiting(), "a key the source stops reporting does not wait while it is gone")
+	assert.Empty(t, st.Match("a"), "nor can it be acked")
 
+	// One empty run (a glitch) does not end the wait: back with the same fingerprint it waits from the same Since.
 	outs := Apply(st, []Event{ev("a", "1")}, renotify, t0.Add(5*time.Hour), q.add)
-	assert.Equal(t, []string{"a=dup"}, fates(outs), "back with the same fingerprint: not news, not waiting")
-	assert.Empty(t, st.Waiting())
+	assert.Equal(t, []string{"a=renote"}, fates(outs))
+	assert.Equal(t, []string{"a"}, st.Waiting())
+	assert.Equal(t, t0, st.Keys["a"].Since)
+
+	Apply(st, nil, renotify, t0.Add(6*time.Hour), q.add)
+	Apply(st, nil, renotify, t0.Add(6*time.Hour+renotify.ForgetAfter), q.add)
+	assert.NotContains(t, st.Keys, "a", "gone past forget_after: forgotten")
+}
+
+func TestRenotifyOffDoesNotWait(t *testing.T) {
+	st, q := NewState(), &queue{}
+
+	Apply(st, []Event{ev("a", "1")}, cfg, t0, q.add)
+	assert.Empty(t, st.Waiting(), "renotify off: a noted key does not wait")
+	assert.True(t, st.Keys["a"].Since.IsZero())
+}
+
+func TestKeyKeepsTheNoteAsQueued(t *testing.T) {
+	st, q := NewState(), &queue{}
+
+	Apply(st, []Event{ev("a", "1")}, renotify, t0, q.add)
+	assert.Equal(t, "w: a at 1", st.Keys["a"].Queued)
+
+	Apply(st, []Event{ev("a", "1")}, renotify, t0.Add(3*time.Hour), func(e Event) (string, error) {
+		return "w: again", nil
+	})
+	assert.Equal(t, "w: again", st.Keys["a"].Queued, "a renote keeps its own queued text")
+}
+
+func TestMatchAndAck(t *testing.T) {
+	st, q := NewState(), &queue{}
+	a := ev("a", "1")
+	a.URL = "https://example.com/1"
+
+	Apply(st, []Event{a, ev("b", "1")}, renotify, t0, q.add)
+	assert.Equal(t, []string{"a"}, st.Match("https://example.com/1"))
+	assert.Empty(t, st.Match("https://example.com/12"))
+	assert.Equal(t, []string{"a", "b"}, st.Waiting(), "Match changes nothing")
 }
 
 func TestRenoteStillQueuedIsADup(t *testing.T) {
@@ -87,8 +124,8 @@ func TestRenoteStillQueuedIsADup(t *testing.T) {
 
 	Apply(st, []Event{ev("a", "1")}, renotify, t0, q.add)
 
-	outs := Apply(st, []Event{ev("a", "1")}, renotify, t0.Add(3*time.Hour), func(e Event) error {
-		return ErrStillQueued
+	outs := Apply(st, []Event{ev("a", "1")}, renotify, t0.Add(3*time.Hour), func(e Event) (string, error) {
+		return "", ErrStillQueued
 	})
 	assert.Equal(t, []string{"a=dup"}, fates(outs), "an earlier note not typed yet is not said twice")
 	assert.Equal(t, t0, st.Keys["a"].NotedAt)

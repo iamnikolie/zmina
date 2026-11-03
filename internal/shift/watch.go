@@ -187,24 +187,24 @@ func (s *Shift) FinishWatch(run WatchRun, res watch.Result, baseline bool) []str
 
 	// A note the dispatcher turned into a task is acked before the run decides what to say again.
 	if len(st.Waiting()) > 0 {
-		for _, a := range ackByTasks(st, s.allTasks(), now) {
+		for _, a := range ackByTasks(name, st, s.allTasks(), now) {
 			s.log(role, "watch-ack", "", "key="+a)
 		}
 	}
 
-	outs := watch.Apply(st, res.Events, cfg, now, func(e watch.Event) error {
+	outs := watch.Apply(st, res.Events, cfg, now, func(e watch.Event) (string, error) {
 		line := e.Line()
 		if !e.Since.IsZero() {
-			if s.stillQueued(name, st.Keys[e.Key]) {
-				return watch.ErrStillQueued
+			if s.stillQueued(st.Keys[e.Key]) {
+				return "", watch.ErrStillQueued
 			}
 
 			line = s.renoteLine(name, e)
 		}
 
-		_, err := s.Note(name, line, false)
+		note, _, err := s.note(name, line, false)
 
-		return err
+		return note, err
 	})
 	st.Cache = res.Cache
 
@@ -285,7 +285,7 @@ func (s *Shift) WatchViews() []WatchView {
 		if st := s.State.Watch[name]; st != nil {
 			v.LastRun, v.LastOK, v.LastError, v.Failures = st.LastRun, st.LastOK, st.LastError, st.Failures
 			v.Keys, v.Pending, v.Recent = len(st.Keys), len(st.Pending), st.Recent
-			v.Waiting = waitingKeys(name, st, tasks)
+			v.Waiting = waitingKeys(w, st, tasks)
 			v.Unacked = len(v.Waiting)
 			v.Running = st.Running.Live(now, w.TimeoutD())
 		}

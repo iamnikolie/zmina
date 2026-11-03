@@ -83,15 +83,18 @@ type Key struct {
 	// GoneAt is when a successful run first missed it; it is forgotten forget_after later.
 	GoneAt time.Time `json:"gone_at,omitzero"`
 	// Since is when the dispatcher was told of the key's current fingerprint, while that note waits on an ack
-	// (zmina watch ack, or a task that carries its url or key). Zero: nothing waits — acked, gone, recorded by a
-	// baseline, or noted by a zmina before acks.
+	// (zmina watch ack, or a task that carries its url or key). Zero: nothing waits — acked, recorded by a
+	// baseline, noted with renotify off, or noted by a zmina before acks. A gone key does not wait while it is
+	// gone; back with the same fingerprint, it waits again from the same Since.
 	Since time.Time `json:"since,omitzero"`
-	// URL and Text are the note it last went out in, to list while it waits.
-	URL  string `json:"url,omitempty"`
-	Text string `json:"text,omitempty"`
+	// URL and Text are the note it last went out in, to list while it waits; Queued is that note exactly as it
+	// was queued for the dispatcher, to tell whether it still waits to be typed.
+	URL    string `json:"url,omitempty"`
+	Text   string `json:"text,omitempty"`
+	Queued string `json:"queued,omitempty"`
 	// Renotes counts the times it was said again while it waited.
 	Renotes int `json:"renotes,omitempty"`
-	// AckedAt and AckedBy say how the last wait ended: a role, "task T-4", "gone".
+	// AckedAt and AckedBy say how the last wait ended: a role, or "task T-4".
 	AckedAt time.Time `json:"acked_at,omitzero"`
 	AckedBy string    `json:"acked_by,omitempty"`
 }
@@ -227,7 +230,7 @@ type Config struct {
 	// Info notes events a kind marks as info.
 	Info bool
 	// Renotify says a key again once its note has waited this long on an ack since it was last said, for as long
-	// as the source still reports it; zero never says it again.
+	// as the source still reports it; zero never says it again, and a key noted then does not wait at all.
 	Renotify time.Duration
 }
 
@@ -238,10 +241,10 @@ var ErrStillQueued = errors.New("the earlier note still waits to be typed")
 // GoneBeforeQuiet is the reason a held event is dropped when its news went away inside the quiet window.
 const GoneBeforeQuiet = "gone-before-quiet"
 
-// Apply diffs a successful run's events against the state: news is queued (queue returns nil once the note waits
-// for the dispatcher) and its fingerprint stored only then; an event that moved within the quiet window is held;
+// Apply diffs a successful run's events against the state: news is queued (queue returns the note as queued once
+// it waits for the dispatcher) and its fingerprint stored only then; an event that moved within the quiet window is held;
 // keys a run no longer reports are gone and forgotten after ForgetAfter.
-func Apply(st *State, events []Event, cfg Config, now time.Time, queue func(Event) error) []Outcome {
+func Apply(st *State, events []Event, cfg Config, now time.Time, queue func(Event) (string, error)) []Outcome {
 	st.init()
 
 	var out []Outcome
@@ -311,7 +314,7 @@ func Apply(st *State, events []Event, cfg Config, now time.Time, queue func(Even
 			e = folded(out, group)
 		}
 
-		err := queue(e)
+		queued, err := queue(e)
 
 		for _, i := range group {
 			o := &out[i]
@@ -327,7 +330,7 @@ func Apply(st *State, events []Event, cfg Config, now time.Time, queue func(Even
 				continue
 			case o.Fate == Renoted:
 				k := st.Keys[o.Event.Key]
-				k.NotedAt, k.URL, k.Text = now, e.URL, e.Text
+				k.NotedAt, k.URL, k.Text, k.Queued = now, e.URL, e.Text, queued
 				k.Renotes++
 
 				continue
@@ -338,8 +341,13 @@ func Apply(st *State, events []Event, cfg Config, now time.Time, queue func(Even
 				first = k.FirstSeen
 			}
 
-			st.Keys[o.Event.Key] = &Key{Fingerprint: o.Event.Fingerprint, NotedAt: now, FirstSeen: first, Since: now,
-				URL: e.URL, Text: e.Text}
+			k := &Key{Fingerprint: o.Event.Fingerprint, NotedAt: now, FirstSeen: first, URL: e.URL, Text: e.Text,
+				Queued: queued}
+			if cfg.Renotify > 0 {
+				k.Since = now
+			}
+
+			st.Keys[o.Event.Key] = k
 			delete(st.Pending, o.Event.Key)
 		}
 	}
@@ -364,11 +372,6 @@ func Apply(st *State, events []Event, cfg Config, now time.Time, queue func(Even
 		}
 
 		if k.GoneAt.IsZero() {
-			// A key the source no longer reports needs no ack any more.
-			if k.Waiting() {
-				k.Ack("gone", now)
-			}
-
 			k.GoneAt = now
 		} else if now.Sub(k.GoneAt) >= cfg.ForgetAfter {
 			delete(st.Keys, key)
@@ -442,24 +445,27 @@ func (s *State) Waiting() []string {
 	return keys
 }
 
-// Ack ends the wait of a key, or of every waiting key whose note carried that url; by says who. It returns the keys
-// it acked.
-func (s *State) Ack(target, by string, now time.Time) []string {
-	if s == nil {
-		return nil
-	}
-
-	var acked []string
+// Match is the waiting keys a target names: the key itself, or every waiting key whose note carried that url.
+func (s *State) Match(target string) []string {
+	var keys []string
 
 	for _, key := range s.Waiting() {
-		k := s.Keys[key]
-		if key == target || (k.URL != "" && k.URL == target) {
-			k.Ack(by, now)
-			acked = append(acked, key)
+		if k := s.Keys[key]; key == target || (k.URL != "" && k.URL == target) {
+			keys = append(keys, key)
 		}
 	}
 
-	return acked
+	return keys
+}
+
+// Ack ends the wait of the keys a target names (Match); by says who. It returns the keys it acked.
+func (s *State) Ack(target, by string, now time.Time) []string {
+	keys := s.Match(target)
+	for _, key := range keys {
+		s.Keys[key].Ack(by, now)
+	}
+
+	return keys
 }
 
 // Forget drops the stored fingerprints (one key, or all when key is empty), so the next run notes them again.

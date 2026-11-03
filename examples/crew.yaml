@@ -54,7 +54,7 @@ roles:
 #     kind: gitlab-mr                    # review threads and conflicts on your open MRs, through gl
 #     every: 10m
 #     quiet: 10m                         # wait until the reviewer stopped typing
-#     renotify: 2h                       # said again while unacked (zmina watch ack); off
+#     renotify: 30m                      # said again while unacked (zmina watch ack); default 30m; off
 #     gl_config: work                    # gl profile
 #   reviews:
 #     kind: gitlab-mr                    # requests, answers and pushes on MRs you review

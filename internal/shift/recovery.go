@@ -90,7 +90,15 @@ func (s *Shift) RecoveryPack() (string, recovery.Pack, error) {
 	}
 	size := 0
 	for k, entries := range full.Entries {
-		sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
+		sort.Slice(entries, func(i, j int) bool {
+			// Watch keys go oldest first, so the longest waits are the ones the pack keeps.
+			if a, ok := entries[i].Data.(WaitingKey); ok {
+				if b, ok := entries[j].Data.(WaitingKey); ok && !a.Since.Equal(b.Since) {
+					return a.Since.Before(b.Since)
+				}
+			}
+			return entries[i].ID < entries[j].ID
+		})
 		full.Entries[k] = entries
 		full.Counts[k] = len(entries)
 		size += len(entries)

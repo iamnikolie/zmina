@@ -460,7 +460,7 @@ watch:
     quiet: 10m                   # hold an event until it has not moved for this long (default 0)
     timeout: 2m                  # one run (default 2m)
     forget_after: 14d            # a key gone this long is forgotten (default 14d)
-    renotify: 2h                 # a noted key nobody acked is said again this often (default 2h; off; at least every)
+    renotify: 30m                # a noted key nobody acked is said again this often (default 30m, or every when longer; off; at least every)
     enabled: true                # false: skipped, state kept
     baseline: true               # the first run records everything, notes nothing (default)
     gl_config: work              # gl profile: sets the host (gitlab.com or self-hosted)
@@ -494,13 +494,18 @@ Rules, every kind:
   `forget_after` is not news.
 - **At least once.** A noted key waits on an ack: a note typed into a dispatcher that then compacted, or that was
   busy, is not lost. While the source still reports the key with the same fingerprint and nobody acked it, the
-  first run once `renotify` has passed since it was last said says it again (never while that earlier note still
-  waits to be typed): `mrs: group/repo!12 — approved https://…/12 (still pending since Mon 2 Nov 11:55; ack: zmina
-  watch ack mrs 'https://…/12')`. The wait ends with `zmina watch ack`, with a task made since the note that
-  carries its url (`--url`, or the url in its asked text or note) or names its key as a word, or when the
-  source stops reporting the key (it cleared: merged, fixed). A new fingerprint is news and waits anew. Keys a
-  baseline recorded, and keys noted by a zmina before acks, never wait. Every waiting key is in the
-  dispatcher's recovery pack (`watch_keys`, each with its ack command) until it is acked.
+  first run once `renotify` has passed since it was last said says it again (never while that earlier note, as it
+  was queued, still waits to be typed): `mrs: group/repo!12 — approved https://…/12 (still pending since Mon 2 Nov
+  11:55; ack: zmina watch ack mrs 'https://…/12')`. The wait ends with `zmina watch ack`, or with a task made since
+  the note that carries it: its url as the task's `--url` or as a whole word of its asked text, title or note; or
+  its key as a whole word, `<watch>/<key>` always, the bare key only when it is structured (six characters at
+  least, with `:`, `!`, `/` or `#`: `group/repo!12:review`, `disk:/data`) — a short key such as `main` is a word
+  any task may say. A key the source stops reporting (merged, fixed) does not wait while it is gone; back with the
+  same fingerprint before `forget_after`, it waits again from the same time (one empty run is no ack). A new
+  fingerprint is news and waits anew. Keys a baseline recorded, keys noted while `renotify` is `off`, and keys
+  noted by a zmina before acks never wait: with `off` a key is said once, as before, and is neither pending nor in
+  the pack. Every waiting key is in the dispatcher's recovery pack (`watch_keys`, oldest first, each with its ack
+  command) until it is acked.
 - `quiet`: an event whose `at` is younger than `quiet` is held. If its news goes away first (key gone,
   or back to the stored fingerprint), it is dropped: event `watch-dropped key=… reason=gone-before-quiet`,
   shown in `watch ls`.
@@ -547,7 +552,7 @@ The keys of one MR noted in one run fold into one note:
 |---|---|
 | `zmina watch ls [--json]` | each watch: kind, every, last run (ok/failed), next, keys, held (the quiet window), pending (keys waiting on an ack, listed under the table with since when), last 5 notes and drops. `--json`: `pending` is held, `unacked` and `waiting` the keys waiting on an ack. |
 | `zmina watch run <name>` | one run now. `--dry-run`: every event with its fate — `note` / `renote` (said again, unacked) / `dup` / `quiet Nm` / `baseline` / `info-off` / `dropped` — nothing written. |
-| `zmina watch ack <name> <key\|url>... \| --all` | the dispatcher has the note: end the wait of a key, of every key whose note carried that url, or of all; they are not said again until their fingerprint changes. |
+| `zmina watch ack <name> <key\|url>... \| --all` | the dispatcher has the note: end the wait of a key, of every key whose note carried that url, or of all; they are not said again until their fingerprint changes. A target that names no waiting key fails the call, and nothing is acked. |
 | `zmina watch baseline <name>` | record what the source reports now, note nothing. |
 | `zmina watch forget <name> [key]` | drop stored fingerprints, so the next run notes them again. |
 
@@ -932,7 +937,8 @@ and exists nowhere else. It is written whole (rename) and never over a file zmin
   watch's `failing for N runs` / `recovered` are about the watch itself (`zmina watch ls`).
 - A watch's note waits on an ack and is said again (`still pending since …`) until it gets one. A task recorded
   with its url (`task new … --url <url>`) acks it; for a note acted on without a new task (handed to a task that
-  already holds that MR, or nothing to do) run `zmina watch ack <watch> <url or key>`. The recovery pack's
+  already holds that MR, or nothing to do) run `zmina watch ack <watch> <url or key>`; a task's asked text that
+  names a short key acks it only as `<watch>/<key>`. The recovery pack's
   `watch_keys` are notes that may have been lost: act on each or ack it.
 - Who is there: `zmina ls`; what is in work: `zmina task ls`; what waits: `zmina queue ls`;
   what is parked: `zmina later ls`. Read the compact views; add `--wide` / `--full` / `zmina ls <role>` /
