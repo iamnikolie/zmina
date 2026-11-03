@@ -176,7 +176,7 @@ func TestCompactScreenKeepsDialogs(t *testing.T) {
 		"numbered after history":    {cat(history, numbered), []string{"1. Keep the old name", "2. Rename it", "Enter to select"}},
 		"boxed after two histories": {cat(history, history, boxed), []string{"Allow this command?", "2. No, and tell Claude why", "Esc to cancel"}},
 		"plain after two histories": {cat(history, history, plain), []string{"Do you trust this folder?", "2. No, exit", "Enter to confirm"}},
-		"T-158 fixture": {cat([]string{"────", "❯ previous request", "────", "⏺ Working"}, boxed),
+		"boxed after a bare history box": {cat([]string{"────", "❯ previous request", "────", "⏺ Working"}, boxed),
 			[]string{"Allow this command?", "2. No, and tell Claude why", "Esc to cancel"}},
 	}
 
