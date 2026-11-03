@@ -103,6 +103,10 @@ func Run(o Options, input io.Reader, output, stderr io.Writer) error {
 
 	r := &runner{o: o, out: output, enc: json.NewEncoder(pipe), pending: map[int]string{}}
 	r.rec.PID, r.rec.Name, r.rec.Cwd = os.Getpid(), o.Name, o.Dir
+	// zmina's lines come through the inbox, never typed into this console; one it cannot make is left to tmux.
+	if dir := InboxDir(o.Registry.Dir, o.Name); o.Registry.Dir != "" && o.Name != "" && openInbox(dir) == nil {
+		r.rec.Inbox = dir
+	}
 	if o.Transport == "shared" {
 		defer func() {
 			if r.turn != "" {
@@ -163,12 +167,18 @@ func Run(o Options, input io.Reader, output, stderr io.Writer) error {
 	}
 	timer := time.NewTimer(90 * time.Second)
 	defer timer.Stop()
+	poll := time.NewTicker(time.Second)
+	defer poll.Stop()
 	var interrupted time.Time
 	for {
 		select {
 		case <-timer.C:
 			if r.rec.SessionID == "" {
 				return errors.New("codex startup timed out")
+			}
+		case <-poll.C:
+			if err := r.drainInbox(); err != nil {
+				return err
 			}
 		case s := <-sig:
 			if s != os.Interrupt || r.turn == "" || time.Since(interrupted) < time.Second {
@@ -301,6 +311,37 @@ func (r *runner) input(line string) error {
 		return nil
 	}
 	return r.startTurn(line)
+}
+
+// drainInbox starts a turn with the oldest line zmina queued, once the thread is idle and no request is open.
+func (r *runner) drainInbox() error {
+	if r.rec.Inbox == "" || r.rec.Status != "idle" || r.request != nil || r.rec.SessionID == "" {
+		return nil
+	}
+
+	l, path, err := nextLine(r.rec.Inbox)
+	if err != nil || l == nil {
+		return nil // a read error is tried again next second
+	}
+
+	fmt.Fprintln(r.out, "\n› "+l.Text)
+
+	if err := r.startTurn(l.Text); err != nil {
+		return err
+	}
+
+	// A line that could not be marked taken does not end the bridge: take sets it aside, and if even that failed
+	// the inbox is left alone from here on rather than start the same turn every second.
+	if err := take(r.rec.Inbox, path, l.ID); err != nil {
+		fmt.Fprintln(r.out, "zmina inbox: "+err.Error())
+
+		if _, serr := os.Stat(path); serr == nil {
+			fmt.Fprintln(r.out, "zmina inbox: the line is still there; this bridge reads its inbox no more")
+			r.rec.Inbox = ""
+		}
+	}
+
+	return nil
 }
 
 func (r *runner) startTurn(text string) error {

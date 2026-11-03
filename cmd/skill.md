@@ -35,6 +35,8 @@ idle_minutes: 30                         # idle longer with no active task -> th
 release_idle_minutes: 30                 # a keep: manual role idle longer is released: tasks to later, down (default off)
 boot_grace: 2m                           # a started role is left this long before lines are typed into it
 remote_control: true                     # open roles to Remote Control (per role too); default true
+delivery: native                         # how lines reach roles: native (default: the agent's own channel) | tmux (per role too)
+renotify: 30m                            # an unacked line is said again this often (default 30m; off)
 drop_env: [MY_TERMINAL_*]                # variables kept from the roles, on top of the built-in list
 drop_tools: [Artifact, Workflow]         # Claude Code tools every role starts without (--disallowedTools)
 context_max: 400k                        # every role's, unless it sets its own (default: none)
@@ -167,14 +169,76 @@ be recovered remain `unpriced`; totals never pretend those tokens were free. `pr
 whole model entry, so include its input/output/read rates and any long-context/speed tiers too. `doctor` checks the executables
 needed by the crew, including Codex App Server support.
 
-A role runs `claude [--model m] [args] [--disallowedTools=<tools>] [--resume id] --name <session>
-"<boot>" [--remote-control <session>]` in its dir, with `CLAUDE_CONFIG_DIR`, `ZMINA_ROLE`, `ZMINA_CREW`, and the caller's PATH
+A role runs `claude [--model m] [args] [--settings '{"crossSessionInbound":"accept"}'] [--disallowedTools=<tools>]
+[--resume id] --name <session> "<boot>" [--remote-control <session>]` in its dir, with `CLAUDE_CONFIG_DIR`, `ZMINA_ROLE`, `ZMINA_CREW`, and the caller's PATH
 less directories under the temp dir (a terminal's per-window shims, such as cmux's, vanish with the
 window and would wrap claude in that window's hooks),
 on top of the tmux server's environment minus what ties a process to another session or terminal
 (`CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_MESSAGING_*`, `TMUX`, `CMUX_*`, … and
 `drop_env`); provider settings such as `CLAUDE_CODE_USE_BEDROCK` pass. With Remote Control every
 role is reachable from claude.ai/code and the phone under its session name.
+
+### Delivery: the agent's own channel
+
+With `delivery: native` (the default) zmina gives a role its lines on its agent's own channel, not typed into its
+input line: a Claude session's inbox socket, a Codex bridge's inbox (below). For Claude, zmina posts the role's lines — signals, task packets, `zmina send`, alarms,
+release notices — to the session's own inbox socket (Claude Code's cross-session messaging, v2.1.224 or later,
+`messagingSocketPath` in its registry entry), not into its input line. The line arrives as a message from another
+session, shown apart from what the owner types: a draft in the input line neither blocks it nor gets sent with it,
+no Enter has to land, and the role does not read it as the owner's words. A role started this way gets zmina's
+`--settings` (`crossSessionInbound: accept`: a session that bypasses permission prompts would otherwise hold such a
+message behind an approval dialog) and a boot line that names its start's tag. With the dialog gone, any session the
+role's inbox is reachable from — the owner's local sessions in the namespace, and with Remote Control the account's
+sessions on other machines — can message it, and its message reads like zmina's (`[zmina] …`, a role's name, a
+session named zmina: all text a sender writes). So every line zmina posts starts with `[zmina:<tag>]`, twelve random
+characters made at each start and given only in the boot line (argv, never posted) and, after a compaction or a
+clear, by the role's `SessionStart` hook (the boot queued after a clear names no tag: it is a line the log, `zmina
+queue` and the recovery pack show); the boot line says that a message without that exact tag, or inside a `<cross-session-message>` wrapper (how
+Claude Code shows another session's `SendMessage`), is that session's request under the usual peer rules, never
+zmina's line or the owner's approval. zmina's lines are still not the owner's approval either. A role started before
+the tag (no tag in its state) is typed into until its next start. A posted line counts once the session's transcript shows its
+message id (`origin.msg_id`); until then the next one waits, as a typed line waits to land. Posted lines go, like typed
+ones, when the role is between turns, never into a dialog.
+
+Typed into the input line as before: a slash command (a posted one is plain text), a role whose `args`
+pass their own `--settings` (zmina's are not passed: a warning), a role with `delivery: tmux`, a role started by an
+earlier zmina (no settings: until its next start), and a session with no inbox socket or another `peerProtocol`.
+A post that never started is tried three beats, then kept as failed; one whose write broke after it started is
+followed like a posted line (`post-broken` in the log: the role may have it), never posted again. A posted line an idle session never shows within 10 min is kept as failed (`posted to its
+inbox socket, never seen in its conversation (held or dropped); inspect before retry`); one that went to a
+conversation that is over (the role restarted) goes back to the head of its queue. `zmina queue ls` shows posted lines
+not yet seen.
+
+A Codex role's bridge keeps an inbox, `<crew state>/codex/inbox/<session>/`, and says where in its record
+(`zminaInbox`). zmina writes one file per line there; the bridge starts a turn with the oldest once its thread is idle
+and no request is open, echoes it in its console (`› …`) and marks it taken, which is when it counts as delivered.
+Nothing is typed into the bridge's console, so the owner's input there never mixes with zmina's lines. Its lines carry the start's tag the same way. A bridge of an
+earlier zmina has no inbox: its role is typed into until it restarts.
+
+### Acks: at least once
+
+The lines of a role on its own channel wait for its ack: the dispatcher's signals (`zmina note`, results ready, released, remote
+lines — not health notes, and not watch notes, which have their own `zmina watch ack`), lines queued with `zmina send
+--when-idle`, and alarms. Each carries an id — `[zmina] S-12 dev: T-5 result ready · S-13 … (zmina S-12 S-13)`, or
+`<line> (zmina S-14)` — and the role's boot line says what to do: once handled (answered, a task recorded, routed, or
+nothing to do), `zmina ack <ids>`. The line itself names no command: Claude Code tells a role that a message from
+another session cannot ask it for a write, and a role was seen to refuse an ack the message asked for; told by its
+own boot line, it acks. Until then a line
+is said again `renotify` after it was last delivered (`S-12 (still pending since Mon 2 Nov 11:55) …`, the same id;
+never while it is still queued or not yet seen; three times at most, then only listed), is listed in the dispatcher's
+recovery pack (`unacked`) and by `zmina pending`, and is given back when the role's session starts, resumes, or has
+its context compacted or cleared: a Claude role's settings from zmina carry a `SessionStart` hook (every source) that
+runs `zmina pending --role <role> --brief`, whose output Claude Code puts into the conversation — after a compaction
+or a clear the tag rule again (a trim may lose the boot line; never at a start or resume, whose boot line names that
+start's tag, and only when `--role` is `$ZMINA_ROLE`), the newest 20 unacked lines (`and K older ones: zmina pending`), and for the
+dispatcher its watch keys that wait. Task packets
+have their own acceptance (`task accept`) and carry no id. A role typed into (tmux, or started by an earlier zmina)
+gets its lines as before, without ids.
+
+| Command | Does |
+|---|---|
+| `zmina ack <S-n>... \| --all [--role r]` | the lines are handled: not said again. An id that waits for no ack (acked already, dropped) or is another role's line is skipped with a warning on stderr, the rest are acked, exit 0; only the owner (no `$ZMINA_ROLE`) acks another role's ids, by id or `--all`. `--all`: every line of the calling role (`$ZMINA_ROLE`, or `--role`). |
+| `zmina pending [--role r \| --all] [--brief] [--json]` | the lines delivered and not acked: id, role, since when, how many times said again. Default the calling role's. `--brief`: the block the hook gives the role at a session's start and after a trim (newest 20 lines; the tag rule after a compaction or clear, to the role itself only), empty when nothing is to be told. |
 
 Every tool's description sits in the context of every turn, used or not: a fresh session of a
 setup with many skills and plugins fills ~50k tokens before the first word, and `Artifact` alone
@@ -196,7 +260,7 @@ the role's add up.
 | `zmina up <role> --resume` / `--resume=<id>` | start on the role's last conversation, or on the session id given — with `=`: `--resume <id>` reads the id as a second role. zmina keeps each role's last session id; a different session with no recorded work does not replace a known conversation. The boot message is sent again into the resumed conversation. |
 | `zmina down <role...>` / `--all` / `zmina down <role> --as N` | types `/exit` (session-end hooks run), kills after 15 s; the wait happens outside the lock, so other commands and the ticker are not held up. `/exit` goes only into an empty input line: a draft there (it would be sent with `/exit`) or a dialog (its Enter would pick the highlighted answer) refuses the down, exit 1, nothing pressed. `--clear` drops the draft (C-c; BSpace and End do not clear it) or closes the dialog (Escape) first, then `/exit`; a screen Escape leaves without an input line gets C-c C-c in one call. Claude Code's "Background work is running" question on exit is answered "Exit and stop tasks". The dispatcher needs `--force`. |
 | `zmina restart <role>` | down + up under the same name, honoring the configured resume policy. `--fresh` forces a new conversation; `--continue` requires its last conversation. A draft or a dialog refuses it as with `down`; `--clear` too. |
-| `zmina send <role> <text>` | type one line into a role's prompt and press Enter. Text that starts with `-` goes after `--`: `zmina send dev -- '- item'`. `--when-idle` queues it instead: the ticker types it the first time the role is up, booted and idle (one queued line per minute). For a message between sessions prefer `SendMessage({to: "<prefix><role>"})`. |
+| `zmina send <role> <text>` | one line for the role now: posted to its inbox socket (see Delivery), else typed into its prompt with Enter. With `--when-idle` to a role on its own channel the queued line carries an id and waits for its ack (see Acks). Text that starts with `-` goes after `--`: `zmina send dev -- '- item'`. `--when-idle` queues it instead: the ticker types it the first time the role is up, booted and idle (one queued line per minute). For a message between sessions prefer `SendMessage({to: "<prefix><role>"})`. |
 | `zmina peek <role> [-n 20] [--raw]` | the role's state in one line (as `ls` has it), then the last 20 lines of its screen as text without blank lines, rules and the footer under the input line — works from an agent, no terminal; also on a `dead` role. The input line stays: `❯` with a draft when there is one. The footer is cut only when it is recognised: the input box (a rule, the `❯` line with its draft, a rule) is the last block on the screen and every line under it is Claude Code's own — its status line, the mode line, its hints. Anything else there — a dialog, boxed or not, numbered options, any text — and nothing is cut: the question, the options and the confirm hint stay. Claude Code's suggested next prompt, dim in an empty input line, shows as `❯ (suggestion) …`: nobody typed it. `--raw`: the screen as it is (40 lines by default). |
 | `zmina keys <role> <key...>` | press named keys: `Enter Escape Up Down Left Right Tab BTab Space BSpace PageUp PageDown Home End C-c y n 1`–`9`. Text goes with `send`. The keys of one call go in one tmux call: `zmina keys <role> C-c C-c` ends a claude, two separate calls are too slow for its double C-c. |
 | `zmina sleep <role> --until <when> [--note file\|-] [--clear]` | put the role down holding what it holds (its tasks stay its own, active), and wake it at `<when>` (see Alarms): it starts on its last conversation and its queue gets `[zmina alarm] <note>` — without `--note`, `you were put to sleep Sun 14:20; go on with T-5`. Prints `dev asleep until Mon 2 Nov 09:00 (in 19h) · R-4 · holds T-5`. Held while asleep: `keep: always` does not start it early. A role asleep already has its alarm moved. A draft or a dialog refuses it as with `down`, `--clear` too. Not the dispatcher, not a copy (`dev#2`). `zmina up` wakes it early (the alarm still rings: the line is queued); `zmina remind off R-4` keeps it down. |
@@ -209,7 +273,7 @@ the role's add up.
 | `zmina stop` | the ticker starts nothing any more (no keep: always role, no scheduled run), then every role goes down, the dispatcher too; a role with a draft or a dialog stays up and is named (`--clear` as with `down`). `ls` shows `STOPPED`. |
 | `zmina start` | lifts the stop and starts the dispatcher. |
 | `zmina doctor [--json]` | checks crew file, tmux (3.2 or newer), claude as roles find it (their PATH; a binary in a temp dir fails) and the flags zmina passes, Claude Code's session registry (zmina reads it to tell idle from busy; it is not a public interface — doctor says when its shape changed), ticker beat, state, lock holder, task files, crews sharing a tmux server. Exit 1 on a fail. |
-| `zmina queue ls [--full] [--json]` | what waits to be typed: the dispatcher's signals and health notes, each role's inbox, and its failed lines (a line tmux refused three beats in a row); each line clipped to 160 characters, `--full` whole. |
+| `zmina queue ls [--full] [--json]` | what waits to be typed: the dispatcher's signals and health notes, each role's inbox, lines posted to its inbox socket not yet seen in its conversation, and its failed lines (a line tmux refused three beats in a row); each line clipped to 160 characters, `--full` whole. |
 | `zmina queue retry <role>` / `queue drop <role> [--all]` | put failed lines back at the head of the inbox / drop them (`--all`: the inbox too; for the dispatcher its signals and notes). Without `--all`, any retained inbox count and the command needed to drop it are printed. The hint includes the resolved `--crew` path and shell-quotes both path and role, so it still targets this crew when pasted into another shell. |
 | `zmina state show` | the state as zmina reads it (JSON). |
 | `zmina state recover` | an unreadable `state.json` (or one from a newer zmina) is never written over: every writing command refuses until this moves it aside as `state.json.broken-<time>`. |
@@ -460,6 +524,7 @@ watch:
     quiet: 10m                   # hold an event until it has not moved for this long (default 0)
     timeout: 2m                  # one run (default 2m)
     forget_after: 14d            # a key gone this long is forgotten (default 14d)
+    renotify: 30m                # a noted key nobody acked is said again this often (default 30m, or every when longer; off; at least every)
     enabled: true                # false: skipped, state kept
     baseline: true               # the first run records everything, notes nothing (default)
     gl_config: work              # gl profile: sets the host (gitlab.com or self-hosted)
@@ -491,6 +556,22 @@ Rules, every kind:
 - A key is noted when it is new or its fingerprint changed; the fingerprint is stored only once the
   note is queued (20 waiting: retried next run). A key back with the same fingerprint within
   `forget_after` is not news.
+- **At least once.** A noted key waits on an ack: a note typed into a dispatcher that then compacted, or that was
+  busy, is not lost. While the source still reports the key with the same fingerprint and nobody acked it, the
+  first run once `renotify` has passed since it was last said (a minute's slack, so `renotify` equal to `every` is
+  the next run) says it again (never while that earlier note, as it
+  was queued, still waits to be typed): `mrs: group/repo!12 — approved https://…/12 (still pending since Mon 2 Nov
+  11:55; ack: zmina watch ack mrs 'https://…/12')`. The wait ends with `zmina watch ack`, or with a task made since
+  the note that carries it: its url as the task's `--url` or in its asked text, title or note (a markdown link's target
+  too; a `#fragment` aside), never a longer url it starts; or
+  its key as a whole word, `<watch>/<key>` always, the bare key only when it is structured (six characters at
+  least, with `:`, `!`, `/` or `#`: `group/repo!12:review`, `disk:/data`) — a short key such as `main` is a word
+  any task may say. A key the source stops reporting (merged, fixed) does not wait while it is gone; back with the
+  same fingerprint before `forget_after`, it waits again from the same time (one empty run is no ack). A new
+  fingerprint is news and waits anew. Keys a baseline recorded, keys noted while `renotify` is `off`, and keys
+  noted by a zmina before acks never wait: with `off` a key is said once, as before, and is neither pending nor in
+  the pack. Every waiting key is in the dispatcher's recovery pack (`watch_keys`, oldest first, each with its ack
+  command) until it is acked.
 - `quiet`: an event whose `at` is younger than `quiet` is held. If its news goes away first (key gone,
   or back to the stored fingerprint), it is dropped: event `watch-dropped key=… reason=gone-before-quiet`,
   shown in `watch ls`.
@@ -535,13 +616,14 @@ The keys of one MR noted in one run fold into one note:
 
 | Command | Does |
 |---|---|
-| `zmina watch ls [--json]` | each watch: kind, every, last run (ok/failed), next, keys, held, last 5 notes and drops. |
-| `zmina watch run <name>` | one run now. `--dry-run`: every event with its fate — `note` / `dup` / `quiet Nm` / `baseline` / `info-off` / `dropped` — nothing written. |
+| `zmina watch ls [--json]` | each watch: kind, every, last run (ok/failed), next, keys, held (the quiet window), pending (keys waiting on an ack, listed under the table with since when), last 5 notes and drops. `--json`: `pending` is held, `unacked` and `waiting` the keys waiting on an ack. |
+| `zmina watch run <name>` | one run now. `--dry-run`: every event with its fate — `note` / `renote` (said again, unacked) / `dup` / `quiet Nm` / `baseline` / `info-off` / `dropped` — nothing written. |
+| `zmina watch ack <name> <key\|url>... \| --all` | the dispatcher has the note: end the wait of a key, of every key whose note carried that url, or of all; they are not said again until their fingerprint changes. A target that names no waiting key fails the call, and nothing is acked. |
 | `zmina watch baseline <name>` | record what the source reports now, note nothing. |
 | `zmina watch forget <name> [key]` | drop stored fingerprints, so the next run notes them again. |
 
-Watches are edited by hand in the crew file. Log events: `watch-run`, `watch-noted`,
-`watch-dropped`, `watch-failed` (role `watch:<name>`: `zmina log --role watch:mrs`).
+Watches are edited by hand in the crew file. Log events: `watch-run`, `watch-noted`, `watch-renoted`,
+`watch-ack`, `watch-dropped`, `watch-failed` (role `watch:<name>`: `zmina log --role watch:mrs`).
 
 ## Tasks — the work ledger
 
@@ -761,7 +843,7 @@ todo. The log has `alarm` (set, moved, off, rang) and `sleep`.
 | Command | Does |
 |---|---|
 | `zmina seat add <role> [--about … --dir … --boot … --model … --keep … --args=--chrome,--x --resume always --schedule "…" --prompt "…" --expires 3d]` | add a role. `--expires` takes `12h`, `3d`, a date or a date and time. |
-| `zmina seat set <role> key=value …` | change keys; `key=` removes one. Keys: runtime, profile, codex_transport, codex_home, reasoning_effort, sandbox, approval_policy, session, dir, boot, keep, model, args (`[--a, --b]` or `--a,--b`), about, remote_control (`true`/`false`), resume, schedule, prompt, expires, context_max, context_action, drop_tools, keep_tools (lists, like args), release_idle_minutes, budget. |
+| `zmina seat set <role> key=value …` | change keys; `key=` removes one. Keys: runtime, profile, codex_transport, codex_home, reasoning_effort, sandbox, approval_policy, session, dir, boot, keep, model, args (`[--a, --b]` or `--a,--b`), about, remote_control (`true`/`false`), delivery (`native`/`tmux`), resume, schedule, prompt, expires, context_max, context_action, drop_tools, keep_tools (lists, like args), release_idle_minutes, budget. |
 | `zmina seat rm <role>` | remove a role that is down and holds no active task (`--force` despite tasks). |
 
 Every edit keeps the file's comments, is checked by loading it before it is written (a crew that
@@ -871,8 +953,8 @@ alone for the beat — never taken as ended; a role being put down is left alone
    dialog or an attached terminal makes it wait. The dispatcher hears `released dev2 after 45m idle
    → L-15, L-16`; the log has `releasing`, `released` and a `down`.
 5. Watches that are due run (their sources outside the lock), and their news joins the notes.
-6. When the dispatcher is idle and has been up `boot_grace`, the waiting signals and notes are typed
-   into it as one line: `[zmina] mr-watch: !35 … · designer: ended · director: busy for 95 min on
+6. When the dispatcher is idle and has been up `boot_grace`, the waiting signals and notes go to it (posted to its
+   own channel, see Delivery, else typed) as one line: `[zmina] mr-watch: !35 … · designer: ended · director: busy for 95 min on
    T-3`. Then each other role that is up `boot_grace` and idle gets its first queued line; a line
    tmux refuses is tried three beats, then kept as failed (`zmina queue`). A typed line is sent or not left
    typed: Claude Code can take a long line typed in one burst, its Enter with it, as a paste and keep it in the
@@ -919,6 +1001,11 @@ and exists nowhere else. It is written whole (rename) and never over a file zmin
 - A `[zmina]` part from `zmina note` or a watch (`<source>: …`, the source is not a role) is a task
   signal, not a health event: record a task and route it to a seat like any other ask. Only a
   watch's `failing for N runs` / `recovered` are about the watch itself (`zmina watch ls`).
+- A watch's note waits on an ack and is said again (`still pending since …`) until it gets one. A task recorded
+  with its url (`task new … --url <url>`) acks it; for a note acted on without a new task (handed to a task that
+  already holds that MR, or nothing to do) run `zmina watch ack <watch> <url or key>`; a task's asked text that
+  names a short key acks it only as `<watch>/<key>`. The recovery pack's
+  `watch_keys` are notes that may have been lost: act on each or ack it.
 - Who is there: `zmina ls`; what is in work: `zmina task ls`; what waits: `zmina queue ls`;
   what is parked: `zmina later ls`. Read the compact views; add `--wide` / `--full` / `zmina ls <role>` /
   `zmina task show <id>` only for the one thing the compact view does not answer. Read them at boot and after every compaction — the ledger, not
@@ -953,6 +1040,9 @@ and exists nowhere else. It is written whole (rename) and never over a file zmin
 - `<role>: no input line …` — a stuck prompt (folder trust elsewhere, a question, a login):
   `zmina peek <role>` (`--raw` when the cleaned screen hides what you need), then `zmina keys <role> …`, or ask the owner. `stopped by a usage limit` —
   nothing to press; say when it resets and hold its work.
+- A zmina line with ids (`S-12 …`) and a line ending `(zmina S-14)` wait for your ack: once each is handled — a task recorded, routed, answered, or nothing to do — `zmina ack S-12 S-14`, one
+  call for the batch. `still pending since …` is one you did not ack: handle it now or ack it. `zmina pending` lists
+  them; the recovery pack has them as `unacked`.
 - `budget: …` — a role or a task went past its budget (API-equivalent dollars). Nothing is stopped: tell the
   owner in one line with `zmina usage --by task --role <role>` behind it, and act on what they decide.
 - Do not end a role that is `busy` unless the owner asks. Do not touch `outside` sessions — they
@@ -967,7 +1057,7 @@ and exists nowhere else. It is written whole (rename) and never over a file zmin
 - Roles inherit nothing from the session that ran `zmina up`: its session variables are dropped, so
   a role started by the dispatcher is not its child.
 - Typing into a prompt is at-least-once: a line typed just before a crash may be typed again. The
-  owner typing in an attached role at the same second gets the line mixed into theirs.
+  owner typing in an attached role at the same second gets the line mixed into theirs (a posted line is not).
 - Roles run with the owner's permissions and credentials. tmux sessions and worktrees separate work,
   not trust.
 - A role whose `dir` was never trusted stops at Claude Code's trust prompt: `zmina peek` shows it,

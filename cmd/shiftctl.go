@@ -113,6 +113,11 @@ func (a *app) queueCommand() *cobra.Command {
 						line("inbox    ", l)
 					}
 
+					for _, p := range q.Posted {
+						line("posted   ", fmt.Sprintf("%s (to its inbox socket %s, not yet seen)", p.Line,
+							p.At.Local().Format("01-02 15:04")))
+					}
+
 					for _, f := range q.Failed {
 						line("failed   ", fmt.Sprintf("%s (%s, %s)", f.Line, f.Error, f.At.Local().Format("01-02 15:04")))
 					}

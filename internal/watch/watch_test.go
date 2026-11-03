@@ -16,14 +16,14 @@ type queue struct {
 	full  bool
 }
 
-func (q *queue) add(e Event) error {
+func (q *queue) add(e Event) (string, error) {
 	if q.full {
-		return errors.New("20 notes already wait")
+		return "", errors.New("20 notes already wait")
 	}
 
 	q.lines = append(q.lines, e.Line())
 
-	return nil
+	return "w: " + e.Line(), nil
 }
 
 func ev(key, fp string) Event { return Event{Key: key, Fingerprint: fp, Text: key + " at " + fp} }

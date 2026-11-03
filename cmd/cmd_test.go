@@ -93,6 +93,62 @@ func TestWatchDryRunWritesNothing(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(filepath.Dir(crewFile), "state.json"), "a dry run writes no state")
 }
 
+func TestAckUnknownIDWarnsAndExitsZero(t *testing.T) {
+	crewFile := testCrew(t, "")
+
+	out, errOut, err := zm(t, crewFile, "ack", "S-9")
+	require.NoError(t, err, "a re-ack after a renote or a brief is not an error")
+	assert.Equal(t, "nothing acked\n", out)
+	assert.Contains(t, errOut, "zmina ack: S-9 waits for no ack")
+
+	_, _, err = zm(t, crewFile, "ack")
+	require.Error(t, err, "ids or --all")
+}
+
+func TestHookSource(t *testing.T) {
+	assert.Equal(t, "compact", hookSource(strings.NewReader(`{"session_id":"x","source":"compact"}`)))
+	assert.True(t, trimmed(hookSource(strings.NewReader(`{"source":"clear"}`))))
+	assert.False(t, trimmed(hookSource(strings.NewReader(`{"source":"startup"}`))), "a start's boot names its tag")
+	assert.False(t, trimmed(hookSource(strings.NewReader(`{"source":"resume"}`))))
+	assert.Empty(t, hookSource(strings.NewReader("")), "run by hand")
+	assert.Empty(t, hookSource(strings.NewReader("not json")))
+}
+
+func TestWatchLsAndAck(t *testing.T) {
+	crewFile := testCrew(t, `watch:
+  ci-red:
+    kind: exec
+    every: 5m
+    baseline: false
+    run: "printf '%s\n' '{\"key\":\"main\",\"fingerprint\":\"red\",\"text\":\"pipeline red\",\"url\":\"https://example.com/p/1\"}'"
+`)
+
+	_, _, err := zm(t, crewFile, "watch", "run", "ci-red")
+	require.NoError(t, err)
+
+	out, _, err := zm(t, crewFile, "watch", "ls")
+	require.NoError(t, err)
+	assert.Contains(t, out, "KEYS  HELD  PENDING")
+	assert.Regexp(t, `ci-red .* 1\s+0\s+1\n`, out)
+	assert.Contains(t, out, "ci-red, waiting on an ack:\n  main  since ")
+	assert.Contains(t, out, "pipeline red https://example.com/p/1")
+
+	_, _, err = zm(t, crewFile, "watch", "ack", "ci-red")
+	require.Error(t, err, "keys, urls or --all")
+
+	out, _, err = zm(t, crewFile, "watch", "ack", "ci-red", "https://example.com/p/1")
+	require.NoError(t, err)
+	assert.Equal(t, "ci-red: acked main\n", out)
+
+	out, _, err = zm(t, crewFile, "watch", "ls", "--json")
+	require.NoError(t, err)
+	assert.NotContains(t, out, `"unacked"`)
+
+	out, _, err = zm(t, crewFile, "watch", "ack", "ci-red", "--all")
+	require.NoError(t, err)
+	assert.Equal(t, "ci-red: nothing waits on an ack\n", out)
+}
+
 func TestTaskWorktreeFlow(t *testing.T) {
 	crewFile := testCrew(t, "  dev:\n")
 	repo := filepath.Join(filepath.Dir(crewFile), "api")
@@ -239,11 +295,12 @@ func TestStartStopWithRealTmux(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		out, _, err = zm(t, crewFile, "peek", "dev", "-n", "5")
-		return err == nil && strings.Contains(out, "claude --name")
+		return err == nil && strings.Contains(out, "--name")
 	}, 15*time.Second, 100*time.Millisecond)
 	require.Eventually(t, func() bool { text, _, _ := zm(t, crewFile, "peek", "dispatcher"); return strings.Contains(text, "❯") }, 15*time.Second, 100*time.Millisecond)
 
-	assert.Contains(t, out, "claude --name")
+	assert.Contains(t, out, `claude --settings {"crossSessionInbound":"accept","hooks":`,
+		"socket delivery: zmina's settings let other sessions' messages in")
 	assert.NotContains(t, out, "--remote-control", "remote_control: false")
 
 	out, _, err = zm(t, crewFile, "stop")

@@ -53,6 +53,8 @@ func TestWatchFailuresAndRecovery(t *testing.T) {
 	f := fixtureWith(t, watchYAML)
 	cycle(t, f, watch.Result{Events: []watch.Event{ev("main", "red")}})
 	f.s.State.Signals = nil
+	_, err := f.s.AckWatch("ci-red", []string{"main"}, false, "dispatcher") // the dispatcher has it: no renote
+	require.NoError(t, err)
 
 	fail := watch.Result{Err: errors.New("dial tcp: lookup gitlab.example.com: no such host"), Stderr: []string{"boom"}}
 	for range 4 {

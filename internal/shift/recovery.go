@@ -52,9 +52,21 @@ func (s *Shift) RecoveryPack() (string, recovery.Pack, error) {
 		if rs.Sent != nil {
 			add("in_flight", name, rs.Sent.Line, "zmina queue ls", rs.Sent)
 		}
+		for i, p := range rs.Posted {
+			add("in_flight", fmt.Sprintf("%s/posted/%d", name, i), p.Line, "zmina queue ls", p)
+		}
 		for i, f := range rs.Failed {
 			add("failures", fmt.Sprintf("%s/%d", name, i), f.Error+": "+f.Line, "zmina queue ls", f)
 		}
+	}
+	for _, a := range s.Pending("") {
+		if !a.First.IsZero() {
+			add("unacked", a.ID, a.Role+": "+a.Text+" (since "+s.clock(a.First)+")", "zmina ack "+a.ID, a)
+		}
+	}
+	for _, k := range s.WaitingKeys() {
+		add("watch_keys", k.Watch+"/"+k.Key, k.Watch+": "+k.Line()+" (pending since "+
+			k.Since.In(s.Crew.Location()).Format("Mon 2 Jan 15:04")+")", k.AckCommand(), k)
 	}
 	for i, text := range s.State.Signals {
 		add("signals", fmt.Sprint(i), text, "zmina queue ls", nil)
@@ -86,7 +98,15 @@ func (s *Shift) RecoveryPack() (string, recovery.Pack, error) {
 	}
 	size := 0
 	for k, entries := range full.Entries {
-		sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
+		sort.Slice(entries, func(i, j int) bool {
+			// Watch keys go oldest first, so the longest waits are the ones the pack keeps.
+			if a, ok := entries[i].Data.(WaitingKey); ok {
+				if b, ok := entries[j].Data.(WaitingKey); ok && !a.Since.Equal(b.Since) {
+					return a.Since.Before(b.Since)
+				}
+			}
+			return entries[i].ID < entries[j].ID
+		})
 		full.Entries[k] = entries
 		full.Counts[k] = len(entries)
 		size += len(entries)

@@ -82,6 +82,8 @@ type Role struct {
 	About string `yaml:"about"`
 	// RemoteControl overrides the crew's remote_control for this role.
 	RemoteControl *bool `yaml:"remote_control"`
+	// Delivery overrides the crew's delivery for this role.
+	Delivery string `yaml:"delivery"`
 	// Resume "always" starts the role on its last conversation (claude --resume) whenever one is known.
 	Resume string `yaml:"resume"`
 	// Schedule is a five-field cron spec; at each time the ticker starts the role if needed and types Prompt.
@@ -203,6 +205,11 @@ type Crew struct {
 	ReleaseIdleMinutes string `yaml:"release_idle_minutes"`
 	// RemoteControl opens every role to Remote Control (claude --remote-control); default true.
 	RemoteControl *bool `yaml:"remote_control"`
+	// Renotify is how long a delivered line waits for its reader's ack before it is said again (default 30m; off).
+	Renotify string `yaml:"renotify"`
+	// Delivery is how lines reach a role: native (the default: its agent's own channel — a Claude session's inbox
+	// socket, a Codex bridge's inbox) or tmux (typed into its input line).
+	Delivery string `yaml:"delivery"`
 	// BootGrace is how long a started role is left to boot before lines are typed into it (default 2m).
 	BootGrace string `yaml:"boot_grace"`
 	// DropEnv lists environment variables (NAME, or PREFIX*) kept from the roles, on top of the built-in list.
@@ -223,6 +230,7 @@ type Crew struct {
 	Timezone string `yaml:"timezone"`
 
 	bootGrace time.Duration
+	renotify  time.Duration
 	loc       *time.Location
 	// Roles are keyed by role name.
 	Roles map[string]*Role `yaml:"roles"`
@@ -370,6 +378,9 @@ func (c *Crew) Socket() string { return suffixed(socket, "-", c.Name) }
 // LaunchdLabel is the crew's ticker: io.iamnikolie.zmina, or io.iamnikolie.zmina.<name>.
 func (c *Crew) LaunchdLabel() string { return suffixed(launchdLabel, ".", c.Name) }
 
+// RenotifyD is how long a delivered line waits for its ack before it is said again; zero is never.
+func (c *Crew) RenotifyD() time.Duration { return c.renotify }
+
 // BootGraceD is how long a started role is left to boot before lines are typed into it.
 func (c *Crew) BootGraceD() time.Duration { return c.bootGrace }
 
@@ -414,6 +425,22 @@ func (c *Crew) RemoteControlFor(r *Role) bool {
 	default:
 		return true
 	}
+}
+
+// The values of delivery.
+const (
+	DeliveryNative = "native"
+	DeliveryTmux   = "tmux"
+)
+
+// DeliveryFor is how lines reach a role: its own delivery, else the crew's, else native. A Claude role whose args
+// pass their own --settings is typed into, since zmina's settings open its inbox socket.
+func (c *Crew) DeliveryFor(r *Role) string {
+	if !r.IsCodex() && r.ownsSettings() {
+		return DeliveryTmux
+	}
+
+	return or(r.Delivery, or(c.Delivery, DeliveryNative))
 }
 
 // SystemdUnit is the crew's ticker on Linux: zmina (.service and .timer), or zmina-<name>.
@@ -509,6 +536,11 @@ func (c *Crew) complete() {
 			r.Boot = c.defaultBoot(r)
 		}
 
+		if r.ownsSettings() && !r.IsCodex() && or(r.Delivery, or(c.Delivery, DeliveryNative)) == DeliveryNative {
+			c.Warnings = append(c.Warnings, fmt.Sprintf("role %s: args has --settings, so zmina's own settings "+
+				"are not passed and lines are typed into it (delivery tmux)", name))
+		}
+
 		if r.ownsTools() && len(c.toolsListed(r)) > 0 {
 			c.Warnings = append(c.Warnings, fmt.Sprintf("role %s: args has --disallowedTools, so drop_tools and "+
 				"keep_tools are not applied to it; move the list to drop_tools", name))
@@ -528,6 +560,17 @@ func parseRelease(v string) (time.Duration, error) {
 	}
 
 	return time.Duration(n) * time.Minute, nil
+}
+
+// ownsSettings reports a role whose args pass their own --settings.
+func (r *Role) ownsSettings() bool {
+	for _, a := range r.Args {
+		if a == "--settings" || strings.HasPrefix(a, "--settings=") {
+			return true
+		}
+	}
+
+	return false
 }
 
 // ownsTools reports whether the role's args already pass --disallowedTools, as crew files before drop_tools did;
@@ -589,6 +632,10 @@ func (c *Crew) check() error {
 	if err := c.Handoff.check(); err != nil {
 		return err
 	}
+
+	if err := checkDelivery(c.Delivery); err != nil {
+		return err
+	}
 	sessions := map[string]string{}
 
 	for _, name := range c.Names() {
@@ -598,6 +645,10 @@ func (c *Crew) check() error {
 		}
 
 		if err := r.CheckRuntime(); err != nil {
+			return fmt.Errorf("role %s: %w", name, err)
+		}
+
+		if err := checkDelivery(r.Delivery); err != nil {
 			return fmt.Errorf("role %s: %w", name, err)
 		}
 
@@ -652,6 +703,20 @@ func (c *Crew) resolve(strict bool) error {
 		}
 
 		c.bootGrace = d
+	}
+
+	c.renotify = defaultRenotify
+	switch v := strings.TrimSpace(c.Renotify); v {
+	case "":
+	case "off", "0":
+		c.renotify = 0
+	default:
+		d, err := ParseSpan(v)
+		if err != nil || d < time.Minute {
+			return fmt.Errorf("renotify %q: a span of a minute at least, such as 30m or 2h, or off", c.Renotify)
+		}
+
+		c.renotify = d
 	}
 
 	c.loc = nil
@@ -852,4 +917,12 @@ func or(v, fallback string) string {
 	}
 
 	return v
+}
+
+func checkDelivery(v string) error {
+	if v != "" && v != DeliveryNative && v != DeliveryTmux {
+		return fmt.Errorf("delivery is %s or %s, not %q", DeliveryNative, DeliveryTmux, v)
+	}
+
+	return nil
 }

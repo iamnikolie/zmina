@@ -349,6 +349,8 @@ func TestWatchValidation(t *testing.T) {
 		"bad voices":         "  x:\n    kind: gitlab-mr\n    every: 5m\n    gl_config: w\n    voices: all\n",
 		"duplicate name":     "  x:\n    kind: exec\n    every: 5m\n    run: [a]\n  x:\n    kind: exec\n    every: 5m\n    run: [b]\n",
 		"bad name":           "  X_1:\n    kind: exec\n    every: 5m\n    run: [a]\n",
+		"bad renotify":       "  x:\n    kind: exec\n    every: 5m\n    run: [a]\n    renotify: soon\n",
+		"renotify < every":   "  x:\n    kind: exec\n    every: 1h\n    run: [a]\n    renotify: 30m\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := Load(write(t, base+body))
@@ -367,7 +369,18 @@ func TestWatchValidation(t *testing.T) {
 	assert.True(t, mrs.Baselines())
 	assert.Equal(t, 14*24*time.Hour, mrs.ForgetAfterD())
 	assert.Equal(t, 2*time.Minute, mrs.TimeoutD())
+	assert.Equal(t, 30*time.Minute, mrs.RenotifyD(), "a noted key is said again after 30m by default")
 	assert.Equal(t, []string{"/bin/sh", "-c", "my-detector --json | tail -5"}, c.Watches["ci"].Run.Line())
+
+	c, err = Load(write(t, base+"  a:\n    kind: exec\n    every: 5m\n    run: [a]\n    renotify: off\n"+
+		"  b:\n    kind: exec\n    every: 5m\n    run: [b]\n    renotify: 1d\n"))
+	require.NoError(t, err)
+	assert.Zero(t, c.Watches["a"].RenotifyD())
+	assert.Equal(t, 24*time.Hour, c.Watches["b"].RenotifyD())
+
+	c, err = Load(write(t, base+"  slow:\n    kind: exec\n    every: 1h\n    run: [a]\n"))
+	require.NoError(t, err)
+	assert.Equal(t, time.Hour, c.Watches["slow"].RenotifyD(), "the default is every when every is longer than 30m")
 }
 
 func TestDropTools(t *testing.T) {
@@ -453,4 +466,20 @@ func TestBudget(t *testing.T) {
 	assert.ErrorContains(t, err, "budget must be positive")
 
 	assert.Contains(t, SeatKeys, "budget", "zmina seat set dev budget=20")
+}
+
+func TestDelivery(t *testing.T) {
+	c, err := Load(write(t, "namespace: /ns\nroles:\n  dispatcher:\n  dev:\n    delivery: tmux\n  own:\n    args: [--settings, /x.json]\n"))
+	require.NoError(t, err)
+	assert.Equal(t, DeliveryNative, c.DeliveryFor(c.Roles["dispatcher"]), "socket by default")
+	assert.Equal(t, DeliveryTmux, c.DeliveryFor(c.Roles["dev"]))
+	assert.Equal(t, DeliveryTmux, c.DeliveryFor(c.Roles["own"]), "its own --settings: typed")
+	assert.Contains(t, strings.Join(c.Warnings, "\n"), "role own: args has --settings")
+
+	c, err = Load(write(t, "namespace: /ns\ndelivery: tmux\nroles:\n  dispatcher:\n"))
+	require.NoError(t, err)
+	assert.Equal(t, DeliveryTmux, c.DeliveryFor(c.Roles["dispatcher"]))
+
+	_, err = Load(write(t, "namespace: /ns\nroles:\n  dispatcher:\n    delivery: pigeon\n"))
+	require.Error(t, err)
 }

@@ -161,6 +161,8 @@ func (s *Shift) Tick() []string {
 	s.addNotes(notes)
 	did = append(did, notes...)
 
+	s.renotify(now)
+
 	typed := map[string]bool{}
 	if line := s.deliver(now); line != "" {
 		typed[s.Crew.Dispatcher] = true
@@ -291,7 +293,9 @@ func (s *Shift) trim(name string, r *crew.Role, now time.Time, tasks []string) s
 		return fmt.Sprintf("%s: /%s (%s): %s", name, do, detail, err)
 	}
 
-	if boot := s.BootText(r); do == crew.ContextClear && !r.IsCodex() && boot != "" {
+	// The boot again, without the tag: queued, it is a line the log, the queue and the recovery pack show; the
+	// clear's hook gives the tag.
+	if boot := s.bootText(r, false); do == crew.ContextClear && !r.IsCodex() && boot != "" {
 		rs.Inbox = append(rs.Inbox, boot)
 	}
 
@@ -629,7 +633,7 @@ func (s *Shift) deliver(now time.Time) string {
 	var local, remote []string
 
 	for _, sig := range s.State.Signals {
-		if IsRemote(sig) {
+		if IsRemote(signalBody(sig)) {
 			remote = append(remote, sig)
 		} else {
 			local = append(local, sig)
@@ -642,34 +646,80 @@ func (s *Shift) deliver(now time.Time) string {
 		}
 	}
 
-	parts := make([]string, 0, len(local)+len(s.State.Notes))
-	for _, line := range local {
-		parts = append(parts, repeated(line, s.State.SignalCounts[line]))
-	}
-	parts = append(parts, s.currentNotes()...)
-	alone := len(remote) > 0 && (len(parts) == 0 || s.State.RemoteBatches >= 3)
-	if alone {
-		parts = []string{repeated(remote[0], s.State.SignalCounts[remote[0]]) + s.lateness(remote[0], now)}
-	}
+	notes := s.currentNotes()
+	alone := len(remote) > 0 && (len(local)+len(notes) == 0 || s.State.RemoteBatches >= 3)
 
 	// A line queued for the dispatcher itself goes first: after a clear it is the boot line, and the signals
-	// belong to a dispatcher that knows its job. The line typed last has to land first: landed presses Enter on it
-	// while it still sits in the input line, whatever the dispatcher's status says.
-	if len(parts) == 0 || len(s.State.Role(d).Inbox) > 0 || !s.landed(d, now) || !s.atPrompt(d, now) {
+	// belong to a dispatcher that knows its job.
+	if len(local)+len(notes) == 0 && !alone || len(s.State.Role(d).Inbox) > 0 {
 		return ""
 	}
 
-	// Never into a draft: the owner's half-typed words would go out joined with the line.
-	if draft, ok, err := s.Tmux.Prompt(d); err == nil && ok && draft != "" {
+	// Posted to its inbox socket, the line needs no empty input line: it waits until the one before it showed and
+	// the dispatcher is between turns.
+	sess := s.native(d, now)
+	if sess != nil {
+		if s.followPosted(d, now) || !s.quiet(d, sess) {
+			return ""
+		}
+	} else {
+		// The line typed last has to land first: landed presses Enter on it while it still sits in the input line,
+		// whatever the dispatcher's status says.
+		if !s.landed(d, now) || !s.atPrompt(d, now) {
+			return ""
+		}
+
+		// Never into a draft: the owner's half-typed words would go out joined with the line.
+		if draft, ok, err := s.Tmux.Prompt(d); err == nil && ok && draft != "" {
+			return ""
+		}
+	}
+
+	// Each signal goes with its id, and the line ends with how to ack them (watch notes have their own ack).
+	var ids, fresh []string
+
+	part := func(sig string) string {
+		p, id := s.signalPart(sig)
+		if id != "" {
+			ids = append(ids, id)
+			if !signalID.MatchString(sig) {
+				fresh = append(fresh, id)
+			}
+		}
+
+		return repeated(p, s.State.SignalCounts[sig])
+	}
+
+	var parts []string
+	if alone {
+		parts = []string{part(remote[0]) + s.lateness(remote[0], now)}
+	} else {
+		for _, sig := range local {
+			parts = append(parts, part(sig))
+		}
+		parts = append(parts, notes...)
+	}
+
+	line := "[zmina] " + strings.Join(parts, " · ") + ackTail(ids)
+
+	var err error
+	if sess != nil {
+		if err = s.post(d, sess, line, now); err != nil {
+			s.log(d, "post-failed", "", err.Error())
+		}
+	} else if err = s.typeLine(d, line); err == nil {
+		s.State.Role(d).Sent = &Sent{Line: line, At: now}
+	}
+
+	if err != nil {
+		for _, id := range fresh {
+			delete(s.State.Acks, id)
+		}
+
 		return ""
 	}
 
-	line := "[zmina] " + strings.Join(parts, " · ")
-	if err := s.typeLine(d, line); err != nil {
-		return ""
-	}
-
-	s.State.Role(d).Sent = &Sent{Line: line, At: now}
+	s.delivered(line, ids, now)
 
 	if alone {
 		delete(s.State.SignalSent, remote[0])
@@ -760,6 +810,27 @@ func (s *Shift) Deliver() string { return s.deliver(s.Now()) }
 func (s *Shift) deliverInbox(name string, now time.Time) string {
 	s.pruneTaskInbox(name)
 	rs := s.State.Role(name)
+
+	// A line posted to the inbox socket needs no empty input line and no Enter: it goes once the one before it
+	// showed in the conversation and the role is between turns. A slash command is typed.
+	if sess := s.native(name, now); sess != nil && rs.Sent == nil {
+		pending := s.followPosted(name, now)
+
+		switch {
+		case len(rs.Inbox) == 0:
+			return ""
+		case postable(rs.Inbox[0]):
+			if pending || !s.quiet(name, sess) {
+				return ""
+			}
+
+			return s.postInbox(name, sess, now)
+		case pending:
+			// A slash command is typed, below, once the lines posted before it showed.
+			return ""
+		}
+	}
+
 	if len(rs.Inbox) == 0 || !s.landed(name, now) || !s.atPrompt(name, now) {
 		return ""
 	}
@@ -789,6 +860,7 @@ func (s *Shift) deliverInbox(name string, now time.Time) string {
 
 	rs.Inbox, rs.Attempts = rs.Inbox[1:], 0
 	s.log(name, "typed", "", head)
+	s.delivered(head, nil, now)
 	s.submittedTask(name, head)
 
 	// A slash command may not change the status; only a line for the conversation is watched until it lands.
@@ -797,6 +869,35 @@ func (s *Shift) deliverInbox(name string, now time.Time) string {
 	}
 
 	return "typed into " + name + ": " + head
+}
+
+// postInbox posts a role's first waiting line to its inbox socket. A post that never started is tried again next beat
+// (typeTries beats, then kept as failed); one whose write broke is followed as posted (post), since the role may have
+// it; any other error keeps it as failed at once.
+func (s *Shift) postInbox(name string, sess *registry.Session, now time.Time) string {
+	rs := s.State.Role(name)
+	head := rs.Inbox[0]
+
+	if err := s.post(name, sess, head, now); err != nil {
+		rs.Attempts++
+		s.log(name, "post-failed", "", fmt.Sprintf("try %d: %s: %s", rs.Attempts, head, err))
+
+		if unavailable(err) && rs.Attempts < typeTries {
+			return ""
+		}
+
+		s.deliveryFailure(name, head, err.Error())
+		rs.Failed = append(rs.Failed, Failed{Line: head, Error: err.Error(), At: now})
+		rs.Inbox, rs.Attempts = rs.Inbox[1:], 0
+
+		return name + ": a queued line could not be posted, kept in zmina queue: " + head
+	}
+
+	rs.Inbox, rs.Attempts = rs.Inbox[1:], 0
+	s.submittedTask(name, head)
+	s.delivered(head, nil, now)
+
+	return "posted to " + name + ": " + head
 }
 
 // FlushInbox attempts the ordinary safe idle delivery path for one role, without starting any roles.

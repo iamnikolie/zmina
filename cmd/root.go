@@ -6,16 +6,19 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/iamnikolie/zmina/internal/codex"
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/events"
 	"github.com/iamnikolie/zmina/internal/inbox"
 	"github.com/iamnikolie/zmina/internal/ledger"
 	"github.com/iamnikolie/zmina/internal/mesh"
+	"github.com/iamnikolie/zmina/internal/peer"
 	"github.com/iamnikolie/zmina/internal/registry"
 	"github.com/iamnikolie/zmina/internal/shift"
 	"github.com/iamnikolie/zmina/internal/task"
@@ -75,7 +78,8 @@ Run 'zmina skill' for the full agent reference.`,
 	root.AddCommand(a.taskCommand(), a.todoCommand(), a.laterCommand(), a.remindCommand(), a.sleepCommand(), a.seatCommand(), a.logCommand(), a.noteCommand(), a.inboxCommand(), a.watchCommand(),
 		a.stopCommand(), a.startCommand(), a.queueCommand(), a.stateCommand(), a.tickerCommand(),
 		a.launchdCommand(), a.doctorCommand(), a.usageCommand(), a.skillCommand(), a.versionCommand(), a.uiCommand(),
-		a.messageCommand(), a.contextCommand(), a.reportCommand(), a.nodeCommand(), a.tellCommand(), a.codexCommand(), a.terminalCommand())
+		a.messageCommand(), a.contextCommand(), a.reportCommand(), a.nodeCommand(), a.tellCommand(), a.codexCommand(), a.terminalCommand(),
+		a.ackCommand(), a.pendingCommand())
 
 	return root
 }
@@ -157,6 +161,9 @@ func (a *app) newShift() (*shift.Shift, error) {
 		Crew:              c,
 		Tmux:              &lazyTmux{socket: c.Socket(), drop: c.DropEnv},
 		Reg:               &registry.Registry{Namespace: c.Namespace},
+		Peer:              peer.Inbox{},
+		CodexInbox:        codex.Inbox{},
+		Self:              self(),
 		State:             shift.NewState(),
 		Tasks:             taskStore(c),
 		Later:             laterStore(c),
@@ -362,4 +369,18 @@ func (l *lazyTmux) KeepScreens(name string) error {
 	}
 
 	return c.KeepScreens(name)
+}
+
+// self is this zmina's executable, for the hooks the roles it starts run; empty when it cannot be found.
+func self() string {
+	path, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		return real
+	}
+
+	return path
 }

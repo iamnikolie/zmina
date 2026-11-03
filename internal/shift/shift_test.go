@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -214,6 +215,8 @@ func (f *fakeTasks) Active() []task.Task {
 
 	return out
 }
+
+func (f *fakeTasks) All() ([]task.Task, error) { return slices.Clone(f.list), nil }
 
 func (f *fakeTasks) Add(t task.Task, now time.Time) (task.Task, error) {
 	t.ID = "T-" + string(rune('1'+len(f.list)))

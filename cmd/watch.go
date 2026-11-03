@@ -17,10 +17,11 @@ import (
 func (a *app) watchCommand() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "watch",
-		Short: "Watches: periodic detectors the ticker runs; each queues notes for the dispatcher (ls, run, baseline, forget)",
+		Short: "Watches: periodic detectors the ticker runs; each queues notes for the dispatcher (ls, run, ack, baseline, forget)",
 	}
 
-	c.AddCommand(a.watchLsCommand(), a.watchRunCommand(), a.watchBaselineCommand(), a.watchForgetCommand())
+	c.AddCommand(a.watchLsCommand(), a.watchRunCommand(), a.watchAckCommand(), a.watchBaselineCommand(),
+		a.watchForgetCommand())
 
 	return c
 }
@@ -30,7 +31,7 @@ func (a *app) watchLsCommand() *cobra.Command {
 
 	c := &cobra.Command{
 		Use:   "ls",
-		Short: "Each watch: kind, every, last run, next run, keys, the last notes and drops",
+		Short: "Each watch: kind, every, last run, next run, keys, held, pending acks, the last notes and drops",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.readState(func(s *shift.Shift) error {
@@ -46,11 +47,11 @@ func (a *app) watchLsCommand() *cobra.Command {
 				}
 
 				w := tabwriter.NewWriter(a.out, 0, 0, 2, ' ', 0)
-				fmt.Fprintln(w, "WATCH\tKIND\tEVERY\tLAST RUN\tNEXT\tKEYS\tHELD")
+				fmt.Fprintln(w, "WATCH\tKIND\tEVERY\tLAST RUN\tNEXT\tKEYS\tHELD\tPENDING")
 
 				for _, v := range views {
-					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d\t%d\n", v.Name, v.Kind, v.Every, lastRun(v), nextRun(v),
-						v.Keys, v.Pending)
+					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%d\t%d\t%d\n", v.Name, v.Kind, v.Every, lastRun(v), nextRun(v),
+						v.Keys, v.Pending, v.Unacked)
 				}
 
 				if err := w.Flush(); err != nil {
@@ -60,6 +61,14 @@ func (a *app) watchLsCommand() *cobra.Command {
 				for _, v := range views {
 					if v.LastError != "" {
 						fmt.Fprintf(a.out, "\n%s failed (%d in a row): %s\n", v.Name, v.Failures, v.LastError)
+					}
+
+					if len(v.Waiting) > 0 {
+						fmt.Fprintf(a.out, "\n%s, waiting on an ack:\n", v.Name)
+
+						for _, k := range v.Waiting {
+							fmt.Fprintf(a.out, "  %s  since %s  %s\n", k.Key, k.Since.In(s.Crew.Location()).Format("Mon 15:04"), k.Line())
+						}
 					}
 
 					if len(v.Recent) > 0 {
@@ -94,6 +103,42 @@ func (a *app) watchRunCommand() *cobra.Command {
 	}
 
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "print every event with its fate; write nothing")
+
+	return c
+}
+
+func (a *app) watchAckCommand() *cobra.Command {
+	var all bool
+
+	c := &cobra.Command{
+		Use:   "ack <watch> [key|url...]",
+		Short: "The dispatcher has the note: stop saying these keys again (a key, or a note's url for all its keys; --all)",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if all == (len(args) > 1) {
+				return fmt.Errorf("name keys or urls to ack, or --all")
+			}
+
+			return a.withState(func(s *shift.Shift) error {
+				acked, err := s.AckWatch(args[0], args[1:], all, by())
+				if err != nil {
+					return err
+				}
+
+				if len(acked) == 0 {
+					fmt.Fprintf(a.out, "%s: nothing waits on an ack\n", args[0])
+
+					return nil
+				}
+
+				fmt.Fprintf(a.out, "%s: acked %s\n", args[0], strings.Join(acked, ", "))
+
+				return nil
+			})
+		},
+	}
+
+	c.Flags().BoolVar(&all, "all", false, "ack every key of the watch that waits")
 
 	return c
 }
@@ -174,10 +219,7 @@ func (a *app) dryRun(name string) error {
 			return res.Err
 		}
 
-		w := run.Watch
-		st := s.State.Watch[name].Clone()
-		cfg := watch.Config{Quiet: w.QuietD(), ForgetAfter: w.ForgetAfterD(), Baseline: w.Baselines(), Info: w.Info}
-		outs := watch.Apply(st, res.Events, cfg, s.Now(), func(watch.Event) error { return nil })
+		outs := s.DryApply(name, res.Events)
 
 		if len(outs) == 0 {
 			fmt.Fprintln(a.out, "no events")
