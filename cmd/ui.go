@@ -246,13 +246,21 @@ func (a *app) uiHandler(bound string, loopback bool, token string, allowHosts ..
 	static, _ := fs.Sub(ui.Files, "static")
 	mux.Handle("GET /", http.FileServerFS(static))
 	mux.HandleFunc("GET /api/ping", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "zmina") })
-	mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, a.uiSnapshot()) })
-	mux.HandleFunc("GET /api/stream", a.uiStream)
+	peers := a.cockpitPeers
+	if peers == nil {
+		peers = newUIPeerCache()
+	}
+
+	snapshot := func() uiSnapshot { return a.cockpitSnapshot(peers) }
+	mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, snapshot()) })
+	mux.HandleFunc("GET /api/stream", func(w http.ResponseWriter, r *http.Request) { a.uiStream(w, r, snapshot) })
 	a.uiTerminals(mux)
 	a.uiChat(mux)
 
 	costs := &uiCostCache{read: a.readUICost}
-	mux.HandleFunc("GET /api/cost", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, costs.get()) })
+	mux.HandleFunc("GET /api/cost", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, a.cockpitCost(costs.get(), peers))
+	})
 	mux.HandleFunc("GET /api/peek", func(w http.ResponseWriter, r *http.Request) {
 		var text string
 
@@ -549,7 +557,7 @@ func writeJSON(w http.ResponseWriter, v any) {
 }
 
 // uiStream sends the snapshot as server-sent events: at once, then whenever it changes.
-func (a *app) uiStream(w http.ResponseWriter, r *http.Request) {
+func (a *app) uiStream(w http.ResponseWriter, r *http.Request, snapshot func() uiSnapshot) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
@@ -567,7 +575,7 @@ func (a *app) uiStream(w http.ResponseWriter, r *http.Request) {
 	var last []byte
 
 	send := func() {
-		raw, _ := json.Marshal(a.uiSnapshot())
+		raw, _ := json.Marshal(snapshot())
 		// The clock moves every poll; compare without it.
 		if body := withoutNow(raw); !bytes.Equal(body, last) {
 			last = body
@@ -630,6 +638,13 @@ type uiCrewView struct {
 	Waiting   int    `json:"waiting"`
 	DoneToday int    `json:"done_today"`
 	Error     string `json:"error,omitempty"`
+	// Node is the mesh node the crew runs on (empty without a mesh); Remote a peer's crew, read over the mesh and
+	// shown read-only; Stale when that read is older than it should be; Dormant a crew stopped by hand or whose
+	// ticker has been silent for long, folded away on the page.
+	Node    string `json:"node,omitempty"`
+	Remote  bool   `json:"remote,omitempty"`
+	Stale   bool   `json:"stale,omitempty"`
+	Dormant bool   `json:"dormant,omitempty"`
 }
 
 // Each list across crews carries the crew's key.
@@ -718,6 +733,9 @@ type uiSnapshot struct {
 	Log     []uiEvent    `json:"log"`
 	// Tints is every project the page names, with its tint (p1 … p5).
 	Tints map[string]string `json:"tints"`
+	// Self is this node's mesh name (empty without a mesh); Nodes this node and every peer, with when each was read.
+	Self  string   `json:"self,omitempty"`
+	Nodes []uiNode `json:"nodes,omitempty"`
 }
 
 // tickerDead is how long a crew's ticker may be silent before the page shows it stopped.
@@ -758,6 +776,18 @@ func (a *app) uiSnapshot() uiSnapshot {
 		snap.Crews = append(snap.Crews, cv)
 	}
 
+	snap.sortAll()
+
+	for _, p := range snap.projects() {
+		snap.Tints[p] = ui.Tint(p, pinned)
+	}
+
+	return snap
+}
+
+// sortAll puts every list in the page's order: the todo in its order, work by what it needs, the rest by time,
+// crews whose ticker stopped first.
+func (snap *uiSnapshot) sortAll() {
 	sortTodo(snap.Todo)
 	// Work that needs the owner first, then what moves (busy), then the rest; newest change first.
 	rank := func(w uiWork) int {
@@ -786,10 +816,6 @@ func (a *app) uiSnapshot() uiSnapshot {
 		snap.Log = snap.Log[:feedMax]
 	}
 
-	for _, p := range snap.projects() {
-		snap.Tints[p] = ui.Tint(p, pinned)
-	}
-
 	// A crew whose ticker stopped first, then the one with the most waiting on the owner, then by name.
 	dead := func(c uiCrewView) bool { return c.LastTick.IsZero() || snap.Now.Sub(c.LastTick) > tickerDead }
 	sort.SliceStable(snap.Crews, func(i, j int) bool {
@@ -804,8 +830,6 @@ func (a *app) uiSnapshot() uiSnapshot {
 
 		return ci.Name < cj.Name
 	})
-
-	return snap
 }
 
 // readCrew adds one crew's roles to cv and its todo, tasks, parked list and log to snap.

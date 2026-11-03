@@ -256,3 +256,31 @@ func TestChatAttachmentsFollowOwnerSignedRelayRoute(t *testing.T) {
 	_, err = jump.Chat(ctx, transport, "worker", "chat/upload", TerminalRequest{Crew: "ops", Role: "dev", Upload: &file})
 	require.ErrorContains(t, err, "owner node")
 }
+
+func TestCrewStatusIsOwnerOnlyAndRelayed(t *testing.T) {
+	owner := newOwner(t, "owner")
+	jump := enroll(t, owner, "jump")
+	worker := enroll(t, owner, "worker")
+	old := enroll(t, owner, "old")
+	addPeer(t, owner, "jump")
+	addPeer(t, owner, "old")
+	addPeer(t, jump, "worker")
+	require.NoError(t, owner.UpdatePeers(func(ps []Peer) []Peer { return append(ps, Peer{Name: "worker", Through: []string{"jump"}}) }))
+	service := &TerminalServices{Status: func(kind string) ([]byte, error) { return []byte(`{"kind":"` + kind + `"}`), nil }}
+	transport := &terminalPipes{nodes: map[string]*Node{"jump": jump, "worker": worker, "old": old},
+		services: map[string]*TerminalServices{"worker": service, "old": {}}}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	got, err := owner.CrewStatus(ctx, transport, "worker", "")
+	require.NoError(t, err)
+	require.JSONEq(t, `{"kind":""}`, string(got))
+	got, err = owner.CrewStatus(ctx, transport, "worker", "cost")
+	require.NoError(t, err)
+	require.JSONEq(t, `{"kind":"cost"}`, string(got))
+
+	_, err = jump.CrewStatus(ctx, transport, "worker", "")
+	require.ErrorContains(t, err, "owner node")
+	_, err = owner.CrewStatus(ctx, transport, "old", "")
+	require.ErrorContains(t, err, "update zmina")
+}

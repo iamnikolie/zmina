@@ -44,6 +44,9 @@ type TerminalServices struct {
 	ChatFile      func(string, string, string) (chat.Upload, error)
 	ChatSendFiles func(string, string, string, string, []string) (chat.Snapshot, error)
 	ChatAction    func(string, string, string) (chat.Snapshot, error)
+	// Status is what the node's crews show on the cockpit, as JSON: kind "" their state, tasks, asks and alarms;
+	// "cost" their spend. Read-only.
+	Status func(kind string) ([]byte, error)
 }
 
 // TerminalRequest is signed against a fresh server challenge, so a certified peer cannot turn a
@@ -99,6 +102,16 @@ func (n *Node) serveTerminal(ctx context.Context, c *conn, w wire, s *TerminalSe
 		return c.send(wire{Op: "terminal/targets", Targets: targets})
 	}
 	req := w.Terminal
+	if w.Op == "crew/status" {
+		if s.Status == nil {
+			return fail(errors.New("crew status unavailable; update zmina on this node"))
+		}
+		data, err := s.Status(req.Action)
+		if err != nil {
+			return fail(err)
+		}
+		return c.send(wire{Op: "crew/status-result", Data: data})
+	}
 	if strings.HasPrefix(w.Op, "chat/") {
 		var snapshot chat.Snapshot
 		var err error
@@ -223,6 +236,20 @@ func (n *Node) TerminalList(ctx context.Context, t Transport, node string) ([]Te
 	}
 	w, err := c.expect("terminal/targets")
 	return w.Targets, err
+}
+
+// CrewStatus reads what a node's crews show on the cockpit (kind "" or "cost"), as the node's JSON. Owner only.
+func (n *Node) CrewStatus(ctx context.Context, t Transport, node, kind string) ([]byte, error) {
+	rw, c, err := n.terminalConnect(ctx, t, node)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rw.Close() }()
+	if err = n.terminalRequest(c, "crew/status", TerminalRequest{Action: kind}); err != nil {
+		return nil, err
+	}
+	w, err := c.expect("crew/status-result")
+	return w.Data, err
 }
 
 // HistoryText bounds history snapshots by bytes as well as lines. Keep a valid UTF-8 suffix.
@@ -456,4 +483,10 @@ func (n *Node) Chat(ctx context.Context, t Transport, node, op string, request T
 		return chat.Snapshot{}, errors.New("peer returned no chat snapshot")
 	}
 	return *w.Chat, nil
+}
+
+// HoldsOwnerKey is true on the owner's node: the one that may read and open other nodes' crews.
+func (n *Node) HoldsOwnerKey() bool {
+	key, err := readKey(filepath.Join(n.Dir, "owner.key"))
+	return err == nil && key.Public().(ed25519.PublicKey).Equal(n.Owner)
 }
