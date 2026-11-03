@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRecoveryIncludesOpenThreadsAndKeepsOverflowIndex(t *testing.T) {
@@ -73,4 +74,48 @@ func TestRecoveryIgnoresUnknownAndTransientContext(t *testing.T) {
 			require.Equal(t, 340000, f.s.State.Role("dispatcher").RecoveryContext)
 		})
 	}
+}
+
+// A trim zmina made queues its own recovery line; the drop in context it causes is not a native compaction too.
+func TestManagedTrimQueuesRecoveryOnce(t *testing.T) {
+	f := fixtureWith(t, trimCrew)
+	f.tk.list = []task.Task{{ID: "T-1", Role: "designer", State: task.Open}}
+	f.s.Tick()
+
+	recoveries := func() int {
+		n := 0
+		for _, line := range append(append([]string{}, f.tm.typed["dispatcher"]...), f.s.State.Role("dispatcher").Inbox...) {
+			if strings.Contains(line, "[zmina recovery]") {
+				n++
+			}
+		}
+		return n
+	}
+
+	f.rg.context["sid-dispatcher"] = 156_000
+	f.status("dispatcher", "idle", f.now.Add(-10*time.Minute))
+	*f.now = f.now.Add(6 * time.Minute)
+	f.s.Tick()
+	f.s.Tick()
+	require.Equal(t, 1, compactCount(f.tm.typed["dispatcher"]))
+	require.Equal(t, 1, recoveries())
+
+	f.rg.context["sid-dispatcher"] = 0 // compacted: unknown until the next turn
+	*f.now = f.now.Add(time.Minute)
+	f.s.Tick()
+	for range 5 {
+		f.rg.context["sid-dispatcher"] = 40_000
+		*f.now = f.now.Add(time.Minute)
+		f.status("dispatcher", "idle", f.now.Add(-10*time.Minute))
+		f.s.Tick()
+	}
+	assert.Equal(t, 1, recoveries(), "the trim's own drop in context is no second compaction")
+	assert.Equal(t, 40_000, f.s.State.Role("dispatcher").RecoveryContext)
+
+	f.rg.context["sid-dispatcher"] = 120_000
+	f.s.Tick()
+	f.rg.context["sid-dispatcher"] = 15_000
+	f.s.Tick()
+	f.s.Tick()
+	assert.Equal(t, 2, recoveries(), "a native compaction after it still queues its own")
 }
