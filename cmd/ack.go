@@ -24,18 +24,19 @@ func (a *app) ackCommand() *cobra.Command {
 				return errors.New("name the ids to ack (S-12 S-13), or --all")
 			}
 
+			caller := by()
 			if role == "" {
-				role = by()
+				role = caller
 			}
 
 			return a.withState(func(s *shift.Shift) error {
-				acked, err := s.AckLines(args, all, role)
-				if err != nil {
-					return err
+				acked, warn := s.AckLines(args, all, role, caller)
+				for _, w := range warn {
+					fmt.Fprintln(a.err, "zmina ack: "+w)
 				}
 
 				if len(acked) == 0 {
-					fmt.Fprintln(a.out, "nothing waits for an ack")
+					fmt.Fprintln(a.out, "nothing acked")
 
 					return nil
 				}
@@ -74,7 +75,7 @@ func (a *app) pendingCommand() *cobra.Command {
 
 			return a.readState(func(s *shift.Shift) error {
 				if brief {
-					// The hook a socket role runs after a compaction: what it prints goes into the context.
+					// The hook a socket role runs at a session's start and after a trim: what it prints goes into the context.
 					if text := s.PendingBrief(role); text != "" {
 						fmt.Fprintln(a.out, text)
 					}

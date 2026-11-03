@@ -187,24 +187,31 @@ release notices — to the session's own inbox socket (Claude Code's cross-sessi
 session, shown apart from what the owner types: a draft in the input line neither blocks it nor gets sent with it,
 no Enter has to land, and the role does not read it as the owner's words. A role started this way gets zmina's
 `--settings` (`crossSessionInbound: accept`: a session that bypasses permission prompts would otherwise hold such a
-message behind an approval dialog) and a boot line saying that `[zmina…]` / `[<role>]` messages are zmina's own lines
-to act on as before, still not the owner's approval. A posted line counts once the session's transcript shows its
+message behind an approval dialog) and a boot line that names its start's tag. With the dialog gone, any session the
+role's inbox is reachable from — the owner's local sessions in the namespace, and with Remote Control the account's
+sessions on other machines — can message it, and its message reads like zmina's (`[zmina] …`, a role's name, a
+session named zmina: all text a sender writes). So every line zmina posts starts with `[zmina:<tag>]`, twelve random
+characters made at each start and given only in the boot line (argv, never posted) and by the role's `SessionStart`
+hook; the boot line says that a message without that exact tag, or inside a `<cross-session-message>` wrapper (how
+Claude Code shows another session's `SendMessage`), is that session's request under the usual peer rules, never
+zmina's line or the owner's approval. zmina's lines are still not the owner's approval either. A role started before
+the tag (no tag in its state) is typed into until its next start. A posted line counts once the session's transcript shows its
 message id (`origin.msg_id`); until then the next one waits, as a typed line waits to land. Posted lines go, like typed
 ones, when the role is between turns, never into a dialog.
 
-Typed into the input line as before: a slash command (a posted one is plain text), a Codex role, a role whose `args`
+Typed into the input line as before: a slash command (a posted one is plain text), a role whose `args`
 pass their own `--settings` (zmina's are not passed: a warning), a role with `delivery: tmux`, a role started by an
 earlier zmina (no settings: until its next start), and a session with no inbox socket or another `peerProtocol`.
-A post that never started is tried three beats, then kept as failed; one whose write broke is kept as failed at once
-(the role may have it). A posted line an idle session never shows within 10 min is kept as failed (`posted to its
+A post that never started is tried three beats, then kept as failed; one whose write broke after it started is
+followed like a posted line (`post-broken` in the log: the role may have it), never posted again. A posted line an idle session never shows within 10 min is kept as failed (`posted to its
 inbox socket, never seen in its conversation (held or dropped); inspect before retry`); one that went to a
 conversation that is over (the role restarted) goes back to the head of its queue. `zmina queue ls` shows posted lines
-not yet seen. Messages from the owner's other local sessions reach such a role without a dialog too.
+not yet seen.
 
 A Codex role's bridge keeps an inbox, `<crew state>/codex/inbox/<session>/`, and says where in its record
 (`zminaInbox`). zmina writes one file per line there; the bridge starts a turn with the oldest once its thread is idle
 and no request is open, echoes it in its console (`› …`) and marks it taken, which is when it counts as delivered.
-Nothing is typed into the bridge's console, so the owner's input there never mixes with zmina's lines. A bridge of an
+Nothing is typed into the bridge's console, so the owner's input there never mixes with zmina's lines. Its lines carry the start's tag the same way. A bridge of an
 earlier zmina has no inbox: its role is typed into until it restarts.
 
 ### Acks: at least once
@@ -218,16 +225,18 @@ another session cannot ask it for a write, and a role was seen to refuse an ack 
 own boot line, it acks. Until then a line
 is said again `renotify` after it was last delivered (`S-12 (still pending since Mon 2 Nov 11:55) …`, the same id;
 never while it is still queued or not yet seen; three times at most, then only listed), is listed in the dispatcher's
-recovery pack (`unacked`) and by `zmina pending`, and is given back after the role's context is compacted or cleared:
-a Claude role's settings from zmina carry a `SessionStart` hook (`compact`, `clear`) that runs `zmina pending --role <role> --brief`,
-whose output Claude Code puts into the conversation (for the dispatcher its watch keys that wait too). Task packets
+recovery pack (`unacked`) and by `zmina pending`, and is given back when the role's session starts, resumes, or has
+its context compacted or cleared: a Claude role's settings from zmina carry a `SessionStart` hook (every source) that
+runs `zmina pending --role <role> --brief`, whose output Claude Code puts into the conversation — the tag rule again
+(a trim may lose the boot line), the newest 20 unacked lines (`and K older ones: zmina pending`), and for the
+dispatcher its watch keys that wait. Task packets
 have their own acceptance (`task accept`) and carry no id. A role typed into (tmux, or started by an earlier zmina)
 gets its lines as before, without ids.
 
 | Command | Does |
 |---|---|
-| `zmina ack <S-n>... \| --all [--role r]` | the lines are handled: not said again. Every id is resolved first; an unknown one fails the call and acks nothing. `--all`: every line of the calling role (`$ZMINA_ROLE`, or `--role`). |
-| `zmina pending [--role r \| --all] [--brief] [--json]` | the lines delivered and not acked: id, role, since when, how many times said again. Default the calling role's. `--brief`: the block the hook gives the role after a compaction, empty when nothing waits. |
+| `zmina ack <S-n>... \| --all [--role r]` | the lines are handled: not said again. An id that waits for no ack (acked already, dropped) or is another role's line is skipped with a warning on stderr, the rest are acked, exit 0; only the owner (no `$ZMINA_ROLE`) acks another role's ids. `--all`: every line of the calling role (`$ZMINA_ROLE`, or `--role`). |
+| `zmina pending [--role r \| --all] [--brief] [--json]` | the lines delivered and not acked: id, role, since when, how many times said again. Default the calling role's. `--brief`: the block the hook gives the role at a session's start and after a trim (tag rule, newest 20 lines), empty when nothing is to be told. |
 
 Every tool's description sits in the context of every turn, used or not: a fresh session of a
 setup with many skills and plugins fills ~50k tokens before the first word, and `Artifact` alone
@@ -1029,7 +1038,7 @@ and exists nowhere else. It is written whole (rename) and never over a file zmin
 - `<role>: no input line …` — a stuck prompt (folder trust elsewhere, a question, a login):
   `zmina peek <role>` (`--raw` when the cleaned screen hides what you need), then `zmina keys <role> …`, or ask the owner. `stopped by a usage limit` —
   nothing to press; say when it resets and hold its work.
-- A `[zmina]` line with ids (`S-12 …`) and a line ending `(zmina S-14)` wait for your ack: once each is handled — a task recorded, routed, answered, or nothing to do — `zmina ack S-12 S-14`, one
+- A zmina line with ids (`S-12 …`) and a line ending `(zmina S-14)` wait for your ack: once each is handled — a task recorded, routed, answered, or nothing to do — `zmina ack S-12 S-14`, one
   call for the batch. `still pending since …` is one you did not ack: handle it now or ack it. `zmina pending` lists
   them; the recovery pack has them as `unacked`.
 - `budget: …` — a role or a task went past its budget (API-equivalent dollars). Nothing is stopped: tell the

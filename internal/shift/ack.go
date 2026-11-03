@@ -2,7 +2,6 @@ package shift
 
 import (
 	"encoding/json"
-	"fmt"
 	"maps"
 	"regexp"
 	"slices"
@@ -205,9 +204,11 @@ func (s *Shift) inFlight(a *Ack) bool {
 	return slices.ContainsFunc(rs.Posted, func(p Posted) bool { return re.MatchString(p.Line) })
 }
 
-// AckLines acks lines by id — every one of them resolved first: an unknown id fails the call and acks nothing — or
-// with all every line of the role. It returns the ids acked.
-func (s *Shift) AckLines(ids []string, all bool, role string) ([]string, error) {
+// AckLines acks lines by id, or with all every line of the role. An id that waits for no ack (acked already, said
+// again after a compaction, dropped) or that is another role's line is skipped with a warning, so the rest are acked
+// all the same; caller is who acks, and only "hand" (the owner, at a shell) acks another role's lines. It returns the
+// ids acked and the warnings.
+func (s *Shift) AckLines(ids []string, all bool, role, caller string) ([]string, []string) {
 	if all {
 		ids = nil
 
@@ -218,7 +219,7 @@ func (s *Shift) AckLines(ids []string, all bool, role string) ([]string, error) 
 		}
 	}
 
-	var acked []string
+	var acked, warn []string
 
 	for _, id := range ids {
 		id = strings.ToUpper(strings.TrimSpace(id))
@@ -226,11 +227,14 @@ func (s *Shift) AckLines(ids []string, all bool, role string) ([]string, error) 
 			id = "S-" + id
 		}
 
-		if s.State.Acks[id] == nil {
-			return nil, fmt.Errorf("%s waits for no ack (zmina pending lists the ones that do)", id)
-		}
+		a := s.State.Acks[id]
 
-		if !slices.Contains(acked, id) {
+		switch {
+		case a == nil:
+			warn = append(warn, id+" waits for no ack: acked already, or dropped (zmina pending lists the ones that do)")
+		case !all && caller != "hand" && caller != "" && a.Role != caller:
+			warn = append(warn, id+" is "+a.Role+"'s line, not "+caller+"'s: left for "+a.Role+" to ack")
+		case !slices.Contains(acked, id):
 			acked = append(acked, id)
 		}
 	}
@@ -243,7 +247,7 @@ func (s *Shift) AckLines(ids []string, all bool, role string) ([]string, error) 
 		s.log(a.Role, "acked", "", id+" "+a.Text)
 	}
 
-	return acked, nil
+	return acked, warn
 }
 
 // Pending is the lines that wait for an ack, oldest first; one role's, or every role's when role is empty.
@@ -261,8 +265,12 @@ func (s *Shift) Pending(role string) []Ack {
 	return out
 }
 
-// PendingBrief is what a role is told after its context was compacted or cleared: the lines it has not acked, and
-// for the dispatcher the watch keys that wait. Empty when nothing waits.
+// briefMax is how many unacked lines a brief lists, the newest; the rest are counted.
+const briefMax = 20
+
+// PendingBrief is what a role is told when its session starts, resumes, or has its context compacted or cleared: the
+// rule of its start's tag (a trim may have lost the boot line), the lines it has not acked — the newest briefMax —
+// and for the dispatcher the watch keys that wait. Empty when nothing is to be told.
 func (s *Shift) PendingBrief(role string) string {
 	var parts []string
 
@@ -274,32 +282,46 @@ func (s *Shift) PendingBrief(role string) string {
 		parts = append(parts, a.ID+" (since "+s.clock(a.First)+") "+a.Text)
 	}
 
+	more := 0
+	if len(parts) > briefMax {
+		more, parts = len(parts)-briefMax, parts[len(parts)-briefMax:]
+	}
+
 	if role == s.Crew.Dispatcher {
 		for _, k := range s.WaitingKeys() {
 			parts = append(parts, "watch "+k.Watch+": "+k.Line()+" (ack: "+k.AckCommand()+")")
 		}
 	}
 
-	if len(parts) == 0 {
-		return ""
+	var out []string
+
+	if rs := s.State.Roles[role]; rs != nil && rs.Inbound && rs.Tag != "" && role != "" {
+		out = append(out, InboxRule(rs.Tag))
 	}
 
-	return "[zmina] Your context was trimmed; these lines still wait for your ack — act on each, then ack it " +
-		"(zmina ack <ids>):\n- " + strings.Join(parts, "\n- ")
+	if len(parts) > 0 {
+		list := "[zmina] These lines still wait for your ack — act on each, then ack it (zmina ack <ids>):\n- " +
+			strings.Join(parts, "\n- ")
+		if more > 0 {
+			list += "\n- and " + strconv.Itoa(more) + " older ones: zmina pending"
+		}
+
+		out = append(out, list)
+	}
+
+	return strings.Join(out, "\n\n")
 }
 
-// roleSettings are the settings a socket role starts with: other sessions' messages let in, and a hook that gives back
-// the lines it has not acked after its context is compacted or cleared (zmina pending).
+// roleSettings are the settings a socket role starts with: other sessions' messages let in, and a hook that tells it
+// its tag and the lines it has not acked whenever its session starts, resumes, or is compacted or cleared (zmina
+// pending --brief).
 func (s *Shift) roleSettings(name string) string {
 	settings := map[string]any{"crossSessionInbound": "accept"}
 
 	if s.Self != "" {
 		cmd := shellWord(s.Self) + " --crew " + shellWord(s.Crew.Path) + " pending --role " + shellWord(name) + " --brief"
 		hook := []any{map[string]any{"type": "command", "command": cmd}}
-		settings["hooks"] = map[string]any{"SessionStart": []any{
-			map[string]any{"matcher": "compact", "hooks": hook},
-			map[string]any{"matcher": "clear", "hooks": hook},
-		}}
+		settings["hooks"] = map[string]any{"SessionStart": []any{map[string]any{"hooks": hook}}}
 	}
 
 	raw, _ := json.Marshal(settings)

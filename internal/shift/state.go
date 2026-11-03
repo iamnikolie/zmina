@@ -145,6 +145,9 @@ type RoleState struct {
 	// with zmina's settings, which let such lines in (crossSessionInbound: accept).
 	Posted  []Posted `json:"posted,omitempty"`
 	Inbound bool     `json:"inbound,omitempty"`
+	// Tag is the random tag of this start: its boot line names it, every line posted to it carries it, so a message
+	// another session sends cannot pass for zmina's.
+	Tag string `json:"tag,omitempty"`
 	// Dir is where the role was started when not its crew dir (zmina up --task: the task's worktree); Trusted
 	// that zmina answered Claude Code's "trust this folder" there.
 	Dir     string `json:"dir,omitempty"`

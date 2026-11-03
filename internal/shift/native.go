@@ -1,6 +1,7 @@
 package shift
 
 import (
+	"crypto/rand"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -56,7 +57,7 @@ func (s *Shift) native(name string, now time.Time) *registry.Session {
 	}
 
 	rs := s.State.Role(name)
-	if !rs.Inbound || now.Sub(rs.Started) < s.Crew.BootGraceD() {
+	if !rs.Inbound || rs.Tag == "" || now.Sub(rs.Started) < s.Crew.BootGraceD() {
 		return nil
 	}
 
@@ -83,21 +84,47 @@ func (s *Shift) quiet(name string, sess *registry.Session) bool {
 	return err == nil && turn.Ended
 }
 
-// post posts a line to the role's inbox socket and follows it until its conversation shows it. An error wrapping
-// peer.ErrUnavailable means nothing reached the session.
+// post posts a line to the role's own channel, behind this start's tag, and follows it until its conversation shows
+// it. A post whose write broke after it started is followed the same way (the session may have it), never posted
+// again; an error wrapping peer.ErrUnavailable means nothing reached the session.
 func (s *Shift) post(name string, sess *registry.Session, line string, now time.Time) error {
 	p, ns := s.peerFor(name)
-	id, err := p.Post(ns, sess, line)
-	if err != nil {
+	rs := s.State.Role(name)
+
+	id, err := p.Post(ns, sess, tagMark(rs.Tag)+" "+line)
+
+	var broke *peer.Committed
+	if err != nil && (!errors.As(err, &broke) || id == "") {
 		return err
 	}
 
-	rs := s.State.Role(name)
 	rs.Posted = append(rs.Posted, Posted{Line: line, MsgID: id, Session: sess.SessionID, At: now})
-	s.log(name, "posted", "", line)
+
+	if broke != nil {
+		s.log(name, "post-broken", "", broke.Error()+"; followed until it shows or "+span(postedWait)+" pass: "+line)
+	} else {
+		s.log(name, "posted", "", line)
+	}
 
 	return nil
 }
+
+// tagMark is what opens every line posted to a role: zmina and the tag of the role's start.
+func tagMark(tag string) string { return "[zmina:" + tag + "]" }
+
+// tag is the tag of a role's start, made the first time its boot line asks for it (start clears it, so each start
+// has its own).
+func (s *Shift) tag(name string) string {
+	rs := s.State.Role(name)
+	if rs.Tag == "" {
+		rs.Tag = newTag()
+	}
+
+	return rs.Tag
+}
+
+// newTag is twelve random characters of base32.
+func newTag() string { return strings.ToLower(rand.Text()[:12]) }
 
 // followPosted settles the role's posted lines: one its conversation shows is done; one that went to a conversation
 // that is over (the role restarted) goes back to the head of its queue; one an idle session never showed within

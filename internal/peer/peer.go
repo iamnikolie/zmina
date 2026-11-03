@@ -36,7 +36,7 @@ const From = "zmina"
 var ErrUnavailable = errors.New("inbox socket unavailable")
 
 // Committed is a post whose write broke after it started: the session may have the message or not, so it is never
-// tried another way.
+// tried another way. Post returns the message id with it, so the caller can still look for the message.
 type Committed struct{ Err error }
 
 func (c *Committed) Error() string {
@@ -108,7 +108,7 @@ func (c Client) Post(namespace string, s *registry.Session, text string) (string
 	_ = conn.SetWriteDeadline(time.Now().Add(timeout))
 
 	if _, err := conn.Write(out); err != nil {
-		return "", &Committed{Err: err}
+		return id, &Committed{Err: err}
 	}
 
 	// Claude Code's own client waits a moment before it closes, so the session reads the line first.

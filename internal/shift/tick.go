@@ -870,7 +870,8 @@ func (s *Shift) deliverInbox(name string, now time.Time) string {
 }
 
 // postInbox posts a role's first waiting line to its inbox socket. A post that never started is tried again next beat
-// (typeTries beats, then kept as failed); one whose write broke is kept as failed at once, since the role may have it.
+// (typeTries beats, then kept as failed); one whose write broke is followed as posted (post), since the role may have
+// it; any other error keeps it as failed at once.
 func (s *Shift) postInbox(name string, sess *registry.Session, now time.Time) string {
 	rs := s.State.Role(name)
 	head := rs.Inbox[0]

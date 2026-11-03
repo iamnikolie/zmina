@@ -93,6 +93,18 @@ func TestWatchDryRunWritesNothing(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(filepath.Dir(crewFile), "state.json"), "a dry run writes no state")
 }
 
+func TestAckUnknownIDWarnsAndExitsZero(t *testing.T) {
+	crewFile := testCrew(t, "")
+
+	out, errOut, err := zm(t, crewFile, "ack", "S-9")
+	require.NoError(t, err, "a re-ack after a renote or a brief is not an error")
+	assert.Equal(t, "nothing acked\n", out)
+	assert.Contains(t, errOut, "zmina ack: S-9 waits for no ack")
+
+	_, _, err = zm(t, crewFile, "ack")
+	require.Error(t, err, "ids or --all")
+}
+
 func TestWatchLsAndAck(t *testing.T) {
 	crewFile := testCrew(t, `watch:
   ci-red:

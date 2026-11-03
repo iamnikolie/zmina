@@ -2,11 +2,15 @@ package shift
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/iamnikolie/zmina/internal/peer"
 )
 
 // upNative starts a role with socket delivery, idle and past its boot grace.
@@ -76,31 +80,67 @@ func TestAckRenotifiesUntilAcked(t *testing.T) {
 	assert.Equal(t, renotesMax, f.s.State.Acks["S-1"].Renotes, "said again at most renotesMax times")
 	assert.Len(t, f.s.Pending("dispatcher"), 1, "still listed")
 
-	acked, err := f.s.AckLines([]string{"s-1"}, false, "dispatcher")
-	require.NoError(t, err)
+	acked, warn := f.s.AckLines([]string{"s-1"}, false, "dispatcher", "dispatcher")
+	assert.Empty(t, warn)
 	assert.Equal(t, []string{"S-1"}, acked)
 	assert.Empty(t, f.s.Pending(""))
 	assert.True(t, f.ev.has("dispatcher", "acked"))
 }
 
-func TestAckLinesResolvesAllFirst(t *testing.T) {
+func TestAckLinesSkipsWhatItCannotAck(t *testing.T) {
 	f, _ := nativeFixture(t, crewYAML)
 	upNative(t, f, "designer")
+	upNative(t, f, "dispatcher")
 
 	id, err := f.s.QueueTracked("designer", "[dispatcher] look at T-1")
 	require.NoError(t, err)
 	assert.Equal(t, "S-1", id)
-
-	_, err = f.s.AckLines([]string{"S-1", "S-9"}, false, "")
-	require.Error(t, err)
-	assert.Len(t, f.s.Pending(""), 1, "an unknown id acks nothing")
-
-	_, err = f.s.QueueTracked("designer", "[dispatcher] and T-2")
+	_, err = f.s.QueueTracked("dispatcher", "[designer] and T-2")
 	require.NoError(t, err)
 
-	acked, err := f.s.AckLines(nil, true, "designer")
+	acked, warn := f.s.AckLines([]string{"S-1", "S-9", "S-2"}, false, "designer", "designer")
+	assert.Equal(t, []string{"S-1"}, acked, "an unknown or another role's id does not stop the rest")
+	require.Len(t, warn, 2)
+	assert.Contains(t, warn[0], "S-9 waits for no ack")
+	assert.Contains(t, warn[1], "S-2 is dispatcher's line")
+
+	acked, warn = f.s.AckLines([]string{"S-1"}, false, "designer", "designer")
+	assert.Empty(t, acked, "acked twice: a warning, nothing else")
+	assert.Len(t, warn, 1)
+
+	acked, warn = f.s.AckLines([]string{"S-2"}, false, "hand", "hand")
+	assert.Equal(t, []string{"S-2"}, acked, "the owner acks any role's line")
+	assert.Empty(t, warn)
+
+	_, err = f.s.QueueTracked("designer", "[dispatcher] T-3")
 	require.NoError(t, err)
-	assert.Equal(t, []string{"S-1", "S-2"}, acked)
+	_, err = f.s.QueueTracked("designer", "[dispatcher] T-4")
+	require.NoError(t, err)
+
+	acked, _ = f.s.AckLines(nil, true, "designer", "designer")
+	assert.Equal(t, []string{"S-3", "S-4"}, acked)
+}
+
+func TestAckBriefIsCappedAndTellsTheTag(t *testing.T) {
+	f, p := nativeFixture(t, crewYAML)
+	upNative(t, f, "designer")
+
+	for i := range briefMax + 5 {
+		_, err := f.s.QueueTracked("designer", fmt.Sprintf("[dispatcher] line %d", i))
+		require.NoError(t, err)
+		f.s.deliverInbox("designer", *f.now)
+		p.showAll()
+		f.s.deliverInbox("designer", *f.now)
+	}
+
+	brief := f.s.PendingBrief("designer")
+	assert.Contains(t, brief, "`"+tagMark(f.s.State.Role("designer").Tag)+"`", "a trim may have lost the boot line")
+	assert.Equal(t, briefMax, strings.Count(brief, "\n- S-"), "the newest briefMax")
+	assert.Contains(t, brief, "S-25 (since")
+	assert.NotContains(t, brief, "S-5 (since")
+	assert.Contains(t, brief, "and 5 older ones: zmina pending")
+
+	assert.Empty(t, f.s.PendingBrief("dispatcher"), "not up: nothing to tell")
 }
 
 func TestAckQueuedLineToARole(t *testing.T) {
@@ -126,7 +166,6 @@ func TestAckQueuedLineToARole(t *testing.T) {
 		")"}, f.s.State.Role("designer").Inbox)
 
 	assert.Contains(t, f.s.PendingBrief("designer"), "S-1 (since "+since+") [dispatcher] look at T-1")
-	assert.Empty(t, f.s.PendingBrief("dispatcher"))
 }
 
 func TestAckOldRoleIsLeftAsItWas(t *testing.T) {
@@ -161,6 +200,28 @@ func TestAckFailedDeliveryLeavesNoID(t *testing.T) {
 	assert.Equal(t, []string{"dev: T-5 result ready"}, f.s.State.Signals)
 }
 
+func TestAckBrokenPostKeepsItsIDs(t *testing.T) {
+	f, p := nativeFixture(t, crewYAML)
+	upNative(t, f, "dispatcher")
+	p.err = &peer.Committed{Err: fmt.Errorf("broken pipe")}
+
+	_, err := f.s.Note("dev", "T-5 result ready", false)
+	require.NoError(t, err)
+	assert.NotEmpty(t, f.s.deliver(*f.now), "the session may have it")
+	assert.Contains(t, f.s.State.Acks, "S-1", "the id stays with the line")
+	assert.Empty(t, f.s.State.Signals)
+	assert.Len(t, f.s.State.Role("dispatcher").Posted, 1, "followed until it shows")
+
+	p.err = nil
+	_, err = f.s.Note("dev", "T-6 result ready", false)
+	require.NoError(t, err)
+	assert.Empty(t, f.s.deliver(*f.now), "waits for the broken one")
+
+	p.showAll()
+	assert.Equal(t, "[zmina] S-2 dev: T-6 result ready (zmina S-2)", f.s.deliver(*f.now),
+		"never the first signal again under a new id")
+}
+
 func TestAckHookInSettings(t *testing.T) {
 	f, _ := nativeFixture(t, crewYAML)
 
@@ -185,9 +246,8 @@ func TestAckHookInSettings(t *testing.T) {
 
 	require.NoError(t, json.Unmarshal([]byte(raw), &got))
 	assert.Equal(t, "accept", got.Inbound)
-	require.Len(t, got.Hooks.SessionStart, 2)
-	assert.Equal(t, "compact", got.Hooks.SessionStart[0].Matcher)
-	assert.Equal(t, "clear", got.Hooks.SessionStart[1].Matcher)
+	require.Len(t, got.Hooks.SessionStart, 1)
+	assert.Empty(t, got.Hooks.SessionStart[0].Matcher, "every start: new, resumed, compacted, cleared")
 	assert.Equal(t, "'/opt/zmina' --crew '"+f.s.Crew.Path+"' pending --role 'designer' --brief",
 		got.Hooks.SessionStart[0].Hooks[0].Command)
 }
