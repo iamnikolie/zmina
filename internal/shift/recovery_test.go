@@ -117,5 +117,6 @@ func TestManagedTrimQueuesRecoveryOnce(t *testing.T) {
 	f.rg.context["sid-dispatcher"] = 15_000
 	f.s.Tick()
 	f.s.Tick()
+	require.Equal(t, 1, compactCount(f.tm.typed["dispatcher"]), "no second trim: the next line is observeRecovery's")
 	assert.Equal(t, 2, recoveries(), "a native compaction after it still queues its own")
 }
