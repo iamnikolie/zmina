@@ -17,8 +17,14 @@ func (s *Shift) TaskPacket(name string, t task.Task) (handoff.Packet, error) {
 	}
 	shape := s.Crew.HandoffFor(r)
 	t.Delivery = nil // Receipt metadata must not recursively change the packet identity.
-	return handoff.Packet{Version: 1, Role: name, Task: t, Shape: shape, Instructions: fmt.Sprintf("Read repository instructions. Run zmina --crew %s task show %s and confirm this task is still assigned to %s; use the latest note before working.\n", shellWord(s.Crew.Path), t.ID, name) + shape.Request("checkpoint or result")}, nil
+	return handoff.Packet{Version: 1, Role: name, Task: t, Shape: shape, Instructions: fmt.Sprintf("Read repository instructions. Run zmina --crew %s task show %s and confirm this task is still assigned to %s; use the latest note before working.\n", shellWord(s.Crew.Path), t.ID, name) + shape.Request("checkpoint or result") + fmt.Sprintf(ReportRule, shellWord(s.Crew.Path), t.ID, t.ID)}, nil
 }
+
+// ReportRule is how a worker reports a finished task: the result goes to the ledger, which tells the dispatcher;
+// a message to the dispatcher on top is one line. A whole report sent as a message sits in the dispatcher's context
+// on every turn after it, and the dispatcher already hears of the result.
+const ReportRule = "When done, save it with zmina --crew %s task result %s --file <json>: that tells the dispatcher. " +
+	"A message to the dispatcher besides is one line — the gist and `zmina task result %s` — never the result again.\n"
 
 // HandTask queues only a packet locator, never the task's body.
 func (s *Shift) HandTask(name string, t task.Task) (string, error) {

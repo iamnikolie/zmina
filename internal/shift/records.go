@@ -1,9 +1,10 @@
 package shift
 
 import (
-	"fmt"
-	"github.com/iamnikolie/zmina/internal/record"
 	"sort"
+	"strings"
+
+	"github.com/iamnikolie/zmina/internal/record"
 )
 
 // NotifyRecords reconciles immutable revisions into the durable dispatcher queue.
@@ -33,11 +34,41 @@ func (s *Shift) NotifyRecords() {
 			if err != nil {
 				continue
 			}
-			text := fmt.Sprintf("%s result %s ready; read zmina task result %s --revision %s (worker-reported)", id, ref.Revision[:12], id, ref.Revision)
+			text := id + " result ready (worker-reported)"
+			if g := resultGist(d); g != "" {
+				text += ": " + g
+			}
+			text += " (zmina task result " + id + ")"
 			if _, err := s.Note(d.Role, text, false); err != nil {
 				return
 			}
 			s.State.RecordNotified[key] = true
 		}
 	}
+}
+
+// resultGist is a result's first sentence for its notice: the summary section (the first section when the shape has
+// none), one line, at most 120 characters. The whole result stays one command away.
+func resultGist(d record.Document) string {
+	if len(d.Shape.Sections) == 0 {
+		return ""
+	}
+
+	name := d.Shape.Sections[0].Name
+	for _, sec := range d.Shape.Sections {
+		if sec.Name == "summary" {
+			name = sec.Name
+		}
+	}
+
+	g := strings.Join(strings.Fields(d.Values[name]), " ")
+	if i := strings.Index(g, ". "); i > 0 {
+		g = g[:i+1]
+	}
+
+	if r := []rune(g); len(r) > 120 {
+		g = string(r[:119]) + "…"
+	}
+
+	return g
 }

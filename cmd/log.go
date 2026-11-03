@@ -17,12 +17,12 @@ func (a *app) logCommand() *cobra.Command {
 	var (
 		since, role, taskID string
 		last                int
-		asJSON              bool
+		asJSON, full        bool
 	)
 
 	c := &cobra.Command{
 		Use:   "log",
-		Short: "What happened on the shift: ups, downs, ends, notes, tasks, seats (--since 12h, --role, --task)",
+		Short: "What happened on the shift, an event a line (--since 12h, --role, --task, --full)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.readState(func(s *shift.Shift) error {
@@ -63,8 +63,10 @@ func (a *app) logCommand() *cobra.Command {
 						line += "  by " + e.By
 					}
 
-					if e.Detail != "" {
+					if e.Detail != "" && full {
 						line += "  " + e.Detail
+					} else if e.Detail != "" {
+						line = clip(line+"  "+oneLine(e.Detail), 160)
 					}
 
 					fmt.Fprintln(a.out, line)
@@ -80,6 +82,7 @@ func (a *app) logCommand() *cobra.Command {
 	c.Flags().StringVar(&taskID, "task", "", "only this task")
 	c.Flags().IntVarP(&last, "last", "n", 50, "the newest n events (0: all)")
 	c.Flags().BoolVar(&asJSON, "json", false, "JSON output")
+	c.Flags().BoolVar(&full, "full", false, "each event whole (default: one line of at most 160 characters)")
 
 	return c
 }

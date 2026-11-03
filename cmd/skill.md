@@ -7,6 +7,12 @@ routes tasks to roles, starts and stops them, and hears the ticker's health note
 itself lives in a **task ledger** outside any session, and everything that happens goes to an
 **event log**.
 
+**Output is compact by default**: one line per item, only what an agent needs to act — every output read stays
+in the reader's context for every turn after it. Ask for detail only when the compact view does not answer:
+`--all` (every item, closed ones too), `--wide` (every column), `--full` (whole texts), `--json` (for machines).
+`zmina ls <role>` and `zmina task show <id>` look at one thing. Notifications carry the gist and the command that
+shows the rest.
+
 ## The crew file
 
 `~/.zmina/crew.yaml`; another crew is `--config <name>` (`~/.zmina/<name>/crew.yaml`; such a
@@ -183,7 +189,7 @@ the role's add up.
 
 | Command | Does |
 |---|---|
-| `zmina ls [--json]` | first line: when the ticker last beat (and `STOPPED` while the shift is stopped). Then every role: `up` / `down` / `dead` (its process ended, the ticker collects it within a minute) / `outside` (a claude with that name runs, not under zmina) / `unknown` (tmux did not answer), `idle`/`busy` (`unknown` when its registry entry does not read), for how long, how many tokens its conversation fills (`362k/150k` with its `context_max`), the active tasks it holds, keep (+ next scheduled run, expiry), about. `--json` also has `prompt: true` while an up role's screen shows a dialog or a question instead of its input line, and `now` / `now_at`: the role's last status line in words (its screen's last `⏺ …` line that is not a tool call) and since when it says so. If tool output scrolls that line away, the last line and its timestamp are kept until new words appear. `*` marks the dispatcher; `(broken)` a role that dies on boot; `(bad dir)` a role whose dir is gone — it does not start, the rest of the crew runs on; `(N failed lines)` see `zmina queue`; `(asleep until Mon 09:00)` a role put to sleep (`zmina sleep`). Last line `later: N parked` while the parked list is not empty. |
+| `zmina ls [role...] [--all] [--wide] [--json]` | first line: when the ticker last beat (and `STOPPED` while the shift is stopped), how many roles are up and down. Then a line per role that is not down: role, `up`/`dead` (its process ended, the ticker collects it within a minute)/`outside` (a claude with that name runs, not under zmina)/`unknown` (tmux did not answer) with `idle`/`busy` (`(dialog)` while its screen shows a question instead of its input line), for how long (`3m`, `4h12m`, `2d3h`), how many tokens its conversation fills (`362k/150k` with its `context_max`), the active tasks it holds. The down roles follow in one line, `down: designer, dev3 (T-4), seo (broken)`, each with what is worth knowing in brackets: tasks, `broken` (dies on boot), `bad dir` (its dir is gone — it does not start, the rest of the crew runs on), `N failed lines` (see `zmina queue`), `asleep until Mon 09:00` (`zmina sleep`), next scheduled run, expiry. `--all`: a line for the down ones too. `--wide`: the whole table with SESSION, KEEP (+ next scheduled run, expiry) and ABOUT; `zmina ls <role>` the same for that role and its copies, with what it says it does. `*` marks the dispatcher. Last line `later: N parked` while the parked list is not empty. `--json` has every field, also `prompt: true` while an up role's screen shows a dialog or a question, and `now` / `now_at`: the role's last status line in words (its screen's last `⏺ …` line that is not a tool call) and since when it says so. If tool output scrolls that line away, the last line and its timestamp are kept until new words appear. |
 | `zmina up <role...>` / `--all` | start roles. Refuses a role already up, and a name a claude outside zmina already holds. Clears a hold and a broken mark. A sleeping role resumes its last known conversation, as at its alarm; the alarm still rings later. |
 | `zmina up <role> --as N` | a copy of the role, `<role>#N` (2–9) under `<session>-N`, same dir/boot/model/args; never kept up, gone once it is down. `zmina down dev --as 2` (or `zmina down 'dev#2'`). |
 | `zmina up <role> [--as N] --task T-1` | start a seat for an active recorded task, in its worktree when present. Queue one short handoff packet locator, never the inline task body. Read that file, check `task show` and its latest Note, then run the exact `task accept` command carried by the locator before work. By default continue a compatible task conversation, otherwise start fresh; `--continue` / `--fresh` make the choice explicit. The task names this role. Claude Code trust is answered only for worktrees zmina made under `<crew>/worktrees/`. |
@@ -191,7 +197,7 @@ the role's add up.
 | `zmina down <role...>` / `--all` / `zmina down <role> --as N` | types `/exit` (session-end hooks run), kills after 15 s; the wait happens outside the lock, so other commands and the ticker are not held up. `/exit` goes only into an empty input line: a draft there (it would be sent with `/exit`) or a dialog (its Enter would pick the highlighted answer) refuses the down, exit 1, nothing pressed. `--clear` drops the draft (C-c; BSpace and End do not clear it) or closes the dialog (Escape) first, then `/exit`; a screen Escape leaves without an input line gets C-c C-c in one call. Claude Code's "Background work is running" question on exit is answered "Exit and stop tasks". The dispatcher needs `--force`. |
 | `zmina restart <role>` | down + up under the same name, honoring the configured resume policy. `--fresh` forces a new conversation; `--continue` requires its last conversation. A draft or a dialog refuses it as with `down`; `--clear` too. |
 | `zmina send <role> <text>` | type one line into a role's prompt and press Enter. Text that starts with `-` goes after `--`: `zmina send dev -- '- item'`. `--when-idle` queues it instead: the ticker types it the first time the role is up, booted and idle (one queued line per minute). For a message between sessions prefer `SendMessage({to: "<prefix><role>"})`. |
-| `zmina peek <role> [-n 40]` | the last lines of a role's screen, as text — works from an agent, no terminal; also on a `dead` role. Claude Code's suggested next prompt, dim in an empty input line, shows as `❯ (suggestion) …`: nobody typed it. |
+| `zmina peek <role> [-n 20] [--raw]` | the role's state in one line (as `ls` has it), then the last 20 lines of its screen as text without blank lines, rules and the footer under the input line — works from an agent, no terminal; also on a `dead` role. The input line stays: `❯` with a draft when there is one. Claude Code's suggested next prompt, dim in an empty input line, shows as `❯ (suggestion) …`: nobody typed it. `--raw`: the screen as it is (40 lines by default). |
 | `zmina keys <role> <key...>` | press named keys: `Enter Escape Up Down Left Right Tab BTab Space BSpace PageUp PageDown Home End C-c y n 1`–`9`. Text goes with `send`. The keys of one call go in one tmux call: `zmina keys <role> C-c C-c` ends a claude, two separate calls are too slow for its double C-c. |
 | `zmina sleep <role> --until <when> [--note file\|-] [--clear]` | put the role down holding what it holds (its tasks stay its own, active), and wake it at `<when>` (see Alarms): it starts on its last conversation and its queue gets `[zmina alarm] <note>` — without `--note`, `you were put to sleep Sun 14:20; go on with T-5`. Prints `dev asleep until Mon 2 Nov 09:00 (in 19h) · R-4 · holds T-5`. Held while asleep: `keep: always` does not start it early. A role asleep already has its alarm moved. A draft or a dialog refuses it as with `down`, `--clear` too. Not the dispatcher, not a copy (`dev#2`). `zmina up` wakes it early (the alarm still rings: the line is queued); `zmina remind off R-4` keeps it down. |
 | `zmina attach <role> [--raw]` | shared Codex: full TUI on the current live daemon thread. `--raw`: original bridge in tmux. Claude: tmux attachment (detach: prefix, then `d`). Needs a TTY; otherwise prints the prepared command. |
@@ -203,7 +209,7 @@ the role's add up.
 | `zmina stop` | the ticker starts nothing any more (no keep: always role, no scheduled run), then every role goes down, the dispatcher too; a role with a draft or a dialog stays up and is named (`--clear` as with `down`). `ls` shows `STOPPED`. |
 | `zmina start` | lifts the stop and starts the dispatcher. |
 | `zmina doctor [--json]` | checks crew file, tmux (3.2 or newer), claude as roles find it (their PATH; a binary in a temp dir fails) and the flags zmina passes, Claude Code's session registry (zmina reads it to tell idle from busy; it is not a public interface — doctor says when its shape changed), ticker beat, state, lock holder, task files, crews sharing a tmux server. Exit 1 on a fail. |
-| `zmina queue ls [--json]` | what waits to be typed: the dispatcher's signals and health notes, each role's inbox, and its failed lines (a line tmux refused three beats in a row). |
+| `zmina queue ls [--full] [--json]` | what waits to be typed: the dispatcher's signals and health notes, each role's inbox, and its failed lines (a line tmux refused three beats in a row); each line clipped to 160 characters, `--full` whole. |
 | `zmina queue retry <role>` / `queue drop <role> [--all]` | put failed lines back at the head of the inbox / drop them (`--all`: the inbox too; for the dispatcher its signals and notes). Without `--all`, any retained inbox count and the command needed to drop it are printed. The hint includes the resolved `--crew` path and shell-quotes both path and role, so it still targets this crew when pasted into another shell. |
 | `zmina state show` | the state as zmina reads it (JSON). |
 | `zmina state recover` | an unreadable `state.json` (or one from a newer zmina) is never written over: every writing command refuses until this moves it aside as `state.json.broken-<time>`. |
@@ -551,7 +557,7 @@ directory, readable or not, and never replaces a file; `task ls` and `doctor` na
 | `zmina task new <role> <asked...>` | record a task; prints `T-14 · dev`. If the role is already running, also queues its current handoff packet for explicit acceptance; does not restart the role or change its working directory. `--repo <name or path>` (a name is a directory under the crew's dir), `--note`, `--title "<short plain sentence>"`, `--project <name>`, `--url <live thing>`, `--budget <dollars>` (what it may cost, see Usage), `--json`. |
 | `zmina task new <role> --repo r --worktree <asked...>` | also gives it its own git worktree `~/.zmina/worktrees/<repo>-T-14` on a new branch `zmina/t-14` (`zmina/<crew>-t-14` for a named crew) from the repo's current branch (`--base` another). The role works there, never in the repo's checkout. The task is written before the worktree is made: if git fails, it stays as `dropped` with the error in its note. |
 | `zmina task ls [--all] [--role r] [--json]` | active tasks (`--all`: closed too). |
-| `zmina task show <id>` | one task with its cost line (see Usage) and its history from the event log. Ids: `T-14`, `t-14` or `14`. |
+| `zmina task show <id> [--full]` | one task: what was asked and its latest note (each clipped to 300 characters), its handoff, result and checkpoint in one line each (revision, time, the summary's start), its cost line (see Usage) and its last 8 events, one line each. `--full`: the asked text, note, result and checkpoint whole and the last 20 events. Ids: `T-14`, `t-14` or `14`. |
 | `zmina task set <id> [state] [--on <who>] [--note …] [--role r] [--title …] [--project …] [--url …] [--budget …]` | change state, note, title, project, url or budget (`-` clears one), or hand it to another role. `waiting --on <who>`: it waits on someone other than the owner — a role of the crew or a person (`--on -`: the owner again); it stays off the owner's todo. Any other state clears it. |
 | `zmina task done <id>` / `task drop <id>` | close it, and print its cost line when turns are found for it. Refuses while its worktree has uncommitted changes (`--force` closes anyway; the worktree stays). |
 | `zmina task park <id> [--note "<what remains>"]` | move an active task to the later list: a new `L-n` with what remains (default: the task's title), note `from T-48 (designer)`, and the role and its conversation (the running one, else its last) for `later take --resume`. The task closes as `parked L-n`; its worktree stays as it is. `task set <id> parked` is refused: parking goes through here. Prints `T-48 · designer · parked L-15`, then its cost line. |
@@ -587,7 +593,7 @@ until the task changes again (`task set`): the turn is the dispatcher's.
 |---|---|
 | `zmina todo add <text...> [--title "<few words>"] [--rec "<answer>" --reason "<why>"] [--kind decision\|check] [--from <role>] [--task T-n] [--blocks <role>] [--project <p>]` | ask the owner; prints `A-3`. With `--rec` it is a decision, else a check. `--from` defaults to `$ZMINA_ROLE`; `--project` to the `--task`'s. The page shows the title, the text on expand. |
 | `zmina todo edit <id> [--title …] [--text …] [--rec …] [--reason …] [--blocks …] [--project …]` | change an open ask's words (`-` clears one; clearing `--rec` makes it a check). |
-| `zmina todo ls [--json]` | what waits, in that order; the parked list's count last. `--json`: `{items, later}`. |
+| `zmina todo ls [--full] [--json]` | what waits, in that order, one line each (its title when it has one); the parked list's count last. `--full`: the whole text. `--json`: `{items, later}`. |
 | `zmina todo yes <id>` | take a decision's recommendation. |
 | `zmina todo done <id>` | a check (or a decision) is dealt with. |
 | `zmina todo answer <id> <text...>` | answer an ask or a waiting task (`T-62`) in the owner's words. |
@@ -684,7 +690,7 @@ and that role's conversation.
 | Command | Does |
 |---|---|
 | `zmina later add <text...> [--note …] [--until <when>]` | park it; prints `L-3`. With `--until` (see Alarms) it comes back to the owner's todo at that time, through the notify command too: `L-3 · back Mon 2 Nov 09:00 (in 19h) · R-5`. |
-| `zmina later ls [--all] [--json]` | what is parked, oldest first: id, age, text (` · note`). `--all`: closed too, with their state. |
+| `zmina later ls [--all] [--full] [--json]` | what is parked, oldest first: id, age, text (` · note`), one line of 100 characters (`--full`: whole). `--all`: closed too, with their state. |
 | `zmina later done <id>` / `later drop <id>` | take it off the list (`--note` replaces its note). Ids: `L-3`, `l-3` or `3`. |
 | `zmina later take <id> <role> [--repo r --worktree --base b]` | turn the item into a task as `task new` would (asked = its text, note `from L-1: <its note>`) and close it as `taken T-n`. Carry its checkpoint, incomplete marker and conversation references into the new task; queue the current role-shaped handoff packet locator. If worktree creation fails, the item stays parked. |
 | `zmina later take <id> <role> --resume` | also start the down role on the stored conversation the item was parked from, then queue a short handoff packet locator. Read the packet and current `task show`/Note, and run its exact `task accept` command before work. Only for an item parked from a role task, into the same base role (or a copy such as `dev#2`), while the role is down. Prints `… · L-1 taken · dev#2 up on <session>`. |
@@ -778,9 +784,10 @@ from each reply's own model), and for `--by task` `HOW`. A totals row `all`.
 
 ## Log
 
-`zmina log [--since 12h|3d] [--role r] [--task T-14] [-n 50] [--json]` — ups, downs, ends, broken
+`zmina log [--since 12h|3d] [--role r] [--task T-14] [-n 50] [--full] [--json]` — ups, downs, ends, broken
 roles, stuck/idle/expired notes, lines told or typed, keys, sends, tasks, seats, scheduled runs,
-each with who did it (`hand`, `ticker`, `schedule`, or the role). File `~/.zmina/events.jsonl`,
+each with who did it (`hand`, `ticker`, `schedule`, or the role); one line of at most 160 characters per event,
+`--full` whole. File `~/.zmina/events.jsonl`,
 rotated at 10 MB into `events.jsonl.1` (log reads both).
 
 ## The ticker
@@ -888,8 +895,9 @@ and exists nowhere else. It is written whole (rename) and never over a file zmin
 - A `[zmina]` part from `zmina note` or a watch (`<source>: …`, the source is not a role) is a task
   signal, not a health event: record a task and route it to a seat like any other ask. Only a
   watch's `failing for N runs` / `recovered` are about the watch itself (`zmina watch ls`).
-- Who is there: `zmina ls --json`; what is in work: `zmina task ls`; what waits: `zmina queue ls`;
-  what is parked: `zmina later ls`. Read them at boot and after every compaction — the ledger, not
+- Who is there: `zmina ls`; what is in work: `zmina task ls`; what waits: `zmina queue ls`;
+  what is parked: `zmina later ls`. Read the compact views; add `--wide` / `--full` / `zmina ls <role>` /
+  `zmina task show <id>` only for the one thing the compact view does not answer. Read them at boot and after every compaction — the ledger, not
   memory, says who holds what.
 - The owner parks a decision or an idea for later ("later", "park it", not for any role now):
   `zmina later add "<their words>"`, not a task. When they come back to one: `zmina later take
@@ -919,7 +927,7 @@ and exists nowhere else. It is written whole (rename) and never over a file zmin
 - A seat for a recorded task: `zmina up dev --as 2 --task T-14` starts it in the task's worktree and
   hands it the task; no `SendMessage` needed for the ask itself.
 - `<role>: no input line …` — a stuck prompt (folder trust elsewhere, a question, a login):
-  `zmina peek <role>`, then `zmina keys <role> …`, or ask the owner. `stopped by a usage limit` —
+  `zmina peek <role>` (`--raw` when the cleaned screen hides what you need), then `zmina keys <role> …`, or ask the owner. `stopped by a usage limit` —
   nothing to press; say when it resets and hold its work.
 - `budget: …` — a role or a task went past its budget (API-equivalent dollars). Nothing is stopped: tell the
   owner in one line with `zmina usage --by task --role <role>` behind it, and act on what they decide.
@@ -954,7 +962,7 @@ and exists nowhere else. It is written whole (rename) and never over a file zmin
 
 A queued role delivery failure immediately queues a dispatcher health note with the role, related task IDs and reason, even while delivery retries remain. Inspect `zmina queue ls` to recover the line.
 
-Task handoffs from `up --task` queue only a short packet locator. The immutable JSON under `<crew>/handoffs/T-n/<content-hash>.json` preserves the full request, latest Note and checkout metadata; read it before working. Multiline task bodies never pass through terminal input.
+Task handoffs from `up --task` queue only a short packet locator. The immutable JSON under `<crew>/handoffs/T-n/<content-hash>.json` preserves the full request, latest Note and checkout metadata; read it before working. Multiline task bodies never pass through terminal input. The packet tells the worker how to report: save the result with `zmina task result T-n --file <json>` (that notifies the dispatcher); a message to the dispatcher besides is one line, the gist and `zmina task result T-n`, never the result again.
 
 ### Role-shaped handoffs
 
@@ -989,7 +997,9 @@ For a worker's repeated conclusion use `zmina report --key T-1/direction 'Direct
 
 `zmina task result T-1 --file result.json` saves a worker-authored JSON object mapping every section in the role's handoff shape to a string (use "unknown" when needed; unknown names are rejected). `--file -` reads stdin, at most 1 MiB. `task done T-1 --result result.json` saves before closing. Same role/shape/content reuses the revision and original timestamp; changes create a new immutable file under `<crew>/results/T-1/<revision>.json`. No commit/test fields are imposed on non-developer roles.
 
-Read the latest with `task result T-1 [--json]`, or a previous `--revision <hash>`. `task show` and the cockpit task sheet show the latest result as worker-reported, not as independently verified or deployed. Missing/invalid records are explicit. Each revision queues one dispatcher notification; the ticker reconciles record files after a crash independently of task state or event-log retention. Legacy tasks can still close without a result. This does not send Telegram or authorize push/publish/deploy/merge.
+Read the latest with `task result T-1 [--full] [--json]`, or a previous `--revision <hash>`: the summary section
+whole (the first section when the shape has none), the others clipped to a line; `--full` every section whole. `task show` and the cockpit task sheet show the latest result as worker-reported, not as independently verified or deployed. Missing/invalid records are explicit. Each revision queues one dispatcher notification, the gist and the pointer:
+`dev: T-1 result ready (worker-reported): <the summary's first sentence> (zmina task result T-1)`; the ticker reconciles record files after a crash independently of task state or event-log retention. Legacy tasks can still close without a result. This does not send Telegram or authorize push/publish/deploy/merge.
 
 ### Task conversation memory
 
