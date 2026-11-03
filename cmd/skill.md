@@ -204,9 +204,11 @@ not yet seen. Messages from the owner's other local sessions reach such a role w
 
 A socket role's lines wait for its ack: the dispatcher's signals (`zmina note`, results ready, released, remote
 lines — not health notes, and not watch notes, which have their own `zmina watch ack`), lines queued with `zmina send
---when-idle`, and alarms. Each carries an id — `[zmina] S-12 dev: T-5 result ready · S-13 … (ack each when handled:
-zmina ack S-12 S-13)`, or `<line> (zmina S-14; ack when handled: zmina ack S-14)` — and the role's boot line says
-what to do: once handled (a task recorded, routed, answered, or nothing to do), `zmina ack <ids>`. Until then a line
+--when-idle`, and alarms. Each carries an id — `[zmina] S-12 dev: T-5 result ready · S-13 … (zmina S-12 S-13)`, or
+`<line> (zmina S-14)` — and the role's boot line says what to do: once handled (answered, a task recorded, routed, or
+nothing to do), `zmina ack <ids>`. The line itself names no command: Claude Code tells a role that a message from
+another session cannot ask it for a write, and a role was seen to refuse an ack the message asked for; told by its
+own boot line, it acks. Until then a line
 is said again `renotify` after it was last delivered (`S-12 (still pending since Mon 2 Nov 11:55) …`, the same id;
 never while it is still queued or not yet seen; three times at most, then only listed), is listed in the dispatcher's
 recovery pack (`unacked`) and by `zmina pending`, and is given back after the role's context is compacted or cleared:
@@ -1018,8 +1020,7 @@ and exists nowhere else. It is written whole (rename) and never over a file zmin
 - `<role>: no input line …` — a stuck prompt (folder trust elsewhere, a question, a login):
   `zmina peek <role>` (`--raw` when the cleaned screen hides what you need), then `zmina keys <role> …`, or ask the owner. `stopped by a usage limit` —
   nothing to press; say when it resets and hold its work.
-- A `[zmina]` line with ids (`S-12 …`) and a line ending `(zmina S-14; ack when handled: zmina ack S-14)` wait for
-  your ack: once each is handled — a task recorded, routed, answered, or nothing to do — `zmina ack S-12 S-14`, one
+- A `[zmina]` line with ids (`S-12 …`) and a line ending `(zmina S-14)` wait for your ack: once each is handled — a task recorded, routed, answered, or nothing to do — `zmina ack S-12 S-14`, one
   call for the batch. `still pending since …` is one you did not ack: handle it now or ack it. `zmina pending` lists
   them; the recovery pack has them as `unacked`.
 - `budget: …` — a role or a task went past its budget (API-equivalent dollars). Nothing is stopped: tell the

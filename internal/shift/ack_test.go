@@ -28,7 +28,7 @@ func TestAckSignalsCarryIDs(t *testing.T) {
 	require.NoError(t, err)
 
 	line := f.s.deliver(*f.now)
-	assert.Equal(t, "[zmina] S-1 dev: T-5 result ready · ci-red: pipeline red (ack each when handled: zmina ack S-1)", line)
+	assert.Equal(t, "[zmina] S-1 dev: T-5 result ready · ci-red: pipeline red (zmina S-1)", line)
 	assert.Equal(t, []string{line}, p.posted["sid-dispatcher"])
 
 	pend := f.s.Pending("dispatcher")
@@ -60,7 +60,7 @@ func TestAckRenotifiesUntilAcked(t *testing.T) {
 	assert.Len(t, f.s.State.Signals, 1, "queued already: not twice")
 
 	line := f.s.deliver(*f.now)
-	assert.Equal(t, "[zmina] S-1 (still pending since "+since+") dev: T-5 result ready (ack each when handled: zmina ack S-1)", line)
+	assert.Equal(t, "[zmina] S-1 (still pending since "+since+") dev: T-5 result ready (zmina S-1)", line)
 	assert.Len(t, f.s.State.Acks, 1, "the same id, no new one")
 	p.showAll()
 	f.s.deliverInbox("dispatcher", *f.now)
@@ -110,7 +110,7 @@ func TestAckQueuedLineToARole(t *testing.T) {
 
 	_, err := f.s.QueueTracked("designer", "[dispatcher] look at T-1")
 	require.NoError(t, err)
-	assert.Equal(t, []string{"[dispatcher] look at T-1 (zmina S-1; ack when handled: zmina ack S-1)"},
+	assert.Equal(t, []string{"[dispatcher] look at T-1 (zmina S-1)"},
 		f.s.State.Role("designer").Inbox)
 
 	f.s.renotify(f.now.Add(time.Hour))
@@ -123,7 +123,7 @@ func TestAckQueuedLineToARole(t *testing.T) {
 	*f.now = f.now.Add(30 * time.Minute)
 	f.s.renotify(*f.now)
 	assert.Equal(t, []string{"[dispatcher] look at T-1 (zmina S-1, still pending since " + since +
-		"; ack when handled: zmina ack S-1)"}, f.s.State.Role("designer").Inbox)
+		")"}, f.s.State.Role("designer").Inbox)
 
 	assert.Contains(t, f.s.PendingBrief("designer"), "S-1 (since "+since+") [dispatcher] look at T-1")
 	assert.Empty(t, f.s.PendingBrief("dispatcher"))
@@ -207,6 +207,6 @@ func TestAckInRecoveryPackAndBootRule(t *testing.T) {
 
 	r, err := f.s.Role("dispatcher")
 	require.NoError(t, err)
-	assert.Contains(t, f.s.BootText(r), "zmina ack <ids>")
+	assert.Contains(t, f.s.BootText(r), "run `zmina ack S-12 S-14`")
 	assert.Contains(t, f.s.BootText(r), "said again after 30m")
 }

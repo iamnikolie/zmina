@@ -35,8 +35,8 @@ const (
 var (
 	// signalID is the id at the head of a dispatcher's signal part: "S-12 mrs: …".
 	signalID = regexp.MustCompile(`^(S-[0-9]+) `)
-	// lineID is the id in a queued line's tail: "… (zmina S-14; ack when handled: zmina ack S-14)".
-	lineID = regexp.MustCompile(`\(zmina (S-[0-9]+)[;,]`)
+	// lineID is the id in a queued line's tail: "… (zmina S-14)", "… (zmina S-14, still pending since …)".
+	lineID = regexp.MustCompile(`\(zmina (S-[0-9]+)[,)]`)
 )
 
 // signalBody is a signal without the id and the "still pending" mark it carries once it was delivered.
@@ -80,14 +80,16 @@ func ackNum(id string) int {
 	return n
 }
 
-// lineSuffix is what a tracked line carries: its id, since when it waits once it is said again, and how to ack it.
+// lineSuffix is what a tracked line carries: its id, and since when it waits once it is said again. The line names
+// no command: the role's own boot line says how to ack (a command inside a message from another session reads as
+// that session asking for it).
 func (s *Shift) lineSuffix(a *Ack) string {
 	since := ""
 	if !a.First.IsZero() {
 		since = ", still pending since " + s.clock(a.First)
 	}
 
-	return " (zmina " + a.ID + since + "; ack when handled: zmina ack " + a.ID + ")"
+	return " (zmina " + a.ID + since + ")"
 }
 
 // clock is a time as a line shows it, on the crew's clock.
@@ -149,13 +151,13 @@ func (s *Shift) signalPart(sig string) (string, string) {
 	return id + " " + sig, id
 }
 
-// ackTail is the end of the dispatcher's line: how to ack its signals.
+// ackTail is the end of the dispatcher's line: which of its signals wait for the ack.
 func ackTail(ids []string) string {
 	if len(ids) == 0 {
 		return ""
 	}
 
-	return " (ack each when handled: zmina ack " + strings.Join(ids, " ") + ")"
+	return " (zmina " + strings.Join(ids, " ") + ")"
 }
 
 // renotify says again each line that waits for an ack past the crew's renotify since it was last delivered, while
