@@ -595,8 +595,15 @@ func (a *app) sendCommand() *cobra.Command {
 
 			return a.withState(func(s *shift.Shift) error {
 				if whenIdle {
-					if err := s.Queue(args[0], text); err != nil {
+					id, err := s.QueueTracked(args[0], text)
+					if err != nil {
 						return err
+					}
+
+					if id != "" {
+						fmt.Fprintf(a.out, "queued for %s as %s: delivered once it is up and between turns; said again until it acks\n", args[0], id)
+
+						return nil
 					}
 
 					fmt.Fprintf(a.out, "queued for %s: typed the first time it is up and idle\n", args[0])

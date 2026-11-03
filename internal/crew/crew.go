@@ -205,6 +205,8 @@ type Crew struct {
 	ReleaseIdleMinutes string `yaml:"release_idle_minutes"`
 	// RemoteControl opens every role to Remote Control (claude --remote-control); default true.
 	RemoteControl *bool `yaml:"remote_control"`
+	// Renotify is how long a delivered line waits for its reader's ack before it is said again (default 30m; off).
+	Renotify string `yaml:"renotify"`
 	// Delivery is how lines reach a Claude role: socket (the default: its inbox socket, a message from another
 	// session) or tmux (typed into its input line).
 	Delivery string `yaml:"delivery"`
@@ -228,6 +230,7 @@ type Crew struct {
 	Timezone string `yaml:"timezone"`
 
 	bootGrace time.Duration
+	renotify  time.Duration
 	loc       *time.Location
 	// Roles are keyed by role name.
 	Roles map[string]*Role `yaml:"roles"`
@@ -374,6 +377,9 @@ func (c *Crew) Socket() string { return suffixed(socket, "-", c.Name) }
 
 // LaunchdLabel is the crew's ticker: io.iamnikolie.zmina, or io.iamnikolie.zmina.<name>.
 func (c *Crew) LaunchdLabel() string { return suffixed(launchdLabel, ".", c.Name) }
+
+// RenotifyD is how long a delivered line waits for its ack before it is said again; zero is never.
+func (c *Crew) RenotifyD() time.Duration { return c.renotify }
 
 // BootGraceD is how long a started role is left to boot before lines are typed into it.
 func (c *Crew) BootGraceD() time.Duration { return c.bootGrace }
@@ -697,6 +703,20 @@ func (c *Crew) resolve(strict bool) error {
 		}
 
 		c.bootGrace = d
+	}
+
+	c.renotify = defaultRenotify
+	switch v := strings.TrimSpace(c.Renotify); v {
+	case "":
+	case "off", "0":
+		c.renotify = 0
+	default:
+		d, err := ParseSpan(v)
+		if err != nil || d < time.Minute {
+			return fmt.Errorf("renotify %q: a span of a minute at least, such as 30m or 2h, or off", c.Renotify)
+		}
+
+		c.renotify = d
 	}
 
 	c.loc = nil

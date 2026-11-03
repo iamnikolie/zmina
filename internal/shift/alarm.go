@@ -146,7 +146,7 @@ func (s *Shift) wake(a *alarm.Alarm, late string) (line, note string) {
 	}
 
 	rs := s.State.Role(name)
-	rs.Inbox = append(rs.Inbox, AlarmPrefix+body(*a)+late)
+	rs.Inbox = append(rs.Inbox, s.trackLine(name, AlarmPrefix+body(*a)+late))
 	line = a.ID + ": " + name + " told"
 
 	if s.has(name) {

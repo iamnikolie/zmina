@@ -59,6 +59,11 @@ func (s *Shift) RecoveryPack() (string, recovery.Pack, error) {
 			add("failures", fmt.Sprintf("%s/%d", name, i), f.Error+": "+f.Line, "zmina queue ls", f)
 		}
 	}
+	for _, a := range s.Pending("") {
+		if !a.First.IsZero() {
+			add("unacked", a.ID, a.Role+": "+a.Text+" (since "+s.clock(a.First)+")", "zmina ack "+a.ID, a)
+		}
+	}
 	for _, k := range s.WaitingKeys() {
 		add("watch_keys", k.Watch+"/"+k.Key, k.Watch+": "+k.Line()+" (pending since "+
 			k.Since.In(s.Crew.Location()).Format("Mon 2 Jan 15:04")+")", k.AckCommand(), k)

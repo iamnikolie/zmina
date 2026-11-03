@@ -39,11 +39,14 @@ type State struct {
 	MessageLines       map[string]string               `json:"message_lines,omitempty"`
 	MessageStages      map[string]map[string]time.Time `json:"message_stages,omitempty"`
 	RemoteBatches      int                             `json:"remote_batches,omitempty"`
-	RecordNotified     map[string]bool                 `json:"record_notified,omitempty"`
-	NoticeMeta         map[string]NoticeMeta           `json:"notice_meta,omitempty"`
-	SignalCounts       map[string]int                  `json:"signal_counts,omitempty"`
-	Reports            map[string]ReportState          `json:"reports,omitempty"`
-	Version            int                             `json:"version"`
+	// Acks are the delivered lines that wait for their reader's ack; AckSeq numbers them (S-<n>).
+	Acks           map[string]*Ack        `json:"acks,omitempty"`
+	AckSeq         int                    `json:"ack_seq,omitempty"`
+	RecordNotified map[string]bool        `json:"record_notified,omitempty"`
+	NoticeMeta     map[string]NoticeMeta  `json:"notice_meta,omitempty"`
+	SignalCounts   map[string]int         `json:"signal_counts,omitempty"`
+	Reports        map[string]ReportState `json:"reports,omitempty"`
+	Version        int                    `json:"version"`
 	// Roles is per role and instance.
 	Roles map[string]*RoleState `json:"roles,omitempty"`
 	// Signals wait for the dispatcher: work found by zmina note and the watches. They are refused at intake when

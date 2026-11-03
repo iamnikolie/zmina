@@ -17,10 +17,6 @@ const postedWait = 10 * time.Minute
 // postedNever is the failure of a posted line the conversation never showed.
 const postedNever = "posted to its inbox socket, never seen in its conversation (held or dropped); inspect before retry"
 
-// inboundSettings are the settings a Claude role whose lines go to its inbox socket starts with: messages from
-// another session are let in (a role that bypasses permission prompts would hold them behind a dialog).
-const inboundSettings = `{"crossSessionInbound":"accept"}`
-
 // inbound reports whether a role starts with zmina's settings, its lines posted to its inbox socket.
 func (s *Shift) inbound(r *crew.Role) bool {
 	return s.Peer != nil && s.Crew.DeliveryFor(r) == crew.DeliverySocket

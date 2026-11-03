@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -76,7 +77,8 @@ Run 'zmina skill' for the full agent reference.`,
 	root.AddCommand(a.taskCommand(), a.todoCommand(), a.laterCommand(), a.remindCommand(), a.sleepCommand(), a.seatCommand(), a.logCommand(), a.noteCommand(), a.inboxCommand(), a.watchCommand(),
 		a.stopCommand(), a.startCommand(), a.queueCommand(), a.stateCommand(), a.tickerCommand(),
 		a.launchdCommand(), a.doctorCommand(), a.usageCommand(), a.skillCommand(), a.versionCommand(), a.uiCommand(),
-		a.messageCommand(), a.contextCommand(), a.reportCommand(), a.nodeCommand(), a.tellCommand(), a.codexCommand(), a.terminalCommand())
+		a.messageCommand(), a.contextCommand(), a.reportCommand(), a.nodeCommand(), a.tellCommand(), a.codexCommand(), a.terminalCommand(),
+		a.ackCommand(), a.pendingCommand())
 
 	return root
 }
@@ -159,6 +161,7 @@ func (a *app) newShift() (*shift.Shift, error) {
 		Tmux:              &lazyTmux{socket: c.Socket(), drop: c.DropEnv},
 		Reg:               &registry.Registry{Namespace: c.Namespace},
 		Peer:              peer.Inbox{},
+		Self:              self(),
 		State:             shift.NewState(),
 		Tasks:             taskStore(c),
 		Later:             laterStore(c),
@@ -364,4 +367,18 @@ func (l *lazyTmux) KeepScreens(name string) error {
 	}
 
 	return c.KeepScreens(name)
+}
+
+// self is this zmina's executable, for the hooks the roles it starts run; empty when it cannot be found.
+func self() string {
+	path, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		return real
+	}
+
+	return path
 }

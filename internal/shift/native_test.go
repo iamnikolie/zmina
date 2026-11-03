@@ -69,7 +69,7 @@ func TestNativeRoleStartsWithInboundSettings(t *testing.T) {
 	require.NoError(t, f.s.Up("designer"))
 
 	assert.Contains(t, f.tm.argv["designer"], "--settings")
-	assert.Contains(t, f.tm.argv["designer"], inboundSettings)
+	assert.Contains(t, f.tm.argv["designer"], f.s.roleSettings("designer"))
 	assert.True(t, f.s.State.Role("designer").Inbound)
 
 	f.s.Crew.Delivery = crew.DeliveryTmux
@@ -221,7 +221,7 @@ func TestNativeDispatcherSignals(t *testing.T) {
 	require.NoError(t, err)
 
 	line := f.s.deliver(*f.now)
-	assert.Equal(t, "[zmina] mrs: acme/site!12 approved", line)
+	assert.Equal(t, "[zmina] S-1 mrs: acme/site!12 approved (ack each when handled: zmina ack S-1)", line)
 	assert.Equal(t, []string{line}, p.posted["sid-dispatcher"])
 	assert.Empty(t, f.tm.typed["dispatcher"])
 	assert.Empty(t, f.s.State.Signals)
