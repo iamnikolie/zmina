@@ -31,6 +31,10 @@ type app struct {
 	out, err io.Writer
 	config   string
 	crew     string
+	// cockpitPeers reads the mesh's other nodes for zmina ui (nil: the mesh's own; tests set a fake).
+	cockpitPeers *uiPeerCache
+	// uiLogins hands out one-time login codes for zmina ui (nil: none).
+	uiLogins *uiLogins
 }
 
 // NewRoot builds the whole command tree writing to out and errw.

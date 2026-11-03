@@ -608,10 +608,34 @@ role that asked, moves a waiting task on. Event `answered` in the log.
 
 ## The ui page
 
-`zmina ui [--addr 127.0.0.1:7517] [--no-open]` serves one live page for **every crew** under
-`~/.zmina` (`crew.yaml` and each `<name>/crew.yaml`, looked up again on every refresh, so a new crew shows without a
-restart) and opens it in the browser. A second `zmina ui` opens the one already running. One screen, top to bottom
-by what a delay costs:
+`zmina ui [--addr 127.0.0.1:7517] [--no-open]` serves one live cockpit for **every crew of the mesh**: every crew
+under `~/.zmina` (`crew.yaml` and each `<name>/crew.yaml`, looked up again on every refresh, so a new crew shows
+without a restart) and, on the owner's node (the one with `owner.key`), every crew of every peer in `zmina node ls`.
+A machine without peers is a mesh of one. It opens the page in the browser.
+
+- **Peers** are read in the background over the mesh (`crew/status`, owner-signed and read-only: roles, tasks,
+  asks, alarms, every 20 s; spend every 3 min) and cached, so a slow or down peer never holds the page. Each node
+  shows when it was last seen: `fresh`, `stale` (no good read for 2 min: its last read stays on the page, marked) or
+  `offline` (never read; the error in its tooltip). Off the owner's node peers are listed, not read. Update zmina on
+  every peer: an older one answers `update zmina on this node`.
+- **One view**: «All» merges every node's crews; every item, a question too, is labelled `node/crew` once there is more
+  than one node (a crew's key on a peer is `<node>/<crew>`; the label is dropped once the switch narrows to that node or
+  crew); the switch filters by node or by crew. A peer's items open in place read-only, `answer on <node>` where
+  the actions would be (answer on that node's cockpit or through its dispatcher).
+- **Stopped crews**: a crew stopped on purpose (`zmina stop`) with nothing waiting on the owner leaves «All»: one
+  muted line names them, a tap shows one. A crew whose ticker has been silent for an hour without a stop stays,
+  its chip marked `silent 1h`; a stopped crew that still holds something waiting on the owner stays too.
+- **One cockpit per machine**: a running `zmina ui` records itself in `~/.zmina/ui.json` (0600: its address, pid and
+  a handoff secret). A second plain `zmina ui` asks it for a one-time login code (one use, one minute) and opens
+  `…/?login=<code>`, which signs the browser in and leaves the address bar; the token is never put in a URL, a
+  shell's history or a process's arguments. With `--addr` it binds that address as before; when a cockpit already
+  answers there, it opens that one signed in the same way: the handoff secret goes only to the cockpit `ui.json`
+  records at that very address, any other is asked with `--token` (or `$ZMINA_UI_TOKEN`), sent as the page's
+  cookie, never in an address. These calls follow no redirect: a 3xx there is not a cockpit, and neither the
+  secret nor the token reaches the address it names. An older `zmina ui` there, without login codes, opens unsigned: a browser not signed
+  in uses `?token=` once.
+
+One screen, top to bottom by what a delay costs:
 
 - one sentence on top: «you hold N · answer N · going N · parked N» (red once anyone has waited on you an hour), a
   crew switch, and a ticker that stopped in any crew;
@@ -675,7 +699,7 @@ Todo answers never type into a role. The separate Terminals page attaches direct
 
 Bound to 127.0.0.1 by default and only answers requests that name it (`Host`), so another web page cannot read or
 write through the browser. Writes need the page's own header. A non-loopback `--addr` is refused unless
-`--token <secret>` (or `$ZMINA_UI_TOKEN`) is set: the page then needs `?token=` once (it is kept in a 90-day HttpOnly, SameSite Strict cookie, renewed on authenticated page loads).
+`--token <secret>` (or `$ZMINA_UI_TOKEN`) is set: the page then needs `?token=` once on a new device (it is kept in a 90-day HttpOnly, SameSite Strict cookie, renewed on authenticated page loads); on this machine `zmina ui` signs the browser in with a one-time login code, and the address it prints carries no token.
 Live over server-sent events; the files are inside the binary.
 
 ## Later — the parked list

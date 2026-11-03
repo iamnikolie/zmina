@@ -74,11 +74,38 @@ func (a *app) uiCommand() *cobra.Command {
 					"it needs --token (or $ZMINA_UI_TOKEN) there", addr)
 			}
 
+			// One cockpit per machine: plain zmina ui opens the one that runs, wherever it listens.
+			if !cmd.Flags().Changed("addr") {
+				if url, ok := runningCockpit(); ok {
+					fmt.Fprintln(a.out, "zmina ui already runs on", strings.SplitN(url, "?", 2)[0])
+
+					if !noOpen {
+						openBrowser(url)
+					}
+
+					return nil
+				}
+			}
+
 			ln, err := net.Listen("tcp", addr)
 			if err != nil {
-				// One page for every crew: a second zmina ui opens the one that runs.
-				if url := runningUI(addr, loopback, token); url != "" {
+				// One page for every crew: a second zmina ui opens the one that runs, signed in.
+				if url, ok := runningCockpitAt(addr, token); ok {
+					fmt.Fprintln(a.out, "zmina ui already runs on", strings.SplitN(url, "?", 2)[0])
+
+					if !noOpen {
+						openBrowser(url)
+					}
+
+					return nil
+				}
+
+				if url := runningUI(addr, token); url != "" {
 					fmt.Fprintln(a.out, "zmina ui already runs on", url)
+					if token != "" {
+						fmt.Fprintln(a.err, "zmina: it is an older zmina ui with no login codes: a browser not signed in "+
+							"there opens it with ?token= once")
+					}
 
 					if !noOpen {
 						openBrowser(url)
@@ -90,18 +117,26 @@ func (a *app) uiCommand() *cobra.Command {
 				return err
 			}
 
+			a.uiLogins = newUILogins()
 			srv := &http.Server{Handler: a.uiHandler(ln.Addr().String(), loopback, token, allowHosts...),
 				ReadHeaderTimeout: 10 * time.Second}
 
 			url := "http://" + ln.Addr().String() + "/"
-			if !loopback {
-				url += "?token=" + token
+
+			if err := writeUIState(url, a.uiLogins); err != nil {
+				fmt.Fprintln(a.err, "zmina: warning: a second zmina ui will not find this one:", err)
 			}
+			defer dropUIState()
 
 			fmt.Fprintln(a.out, "zmina ui on", url, "(Ctrl-C stops it)")
 
 			if !noOpen {
-				openBrowser(url)
+				open := url
+				if token != "" {
+					open += "?login=" + a.uiLogins.code()
+				}
+
+				openBrowser(open)
 			}
 
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
@@ -143,16 +178,23 @@ func isLoopback(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// runningUI is the page's address when a zmina ui already answers on addr, else empty.
-func runningUI(addr string, loopback bool, token string) string {
+// runningUI is the page's address when a zmina ui already answers on addr, else empty: an older one, which hands out
+// no login codes.
+func runningUI(addr, token string) string {
+	// The token goes in no address, this ping's or the one opened: a browser signed in has the cookie, another
+	// signs in once.
 	url := "http://" + addr + "/"
-	if !loopback {
-		url += "?token=" + token
+
+	req, err := http.NewRequest(http.MethodGet, url+"api/ping", nil)
+	if err != nil {
+		return ""
 	}
 
-	client := http.Client{Timeout: 2 * time.Second}
+	if token != "" {
+		req.AddCookie(&http.Cookie{Name: uiCookie, Value: token})
+	}
 
-	resp, err := client.Get("http://" + addr + "/api/ping?token=" + token)
+	resp, err := uiProbe().Do(req)
 	if err != nil {
 		return ""
 	}
@@ -230,7 +272,8 @@ func (a *app) extraCrew() string {
 	return os.Getenv("ZMINA_CREW")
 }
 
-func openBrowser(url string) {
+// openBrowser opens url in the browser; a test replaces it to see what would be opened.
+var openBrowser = func(url string) {
 	name := "xdg-open"
 	if runtime.GOOS == "darwin" {
 		name = "open"
@@ -246,13 +289,21 @@ func (a *app) uiHandler(bound string, loopback bool, token string, allowHosts ..
 	static, _ := fs.Sub(ui.Files, "static")
 	mux.Handle("GET /", http.FileServerFS(static))
 	mux.HandleFunc("GET /api/ping", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "zmina") })
-	mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, a.uiSnapshot()) })
-	mux.HandleFunc("GET /api/stream", a.uiStream)
+	peers := a.cockpitPeers
+	if peers == nil {
+		peers = newUIPeerCache()
+	}
+
+	snapshot := func() uiSnapshot { return a.cockpitSnapshot(peers) }
+	mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, snapshot()) })
+	mux.HandleFunc("GET /api/stream", func(w http.ResponseWriter, r *http.Request) { a.uiStream(w, r, snapshot) })
 	a.uiTerminals(mux)
 	a.uiChat(mux)
 
 	costs := &uiCostCache{read: a.readUICost}
-	mux.HandleFunc("GET /api/cost", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, costs.get()) })
+	mux.HandleFunc("GET /api/cost", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, a.cockpitCost(costs.get(), peers))
+	})
 	mux.HandleFunc("GET /api/peek", func(w http.ResponseWriter, r *http.Request) {
 		var text string
 
@@ -398,7 +449,7 @@ func (a *app) uiHandler(bound string, loopback bool, token string, allowHosts ..
 		writeJSON(w, map[string]string{"done": line})
 	})
 
-	return guard(mux, bound, loopback, token, allowHosts...)
+	return guardLogins(mux, bound, loopback, token, a.uiLogins, allowHosts...)
 }
 
 // alarmAction is the page's set, move and off; the caller holds the lock. set is a reminder for the owner, or for a
@@ -464,6 +515,13 @@ func (a *app) takeBack(s *shift.Shift, id string) (string, error) {
 // one of them. A write must carry X-Zmina, which a cross-site form or fetch cannot send without a preflight this
 // server never answers.
 func guard(next http.Handler, bound string, loopback bool, token string, allowHosts ...string) http.Handler {
+	return guardLogins(next, bound, loopback, token, nil, allowHosts...)
+}
+
+// guardLogins is guard that also takes one-time login codes (?login=) and hands them out to a second zmina ui
+// that shows the handoff secret (POST /api/handoff), when logins is set.
+func guardLogins(next http.Handler, bound string, loopback bool, token string, logins *uiLogins,
+	allowHosts ...string) http.Handler {
 	_, port, _ := net.SplitHostPort(bound)
 	hosts := map[string]bool{bound: true, "localhost:" + port: true, "127.0.0.1:" + port: true, "[::1]:" + port: true}
 	if token != "" {
@@ -476,6 +534,10 @@ func guard(next http.Handler, bound string, loopback bool, token string, allowHo
 		if loopback && !hosts[r.Host] {
 			http.Error(w, "unknown host", http.StatusForbidden)
 
+			return
+		}
+
+		if serveLogin(w, r, logins, token, allowHosts) {
 			return
 		}
 
@@ -497,10 +559,7 @@ func guard(next http.Handler, bound string, loopback bool, token string, allowHo
 
 			page := r.Method == http.MethodGet && (r.URL.Path == "/" || strings.HasSuffix(r.URL.Path, ".html"))
 			if r.URL.Query().Get("token") != "" || page {
-				const lifetime = 90 * 24 * time.Hour
-				http.SetCookie(w, &http.Cookie{Name: uiCookie, Value: token, Path: "/", HttpOnly: true,
-					MaxAge: int(lifetime / time.Second), Expires: time.Now().Add(lifetime).UTC(),
-					Secure: secureUIRequest(r, allowHosts), SameSite: http.SameSiteStrictMode})
+				setUICookie(w, r, token, allowHosts)
 			}
 		}
 
@@ -516,6 +575,14 @@ func guard(next http.Handler, bound string, loopback bool, token string, allowHo
 			"img-src 'self' data:; frame-ancestors 'none'")
 		next.ServeHTTP(w, r)
 	})
+}
+
+// setUICookie signs the browser in for 90 days (renewed on every page load).
+func setUICookie(w http.ResponseWriter, r *http.Request, token string, allowHosts []string) {
+	const lifetime = 90 * 24 * time.Hour
+	http.SetCookie(w, &http.Cookie{Name: uiCookie, Value: token, Path: "/", HttpOnly: true,
+		MaxAge: int(lifetime / time.Second), Expires: time.Now().Add(lifetime).UTC(),
+		Secure: secureUIRequest(r, allowHosts), SameSite: http.SameSiteStrictMode})
 }
 
 // Forwarded TLS is trusted only from a local proxy using an explicitly allowed
@@ -549,7 +616,7 @@ func writeJSON(w http.ResponseWriter, v any) {
 }
 
 // uiStream sends the snapshot as server-sent events: at once, then whenever it changes.
-func (a *app) uiStream(w http.ResponseWriter, r *http.Request) {
+func (a *app) uiStream(w http.ResponseWriter, r *http.Request, snapshot func() uiSnapshot) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
@@ -567,7 +634,7 @@ func (a *app) uiStream(w http.ResponseWriter, r *http.Request) {
 	var last []byte
 
 	send := func() {
-		raw, _ := json.Marshal(a.uiSnapshot())
+		raw, _ := json.Marshal(snapshot())
 		// The clock moves every poll; compare without it.
 		if body := withoutNow(raw); !bytes.Equal(body, last) {
 			last = body
@@ -630,6 +697,15 @@ type uiCrewView struct {
 	Waiting   int    `json:"waiting"`
 	DoneToday int    `json:"done_today"`
 	Error     string `json:"error,omitempty"`
+	// Node is the mesh node the crew runs on (empty without a mesh); Remote a peer's crew, read over the mesh and
+	// shown read-only; Stale when that read is older than it should be; Dormant a crew stopped on purpose with
+	// nothing waiting on the owner, folded away on the page.
+	Node    string `json:"node,omitempty"`
+	Remote  bool   `json:"remote,omitempty"`
+	Stale   bool   `json:"stale,omitempty"`
+	Dormant bool   `json:"dormant,omitempty"`
+	// Silent is a crew not stopped whose ticker has not beaten for an hour: it stays on the page, marked.
+	Silent bool `json:"silent,omitempty"`
 }
 
 // Each list across crews carries the crew's key.
@@ -718,6 +794,9 @@ type uiSnapshot struct {
 	Log     []uiEvent    `json:"log"`
 	// Tints is every project the page names, with its tint (p1 … p5).
 	Tints map[string]string `json:"tints"`
+	// Self is this node's mesh name (empty without a mesh); Nodes this node and every peer, with when each was read.
+	Self  string   `json:"self,omitempty"`
+	Nodes []uiNode `json:"nodes,omitempty"`
 }
 
 // tickerDead is how long a crew's ticker may be silent before the page shows it stopped.
@@ -758,6 +837,18 @@ func (a *app) uiSnapshot() uiSnapshot {
 		snap.Crews = append(snap.Crews, cv)
 	}
 
+	snap.sortAll()
+
+	for _, p := range snap.projects() {
+		snap.Tints[p] = ui.Tint(p, pinned)
+	}
+
+	return snap
+}
+
+// sortAll puts every list in the page's order: the todo in its order, work by what it needs, the rest by time,
+// crews whose ticker stopped first.
+func (snap *uiSnapshot) sortAll() {
 	sortTodo(snap.Todo)
 	// Work that needs the owner first, then what moves (busy), then the rest; newest change first.
 	rank := func(w uiWork) int {
@@ -786,10 +877,6 @@ func (a *app) uiSnapshot() uiSnapshot {
 		snap.Log = snap.Log[:feedMax]
 	}
 
-	for _, p := range snap.projects() {
-		snap.Tints[p] = ui.Tint(p, pinned)
-	}
-
 	// A crew whose ticker stopped first, then the one with the most waiting on the owner, then by name.
 	dead := func(c uiCrewView) bool { return c.LastTick.IsZero() || snap.Now.Sub(c.LastTick) > tickerDead }
 	sort.SliceStable(snap.Crews, func(i, j int) bool {
@@ -804,8 +891,6 @@ func (a *app) uiSnapshot() uiSnapshot {
 
 		return ci.Name < cj.Name
 	})
-
-	return snap
 }
 
 // readCrew adds one crew's roles to cv and its todo, tasks, parked list and log to snap.
