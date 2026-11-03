@@ -81,7 +81,7 @@ func (a *app) laterAddCommand() *cobra.Command {
 }
 
 func (a *app) laterLsCommand() *cobra.Command {
-	var all, asJSON bool
+	var all, asJSON, full bool
 
 	c := &cobra.Command{
 		Use:   "ls",
@@ -124,10 +124,16 @@ func (a *app) laterLsCommand() *cobra.Command {
 						line += laterState(it) + "\t"
 					}
 
-					line += it.Text
+					text := it.Text
 					if it.Note != "" {
-						line += " · " + it.Note
+						text += " · " + it.Note
 					}
+
+					if !full {
+						text = clip(oneLine(text), 100)
+					}
+
+					line += text
 
 					fmt.Fprintln(w, line)
 				}
@@ -138,6 +144,7 @@ func (a *app) laterLsCommand() *cobra.Command {
 	}
 
 	c.Flags().BoolVar(&all, "all", false, "also done, dropped and taken items")
+	c.Flags().BoolVar(&full, "full", false, "each item's whole text and note (default: one line)")
 	c.Flags().BoolVar(&asJSON, "json", false, "JSON output")
 
 	return c

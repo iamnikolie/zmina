@@ -228,9 +228,14 @@ func TestStartStopWithRealTmux(t *testing.T) {
 	_, _, err = zm(t, crewFile, "up", "dev")
 	require.NoError(t, err)
 
-	out, _, err = zm(t, crewFile, "ls")
+	out, _, err = zm(t, crewFile, "ls", "--wide")
 	require.NoError(t, err)
 	assert.Regexp(t, `dev\s+\S+-dev\s+up`, out)
+
+	out, _, err = zm(t, crewFile, "ls")
+	require.NoError(t, err)
+	assert.Regexp(t, `(?m)^dev\s+up`, out)
+	assert.NotContains(t, out, "-dev", "compact: no session column")
 
 	require.Eventually(t, func() bool {
 		out, _, err = zm(t, crewFile, "peek", "dev", "-n", "5")

@@ -62,7 +62,7 @@ func (a *app) startCommand() *cobra.Command {
 }
 
 func (a *app) queueCommand() *cobra.Command {
-	var asJSON, all bool
+	var asJSON, all, full bool
 
 	c := &cobra.Command{
 		Use:   "queue",
@@ -90,23 +90,31 @@ func (a *app) queueCommand() *cobra.Command {
 					return nil
 				}
 
+				line := func(kind, text string) {
+					if !full {
+						text = clip(oneLine(text), 160)
+					}
+
+					fmt.Fprintln(a.out, "  "+kind+text)
+				}
+
 				for _, q := range qs {
 					fmt.Fprintln(a.out, q.Role+":")
 
 					for _, l := range q.Signals {
-						fmt.Fprintln(a.out, "  signal  ", l)
+						line("signal   ", l)
 					}
 
 					for _, l := range q.Notes {
-						fmt.Fprintln(a.out, "  note    ", l)
+						line("note     ", l)
 					}
 
 					for _, l := range q.Inbox {
-						fmt.Fprintln(a.out, "  inbox   ", l)
+						line("inbox    ", l)
 					}
 
 					for _, f := range q.Failed {
-						fmt.Fprintf(a.out, "  failed   %s (%s, %s)\n", f.Line, f.Error, f.At.Local().Format("01-02 15:04"))
+						line("failed   ", fmt.Sprintf("%s (%s, %s)", f.Line, f.Error, f.At.Local().Format("01-02 15:04")))
 					}
 				}
 
@@ -115,6 +123,7 @@ func (a *app) queueCommand() *cobra.Command {
 		},
 	}
 	ls.Flags().BoolVar(&asJSON, "json", false, "JSON output")
+	ls.Flags().BoolVar(&full, "full", false, "every line whole (default: one line of at most 160 characters each)")
 
 	retry := &cobra.Command{
 		Use:   "retry <role>",

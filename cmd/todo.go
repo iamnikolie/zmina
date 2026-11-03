@@ -296,7 +296,7 @@ func (a *app) todoEditCommand() *cobra.Command {
 }
 
 func (a *app) todoLsCommand() *cobra.Command {
-	var asJSON bool
+	var asJSON, full bool
 
 	c := &cobra.Command{
 		Use:   "ls",
@@ -343,6 +343,9 @@ func (a *app) todoLsCommand() *cobra.Command {
 					}
 
 					line := it.Text
+					if !full && it.Title != "" {
+						line = it.Title
+					}
 					switch {
 					case it.Rec != "":
 						line += " · recommended: " + it.Rec
@@ -351,6 +354,10 @@ func (a *app) todoLsCommand() *cobra.Command {
 						}
 					case it.Note != "":
 						line += " · " + it.Note
+					}
+
+					if !full {
+						line = clip(oneLine(line), 160)
 					}
 
 					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", it.ID, it.Kind, age(s.Now().Sub(it.Created)), meta, line)
@@ -370,6 +377,7 @@ func (a *app) todoLsCommand() *cobra.Command {
 	}
 
 	c.Flags().BoolVar(&asJSON, "json", false, "JSON output")
+	c.Flags().BoolVar(&full, "full", false, "each item's whole text (default: its title, one line)")
 
 	return c
 }

@@ -27,12 +27,16 @@ func TestRoleResultSavedShownAndNotifiedOnce(t *testing.T) {
 		_, _, err = zm(t, file, "task", "result", "1", "--file", body)
 		require.NoError(t, err)
 	}
-	out, _, err := zm(t, file, "task", "show", "1")
+	out, _, err := zm(t, file, "task", "show", "1", "--full")
 	require.NoError(t, err)
 	assert.Contains(t, out, "draft:\nReply in Russian: ответ.")
+	out, _, err = zm(t, file, "task", "show", "1")
+	require.NoError(t, err)
+	assert.Regexp(t, `(?m)^result: [0-9a-f]{12} · .* · Reply in Russian: ответ\. Second line$`, out, "compact: the result in one line")
+	assert.Contains(t, out, "zmina task result T-1")
 	out, _, err = zm(t, file, "queue", "ls")
 	require.NoError(t, err)
-	assert.Equal(t, 1, strings.Count(out, "ready; read zmina task result"))
+	assert.Equal(t, 1, strings.Count(out, "T-1 result ready (worker-reported): Reply in Russian: ответ. (zmina task result T-1 --revision "))
 	require.NoError(t, os.WriteFile(body, []byte(`{"draft":"Revised response"}`), 0600))
 	_, _, err = zm(t, file, "task", "done", "1", "--result", body)
 	require.NoError(t, err)
@@ -87,9 +91,12 @@ func TestCheckpointRemainsReadableWhenParkedWorkGetsNewTaskID(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, `"task": "T-1"`)
 	assert.Contains(t, out, "Reply needs one answer")
-	out, _, err = zm(t, file, "task", "show", "2")
+	out, _, err = zm(t, file, "task", "show", "2", "--full")
 	require.NoError(t, err)
 	assert.Contains(t, out, "source task: T-1")
+	out, _, err = zm(t, file, "task", "show", "2")
+	require.NoError(t, err)
+	assert.Regexp(t, `(?m)^checkpoint: [0-9a-f]{12} · .* · from T-1 · Reply needs one answer$`, out)
 }
 
 func TestCheckpointFreshnessUsesTaskSnapshotAndExplicitRevalidation(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -73,50 +74,226 @@ func (a *app) initCommand() *cobra.Command {
 }
 
 func (a *app) lsCommand() *cobra.Command {
-	var asJSON bool
+	var asJSON, all, wide bool
 
 	c := &cobra.Command{
-		Use:   "ls",
-		Short: "List the roles: up, down, dead, outside or unknown; idle or busy; the tasks they hold",
-		Args:  cobra.NoArgs,
+		Use:   "ls [role...]",
+		Short: "List the roles: up ones a line each, the down ones in one line (--all, --wide, or name roles for more)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.readState(func(s *shift.Shift) error {
-				views := s.Views()
+				views, err := pickViews(s.Views(), args)
+				if err != nil {
+					return err
+				}
+
 				if asJSON {
 					return a.printJSON(views)
 				}
 
-				fmt.Fprintln(a.out, shiftLine(s))
-
-				w := tabwriter.NewWriter(a.out, 0, 0, 2, ' ', 0)
-				fmt.Fprintln(w, "ROLE\tSESSION\tSTATE\tSTATUS\tFOR\tCONTEXT\tTASKS\tKEEP\tABOUT")
-
-				for _, v := range views {
-					role := v.Role
-					if v.Role == s.Crew.Dispatcher {
-						role += " *"
-					}
-
-					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", role, v.Session, stateCell(v),
-						dash(v.Status), since(v), contextCell(v), dash(strings.Join(v.Tasks, ",")), keep(v), v.About)
+				if wide || len(args) > 0 {
+					return a.lsWide(s, views, len(args) > 0)
 				}
 
-				if err := w.Flush(); err != nil {
-					return err
-				}
-
-				if n := len(laterStore(s.Crew).Parked()); n > 0 {
-					fmt.Fprintf(a.out, "later: %d parked (zmina later ls)\n", n)
-				}
-
-				return nil
+				return a.lsCompact(s, views, all)
 			})
 		},
 	}
 
 	c.Flags().BoolVar(&asJSON, "json", false, "JSON output")
+	c.Flags().BoolVar(&all, "all", false, "a line for every role, the down ones too")
+	c.Flags().BoolVar(&wide, "wide", false, "every role with its session, keep and about")
 
 	return c
+}
+
+// pickViews keeps the named roles (and their copies: dev names dev#2 too), in the crew's order.
+func pickViews(views []shift.View, names []string) ([]shift.View, error) {
+	if len(names) == 0 {
+		return views, nil
+	}
+
+	var out []shift.View
+
+	for _, n := range names {
+		found := false
+
+		for _, v := range views {
+			if base, _, _ := shift.SplitInstance(v.Role); v.Role == n || base == n {
+				out = append(out, v)
+				found = true
+			}
+		}
+
+		if !found {
+			return nil, fmt.Errorf("no role %q in the crew", n)
+		}
+	}
+
+	return out, nil
+}
+
+// lsCompact is the default view: a line per role that is not down (state and status, for how long, context,
+// tasks), then the down roles in one line, each with what is worth knowing about it in brackets.
+func (a *app) lsCompact(s *shift.Shift, views []shift.View, all bool) error {
+	var rows, down []shift.View
+
+	for _, v := range views {
+		if v.State == shift.PresenceDown && !all {
+			down = append(down, v)
+		} else {
+			rows = append(rows, v)
+		}
+	}
+
+	head := shiftLine(s) + fmt.Sprintf(" · %d up, %d down", len(views)-countDown(views), countDown(views))
+	fmt.Fprintln(a.out, head)
+
+	w := tabwriter.NewWriter(a.out, 0, 0, 2, ' ', 0)
+
+	for _, v := range rows {
+		role := v.Role
+		if v.Role == s.Crew.Dispatcher {
+			role += " *"
+		}
+
+		state := stateCell(v)
+		if v.Status != "" {
+			state += " " + v.Status
+		}
+
+		if v.Prompt {
+			state += " (dialog)"
+		}
+
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", role, state, shortSince(v), contextCell(v), dash(strings.Join(v.Tasks, ",")))
+	}
+
+	if err := w.Flush(); err != nil {
+		return err
+	}
+
+	if len(down) > 0 {
+		names := make([]string, 0, len(down))
+		for _, v := range down {
+			names = append(names, v.Role+downMarks(v))
+		}
+
+		fmt.Fprintln(a.out, "down: "+strings.Join(names, ", "))
+	}
+
+	if n := len(laterStore(s.Crew).Parked()); n > 0 {
+		fmt.Fprintf(a.out, "later: %d parked (zmina later ls)\n", n)
+	}
+
+	return nil
+}
+
+func countDown(views []shift.View) int {
+	n := 0
+
+	for _, v := range views {
+		if v.State == shift.PresenceDown {
+			n++
+		}
+	}
+
+	return n
+}
+
+// downMarks is what a down role's name carries in the compact view: its tasks, a broken mark, a bad dir, failed
+// lines, its wake-up, its next scheduled run, its expiry. Empty for a plain down role.
+func downMarks(v shift.View) string {
+	var m []string
+
+	if len(v.Tasks) > 0 {
+		m = append(m, strings.Join(v.Tasks, ","))
+	}
+
+	if v.Broken {
+		m = append(m, "broken")
+	}
+
+	if v.Problem != "" {
+		m = append(m, "bad dir")
+	}
+
+	if v.Failed > 0 {
+		m = append(m, fmt.Sprintf("%d failed lines", v.Failed))
+	}
+
+	if !v.Asleep.IsZero() {
+		m = append(m, "asleep until "+v.Asleep.Local().Format("Mon 15:04"))
+	}
+
+	if !v.NextRun.IsZero() {
+		m = append(m, "next "+v.NextRun.Format("01-02 15:04"))
+	}
+
+	if !v.Expires.IsZero() {
+		m = append(m, "expires "+v.Expires.Format("01-02"))
+	}
+
+	if len(m) == 0 {
+		return ""
+	}
+
+	return " (" + strings.Join(m, " · ") + ")"
+}
+
+// shortSince is for how long the role has been in its state, in one unit or two: 3m, 4h12m, 2d.
+func shortSince(v shift.View) string {
+	if v.Since.IsZero() {
+		return "-"
+	}
+
+	d := time.Since(v.Since)
+
+	switch {
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh%02dm", int(d.Hours()), int(d.Minutes())%60)
+	default:
+		return fmt.Sprintf("%dd%dh", int(d.Hours()/24), int(d.Hours())%24)
+	}
+}
+
+// lsWide is the whole table: session, keep and about too; with named roles also what each says it does.
+func (a *app) lsWide(s *shift.Shift, views []shift.View, now bool) error {
+	fmt.Fprintln(a.out, shiftLine(s))
+
+	w := tabwriter.NewWriter(a.out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "ROLE\tSESSION\tSTATE\tSTATUS\tFOR\tCONTEXT\tTASKS\tKEEP\tABOUT")
+
+	for _, v := range views {
+		role := v.Role
+		if v.Role == s.Crew.Dispatcher {
+			role += " *"
+		}
+
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", role, v.Session, stateCell(v),
+			dash(v.Status), since(v), contextCell(v), dash(strings.Join(v.Tasks, ",")), keep(v), v.About)
+	}
+
+	if err := w.Flush(); err != nil {
+		return err
+	}
+
+	if now {
+		for _, v := range views {
+			if v.Now != "" {
+				fmt.Fprintf(a.out, "%s now: %s\n", v.Role, v.Now)
+			}
+		}
+
+		return nil
+	}
+
+	if n := len(laterStore(s.Crew).Parked()); n > 0 {
+		fmt.Fprintf(a.out, "later: %d parked (zmina later ls)\n", n)
+	}
+
+	return nil
 }
 
 // contextCell is how full the conversation is, with the role's context_max when it has one: 362k/150k.
@@ -438,30 +615,211 @@ func (a *app) sendCommand() *cobra.Command {
 }
 
 func (a *app) peekCommand() *cobra.Command {
-	var lines int
+	var (
+		lines int
+		raw   bool
+	)
 
 	c := &cobra.Command{
 		Use:   "peek <role>",
-		Short: "Print the last lines of a role's screen (works from an agent, no terminal needed)",
+		Short: "A role's state, then the last lines of its screen without blank lines, rules and footer (--raw: as is)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.readState(func(s *shift.Shift) error {
-				text, err := s.Peek(args[0], lines)
+				if raw {
+					if lines <= 0 {
+						lines = 40
+					}
+
+					text, err := s.Peek(args[0], lines)
+					if err != nil {
+						return err
+					}
+
+					fmt.Fprintln(a.out, text)
+
+					return nil
+				}
+
+				if lines <= 0 {
+					lines = 20
+				}
+
+				text, err := s.Peek(args[0], max(3*lines, 60))
 				if err != nil {
 					return err
 				}
 
-				fmt.Fprintln(a.out, text)
+				for _, v := range s.Views() {
+					if v.Role == args[0] {
+						fmt.Fprintln(a.out, peekHead(v))
+					}
+				}
+
+				fmt.Fprintln(a.out, compactScreen(text, lines))
 
 				return nil
 			})
 		},
 	}
 
-	c.Flags().IntVarP(&lines, "lines", "n", 40, "how many lines")
+	c.Flags().IntVarP(&lines, "lines", "n", 0, "how many lines (default 20; 40 with --raw)")
+	c.Flags().BoolVar(&raw, "raw", false, "the screen as it is: blank lines, rules and the footer too")
 
 	return c
 }
+
+// peekHead is peek's first line: the role's state and status, for how long, its context and tasks.
+func peekHead(v shift.View) string {
+	parts := []string{v.Role, strings.TrimSpace(stateCell(v)+" "+v.Status) + " " + shortSince(v)}
+	if v.Prompt {
+		parts = append(parts, "dialog on screen")
+	}
+
+	if c := contextCell(v); c != "-" {
+		parts = append(parts, c)
+	}
+
+	if len(v.Tasks) > 0 {
+		parts = append(parts, strings.Join(v.Tasks, ","))
+	}
+
+	return strings.Join(parts, " · ")
+}
+
+// isRule is a line drawn rather than written: mostly box-drawing dashes, perhaps with a label in it (── name ──).
+func isRule(l string) bool {
+	box, other := 0, 0
+
+	for _, r := range l {
+		switch {
+		case r == '─' || r == '━' || r == '═' || r == '╌' || r == '┄':
+			box++
+		case r != ' ':
+			other++
+		}
+	}
+
+	return box >= 3 && box >= 2*other
+}
+
+// compactScreen is a captured screen without what carries no words: trailing spaces, blank lines, rules, and the
+// footer under the input line (path, model, mode). The input line itself stays, with a draft when there is one.
+// The last n lines are kept. The footer is cut only when it is recognised as such (footerAt); anything else under
+// the input box — a dialog, boxed or not, an option list, any text — keeps the whole screen: a few lines too many
+// cost a few tokens, a lost dialog costs the reader the question it has to answer.
+func compactScreen(text string, n int) string {
+	lines := strings.Split(text, "\n")
+	if end := footerAt(lines); end >= 0 {
+		lines = lines[:end]
+	}
+
+	var out []string
+
+	for _, l := range lines {
+		l = strings.TrimRight(l, " \t")
+		if strings.TrimSpace(l) == "" || isRule(l) {
+			continue
+		}
+
+		out = append(out, l)
+	}
+
+	if len(out) > n {
+		out = out[len(out)-n:]
+	}
+
+	return strings.Join(out, "\n")
+}
+
+// footerAt is the index of the rule under Claude Code's input box when that box is the last block on the screen and
+// only its own footer follows; -1 otherwise, and then nothing is cut. Read from the bottom up: blank lines, then
+// footer lines (isFooterLine; the first under the rule may be the status line), then the closing rule, then the
+// input line with its draft, then the opening rule. Any line that does not fit, or an input line that reads as a
+// dialog's option, and it is not the input box.
+func footerAt(lines []string) int {
+	i := len(lines) - 1
+	for i >= 0 && strings.TrimSpace(lines[i]) == "" {
+		i--
+	}
+
+	footer := i
+	for i >= 0 && !isRule(lines[i]) {
+		i--
+	}
+
+	if i < 0 {
+		return -1
+	}
+
+	closing := i
+	for k := closing + 1; k <= footer; k++ {
+		if !isFooterLine(lines[k], k == closing+1) {
+			return -1
+		}
+	}
+
+	// The box: from the opening rule down to the closing one, the ❯ line first, then a draft's further lines.
+	i = closing - 1
+	for i >= 0 && !isRule(lines[i]) {
+		i--
+	}
+
+	if i < 0 {
+		return -1
+	}
+
+	body := lines[i+1 : closing]
+	for len(body) > 0 && strings.TrimSpace(body[0]) == "" {
+		body = body[1:]
+	}
+
+	if len(body) == 0 || !strings.HasPrefix(body[0], "❯") || optionRe.MatchString(body[0]) {
+		return -1
+	}
+
+	for _, l := range body[1:] {
+		if optionRe.MatchString(l) || strings.ContainsAny(l, "❯│┃") {
+			return -1
+		}
+	}
+
+	return closing
+}
+
+// optionRe is a line that reads as a dialog's option: a number and a dot or bracket, maybe behind a cursor or a box.
+var optionRe = regexp.MustCompile(`^\s*[│┃]?\s*(❯\s*)?\d+[.)]\s`)
+
+// footerHints are the words of Claude Code's own lines under the input box: the mode line and its hints.
+var footerHints = []string{
+	"⏵⏵", "⏸", "? for shortcuts", "shift+tab to cycle", "esc to interrupt", "until auto-compact",
+	"Auto-update failed", "Press Ctrl-C again", "ctrl+t to", "ctrl+o to",
+}
+
+// isFooterLine is a line Claude Code draws under its input box: indented, no box or cursor in it, and either one of
+// its hint lines or — right under the rule — a status line (a path or a [model] in it).
+func isFooterLine(l string, first bool) bool {
+	if strings.TrimSpace(l) == "" {
+		return true
+	}
+
+	if !strings.HasPrefix(l, "  ") || strings.ContainsAny(l, "❯│┃╭╰") || optionRe.MatchString(l) {
+		return false
+	}
+
+	for _, h := range footerHints {
+		if strings.Contains(l, h) {
+			return true
+		}
+	}
+
+	t := strings.TrimSpace(l)
+
+	return first && (strings.HasPrefix(t, "~/") || strings.HasPrefix(t, "/") || modelRe.MatchString(t))
+}
+
+// modelRe is a status line's model in brackets: [Opus 5.5], [Sonnet], [gpt-6].
+var modelRe = regexp.MustCompile(`\[[A-Za-z][\w .-]*\]`)
 
 func (a *app) keysCommand() *cobra.Command {
 	return &cobra.Command{

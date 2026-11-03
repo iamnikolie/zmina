@@ -42,7 +42,7 @@ func TestNewTaskQueuesPacketForRunningRole(t *testing.T) {
 	require.NotNil(t, got.Delivery, "an already running role needs a handoff to accept")
 	assert.Equal(t, "dev", got.Delivery.Role)
 	assert.Zero(t, got.Delivery.SentAt, "queued does not mean submitted")
-	out, _, err := zm(t, file, "queue", "ls")
+	out, _, err := zm(t, file, "queue", "ls", "--full")
 	require.NoError(t, err)
 	assert.Equal(t, 1, strings.Count(out, got.Delivery.Line))
 	raw, _, err = zm(t, file, "task", "handoff", "1", "--json")

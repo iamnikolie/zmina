@@ -91,9 +91,13 @@ func TestRemindTheOwner(t *testing.T) {
 	assert.Contains(t, out, "R-1: notified")
 	assert.Equal(t, "--title zmina the site is on hold|R-1\n", string(mustRead(t, pushed)))
 
-	out, _, err = zm(t, crewFile, "todo", "ls")
+	out, _, err = zm(t, crewFile, "todo", "ls", "--full")
 	require.NoError(t, err)
 	assert.Regexp(t, `A-1\s+check\s+\S+\s+remind\s+the site is on hold\n\nDecide on the one-pager.`, out)
+
+	out, _, err = zm(t, crewFile, "todo", "ls")
+	require.NoError(t, err)
+	assert.Regexp(t, `(?m)^A-1\s+check\s+\S+\s+remind\s+the site is on hold$`, out, "compact: its title, one line")
 
 	_, _, err = zm(t, crewFile, "tick")
 	require.NoError(t, err)
@@ -163,7 +167,7 @@ func TestRoleAlarmAndSleep(t *testing.T) {
 
 	out, _, err = zm(t, crewFile, "ls")
 	require.NoError(t, err)
-	assert.Regexp(t, `designer\s+\S+\s+down \(asleep until \w{3} \d\d:\d\d\)`, out)
+	assert.Regexp(t, `(?m)^down: .*designer \(asleep until \w{3} \d\d:\d\d\)`, out)
 
 	due(t, crewFile, "R-2")
 

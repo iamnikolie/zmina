@@ -162,11 +162,11 @@ func (a *app) taskLsCommand() *cobra.Command {
 }
 
 func (a *app) taskShowCommand() *cobra.Command {
-	var asJSON bool
+	var asJSON, full bool
 
 	c := &cobra.Command{
 		Use:   "show <id>",
-		Short: "One task with its history",
+		Short: "One task: what was asked (clipped), its note, result and the last events (--full: all of it)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.readState(func(s *shift.Shift) error {
@@ -185,7 +185,15 @@ func (a *app) taskShowCommand() *cobra.Command {
 					fmt.Fprintln(a.out, "title:", t.Title)
 				}
 
-				fmt.Fprintln(a.out, "asked:", t.Asked)
+				if full {
+					fmt.Fprintln(a.out, "asked:", t.Asked)
+				} else {
+					asked := clip(oneLine(t.Asked), 300)
+					if asked != t.Asked && len([]rune(asked)) < len([]rune(t.Asked)) {
+						asked += fmt.Sprintf(" (+%d chars, --full)", len([]rune(oneLine(t.Asked)))-len([]rune(asked))+1)
+					}
+					fmt.Fprintln(a.out, "asked:", asked)
+				}
 
 				if p := t.Where(); p != "" {
 					fmt.Fprintln(a.out, "project:", p)
@@ -204,14 +212,22 @@ func (a *app) taskShowCommand() *cobra.Command {
 				}
 
 				if t.Note != "" {
-					fmt.Fprintln(a.out, "note:", t.Note)
+					note := t.Note
+					if !full {
+						note = clip(oneLine(note), 300)
+					}
+					fmt.Fprintln(a.out, "note:", note)
 				}
 
 				if t.Delivery != nil {
 					fmt.Fprintf(a.out, "handoff: %s · %s\n", t.Delivery.ID, t.Delivery.Status())
 				}
+				view := recordLine
+				if full {
+					view = recordFull
+				}
 				if t.Checkpoint != nil {
-					if err := a.printTaskRecord(s, t, "checkpoint", t.Checkpoint.Revision); err != nil {
+					if err := a.printTaskRecord(s, t, "checkpoint", t.Checkpoint.Revision, view); err != nil {
 						return err
 					}
 				}
@@ -219,16 +235,35 @@ func (a *app) taskShowCommand() *cobra.Command {
 					fmt.Fprintln(a.out, "handoff: incomplete; checkpoint missing, stale or unavailable")
 				}
 				if t.Result != nil {
-					if err := a.printTaskRecord(s, t, "result", t.Result.Revision); err != nil {
+					if err := a.printTaskRecord(s, t, "result", t.Result.Revision, view); err != nil {
 						return err
 					}
 				}
 
 				fmt.Fprintln(a.out, a.taskCost(t, s))
 
-				evs, _ := eventLog(s.Crew).Read(events.Filter{Task: t.ID, Last: 20})
+				last := 20
+				if !full {
+					last = 8
+				}
+				evs, _ := eventLog(s.Crew).Read(events.Filter{Task: t.ID, Last: last})
 				for _, e := range evs {
-					fmt.Fprintf(a.out, "  %s  %s  %s  %s\n", e.TS.Local().Format(time.DateTime), e.By, e.Event, e.Detail)
+					detail := e.Detail
+					if !full {
+						detail = oneLine(detail)
+					}
+					line := fmt.Sprintf("  %s  %s  %s  %s", e.TS.Local().Format(time.DateTime), e.By, e.Event, detail)
+					if !full {
+						line = clip(line, 160)
+					}
+					fmt.Fprintln(a.out, line)
+				}
+				if !full && (t.Result != nil || t.Checkpoint != nil || len(evs) == last) {
+					fmt.Fprintf(a.out, "more: zmina task show %s --full", t.ID)
+					if t.Result != nil {
+						fmt.Fprintf(a.out, " · zmina task result %s", t.ID)
+					}
+					fmt.Fprintln(a.out)
 				}
 
 				return nil
@@ -237,6 +272,7 @@ func (a *app) taskShowCommand() *cobra.Command {
 	}
 
 	c.Flags().BoolVar(&asJSON, "json", false, "JSON output")
+	c.Flags().BoolVar(&full, "full", false, "the asked text, result, checkpoint and the last 20 events whole")
 
 	return c
 }
