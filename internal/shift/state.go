@@ -138,6 +138,10 @@ type RoleState struct {
 	ReleaseIdle  time.Duration `json:"release_idle,omitempty"`
 	// Sent is the last line typed into the role, until the role shows it took it.
 	Sent *Sent `json:"sent,omitempty"`
+	// Posted are lines posted to its inbox socket not yet seen in its conversation; Inbound that it was started
+	// with zmina's settings, which let such lines in (crossSessionInbound: accept).
+	Posted  []Posted `json:"posted,omitempty"`
+	Inbound bool     `json:"inbound,omitempty"`
 	// Dir is where the role was started when not its crew dir (zmina up --task: the task's worktree); Trusted
 	// that zmina answered Claude Code's "trust this folder" there.
 	Dir     string `json:"dir,omitempty"`
@@ -149,6 +153,14 @@ type Sent struct {
 	Line  string    `json:"line"`
 	At    time.Time `json:"at"`
 	Tries int       `json:"tries,omitempty"`
+}
+
+// Posted is a line posted to a role's inbox socket: the message's id, and the session it went to.
+type Posted struct {
+	Line    string    `json:"line"`
+	MsgID   string    `json:"msg_id"`
+	Session string    `json:"session"`
+	At      time.Time `json:"at"`
 }
 
 // Failed is a queued line that could not be typed.

@@ -16,6 +16,7 @@ import (
 	"github.com/iamnikolie/zmina/internal/inbox"
 	"github.com/iamnikolie/zmina/internal/ledger"
 	"github.com/iamnikolie/zmina/internal/mesh"
+	"github.com/iamnikolie/zmina/internal/peer"
 	"github.com/iamnikolie/zmina/internal/registry"
 	"github.com/iamnikolie/zmina/internal/shift"
 	"github.com/iamnikolie/zmina/internal/task"
@@ -157,6 +158,7 @@ func (a *app) newShift() (*shift.Shift, error) {
 		Crew:              c,
 		Tmux:              &lazyTmux{socket: c.Socket(), drop: c.DropEnv},
 		Reg:               &registry.Registry{Namespace: c.Namespace},
+		Peer:              peer.Inbox{},
 		State:             shift.NewState(),
 		Tasks:             taskStore(c),
 		Later:             laterStore(c),

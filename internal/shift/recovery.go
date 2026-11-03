@@ -52,6 +52,9 @@ func (s *Shift) RecoveryPack() (string, recovery.Pack, error) {
 		if rs.Sent != nil {
 			add("in_flight", name, rs.Sent.Line, "zmina queue ls", rs.Sent)
 		}
+		for i, p := range rs.Posted {
+			add("in_flight", fmt.Sprintf("%s/posted/%d", name, i), p.Line, "zmina queue ls", p)
+		}
 		for i, f := range rs.Failed {
 			add("failures", fmt.Sprintf("%s/%d", name, i), f.Error+": "+f.Line, "zmina queue ls", f)
 		}

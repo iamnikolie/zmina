@@ -653,23 +653,43 @@ func (s *Shift) deliver(now time.Time) string {
 	}
 
 	// A line queued for the dispatcher itself goes first: after a clear it is the boot line, and the signals
-	// belong to a dispatcher that knows its job. The line typed last has to land first: landed presses Enter on it
-	// while it still sits in the input line, whatever the dispatcher's status says.
-	if len(parts) == 0 || len(s.State.Role(d).Inbox) > 0 || !s.landed(d, now) || !s.atPrompt(d, now) {
-		return ""
-	}
-
-	// Never into a draft: the owner's half-typed words would go out joined with the line.
-	if draft, ok, err := s.Tmux.Prompt(d); err == nil && ok && draft != "" {
+	// belong to a dispatcher that knows its job.
+	if len(parts) == 0 || len(s.State.Role(d).Inbox) > 0 {
 		return ""
 	}
 
 	line := "[zmina] " + strings.Join(parts, " · ")
-	if err := s.typeLine(d, line); err != nil {
-		return ""
-	}
 
-	s.State.Role(d).Sent = &Sent{Line: line, At: now}
+	// Posted to its inbox socket, the line needs no empty input line: it waits until the one before it showed and
+	// the dispatcher is between turns.
+	if sess := s.native(d, now); sess != nil {
+		if s.followPosted(d, now) || !s.quiet(d, sess) {
+			return ""
+		}
+
+		if err := s.post(d, sess, line, now); err != nil {
+			s.log(d, "post-failed", "", err.Error())
+
+			return ""
+		}
+	} else {
+		// The line typed last has to land first: landed presses Enter on it while it still sits in the input line,
+		// whatever the dispatcher's status says.
+		if !s.landed(d, now) || !s.atPrompt(d, now) {
+			return ""
+		}
+
+		// Never into a draft: the owner's half-typed words would go out joined with the line.
+		if draft, ok, err := s.Tmux.Prompt(d); err == nil && ok && draft != "" {
+			return ""
+		}
+
+		if err := s.typeLine(d, line); err != nil {
+			return ""
+		}
+
+		s.State.Role(d).Sent = &Sent{Line: line, At: now}
+	}
 
 	if alone {
 		delete(s.State.SignalSent, remote[0])
@@ -760,6 +780,27 @@ func (s *Shift) Deliver() string { return s.deliver(s.Now()) }
 func (s *Shift) deliverInbox(name string, now time.Time) string {
 	s.pruneTaskInbox(name)
 	rs := s.State.Role(name)
+
+	// A line posted to the inbox socket needs no empty input line and no Enter: it goes once the one before it
+	// showed in the conversation and the role is between turns. A slash command is typed.
+	if sess := s.native(name, now); sess != nil && rs.Sent == nil {
+		pending := s.followPosted(name, now)
+
+		switch {
+		case len(rs.Inbox) == 0:
+			return ""
+		case postable(rs.Inbox[0]):
+			if pending || !s.quiet(name, sess) {
+				return ""
+			}
+
+			return s.postInbox(name, sess, now)
+		case pending:
+			// A slash command is typed, below, once the lines posted before it showed.
+			return ""
+		}
+	}
+
 	if len(rs.Inbox) == 0 || !s.landed(name, now) || !s.atPrompt(name, now) {
 		return ""
 	}
@@ -797,6 +838,33 @@ func (s *Shift) deliverInbox(name string, now time.Time) string {
 	}
 
 	return "typed into " + name + ": " + head
+}
+
+// postInbox posts a role's first waiting line to its inbox socket. A post that never started is tried again next beat
+// (typeTries beats, then kept as failed); one whose write broke is kept as failed at once, since the role may have it.
+func (s *Shift) postInbox(name string, sess *registry.Session, now time.Time) string {
+	rs := s.State.Role(name)
+	head := rs.Inbox[0]
+
+	if err := s.post(name, sess, head, now); err != nil {
+		rs.Attempts++
+		s.log(name, "post-failed", "", fmt.Sprintf("try %d: %s: %s", rs.Attempts, head, err))
+
+		if unavailable(err) && rs.Attempts < typeTries {
+			return ""
+		}
+
+		s.deliveryFailure(name, head, err.Error())
+		rs.Failed = append(rs.Failed, Failed{Line: head, Error: err.Error(), At: now})
+		rs.Inbox, rs.Attempts = rs.Inbox[1:], 0
+
+		return name + ": a queued line could not be posted, kept in zmina queue: " + head
+	}
+
+	rs.Inbox, rs.Attempts = rs.Inbox[1:], 0
+	s.submittedTask(name, head)
+
+	return "posted to " + name + ": " + head
 }
 
 // FlushInbox attempts the ordinary safe idle delivery path for one role, without starting any roles.

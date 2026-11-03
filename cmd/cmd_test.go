@@ -274,11 +274,12 @@ func TestStartStopWithRealTmux(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		out, _, err = zm(t, crewFile, "peek", "dev", "-n", "5")
-		return err == nil && strings.Contains(out, "claude --name")
+		return err == nil && strings.Contains(out, "--name")
 	}, 15*time.Second, 100*time.Millisecond)
 	require.Eventually(t, func() bool { text, _, _ := zm(t, crewFile, "peek", "dispatcher"); return strings.Contains(text, "❯") }, 15*time.Second, 100*time.Millisecond)
 
-	assert.Contains(t, out, "claude --name")
+	assert.Contains(t, out, `claude --settings {"crossSessionInbound":"accept"} --name`,
+		"socket delivery: zmina's settings let other sessions' messages in")
 	assert.NotContains(t, out, "--remote-control", "remote_control: false")
 
 	out, _, err = zm(t, crewFile, "stop")

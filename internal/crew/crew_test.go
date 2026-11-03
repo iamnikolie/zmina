@@ -467,3 +467,19 @@ func TestBudget(t *testing.T) {
 
 	assert.Contains(t, SeatKeys, "budget", "zmina seat set dev budget=20")
 }
+
+func TestDelivery(t *testing.T) {
+	c, err := Load(write(t, "namespace: /ns\nroles:\n  dispatcher:\n  dev:\n    delivery: tmux\n  own:\n    args: [--settings, /x.json]\n"))
+	require.NoError(t, err)
+	assert.Equal(t, DeliverySocket, c.DeliveryFor(c.Roles["dispatcher"]), "socket by default")
+	assert.Equal(t, DeliveryTmux, c.DeliveryFor(c.Roles["dev"]))
+	assert.Equal(t, DeliveryTmux, c.DeliveryFor(c.Roles["own"]), "its own --settings: typed")
+	assert.Contains(t, strings.Join(c.Warnings, "\n"), "role own: args has --settings")
+
+	c, err = Load(write(t, "namespace: /ns\ndelivery: tmux\nroles:\n  dispatcher:\n"))
+	require.NoError(t, err)
+	assert.Equal(t, DeliveryTmux, c.DeliveryFor(c.Roles["dispatcher"]))
+
+	_, err = Load(write(t, "namespace: /ns\nroles:\n  dispatcher:\n    delivery: pigeon\n"))
+	require.Error(t, err)
+}

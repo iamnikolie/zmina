@@ -20,6 +20,11 @@ type Session struct {
 	Cwd             string `json:"cwd"`
 	Status          string `json:"status"`
 	StatusUpdatedAt int64  `json:"statusUpdatedAt"`
+	// MessagingSocketPath is the session's inbox socket (cross-session messaging), PeerProtocol its version.
+	MessagingSocketPath string `json:"messagingSocketPath,omitempty"`
+	PeerProtocol        int    `json:"peerProtocol,omitempty"`
+	ProcStart           string `json:"procStart,omitempty"`
+	Version             string `json:"version,omitempty"`
 }
 
 // StatusSince is when the status last changed.

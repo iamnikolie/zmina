@@ -82,6 +82,8 @@ type Role struct {
 	About string `yaml:"about"`
 	// RemoteControl overrides the crew's remote_control for this role.
 	RemoteControl *bool `yaml:"remote_control"`
+	// Delivery overrides the crew's delivery for this role.
+	Delivery string `yaml:"delivery"`
 	// Resume "always" starts the role on its last conversation (claude --resume) whenever one is known.
 	Resume string `yaml:"resume"`
 	// Schedule is a five-field cron spec; at each time the ticker starts the role if needed and types Prompt.
@@ -203,6 +205,9 @@ type Crew struct {
 	ReleaseIdleMinutes string `yaml:"release_idle_minutes"`
 	// RemoteControl opens every role to Remote Control (claude --remote-control); default true.
 	RemoteControl *bool `yaml:"remote_control"`
+	// Delivery is how lines reach a Claude role: socket (the default: its inbox socket, a message from another
+	// session) or tmux (typed into its input line).
+	Delivery string `yaml:"delivery"`
 	// BootGrace is how long a started role is left to boot before lines are typed into it (default 2m).
 	BootGrace string `yaml:"boot_grace"`
 	// DropEnv lists environment variables (NAME, or PREFIX*) kept from the roles, on top of the built-in list.
@@ -416,6 +421,22 @@ func (c *Crew) RemoteControlFor(r *Role) bool {
 	}
 }
 
+// The values of delivery.
+const (
+	DeliverySocket = "socket"
+	DeliveryTmux   = "tmux"
+)
+
+// DeliveryFor is how lines reach a role: its own delivery, else the crew's, else socket. A Codex role is typed into
+// its bridge; a role whose args pass their own --settings is typed into too, since zmina's settings open the socket.
+func (c *Crew) DeliveryFor(r *Role) string {
+	if r.IsCodex() || r.ownsSettings() {
+		return DeliveryTmux
+	}
+
+	return or(r.Delivery, or(c.Delivery, DeliverySocket))
+}
+
 // SystemdUnit is the crew's ticker on Linux: zmina (.service and .timer), or zmina-<name>.
 func (c *Crew) SystemdUnit() string { return suffixed("zmina", "-", c.Name) }
 
@@ -509,6 +530,11 @@ func (c *Crew) complete() {
 			r.Boot = c.defaultBoot(r)
 		}
 
+		if r.ownsSettings() && !r.IsCodex() && or(r.Delivery, or(c.Delivery, DeliverySocket)) == DeliverySocket {
+			c.Warnings = append(c.Warnings, fmt.Sprintf("role %s: args has --settings, so zmina's own settings "+
+				"are not passed and lines are typed into it (delivery tmux)", name))
+		}
+
 		if r.ownsTools() && len(c.toolsListed(r)) > 0 {
 			c.Warnings = append(c.Warnings, fmt.Sprintf("role %s: args has --disallowedTools, so drop_tools and "+
 				"keep_tools are not applied to it; move the list to drop_tools", name))
@@ -532,6 +558,17 @@ func parseRelease(v string) (time.Duration, error) {
 
 // ownsTools reports whether the role's args already pass --disallowedTools, as crew files before drop_tools did;
 // zmina then adds no second one.
+// ownsSettings reports a role whose args pass their own --settings.
+func (r *Role) ownsSettings() bool {
+	for _, a := range r.Args {
+		if a == "--settings" || strings.HasPrefix(a, "--settings=") {
+			return true
+		}
+	}
+
+	return false
+}
+
 func (r *Role) ownsTools() bool {
 	for _, a := range r.Args {
 		if strings.HasPrefix(a, "--disallowedTools") || strings.HasPrefix(a, "--disallowed-tools") {
@@ -589,6 +626,10 @@ func (c *Crew) check() error {
 	if err := c.Handoff.check(); err != nil {
 		return err
 	}
+
+	if err := checkDelivery(c.Delivery); err != nil {
+		return err
+	}
 	sessions := map[string]string{}
 
 	for _, name := range c.Names() {
@@ -598,6 +639,10 @@ func (c *Crew) check() error {
 		}
 
 		if err := r.CheckRuntime(); err != nil {
+			return fmt.Errorf("role %s: %w", name, err)
+		}
+
+		if err := checkDelivery(r.Delivery); err != nil {
 			return fmt.Errorf("role %s: %w", name, err)
 		}
 
@@ -852,4 +897,12 @@ func or(v, fallback string) string {
 	}
 
 	return v
+}
+
+func checkDelivery(v string) error {
+	if v != "" && v != DeliverySocket && v != DeliveryTmux {
+		return fmt.Errorf("delivery is %s or %s, not %q", DeliverySocket, DeliveryTmux, v)
+	}
+
+	return nil
 }
