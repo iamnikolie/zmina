@@ -17,7 +17,7 @@ import (
 	"github.com/iamnikolie/zmina/internal/mesh"
 )
 
-// fakeMesh is a mesh of this node (alex-mac) and peers whose reads the test decides.
+// fakeMesh is a mesh of this node (node-a) and peers whose reads the test decides.
 type fakeMesh struct {
 	mu    sync.Mutex
 	now   time.Time
@@ -30,7 +30,7 @@ func (f *fakeMesh) cache() *uiPeerCache {
 	c := newUIPeerCache()
 	c.now = func() time.Time { f.mu.Lock(); defer f.mu.Unlock(); return f.now }
 	c.peers = func() (string, []mesh.Peer, string) {
-		return "alex-mac", []mesh.Peer{{Name: "box"}, {Name: "gone", OK: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)}}, f.why
+		return "node-a", []mesh.Peer{{Name: "node-b"}, {Name: "node-c", OK: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)}}, f.why
 	}
 	c.fetch = func(ctx context.Context, node, kind string) ([]byte, error) {
 		f.mu.Lock()
@@ -101,7 +101,7 @@ func TestCockpitMergesPeersAndNeverWaitsForOne(t *testing.T) {
 
 	f := &fakeMesh{now: time.Now(), reads: map[string]int{}, fetch: func(node, kind string) ([]byte, error) {
 		switch {
-		case node == "gone":
+		case node == "node-c":
 			<-block // a peer that never answers
 
 			return nil, errors.New("ssh: connect timed out")
@@ -127,19 +127,19 @@ func TestCockpitMergesPeersAndNeverWaitsForOne(t *testing.T) {
 		return len(snap.Crews) == 4
 	}, 5*time.Second, 50*time.Millisecond)
 
-	assert.Equal(t, "alex-mac", snap.Self)
-	assert.ElementsMatch(t, []string{"box/default", "box/ops"}, snapKeys(snap)[:2], "live peer crews before dormant local ones")
-	assert.ElementsMatch(t, []string{"box/default", "box/ops", "default", "ops"}, snapKeys(snap))
+	assert.Equal(t, "node-a", snap.Self)
+	assert.ElementsMatch(t, []string{"node-b/default", "node-b/ops", "default", "ops"}, snapKeys(snap))
 
 	for _, c := range snap.Crews {
-		if c.Node == "box" {
+		if c.Node == "node-b" {
 			assert.True(t, c.Remote)
 			assert.False(t, c.Dormant, "its ticker beats")
 			assert.False(t, c.Stale)
 		} else {
-			assert.Equal(t, "alex-mac", c.Node)
+			assert.Equal(t, "node-a", c.Node)
 			assert.False(t, c.Remote)
-			assert.True(t, c.Dormant, "no ticker beat here: folded away as stopped")
+			assert.False(t, c.Dormant, "not stopped on purpose: stays")
+			assert.True(t, c.Silent, "no ticker beat here")
 		}
 	}
 
@@ -147,14 +147,14 @@ func TestCockpitMergesPeersAndNeverWaitsForOne(t *testing.T) {
 	for _, item := range snap.Todo {
 		crews = append(crews, item.Crew)
 	}
-	assert.ElementsMatch(t, []string{"ops", "box/ops"}, crews, "each item labelled with its node/crew")
+	assert.ElementsMatch(t, []string{"ops", "node-b/ops"}, crews, "each item labelled with its node/crew")
 
 	require.Len(t, snap.Nodes, 3)
-	assert.Equal(t, uiNode{Name: "alex-mac", Self: true, State: "self", Seen: snap.Nodes[0].Seen, Crews: []string{"default", "ops"}}, snap.Nodes[0])
-	assert.Equal(t, "box", snap.Nodes[1].Name)
+	assert.Equal(t, uiNode{Name: "node-a", Self: true, State: "self", Seen: snap.Nodes[0].Seen, Crews: []string{"default", "ops"}}, snap.Nodes[0])
+	assert.Equal(t, "node-b", snap.Nodes[1].Name)
 	assert.Equal(t, "fresh", snap.Nodes[1].State)
-	assert.ElementsMatch(t, []string{"box/default", "box/ops"}, snap.Nodes[1].Crews)
-	assert.Equal(t, "gone", snap.Nodes[2].Name)
+	assert.ElementsMatch(t, []string{"node-b/default", "node-b/ops"}, snap.Nodes[1].Crews)
+	assert.Equal(t, "node-c", snap.Nodes[2].Name)
 	assert.Equal(t, "offline", snap.Nodes[2].State)
 	assert.Equal(t, time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), snap.Nodes[2].Seen.UTC(), "last mesh session")
 
@@ -163,9 +163,9 @@ func TestCockpitMergesPeersAndNeverWaitsForOne(t *testing.T) {
 		spend = uiCost{}
 		getJSON(t, srv.URL+"/api/cost", &spend)
 
-		return spend.Crews["box/ops"].Week == 4
+		return spend.Crews["node-b/ops"].Week == 4
 	}, 5*time.Second, 50*time.Millisecond)
-	assert.InDelta(t, 1.5, spend.Roles["box/ops/dev"], 1e-9)
+	assert.InDelta(t, 1.5, spend.Roles["node-b/ops/dev"], 1e-9)
 
 	// Two minutes on with the peer unread: its crews stay, marked stale.
 	f.mu.Lock()
@@ -181,7 +181,7 @@ func TestCockpitMergesPeersAndNeverWaitsForOne(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond)
 
 	for _, c := range snap.Crews {
-		if c.Node == "box" {
+		if c.Node == "node-b" {
 			assert.True(t, c.Stale)
 		}
 	}
@@ -216,4 +216,25 @@ func TestCockpitWithoutMeshIsThisNodeOnly(t *testing.T) {
 	assert.Empty(t, snap.Self)
 	assert.Empty(t, snap.Nodes)
 	assert.Len(t, snap.Crews, 2)
+}
+
+func TestOnlyACrewStoppedOnPurposeLeavesAll(t *testing.T) {
+	now := time.Now()
+	snap := uiSnapshot{Now: now, Crews: []uiCrewView{
+		{Key: "stopped", Stopped: now.Add(-time.Hour), LastTick: now.Add(-time.Hour)},
+		{Key: "live", LastTick: now.Add(-time.Minute)},
+		{Key: "silent", LastTick: now.Add(-uiDormant - time.Minute)},
+		{Key: "stopped-but-asks", Stopped: now.Add(-time.Hour), Waiting: 1},
+	}}
+
+	markDormant(&snap)
+
+	got := map[string][2]bool{}
+	for _, c := range snap.Crews {
+		got[c.Key] = [2]bool{c.Dormant, c.Silent}
+	}
+
+	assert.Equal(t, map[string][2]bool{"stopped": {true, false}, "live": {false, false}, "silent": {false, true},
+		"stopped-but-asks": {false, false}}, got)
+	assert.Equal(t, "stopped", snap.Crews[len(snap.Crews)-1].Key, "folded crews last")
 }

@@ -22,7 +22,7 @@ const (
 	// uiPeerTimeout bounds one read of a peer's crews; uiPeerCostTimeout one read of its spend.
 	uiPeerTimeout     = 45 * time.Second
 	uiPeerCostTimeout = 2 * time.Minute
-	// uiDormant is how long a crew's ticker may be silent before the page folds the crew away as stopped.
+	// uiDormant is how long a crew's ticker may be silent before the page marks the crew silent.
 	uiDormant = time.Hour
 )
 
@@ -332,10 +332,13 @@ func mergePeer(snap *uiSnapshot, p uiSnapshot, node string, stale bool) {
 	}
 }
 
-// markDormant folds away a crew stopped by hand or whose ticker has been silent past uiDormant.
+// markDormant folds away a crew stopped on purpose that holds nothing waiting on the owner; a crew not stopped
+// whose ticker has been silent past uiDormant stays, marked silent.
 func markDormant(snap *uiSnapshot) {
 	for i, c := range snap.Crews {
-		snap.Crews[i].Dormant = !c.Stopped.IsZero() || c.LastTick.IsZero() || snap.Now.Sub(c.LastTick) > uiDormant
+		silent := c.LastTick.IsZero() || snap.Now.Sub(c.LastTick) > uiDormant
+		snap.Crews[i].Dormant = !c.Stopped.IsZero() && c.Waiting == 0
+		snap.Crews[i].Silent = c.Stopped.IsZero() && silent
 	}
 
 	sort.SliceStable(snap.Crews, func(i, j int) bool { return !snap.Crews[i].Dormant && snap.Crews[j].Dormant })

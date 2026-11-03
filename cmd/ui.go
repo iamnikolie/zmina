@@ -674,12 +674,14 @@ type uiCrewView struct {
 	DoneToday int    `json:"done_today"`
 	Error     string `json:"error,omitempty"`
 	// Node is the mesh node the crew runs on (empty without a mesh); Remote a peer's crew, read over the mesh and
-	// shown read-only; Stale when that read is older than it should be; Dormant a crew stopped by hand or whose
-	// ticker has been silent for long, folded away on the page.
+	// shown read-only; Stale when that read is older than it should be; Dormant a crew stopped on purpose with
+	// nothing waiting on the owner, folded away on the page.
 	Node    string `json:"node,omitempty"`
 	Remote  bool   `json:"remote,omitempty"`
 	Stale   bool   `json:"stale,omitempty"`
 	Dormant bool   `json:"dormant,omitempty"`
+	// Silent is a crew not stopped whose ticker has not beaten for an hour: it stays on the page, marked.
+	Silent bool `json:"silent,omitempty"`
 }
 
 // Each list across crews carries the crew's key.
