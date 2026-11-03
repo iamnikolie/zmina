@@ -164,7 +164,7 @@ func (a *app) printRecord(s *shift.Shift, t task.Task, kind, src, revision strin
 	if clipped {
 		// The hint opens this revision of this crew's record, not whatever is latest by the time it is run.
 		fmt.Fprintf(a.out, "full: zmina --crew %s task %s %s --revision %s --full\n",
-			quoteCommandArg(s.Crew.Path), kind, t.ID, revision[:min(record.ShortLen, len(revision))])
+			quoteCommandArg(s.Crew.Path), kind, t.ID, record.Short(record.Revisions(s.Crew.StateDir(), kind, t.RecordSources(kind)), revision))
 	}
 	return nil
 }
@@ -190,30 +190,9 @@ func recordGist(d record.Document) string {
 func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 
 // resolveRecord is the task whose records hold rev (t itself, or the task its current record was carried from) and
-// rev whole: --revision takes a hash's start as well as the hash.
+// rev whole: --revision takes a hash's start as well as the hash, as long as one record in all those places has it.
 func resolveRecord(s *shift.Shift, t task.Task, kind, rev string) (string, string, error) {
-	ref := t.Result
-	if kind == "checkpoint" {
-		ref = t.Checkpoint
-	}
-	srcs := []string{t.ID}
-	if ref != nil && ref.Task != "" && ref.Task != t.ID {
-		srcs = []string{ref.Task, t.ID}
-		if !strings.HasPrefix(ref.Revision, rev) {
-			srcs = []string{t.ID, ref.Task}
-		}
-	}
-	var first error
-	for _, src := range srcs {
-		whole, err := record.Resolve(s.Crew.StateDir(), kind, src, rev)
-		if err == nil {
-			return src, whole, nil
-		}
-		if first == nil {
-			first = err
-		}
-	}
-	return "", "", first
+	return record.Find(s.Crew.StateDir(), kind, t.RecordSources(kind), rev)
 }
 
 func recordTask(t task.Task, kind, revision string) string {

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -118,6 +119,19 @@ func TestCompactScreen(t *testing.T) {
 	}, "\n")
 	assert.Equal(t, "⏺ Which one?\n❯ 1. the first\n  2. the second\n❯", compactScreen(inline, 20),
 		"only the input box's footer goes")
+
+	history := strings.Join([]string{
+		"────────────────────────────────",
+		"❯ previous request",
+		"────────────────────────────────",
+		"⏺ Working",
+		"Do you trust this folder?",
+		"❯ 1. Yes, proceed",
+		"  2. No, exit",
+		"Enter to confirm",
+	}, "\n")
+	assert.Equal(t, "❯ previous request\n⏺ Working\nDo you trust this folder?\n❯ 1. Yes, proceed\n  2. No, exit\nEnter to confirm",
+		compactScreen(history, 20), "an input box in history does not cut the dialog under it")
 
 	draft := "──────\n❯ first line\n  second line\n──────\n  footer"
 	assert.Equal(t, "❯ first line\n  second line", compactScreen(draft, 20), "a draft on two lines stays whole")
@@ -275,4 +289,93 @@ func TestHistoricalResultHintKeepsRevision(t *testing.T) {
 			assert.NotContains(t, full, "NEW ")
 		})
 	}
+}
+
+// sharedStart writes a record file whose name starts as rev does for n hex digits and then differs: a synthetic
+// index entry, so prefix handling is tested without a real hash collision.
+func sharedStart(t *testing.T, stateDir, kind, id, rev string, n int, fill byte) string {
+	t.Helper()
+	other := rev[:n] + strings.Repeat(string(fill), 64-n)
+	require.NotEqual(t, rev, other)
+	dir := filepath.Join(stateDir, kind+"s", id)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, other+".json"), []byte("{}"), 0o600))
+	return other
+}
+
+func stateDirOf(t *testing.T, file string) string {
+	t.Helper()
+	c, err := crew.Load(file)
+	require.NoError(t, err)
+	return c.StateDir()
+}
+
+// The full hint's revision is as long as it takes to name one record: a file sharing the first 12 hex digits
+// makes it longer, and the printed command opens the record shown.
+func TestFullHintDisambiguatesItsPrefix(t *testing.T) {
+	for _, kind := range []string{"result", "checkpoint"} {
+		t.Run(kind, func(t *testing.T) {
+			file := testCrew(t, "  dev: {}\n")
+			_, _, err := zm(t, file, "task", "new", "dev", "fix it")
+			require.NoError(t, err)
+
+			body := filepath.Join(t.TempDir(), "record.json")
+			require.NoError(t, os.WriteFile(body, []byte(`{"summary":"Step.","done":"`+strings.Repeat("d", 400)+`",`+
+				`"remaining":"none","open_questions":"none","artifacts":"none","next_step":"none"}`), 0o600))
+			out, _, err := zm(t, file, "task", kind, "1", "--file", body)
+			require.NoError(t, err)
+			rev := strings.Fields(out)[2]
+			sharedStart(t, stateDirOf(t, file), kind, "T-1", rev, 16, otherHex(rev[16]))
+
+			shown, _, err := zm(t, file, "task", kind, "1", "--revision", rev)
+			require.NoError(t, err)
+			m := regexp.MustCompile(`--revision ([0-9a-f]+) --full\n`).FindStringSubmatch(shown)
+			require.NotNil(t, m, shown)
+			assert.Greater(t, len(m[1]), 16, "longer than the shared start")
+
+			full, _, err := zm(t, file, "task", kind, "1", "--revision", m[1], "--full")
+			require.NoError(t, err)
+			assert.Contains(t, full, strings.Repeat("d", 400))
+		})
+	}
+}
+
+// otherHex is a hex digit other than b.
+func otherHex(b byte) byte {
+	if b == 'f' {
+		return 'e'
+	}
+	return 'f'
+}
+
+// A prefix two records share in the task a checkpoint was carried from is refused, even when the new task has
+// one record that starts the same: the answer is never a different record than the one asked for.
+func TestCarriedAmbiguityIsRefused(t *testing.T) {
+	file := testCrew(t, "  dev: {}\n")
+	_, _, err := zm(t, file, "task", "new", "dev", "prepare")
+	require.NoError(t, err)
+	body := filepath.Join(t.TempDir(), "checkpoint.json")
+	require.NoError(t, os.WriteFile(body, []byte(`{"summary":"Half.","done":"some","remaining":"rest",`+
+		`"open_questions":"none","artifacts":"none","next_step":"go on"}`), 0o600))
+	out, _, err := zm(t, file, "task", "checkpoint", "1", "--file", body)
+	require.NoError(t, err)
+	rev := strings.Fields(out)[2]
+	_, _, err = zm(t, file, "task", "park", "1", "--note", "rest")
+	require.NoError(t, err)
+	_, _, err = zm(t, file, "later", "take", "1", "dev")
+	require.NoError(t, err)
+
+	base := stateDirOf(t, file)
+	sharedStart(t, base, "checkpoint", "T-1", rev, 12, otherHex(rev[12]))
+	sharedStart(t, base, "checkpoint", "T-2", rev, 8, otherHex(rev[8]))
+
+	for _, prefix := range []string{rev[:8], rev[:12]} {
+		_, _, err = zm(t, file, "task", "checkpoint", "2", "--revision", prefix)
+		require.ErrorContains(t, err, "give more of it", prefix)
+	}
+
+	got, _, err := zm(t, file, "task", "checkpoint", "2", "--revision", rev)
+	require.NoError(t, err)
+	assert.Contains(t, got, "checkpoint: "+rev)
+	assert.Contains(t, got, "source task: T-1")
 }

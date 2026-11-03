@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -65,29 +66,73 @@ func Short(revs []string, rev string) string {
 // Resolve is the whole revision of task id's record that prefix names: the hash itself, or a start of it (at least
 // eight hex digits) that only one of the task's revisions has.
 func Resolve(dir, kind, id, prefix string) (string, error) {
+	_, rev, err := Find(dir, kind, []string{id}, prefix)
+	return rev, err
+}
+
+// Find is the one record among the tasks ids (a task and the task its records were carried from) whose revision
+// starts with prefix, and that task. A prefix two of them share is refused wherever they lie: an answer from
+// another task would be a different record than the one asked for.
+func Find(dir, kind string, ids []string, prefix string) (string, string, error) {
 	if !revisionPrefix.MatchString(prefix) {
-		return "", fmt.Errorf("invalid revision %q: a hash or its first 8 or more hex digits", prefix)
+		return "", "", fmt.Errorf("invalid revision %q: a hash or its first 8 or more hex digits", prefix)
 	}
-	if _, err := path(dir, kind, id, strings.Repeat("0", 64)); err != nil {
-		return "", err
-	}
-	paths, err := filepath.Glob(filepath.Join(dir, kind+"s", id, prefix+"*.json"))
-	if err != nil {
-		return "", err
-	}
-	var found []string
-	for _, p := range paths {
-		if rev := strings.TrimSuffix(filepath.Base(p), ".json"); revisionID.MatchString(rev) {
-			found = append(found, rev)
+	type hit struct{ id, rev string }
+	var found []hit
+	for _, id := range unique(ids) {
+		revs, err := revisions(dir, kind, id, prefix)
+		if err != nil {
+			return "", "", err
+		}
+		for _, rev := range revs {
+			found = append(found, hit{id, rev})
 		}
 	}
 	switch len(found) {
 	case 0:
-		return "", fmt.Errorf("no %s revision %s for %s", kind, prefix, id)
+		return "", "", fmt.Errorf("no %s revision %s for %s", kind, prefix, strings.Join(unique(ids), " or "))
 	case 1:
-		return found[0], nil
+		return found[0].id, found[0].rev, nil
 	}
-	return "", fmt.Errorf("revision %s of %s names %d %ss; give more of it", prefix, id, len(found), kind)
+	return "", "", fmt.Errorf("revision %s of %s names %d %ss; give more of it", prefix, strings.Join(unique(ids), " or "), len(found), kind)
+}
+
+// Revisions is every revision of kind kept under the tasks ids: what a short form has to stay apart from.
+func Revisions(dir, kind string, ids []string) []string {
+	var out []string
+	for _, id := range unique(ids) {
+		revs, _ := revisions(dir, kind, id, "")
+		out = append(out, revs...)
+	}
+	return out
+}
+
+// revisions is the revisions of task id's records that start with prefix, read from the file names.
+func revisions(dir, kind, id, prefix string) ([]string, error) {
+	if _, err := path(dir, kind, id, strings.Repeat("0", 64)); err != nil {
+		return nil, err
+	}
+	paths, err := filepath.Glob(filepath.Join(dir, kind+"s", id, prefix+"*.json"))
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, p := range paths {
+		if rev := strings.TrimSuffix(filepath.Base(p), ".json"); revisionID.MatchString(rev) {
+			out = append(out, rev)
+		}
+	}
+	return out, nil
+}
+
+func unique(ids []string) []string {
+	var out []string
+	for _, id := range ids {
+		if id != "" && !slices.Contains(out, id) {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 func path(dir, kind, id, revision string) (string, error) {

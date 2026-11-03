@@ -25,10 +25,12 @@ func (s *Shift) NotifyRecords() {
 	sort.Strings(ids)
 	for _, id := range ids {
 		list := refs[id]
-		revs := make([]string, len(list))
-		for i, ref := range list {
-			revs[i] = ref.Revision
+		// The short form stays apart from every revision task result <id> --revision looks among.
+		srcs := []string{id}
+		if t, err := s.Tasks.Get(id); err == nil {
+			srcs = t.RecordSources("result")
 		}
+		revs := record.Revisions(s.Crew.StateDir(), "result", srcs)
 		for _, ref := range list {
 			key := "result/" + id + "/" + ref.Revision
 			if s.State.RecordNotified[key] {

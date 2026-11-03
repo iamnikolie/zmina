@@ -371,3 +371,16 @@ func num(id string) int {
 
 	return v
 }
+
+// RecordSources is where t's records of kind (result or checkpoint) are kept: under t itself, and under the task its
+// current one was carried from (later take), when there is one.
+func (t Task) RecordSources(kind string) []string {
+	ref := t.Result
+	if kind == "checkpoint" {
+		ref = t.Checkpoint
+	}
+	if ref != nil && ref.Task != "" && ref.Task != t.ID {
+		return []string{t.ID, ref.Task}
+	}
+	return []string{t.ID}
+}

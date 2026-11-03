@@ -731,33 +731,34 @@ func compactScreen(text string, n int) string {
 }
 
 // inputBoxEnd is the index of the rule that closes Claude Code's input box — a rule, the ❯ line (a draft may run on
-// to more lines), a rule — the last such box on the screen; -1 when there is none. What lies under it is the footer.
-// A ❯ outside such a box (a dialog's selected option) is no input line.
+// to more lines), a rule — when the screen's last ❯ is that box's; -1 otherwise. What lies under it is the footer.
+// A last ❯ outside such a box is a dialog's selected option: the dialog is the screen's present, and an input box
+// above it is history, so nothing is cut.
 func inputBoxEnd(lines []string) int {
-	blank := func(i int) bool { return strings.TrimSpace(lines[i]) == "" }
-
+	last := -1
 	for i := len(lines) - 1; i >= 0; i-- {
-		if !strings.HasPrefix(strings.TrimSpace(lines[i]), "❯") {
-			continue
+		if strings.HasPrefix(strings.TrimSpace(lines[i]), "❯") {
+			last = i
+			break
 		}
+	}
 
-		above := i - 1
-		for above >= 0 && blank(above) {
-			above--
-		}
+	if last < 0 {
+		return -1
+	}
 
-		if above < 0 || !isRule(lines[above]) {
-			continue
-		}
+	above := last - 1
+	for above >= 0 && strings.TrimSpace(lines[above]) == "" {
+		above--
+	}
 
-		for j := i + 1; j < len(lines); j++ {
-			if isRule(lines[j]) {
-				return j
-			}
+	if above < 0 || !isRule(lines[above]) {
+		return -1
+	}
 
-			if strings.HasPrefix(strings.TrimSpace(lines[j]), "❯") {
-				break
-			}
+	for j := last + 1; j < len(lines); j++ {
+		if isRule(lines[j]) {
+			return j
 		}
 	}
 

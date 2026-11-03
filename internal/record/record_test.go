@@ -5,6 +5,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -75,4 +76,37 @@ func TestResolveAndShortName(t *testing.T) {
 	assert.Greater(t, len(short), 20)
 	assert.True(t, len(short) < 64 || twin == ref.Revision)
 	assert.Equal(t, ref.Revision[:ShortLen], Short([]string{ref.Revision}, ref.Revision))
+}
+
+func TestFindRefusesAmbiguityInAnySource(t *testing.T) {
+	dir := t.TempDir()
+	put := func(id, rev string) {
+		require.NoError(t, os.MkdirAll(dir+"/checkpoints/"+id, 0o700))
+		require.NoError(t, os.WriteFile(dir+"/checkpoints/"+id+"/"+rev+".json", []byte("{}"), 0o600))
+	}
+	a := "12345678" + strings.Repeat("a", 56)
+	b := "12345678" + strings.Repeat("b", 56)
+	c := "12345678" + strings.Repeat("c", 56)
+	put("T-1", a)
+	put("T-1", b)
+	put("T-2", c)
+
+	_, _, err := Find(dir, "checkpoint", []string{"T-2", "T-1"}, "12345678")
+	require.ErrorContains(t, err, "names 3 checkpoints")
+	_, _, err = Find(dir, "checkpoint", []string{"T-1", "T-2"}, "12345678")
+	require.ErrorContains(t, err, "names 3 checkpoints", "the order of the sources changes nothing")
+
+	id, rev, err := Find(dir, "checkpoint", []string{"T-2", "T-1"}, "12345678c")
+	require.NoError(t, err)
+	assert.Equal(t, "T-2", id)
+	assert.Equal(t, c, rev)
+	id, rev, err = Find(dir, "checkpoint", []string{"T-2", "T-1"}, b)
+	require.NoError(t, err, "a source with no match is no error")
+	assert.Equal(t, "T-1", id)
+	assert.Equal(t, b, rev)
+
+	all := Revisions(dir, "checkpoint", []string{"T-2", "T-1", "T-2"})
+	assert.ElementsMatch(t, []string{a, b, c}, all)
+	assert.Equal(t, "12345678c", Short([]string{a, b, c}, c)[:9])
+	assert.Len(t, Short(all, c), ShortLen)
 }
