@@ -48,7 +48,7 @@ func (s *Shift) inbound(r *crew.Role) bool {
 	return p != nil && s.Crew.DeliveryFor(r) == crew.DeliveryNative
 }
 
-// native is the session a role's lines are posted to: a role started on its own channel, past its boot grace, whose
+// native is the session a role's lines are posted to: a role started on its own channel, its boot over (booted), whose
 // session takes posts (a Claude inbox socket zmina can write, a bridge with an inbox). Nil: its lines are typed.
 func (s *Shift) native(name string, now time.Time) *registry.Session {
 	p, _ := s.peerFor(name)
@@ -57,7 +57,7 @@ func (s *Shift) native(name string, now time.Time) *registry.Session {
 	}
 
 	rs := s.State.Role(name)
-	if !rs.Inbound || rs.Tag == "" || now.Sub(rs.Started) < s.Crew.BootGraceD() {
+	if !rs.Inbound || rs.Tag == "" || !s.booted(name, now) {
 		return nil
 	}
 

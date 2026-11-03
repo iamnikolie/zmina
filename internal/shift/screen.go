@@ -15,6 +15,9 @@ const (
 	// blockedAfter is how long a role's screen may show no input line before the dispatcher hears of it: a
 	// dialog (trust this folder, a permission), a login, a screen claude could not draw.
 	blockedAfter = 3 * time.Minute
+	// bootBlockedAfter is how long a booting role's screen may show no input line: Claude Code draws it within
+	// seconds of its start, so past this a dialog holds the boot.
+	bootBlockedAfter = 45 * time.Second
 	// confirmAfter is how long a typed line has to show that it landed — the role's status changes when it takes
 	// a line — before its own remaining draft gets Enter again.
 	confirmAfter = 90 * time.Second
@@ -50,7 +53,19 @@ func (s *Shift) watchScreen(name string, now time.Time) []string {
 		}
 	}
 
-	if now.Sub(rs.Started) < s.Crew.BootGraceD() {
+	if !s.booted(name, now) {
+		// A boot with no input line on screen waits on a dialog (a folder not trusted, a login, a permission) and
+		// reads nothing queued for it: the dispatcher hears of it now, not boot_grace and blockedAfter later.
+		if err == nil && !ok && !rs.BlockedNoted && now.Sub(rs.Started) >= bootBlockedAfter {
+			rs.BlockedNoted, rs.NoPrompt = true, rs.Started
+			note := fmt.Sprintf("%s: up %d s and still no input line, a dialog holds its boot and its queued lines "+
+				"wait: %s (zmina peek %s; zmina keys %s ...)", name, int(now.Sub(rs.Started).Seconds()), s.excerpt(name),
+				name, name)
+			s.log(name, "blocked", "", note)
+
+			return []string{note}
+		}
+
 		return nil
 	}
 

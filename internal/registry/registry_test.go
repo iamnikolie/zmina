@@ -248,3 +248,26 @@ func TestLastTurnEnded(t *testing.T) {
 		assert.Equal(t, want, got.Ended, lines)
 	}
 }
+
+// A turn that ended carries the time of the line that closed it: a start's boot is over once a turn ended after it.
+func TestLastTurnEndedAt(t *testing.T) {
+	ns := t.TempDir()
+	dir := filepath.Join(ns, "projects", "-work")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+
+	reply := `{"type":"assistant","timestamp":"2026-10-24T12:00:05.120Z","message":{"id":"m2","stop_reason":"end_turn","usage":{"input_tokens":9}}}`
+	closing := `{"type":"system","subtype":"turn_duration","timestamp":"2026-10-24T12:00:06.000Z"}`
+	prompt := `{"type":"user","timestamp":"2026-10-24T12:01:00.000Z","message":{"content":"go on"}}`
+
+	for lines, want := range map[string]time.Time{
+		reply:                                  time.Date(2026, 10, 24, 12, 0, 5, 120e6, time.UTC),
+		reply + "\n" + closing:                 time.Date(2026, 10, 24, 12, 0, 6, 0, time.UTC),
+		reply + "\n" + closing + "\n" + prompt: {},
+	} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "s1.jsonl"), []byte(lines+"\n"), 0o600))
+
+		got, err := (&Registry{Namespace: ns}).Last("s1")
+		require.NoError(t, err)
+		assert.True(t, want.Equal(got.At), "%s: %v", lines, got.At)
+	}
+}

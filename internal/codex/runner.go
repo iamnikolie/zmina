@@ -345,7 +345,7 @@ func (r *runner) drainInbox() error {
 }
 
 func (r *runner) startTurn(text string) error {
-	r.rec.Turn.Ended, r.rec.Turn.Error, r.rec.Turn.ErrorID = false, "", ""
+	r.rec.Turn.Ended, r.rec.Turn.At, r.rec.Turn.Error, r.rec.Turn.ErrorID = false, time.Time{}, "", ""
 	r.trigger, r.from = registry.TextTrigger(text)
 	if err := r.status("busy"); err != nil {
 		return err
@@ -502,7 +502,7 @@ func (r *runner) handle(m message) error {
 		r.turn = ""
 		r.request = nil
 		r.requests = nil
-		r.rec.Turn.Ended = true
+		r.rec.Turn.Ended, r.rec.Turn.At = true, time.Now()
 		if p.Turn.Error != nil {
 			r.rec.Turn.Error = p.Turn.Error.Message
 			r.rec.Turn.ErrorID = p.Turn.ID

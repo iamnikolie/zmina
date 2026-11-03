@@ -31,6 +31,9 @@ type Turn struct {
 	// system line): the session waits for its next prompt, even while its status says otherwise because a
 	// background shell or agent runs.
 	Ended bool
+	// At is when the newest line that closed a turn was written; zero when the last turn is not over or the time
+	// is not known. A start's boot turn is over once a turn ended at or after the start.
+	At time.Time `json:",omitzero"`
 }
 
 // line is the part of a transcript line zmina reads.
@@ -179,6 +182,10 @@ func lastTurn(path string) (Turn, error) {
 				t.Ended, decided = l.Message.StopReason == "end_turn" || l.Message.StopReason == "stop_sequence", true
 			case l.Type == "user":
 				decided = true
+			}
+
+			if t.Ended {
+				t.At = l.Timestamp
 			}
 		}
 
