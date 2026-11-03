@@ -38,8 +38,12 @@ type WatchView struct {
 	NextRun   time.Time `json:"next_run,omitzero"`
 	Running   bool      `json:"running,omitempty"`
 	Keys      int       `json:"keys"`
-	Pending   int       `json:"pending,omitempty"`
-	Recent    []string  `json:"recent,omitempty"`
+	// Pending is the events the quiet window holds (HELD).
+	Pending int `json:"pending,omitempty"`
+	// Unacked is the keys whose notes wait on an ack (PENDING), Waiting the keys themselves.
+	Unacked int          `json:"unacked,omitempty"`
+	Waiting []WaitingKey `json:"waiting,omitempty"`
+	Recent  []string     `json:"recent,omitempty"`
 }
 
 // watchState is the state of a watch, made on first use.
@@ -175,13 +179,30 @@ func (s *Shift) FinishWatch(run WatchRun, res watch.Result, baseline bool) []str
 
 	st.Failures, st.FailNoted, st.LastOK, st.LastError = 0, false, true, ""
 
-	cfg := watch.Config{Quiet: w.QuietD(), ForgetAfter: w.ForgetAfterD(), Baseline: w.Baselines(), Info: w.Info}
+	cfg := watch.Config{Quiet: w.QuietD(), ForgetAfter: w.ForgetAfterD(), Baseline: w.Baselines(), Info: w.Info,
+		Renotify: w.RenotifyD()}
 	if baseline {
 		st.Baselined, cfg.Baseline = false, true
 	}
 
+	// A note the dispatcher turned into a task is acked before the run decides what to say again.
+	if len(st.Waiting()) > 0 {
+		for _, a := range ackByTasks(st, s.allTasks(), now) {
+			s.log(role, "watch-ack", "", "key="+a)
+		}
+	}
+
 	outs := watch.Apply(st, res.Events, cfg, now, func(e watch.Event) error {
-		_, err := s.Note(name, e.Line(), false)
+		line := e.Line()
+		if !e.Since.IsZero() {
+			if s.stillQueued(name, st.Keys[e.Key]) {
+				return watch.ErrStillQueued
+			}
+
+			line = s.renoteLine(name, e)
+		}
+
+		_, err := s.Note(name, line, false)
 
 		return err
 	})
@@ -196,6 +217,9 @@ func (s *Shift) FinishWatch(run WatchRun, res watch.Result, baseline bool) []str
 		case watch.Noted:
 			st.Remember(now.Format("01-02 15:04") + " noted " + o.Event.Line())
 			s.log(role, "watch-noted", "", "key="+o.Event.Key+" "+o.Event.Line())
+		case watch.Renoted:
+			st.Remember(now.Format("01-02 15:04") + " said again " + o.Event.Key)
+			s.log(role, "watch-renoted", "", "key="+o.Event.Key+" pending since "+o.Event.Since.Format(time.RFC3339))
 		case watch.Dropped:
 			st.Remember(now.Format("01-02 15:04") + " dropped " + o.Event.Key + " (" + o.Reason + ")")
 			s.log(role, "watch-dropped", "", "key="+o.Event.Key+" reason="+o.Reason)
@@ -206,7 +230,7 @@ func (s *Shift) FinishWatch(run WatchRun, res watch.Result, baseline bool) []str
 	}
 
 	summary := fmt.Sprintf("%d events", len(res.Events))
-	for _, f := range []watch.Fate{watch.Noted, watch.Dup, watch.Quiet, watch.Baseline, watch.InfoOff,
+	for _, f := range []watch.Fate{watch.Noted, watch.Renoted, watch.Dup, watch.Quiet, watch.Baseline, watch.InfoOff,
 		watch.QueueFull, watch.Dropped} {
 		if counts[f] > 0 {
 			summary += fmt.Sprintf(", %d %s", counts[f], f)
@@ -250,6 +274,7 @@ func (s *Shift) ForgetWatch(name, key string) (int, error) {
 // WatchViews lists the watches.
 func (s *Shift) WatchViews() []WatchView {
 	now := s.Now()
+	tasks := s.allTasks()
 
 	var out []WatchView
 
@@ -260,6 +285,8 @@ func (s *Shift) WatchViews() []WatchView {
 		if st := s.State.Watch[name]; st != nil {
 			v.LastRun, v.LastOK, v.LastError, v.Failures = st.LastRun, st.LastOK, st.LastError, st.Failures
 			v.Keys, v.Pending, v.Recent = len(st.Keys), len(st.Pending), st.Recent
+			v.Waiting = waitingKeys(name, st, tasks)
+			v.Unacked = len(v.Waiting)
 			v.Running = st.Running.Live(now, w.TimeoutD())
 		}
 

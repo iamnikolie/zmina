@@ -77,6 +77,8 @@ type Registry interface {
 // Tasks is the work ledger.
 type Tasks interface {
 	Active() []task.Task
+	// All is every readable task, closed ones too.
+	All() ([]task.Task, error)
 	Add(t task.Task, now time.Time) (task.Task, error)
 	Get(id string) (task.Task, error)
 	Put(t task.Task) error

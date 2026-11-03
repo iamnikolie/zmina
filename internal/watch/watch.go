@@ -4,6 +4,7 @@ package watch
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -29,6 +30,8 @@ type Event struct {
 	// Fold joins the events noted in one run that share it into one note: Fold, " — ", their texts after their
 	// own "<Fold> — ", by ", ".
 	Fold string `json:"-"`
+	// Since is set on an event said again (Renoted): when the dispatcher was first told and has not acked it.
+	Since time.Time `json:"-"`
 }
 
 // Line is the note's text: the event's text and its URL.
@@ -79,6 +82,26 @@ type Key struct {
 	FirstSeen   time.Time `json:"first_seen"`
 	// GoneAt is when a successful run first missed it; it is forgotten forget_after later.
 	GoneAt time.Time `json:"gone_at,omitzero"`
+	// Since is when the dispatcher was told of the key's current fingerprint, while that note waits on an ack
+	// (zmina watch ack, or a task that carries its url or key). Zero: nothing waits — acked, gone, recorded by a
+	// baseline, or noted by a zmina before acks.
+	Since time.Time `json:"since,omitzero"`
+	// URL and Text are the note it last went out in, to list while it waits.
+	URL  string `json:"url,omitempty"`
+	Text string `json:"text,omitempty"`
+	// Renotes counts the times it was said again while it waited.
+	Renotes int `json:"renotes,omitempty"`
+	// AckedAt and AckedBy say how the last wait ended: a role, "task T-4", "gone".
+	AckedAt time.Time `json:"acked_at,omitzero"`
+	AckedBy string    `json:"acked_by,omitempty"`
+}
+
+// Waiting reports whether the key's note waits on an ack: told, not acked, and still reported.
+func (k *Key) Waiting() bool { return k != nil && !k.Since.IsZero() && k.GoneAt.IsZero() }
+
+// Ack ends the key's wait.
+func (k *Key) Ack(by string, now time.Time) {
+	k.Since, k.AckedAt, k.AckedBy = time.Time{}, now, by
 }
 
 // Pending is an event held by the quiet window.
@@ -164,6 +187,7 @@ type Fate string
 // Fates.
 const (
 	Noted     Fate = "note"
+	Renoted   Fate = "renote"
 	Dup       Fate = "dup"
 	Quiet     Fate = "quiet"
 	Baseline  Fate = "baseline"
@@ -202,7 +226,14 @@ type Config struct {
 	Baseline bool
 	// Info notes events a kind marks as info.
 	Info bool
+	// Renotify says a key again once its note has waited this long on an ack since it was last said, for as long
+	// as the source still reports it; zero never says it again.
+	Renotify time.Duration
 }
+
+// ErrStillQueued is what queue returns for an event said again while its earlier note still waits to be typed:
+// the dispatcher has not seen it yet, so it is not said twice.
+var ErrStillQueued = errors.New("the earlier note still waits to be typed")
 
 // GoneBeforeQuiet is the reason a held event is dropped when its news went away inside the quiet window.
 const GoneBeforeQuiet = "gone-before-quiet"
@@ -242,6 +273,15 @@ func Apply(st *State, events []Event, cfg Config, now time.Time, queue func(Even
 
 		switch {
 		case k != nil && k.Fingerprint == e.Fingerprint:
+			// The dispatcher was told and has not acked: past renotify it is said again, never dropped as a dup.
+			if cfg.Renotify > 0 && k.Waiting() && now.Sub(k.NotedAt) >= cfg.Renotify && (!e.Info || cfg.Info) {
+				e.Since = k.Since
+				due = append(due, len(out))
+				out = append(out, Outcome{Event: e, Fate: Renoted})
+
+				continue
+			}
+
 			out = append(out, Outcome{Event: e, Fate: Dup})
 
 			continue
@@ -275,8 +315,20 @@ func Apply(st *State, events []Event, cfg Config, now time.Time, queue func(Even
 
 		for _, i := range group {
 			o := &out[i]
-			if err != nil {
+
+			switch {
+			case errors.Is(err, ErrStillQueued) && o.Fate == Renoted:
+				o.Fate = Dup
+
+				continue
+			case err != nil:
 				o.Fate, o.Reason = QueueFull, err.Error()
+
+				continue
+			case o.Fate == Renoted:
+				k := st.Keys[o.Event.Key]
+				k.NotedAt, k.URL, k.Text = now, e.URL, e.Text
+				k.Renotes++
 
 				continue
 			}
@@ -286,7 +338,8 @@ func Apply(st *State, events []Event, cfg Config, now time.Time, queue func(Even
 				first = k.FirstSeen
 			}
 
-			st.Keys[o.Event.Key] = &Key{Fingerprint: o.Event.Fingerprint, NotedAt: now, FirstSeen: first}
+			st.Keys[o.Event.Key] = &Key{Fingerprint: o.Event.Fingerprint, NotedAt: now, FirstSeen: first, Since: now,
+				URL: e.URL, Text: e.Text}
 			delete(st.Pending, o.Event.Key)
 		}
 	}
@@ -311,6 +364,11 @@ func Apply(st *State, events []Event, cfg Config, now time.Time, queue func(Even
 		}
 
 		if k.GoneAt.IsZero() {
+			// A key the source no longer reports needs no ack any more.
+			if k.Waiting() {
+				k.Ack("gone", now)
+			}
+
 			k.GoneAt = now
 		} else if now.Sub(k.GoneAt) >= cfg.ForgetAfter {
 			delete(st.Keys, key)
@@ -320,8 +378,8 @@ func Apply(st *State, events []Event, cfg Config, now time.Time, queue func(Even
 	return out
 }
 
-// folds groups the due outcomes by their events' Fold, in the order of each group's first event; an event without
-// one is a group of its own.
+// folds groups the due outcomes by their events' Fold and fate (news and what is said again go apart), in the order
+// of each group's first event; an event without a fold is a group of its own.
 func folds(out []Outcome, due []int) [][]int {
 	var groups [][]int
 
@@ -329,6 +387,10 @@ func folds(out []Outcome, due []int) [][]int {
 
 	for _, i := range due {
 		f := out[i].Event.Fold
+		if f != "" {
+			f = string(out[i].Fate) + "\x00" + f
+		}
+
 		if g, ok := at[f]; ok && f != "" {
 			groups[g] = append(groups[g], i)
 
@@ -346,14 +408,58 @@ func folds(out []Outcome, due []int) [][]int {
 func folded(out []Outcome, group []int) Event {
 	first := out[group[0]].Event
 	parts := make([]string, 0, len(group))
+	since := first.Since
 
 	for _, i := range group {
 		e := out[i].Event
 		parts = append(parts, strings.TrimPrefix(e.Text, e.Fold+" — "))
+
+		if !e.Since.IsZero() && e.Since.Before(since) {
+			since = e.Since
+		}
 	}
 
 	return Event{Key: first.Key, Fingerprint: first.Fingerprint, Text: first.Fold + " — " + strings.Join(parts, ", "),
-		At: first.At, URL: first.URL}
+		At: first.At, URL: first.URL, Since: since}
+}
+
+// Waiting is the keys whose notes wait on an ack, by key.
+func (s *State) Waiting() []string {
+	if s == nil {
+		return nil
+	}
+
+	var keys []string
+
+	for key, k := range s.Keys {
+		if k.Waiting() {
+			keys = append(keys, key)
+		}
+	}
+
+	slices.Sort(keys)
+
+	return keys
+}
+
+// Ack ends the wait of a key, or of every waiting key whose note carried that url; by says who. It returns the keys
+// it acked.
+func (s *State) Ack(target, by string, now time.Time) []string {
+	if s == nil {
+		return nil
+	}
+
+	var acked []string
+
+	for _, key := range s.Waiting() {
+		k := s.Keys[key]
+		if key == target || (k.URL != "" && k.URL == target) {
+			k.Ack(by, now)
+			acked = append(acked, key)
+		}
+	}
+
+	return acked
 }
 
 // Forget drops the stored fingerprints (one key, or all when key is empty), so the next run notes them again.

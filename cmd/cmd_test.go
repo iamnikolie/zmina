@@ -93,6 +93,41 @@ func TestWatchDryRunWritesNothing(t *testing.T) {
 	assert.NoFileExists(t, filepath.Join(filepath.Dir(crewFile), "state.json"), "a dry run writes no state")
 }
 
+func TestWatchLsAndAck(t *testing.T) {
+	crewFile := testCrew(t, `watch:
+  ci-red:
+    kind: exec
+    every: 5m
+    baseline: false
+    run: "printf '%s\n' '{\"key\":\"main\",\"fingerprint\":\"red\",\"text\":\"pipeline red\",\"url\":\"https://example.com/p/1\"}'"
+`)
+
+	_, _, err := zm(t, crewFile, "watch", "run", "ci-red")
+	require.NoError(t, err)
+
+	out, _, err := zm(t, crewFile, "watch", "ls")
+	require.NoError(t, err)
+	assert.Contains(t, out, "KEYS  HELD  PENDING")
+	assert.Regexp(t, `ci-red .* 1\s+0\s+1\n`, out)
+	assert.Contains(t, out, "ci-red, waiting on an ack:\n  main  since ")
+	assert.Contains(t, out, "pipeline red https://example.com/p/1")
+
+	_, _, err = zm(t, crewFile, "watch", "ack", "ci-red")
+	require.Error(t, err, "keys, urls or --all")
+
+	out, _, err = zm(t, crewFile, "watch", "ack", "ci-red", "https://example.com/p/1")
+	require.NoError(t, err)
+	assert.Equal(t, "ci-red: acked main\n", out)
+
+	out, _, err = zm(t, crewFile, "watch", "ls", "--json")
+	require.NoError(t, err)
+	assert.NotContains(t, out, `"unacked"`)
+
+	out, _, err = zm(t, crewFile, "watch", "ack", "ci-red", "--all")
+	require.NoError(t, err)
+	assert.Equal(t, "ci-red: nothing waits on an ack\n", out)
+}
+
 func TestTaskWorktreeFlow(t *testing.T) {
 	crewFile := testCrew(t, "  dev:\n")
 	repo := filepath.Join(filepath.Dir(crewFile), "api")

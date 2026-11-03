@@ -460,6 +460,7 @@ watch:
     quiet: 10m                   # hold an event until it has not moved for this long (default 0)
     timeout: 2m                  # one run (default 2m)
     forget_after: 14d            # a key gone this long is forgotten (default 14d)
+    renotify: 2h                 # a noted key nobody acked is said again this often (default 2h; off; at least every)
     enabled: true                # false: skipped, state kept
     baseline: true               # the first run records everything, notes nothing (default)
     gl_config: work              # gl profile: sets the host (gitlab.com or self-hosted)
@@ -491,6 +492,15 @@ Rules, every kind:
 - A key is noted when it is new or its fingerprint changed; the fingerprint is stored only once the
   note is queued (20 waiting: retried next run). A key back with the same fingerprint within
   `forget_after` is not news.
+- **At least once.** A noted key waits on an ack: a note typed into a dispatcher that then compacted, or that was
+  busy, is not lost. While the source still reports the key with the same fingerprint and nobody acked it, the
+  first run once `renotify` has passed since it was last said says it again (never while that earlier note still
+  waits to be typed): `mrs: group/repo!12 — approved https://…/12 (still pending since Mon 2 Nov 11:55; ack: zmina
+  watch ack mrs 'https://…/12')`. The wait ends with `zmina watch ack`, with a task made since the note that
+  carries its url (`--url`, or the url in its asked text or note) or names its key as a word, or when the
+  source stops reporting the key (it cleared: merged, fixed). A new fingerprint is news and waits anew. Keys a
+  baseline recorded, and keys noted by a zmina before acks, never wait. Every waiting key is in the
+  dispatcher's recovery pack (`watch_keys`, each with its ack command) until it is acked.
 - `quiet`: an event whose `at` is younger than `quiet` is held. If its news goes away first (key gone,
   or back to the stored fingerprint), it is dropped: event `watch-dropped key=… reason=gone-before-quiet`,
   shown in `watch ls`.
@@ -535,13 +545,14 @@ The keys of one MR noted in one run fold into one note:
 
 | Command | Does |
 |---|---|
-| `zmina watch ls [--json]` | each watch: kind, every, last run (ok/failed), next, keys, held, last 5 notes and drops. |
-| `zmina watch run <name>` | one run now. `--dry-run`: every event with its fate — `note` / `dup` / `quiet Nm` / `baseline` / `info-off` / `dropped` — nothing written. |
+| `zmina watch ls [--json]` | each watch: kind, every, last run (ok/failed), next, keys, held (the quiet window), pending (keys waiting on an ack, listed under the table with since when), last 5 notes and drops. `--json`: `pending` is held, `unacked` and `waiting` the keys waiting on an ack. |
+| `zmina watch run <name>` | one run now. `--dry-run`: every event with its fate — `note` / `renote` (said again, unacked) / `dup` / `quiet Nm` / `baseline` / `info-off` / `dropped` — nothing written. |
+| `zmina watch ack <name> <key\|url>... \| --all` | the dispatcher has the note: end the wait of a key, of every key whose note carried that url, or of all; they are not said again until their fingerprint changes. |
 | `zmina watch baseline <name>` | record what the source reports now, note nothing. |
 | `zmina watch forget <name> [key]` | drop stored fingerprints, so the next run notes them again. |
 
-Watches are edited by hand in the crew file. Log events: `watch-run`, `watch-noted`,
-`watch-dropped`, `watch-failed` (role `watch:<name>`: `zmina log --role watch:mrs`).
+Watches are edited by hand in the crew file. Log events: `watch-run`, `watch-noted`, `watch-renoted`,
+`watch-ack`, `watch-dropped`, `watch-failed` (role `watch:<name>`: `zmina log --role watch:mrs`).
 
 ## Tasks — the work ledger
 
@@ -919,6 +930,10 @@ and exists nowhere else. It is written whole (rename) and never over a file zmin
 - A `[zmina]` part from `zmina note` or a watch (`<source>: …`, the source is not a role) is a task
   signal, not a health event: record a task and route it to a seat like any other ask. Only a
   watch's `failing for N runs` / `recovered` are about the watch itself (`zmina watch ls`).
+- A watch's note waits on an ack and is said again (`still pending since …`) until it gets one. A task recorded
+  with its url (`task new … --url <url>`) acks it; for a note acted on without a new task (handed to a task that
+  already holds that MR, or nothing to do) run `zmina watch ack <watch> <url or key>`. The recovery pack's
+  `watch_keys` are notes that may have been lost: act on each or ack it.
 - Who is there: `zmina ls`; what is in work: `zmina task ls`; what waits: `zmina queue ls`;
   what is parked: `zmina later ls`. Read the compact views; add `--wide` / `--full` / `zmina ls <role>` /
   `zmina task show <id>` only for the one thing the compact view does not answer. Read them at boot and after every compaction — the ledger, not

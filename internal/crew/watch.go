@@ -32,6 +32,7 @@ const (
 const (
 	defaultWatchTimeout = 2 * time.Minute
 	defaultForgetAfter  = 14 * 24 * time.Hour
+	defaultRenotify     = 2 * time.Hour
 	defaultCommand      = "/agent"
 	minEvery            = time.Minute
 )
@@ -48,6 +49,8 @@ type Watch struct {
 	Quiet       string `yaml:"quiet"`
 	Timeout     string `yaml:"timeout"`
 	ForgetAfter string `yaml:"forget_after"`
+	// Renotify (default 2h; off) says a noted key again while the source still reports it and nobody acked it.
+	Renotify string `yaml:"renotify,omitempty"`
 	// Enabled false skips the watch and keeps its state.
 	Enabled *bool `yaml:"enabled"`
 	// Baseline (default true) records the first run's events without noting them.
@@ -80,7 +83,7 @@ type Watch struct {
 	// Info also notes new comments outside open threads.
 	Info bool `yaml:"info"`
 
-	every, quiet, timeout, forgetAfter time.Duration
+	every, quiet, timeout, forgetAfter, renotify time.Duration
 }
 
 // Command is a command line: argv, or one string for /bin/sh -c.
@@ -130,6 +133,9 @@ func (w *Watch) TimeoutD() time.Duration { return w.timeout }
 
 // ForgetAfterD is how long a key that is gone is remembered.
 func (w *Watch) ForgetAfterD() time.Duration { return w.forgetAfter }
+
+// RenotifyD is how long a noted key waits on an ack before it is said again; zero is never.
+func (w *Watch) RenotifyD() time.Duration { return w.renotify }
 
 // Fingerprint identifies the watch's configuration, to tell whether it changed while a run went.
 func (w *Watch) Fingerprint() string {
@@ -230,6 +236,19 @@ func (w *Watch) Check(c *Crew) error {
 
 	if w.forgetAfter, err = span("forget_after", w.ForgetAfter, defaultForgetAfter); err != nil {
 		return err
+	}
+
+	switch strings.TrimSpace(w.Renotify) {
+	case "off", "0":
+		w.renotify = 0
+	default:
+		if w.renotify, err = span("renotify", w.Renotify, defaultRenotify); err != nil {
+			return fmt.Errorf("%w, or off", err)
+		}
+
+		if w.renotify < w.every {
+			return fmt.Errorf("renotify: at least every (%s), or off", w.Every)
+		}
 	}
 
 	switch w.Kind {
