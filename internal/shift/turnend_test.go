@@ -22,6 +22,7 @@ func TestTurnEndPostsWhatABeatWould(t *testing.T) {
 	require.NoError(t, f.s.Queue("designer", "[dispatcher] second"))
 
 	*f.now = start.Add(10 * time.Second)
+	assert.False(t, f.s.TurnOver("designer", "sid-designer"), "idle, but the transcript does not show the turn closed yet")
 	assert.Empty(t, f.s.TurnEnd("designer", "sid-designer"), "the boot is not over")
 
 	f.rg.endedAt["sid-designer"] = start.Add(8 * time.Second)
