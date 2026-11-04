@@ -164,7 +164,7 @@ func lastTurn(path string) (Turn, error) {
 
 	var t Turn
 
-	seenTurn, decided := false, false
+	seenTurn, decided, compacted := false, false, false
 
 	for i := len(lines) - 1; i >= 0; i-- {
 		var l line
@@ -173,8 +173,10 @@ func lastTurn(path string) (Turn, error) {
 		}
 
 		// The newest line of the conversation says whether its turn is over: a prompt or a tool result waits on
-		// a reply, a tool call on its result; an end_turn reply or the turn's closing system lines end it.
-		if !decided {
+		// a reply, a tool call on its result; an end_turn reply or the turn's closing system lines end it. A
+		// compaction's own lines start no turn: the newest line before it decides, so a session compacted between
+		// turns (Claude Code's idle compaction, a /compact) is still between them, one compacted mid-turn still in it.
+		if !decided && !compactionLine(&l, compacted) {
 			switch {
 			case l.Type == "system" && (l.Subtype == "turn_duration" || l.Subtype == "stop_hook_summary"):
 				t.Ended, decided = true, true
@@ -191,8 +193,22 @@ func lastTurn(path string) (Turn, error) {
 
 		if l.Type == "system" && l.Subtype == "compact_boundary" {
 			t.Context = 0
+			if decided {
+				return t, nil
+			}
 
-			return t, nil
+			compacted = true
+
+			continue
+		}
+
+		// Past a compaction only whether the turn is over is read: neither the context nor an error from before it.
+		if compacted {
+			if decided {
+				return t, nil
+			}
+
+			continue
 		}
 
 		if l.Type != "assistant" {
@@ -215,6 +231,31 @@ func lastTurn(path string) (Turn, error) {
 	}
 
 	return t, nil
+}
+
+// compactionLine reports a line a compaction writes, which starts no turn: its summary, and the lines of a /compact
+// run at the prompt — Claude Code's note on a local command, the command, its output. before is set once the scan is
+// past the compaction's boundary, where a /compact typed at the prompt (as zmina types it) is the command too.
+func compactionLine(l *line, before bool) bool {
+	if l.Type != "user" {
+		return false
+	}
+
+	if l.Compact {
+		return true
+	}
+
+	text := strings.TrimSpace(l.text())
+
+	switch {
+	case strings.HasPrefix(text, "<local-command-caveat>"), strings.HasPrefix(text, "<local-command-stdout>"),
+		strings.HasPrefix(text, "<command-name>/compact</command-name>"):
+		return true
+	case before:
+		return text == "/compact" || strings.HasPrefix(text, "/compact ")
+	}
+
+	return false
 }
 
 // headSize is how much of a transcript's start is read for its session name.

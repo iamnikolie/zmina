@@ -232,6 +232,19 @@ func TestLastTurnEnded(t *testing.T) {
 	side := `{"type":"user","isSidechain":true,"message":{"content":"a subagent"}}`
 	snapshot := `{"type":"file-history-snapshot"}`
 
+	// A compaction as Claude Code writes it: its boundary, the summary, attachments and a notice when it compacted
+	// on its own while idle; the lines of a /compact run at the prompt after them.
+	boundary := `{"type":"system","subtype":"compact_boundary","content":"Conversation compacted"}`
+	summary := `{"type":"user","isCompactSummary":true,"isVisibleInTranscriptOnly":true,"message":{"role":"user","content":"This session is being continued"}}`
+	attachment := `{"type":"attachment","attachment":{"type":"skill_listing"}}`
+	idle := `{"type":"system","subtype":"informational","content":"Compacted while idle, before the prompt cache expired"}`
+	typed := `{"type":"user","message":{"role":"user","content":"/compact"}}`
+	caveat := `{"type":"user","isMeta":true,"message":{"role":"user","content":"<local-command-caveat>The command below was run directly in Claude Code</local-command-caveat>"}}`
+	command := `{"type":"user","message":{"role":"user","content":"<command-name>/compact</command-name>\n<command-message>compact</command-message>"}}`
+	stdout := `{"type":"user","message":{"role":"user","content":"<local-command-stdout>Compacted</local-command-stdout>"}}`
+	peer := `{"type":"user","isMeta":true,"message":{"role":"user","content":"Another Claude session sent a message"}}`
+	idleCompact := strings.Join([]string{boundary, summary, attachment, idle}, "\n")
+
 	for lines, want := range map[string]bool{
 		prompt:                                   false,
 		prompt + "\n" + call:                     false,
@@ -240,6 +253,18 @@ func TestLastTurnEnded(t *testing.T) {
 		reply + "\n" + closing + "\n" + side:     true,
 		reply + "\n" + closing + "\n" + snapshot: true,
 		closing + "\n" + prompt:                  false,
+		// Compacted between turns, idle or by a /compact: still between them.
+		reply + "\n" + closing + "\n" + idleCompact: true,
+		strings.Join([]string{reply, closing, typed, boundary, summary, caveat, command, stdout}, "\n"): true,
+		// Compacted mid-turn: still in it; a prompt or a peer's message after a compaction starts a turn.
+		strings.Join([]string{call, result, boundary, summary}, "\n"): false,
+		closing + "\n" + idleCompact + "\n" + prompt:                   false,
+		closing + "\n" + idleCompact + "\n" + peer:                     false,
+		closing + "\n" + idleCompact + "\n" + peer + "\n" + reply:      true,
+		// A compaction with nothing before it in the tail: not known to be over.
+		idleCompact: false,
+		// /compact typed as a prompt is a prompt until a compaction follows it.
+		closing + "\n" + typed: false,
 	} {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "s1.jsonl"), []byte(lines+"\n"), 0o600))
 
@@ -263,6 +288,9 @@ func TestLastTurnEndedAt(t *testing.T) {
 		reply:                                  time.Date(2026, 10, 24, 12, 0, 5, 120e6, time.UTC),
 		reply + "\n" + closing:                 time.Date(2026, 10, 24, 12, 0, 6, 0, time.UTC),
 		reply + "\n" + closing + "\n" + prompt: {},
+		// Compacted while idle: the turn that closed before it is the last one over.
+		reply + "\n" + closing + "\n" + `{"type":"system","subtype":"compact_boundary","timestamp":"2026-10-24T12:30:00.000Z"}` +
+			"\n" + `{"type":"user","isCompactSummary":true,"timestamp":"2026-10-24T12:30:00.000Z","message":{"content":"summary"}}`: time.Date(2026, 10, 24, 12, 0, 6, 0, time.UTC),
 	} {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "s1.jsonl"), []byte(lines+"\n"), 0o600))
 
