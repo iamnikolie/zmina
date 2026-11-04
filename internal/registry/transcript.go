@@ -156,29 +156,49 @@ func lastTurn(path string) (Turn, error) {
 		return Turn{}, err
 	}
 
-	lines := bytes.Split(tail, []byte("\n"))
+	raw := bytes.Split(tail, []byte("\n"))
 	if off > 0 {
 		// The first line was cut by the offset.
-		lines = lines[1:]
+		raw = raw[1:]
 	}
 
-	var t Turn
+	lines := make([]line, 0, len(raw))
 
-	seenTurn, decided, compacted := false, false, false
-
-	for i := len(lines) - 1; i >= 0; i-- {
+	for _, b := range raw {
 		var l line
-		if len(bytes.TrimSpace(lines[i])) == 0 || json.Unmarshal(lines[i], &l) != nil || l.Sidechain {
+		if len(bytes.TrimSpace(b)) == 0 || json.Unmarshal(b, &l) != nil || l.Sidechain {
 			continue
 		}
 
+		lines = append(lines, l)
+	}
+
+	// A compaction between turns (Claude Code's idle compaction, a /compact at the prompt) starts no turn: the lines
+	// before it say whether the last turn is over. Past it nothing is read of the context or an error.
+	if cut, ok := settledCompaction(lines); ok {
+		t := readTurn(lines[:cut])
+		t.Context, t.Error, t.ErrorID = 0, "", ""
+
+		return t, nil
+	}
+
+	return readTurn(lines), nil
+}
+
+// readTurn reads what the newest lines of a conversation say about its last turn.
+func readTurn(lines []line) Turn {
+	var t Turn
+
+	seenTurn, decided := false, false
+
+	for i := len(lines) - 1; i >= 0; i-- {
+		l := &lines[i]
+
 		// The newest line of the conversation says whether its turn is over: a prompt or a tool result waits on
-		// a reply, a tool call on its result; an end_turn reply or the turn's closing system lines end it. A
-		// compaction's own lines start no turn: the newest line before it decides, so a session compacted between
-		// turns (Claude Code's idle compaction, a /compact) is still between them, one compacted mid-turn still in it.
-		if !decided && !compactionLine(&l, compacted) {
+		// a reply, a tool call on its result; an end_turn reply or the turn's closing system lines end it.
+		if !decided {
 			switch {
-			case l.Type == "system" && (l.Subtype == "turn_duration" || l.Subtype == "stop_hook_summary"):
+			case closesTurn(l):
 				t.Ended, decided = true, true
 			case l.Type == "assistant":
 				t.Ended, decided = l.Message.StopReason == "end_turn" || l.Message.StopReason == "stop_sequence", true
@@ -193,22 +213,8 @@ func lastTurn(path string) (Turn, error) {
 
 		if l.Type == "system" && l.Subtype == "compact_boundary" {
 			t.Context = 0
-			if decided {
-				return t, nil
-			}
 
-			compacted = true
-
-			continue
-		}
-
-		// Past a compaction only whether the turn is over is read: neither the context nor an error from before it.
-		if compacted {
-			if decided {
-				return t, nil
-			}
-
-			continue
+			return t
 		}
 
 		if l.Type != "assistant" {
@@ -226,36 +232,116 @@ func lastTurn(path string) (Turn, error) {
 		if n := l.tokens(); n > 0 {
 			t.Context = n
 
-			return t, nil
+			return t
 		}
 	}
 
-	return t, nil
+	return t
 }
 
-// compactionLine reports a line a compaction writes, which starts no turn: its summary, and the lines of a /compact
-// run at the prompt — Claude Code's note on a local command, the command, its output. before is set once the scan is
-// past the compaction's boundary, where a /compact typed at the prompt (as zmina types it) is the command too.
-func compactionLine(l *line, before bool) bool {
-	if l.Type != "user" {
-		return false
+func closesTurn(l *line) bool {
+	return l.Type == "system" && (l.Subtype == "turn_duration" || l.Subtype == "stop_hook_summary")
+}
+
+// turnLine reports a line that starts, carries or closes a turn; attachments and notices do neither.
+func turnLine(l *line) bool { return l.Type == "user" || l.Type == "assistant" || closesTurn(l) }
+
+// settledCompaction reports a conversation whose newest turn lines are exactly what a compaction between turns
+// writes, and where the lines before it end: after the newest boundary its summary alone (Claude Code compacted on
+// its own), or the summary and a /compact run at the prompt — Claude Code's note on a local command, the command,
+// its output — with the /compact typed at the prompt just before the boundary. Each is told by how Claude Code marks
+// it (a compact summary, a meta note, no origin) and by its whole text, never by how a text starts: a line that
+// carries an origin (the owner's, a peer's) or any other line after the boundary is a turn as any other.
+func settledCompaction(lines []line) (int, bool) {
+	b := -1
+
+	for i := len(lines) - 1; i >= 0; i-- {
+		if lines[i].Type == "system" && lines[i].Subtype == "compact_boundary" {
+			b = i
+
+			break
+		}
 	}
 
-	if l.Compact {
-		return true
+	if b < 0 {
+		return 0, false
 	}
 
-	text := strings.TrimSpace(l.text())
+	var after []*line
+
+	for i := b + 1; i < len(lines); i++ {
+		if turnLine(&lines[i]) {
+			after = append(after, &lines[i])
+		}
+	}
+
+	if len(after) == 0 || !after[0].Compact {
+		return 0, false
+	}
+
+	if _, ok := ownText(after[0]); !ok {
+		return 0, false
+	}
 
 	switch {
-	case strings.HasPrefix(text, "<local-command-caveat>"), strings.HasPrefix(text, "<local-command-stdout>"),
-		strings.HasPrefix(text, "<command-name>/compact</command-name>"):
-		return true
-	case before:
-		return text == "/compact" || strings.HasPrefix(text, "/compact ")
+	case len(after) == 1:
+		return b, true
+	case len(after) == 4 && localCaveat(after[1]) && localLine(after[2], compactCommand) && localLine(after[3], compactStdout):
+		// The /compact the prompt took, written just before the boundary, is the command too.
+		for i := b - 1; i >= 0; i-- {
+			if !turnLine(&lines[i]) {
+				continue
+			}
+
+			if l := &lines[i]; localLine(l, typedCompact) {
+				return i, true
+			}
+
+			break
+		}
+
+		return b, true
 	}
 
-	return false
+	return 0, false
+}
+
+var (
+	// compactCommand is the whole text of a /compact as Claude Code records the command.
+	compactCommand = regexp.MustCompile(`^<command-name>/compact</command-name>\s*<command-message>compact</command-message>` +
+		`(?:\s*<command-args>[^<]*</command-args>)?$`)
+	// compactStdout is the whole text of what /compact printed: one element that says it compacted (dimmed), nothing
+	// after it.
+	compactStdout = regexp.MustCompile(`^<local-command-stdout>(?:\x1b\[[0-9;]*m)*Compacted\b(?s:.*)</local-command-stdout>$`)
+	// localNote is the whole text of Claude Code's note before a local command it ran.
+	localNote = regexp.MustCompile(`^<local-command-caveat>[^<]*</local-command-caveat>$`)
+	// typedCompact is /compact as typed at the prompt, with its instructions if any.
+	typedCompact = regexp.MustCompile(`^/compact(?:\s[^<]*)?$`)
+)
+
+// localCaveat reports Claude Code's meta note before a local command it ran.
+func localCaveat(l *line) bool {
+	text, ok := ownText(l)
+
+	return ok && l.Meta && localNote.MatchString(text)
+}
+
+// localLine reports a user line of Claude Code's own, not meta, whose whole text is that shape.
+func localLine(l *line, shape *regexp.Regexp) bool {
+	text, ok := ownText(l)
+
+	return ok && !l.Meta && shape.MatchString(text) && strings.Count(text, "<local-command-stdout>") <= 1
+}
+
+// ownText is the text of a user line as Claude Code writes its own: no origin (the owner's or a peer's message has
+// one), the content a plain string (a prompt may come in text blocks).
+func ownText(l *line) (string, bool) {
+	var text string
+	if l.Type != "user" || l.Origin != nil || json.Unmarshal(l.Message.Content, &text) != nil {
+		return "", false
+	}
+
+	return strings.TrimSpace(text), true
 }
 
 // headSize is how much of a transcript's start is read for its session name.

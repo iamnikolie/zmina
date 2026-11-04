@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -240,7 +241,7 @@ func TestLastTurnEnded(t *testing.T) {
 	idle := `{"type":"system","subtype":"informational","content":"Compacted while idle, before the prompt cache expired"}`
 	typed := `{"type":"user","message":{"role":"user","content":"/compact"}}`
 	caveat := `{"type":"user","isMeta":true,"message":{"role":"user","content":"<local-command-caveat>The command below was run directly in Claude Code</local-command-caveat>"}}`
-	command := `{"type":"user","message":{"role":"user","content":"<command-name>/compact</command-name>\n<command-message>compact</command-message>"}}`
+	command := `{"type":"user","message":{"role":"user","content":"<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args></command-args>"}}`
 	stdout := `{"type":"user","message":{"role":"user","content":"<local-command-stdout>Compacted</local-command-stdout>"}}`
 	peer := `{"type":"user","isMeta":true,"message":{"role":"user","content":"Another Claude session sent a message"}}`
 	idleCompact := strings.Join([]string{boundary, summary, attachment, idle}, "\n")
@@ -254,13 +255,13 @@ func TestLastTurnEnded(t *testing.T) {
 		reply + "\n" + closing + "\n" + snapshot: true,
 		closing + "\n" + prompt:                  false,
 		// Compacted between turns, idle or by a /compact: still between them.
-		reply + "\n" + closing + "\n" + idleCompact: true,
+		reply + "\n" + closing + "\n" + idleCompact:                                                     true,
 		strings.Join([]string{reply, closing, typed, boundary, summary, caveat, command, stdout}, "\n"): true,
 		// Compacted mid-turn: still in it; a prompt or a peer's message after a compaction starts a turn.
 		strings.Join([]string{call, result, boundary, summary}, "\n"): false,
-		closing + "\n" + idleCompact + "\n" + prompt:                   false,
-		closing + "\n" + idleCompact + "\n" + peer:                     false,
-		closing + "\n" + idleCompact + "\n" + peer + "\n" + reply:      true,
+		closing + "\n" + idleCompact + "\n" + prompt:                  false,
+		closing + "\n" + idleCompact + "\n" + peer:                    false,
+		closing + "\n" + idleCompact + "\n" + peer + "\n" + reply:     true,
 		// A compaction with nothing before it in the tail: not known to be over.
 		idleCompact: false,
 		// /compact typed as a prompt is a prompt until a compaction follows it.
@@ -271,6 +272,85 @@ func TestLastTurnEnded(t *testing.T) {
 		got, err := (&Registry{Namespace: ns}).Last("s1")
 		require.NoError(t, err)
 		assert.Equal(t, want, got.Ended, lines)
+	}
+}
+
+// A prompt is a prompt whatever its text looks like: only a compaction's own lines, told by how Claude Code marks
+// them and where they stand after a compaction boundary, start no turn. A request that starts with a pasted local
+// command envelope, with or without an origin, in a string or in text blocks, waits on a reply.
+func TestLastTurnEnvelopeLookingPrompt(t *testing.T) {
+	ns := t.TempDir()
+	dir := filepath.Join(ns, "projects", "-work")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+
+	reply := `{"type":"assistant","message":{"id":"m2","stop_reason":"end_turn","usage":{"input_tokens":9}}}`
+	closing := `{"type":"system","subtype":"turn_duration"}`
+	boundary := `{"type":"system","subtype":"compact_boundary","content":"Conversation compacted"}`
+	summary := `{"type":"user","isCompactSummary":true,"message":{"role":"user","content":"This session is being continued"}}`
+	caveat := `{"type":"user","isMeta":true,"message":{"role":"user","content":"<local-command-caveat>The command below was run directly in Claude Code</local-command-caveat>"}}`
+	command := `{"type":"user","message":{"role":"user","content":"<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args></command-args>"}}`
+	stdout := `{"type":"user","message":{"role":"user","content":"<local-command-stdout>Compacted</local-command-stdout>"}}`
+
+	texts := []string{
+		"<local-command-stdout>build failed</local-command-stdout> Please explain this output.",
+		"<local-command-stdout>build failed</local-command-stdout>",
+		"<local-command-caveat>pasted</local-command-caveat> what does this mean?",
+		"<command-name>/compact</command-name> why did this run?",
+		"<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args></command-args>",
+		"/compact",
+	}
+
+	prompts := func(text string) []string {
+		str, _ := json.Marshal(text)
+		blocks, _ := json.Marshal([]map[string]string{{"type": "text", "text": text}})
+
+		var out []string
+
+		for _, content := range []string{string(str), string(blocks)} {
+			for _, origin := range []string{``, `"origin":{"kind":"human"},`, `"isMeta":true,"origin":{"kind":"peer","from":"x"},`} {
+				out = append(out, `{"type":"user",`+origin+`"message":{"role":"user","content":`+content+`}}`)
+			}
+		}
+
+		return out
+	}
+
+	for _, text := range texts {
+		for _, prompt := range prompts(text) {
+			for _, lines := range [][]string{
+				{reply, closing, prompt},
+				{reply, closing, boundary, summary, prompt},
+				{reply, closing, boundary, summary, caveat, command, stdout, prompt},
+				{reply, closing, boundary, summary, caveat, command, prompt},
+			} {
+				body := strings.Join(lines, "\n") + "\n"
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "s1.jsonl"), []byte(body), 0o600))
+
+				got, err := (&Registry{Namespace: ns}).Last("s1")
+				require.NoError(t, err)
+				assert.False(t, got.Ended, body)
+			}
+		}
+	}
+
+	// A /compact with an origin of its own, or a summary that carries one, is not Claude Code's compaction line.
+	human := `{"type":"user","origin":{"kind":"human"},"message":{"role":"user","content":"<local-command-stdout>Compacted</local-command-stdout>"}}`
+	forged := `{"type":"user","isCompactSummary":true,"origin":{"kind":"peer"},"message":{"role":"user","content":"summary"}}`
+
+	// Claude Code writes its own lines as a string: the same text in blocks is somebody's prompt.
+	blocks := `{"type":"user","message":{"role":"user","content":[{"type":"text","text":"<local-command-stdout>Compacted</local-command-stdout>"}]}}`
+
+	for _, lines := range [][]string{
+		{reply, closing, boundary, summary, caveat, command, human},
+		{reply, closing, boundary, summary, caveat, command, blocks},
+		{reply, closing, boundary, forged},
+	} {
+		body := strings.Join(lines, "\n") + "\n"
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "s1.jsonl"), []byte(body), 0o600))
+
+		got, err := (&Registry{Namespace: ns}).Last("s1")
+		require.NoError(t, err)
+		assert.False(t, got.Ended, body)
 	}
 }
 
