@@ -982,7 +982,11 @@ alone for the beat — never taken as ended; a role being put down is left alone
    (`typed, never taken`) after three tries and taken out of the input line.
    «Idle» here also covers a role at its prompt whose status stays off idle because a background shell or agent it
    started still runs: its transcript's newest line ends a turn (an end_turn reply, the turn's closing system line)
-   and its input line is on screen and empty. Never a role that shows a dialog. Release and trims still wait for a
+   and its input line is on screen and empty. A compaction's own lines (its summary, a `/compact` and its output, told
+   by how Claude Code marks them and where they stand after the compaction's boundary, never by how a text starts)
+   start no turn: a role Claude Code compacted while idle, or one given `/compact` (once or several times in a row), is still between turns, and its
+   lines go without waiting for a turn of the owner's; one compacted mid-turn is still in it, and a request after the
+   compaction is a turn like any other. Never a role that shows a dialog. Release and trims still wait for a
    plain idle, so a role with a background process running is never put down or cleared under it.
 7. Context: a role with `context_max` (its own, else the crew's; `off` opts out) whose
    conversation fills more than that (the last turn's tokens in its transcript,
