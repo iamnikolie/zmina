@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -351,6 +352,107 @@ func TestLastTurnEnvelopeLookingPrompt(t *testing.T) {
 		got, err := (&Registry{Namespace: ns}).Last("s1")
 		require.NoError(t, err)
 		assert.False(t, got.Ended, body)
+	}
+}
+
+// compactionChains is every transcript of a turn (closed, or cut mid-turn by a tool call) followed by zero to three
+// compactions, each Claude Code's own (idle) or a /compact at the prompt, with a request — plain, or one that looks
+// like a compaction's line — at any place among them or none; and whether its last turn is over: only a closed turn
+// followed by compactions alone.
+func compactionChains() (chains []string, ended []bool) {
+	closed := `{"type":"assistant","message":{"id":"m1","stop_reason":"end_turn","usage":{"input_tokens":9}}}` + "\n" +
+		`{"type":"system","subtype":"turn_duration","timestamp":"2026-10-24T12:00:06.000Z"}`
+	midTurn := `{"type":"assistant","message":{"id":"m1","stop_reason":"tool_use","usage":{"input_tokens":9}}}` + "\n" +
+		`{"type":"user","message":{"content":[{"type":"tool_result"}]}}`
+	idle := strings.Join([]string{
+		`{"type":"system","subtype":"compact_boundary","content":"Conversation compacted"}`,
+		`{"type":"user","isCompactSummary":true,"message":{"role":"user","content":"This session is being continued"}}`,
+		`{"type":"attachment","attachment":{"type":"skill_listing"}}`,
+		`{"type":"system","subtype":"informational","content":"Compacted while idle"}`,
+	}, "\n")
+	manual := strings.Join([]string{
+		`{"type":"user","message":{"role":"user","content":"/compact"}}`,
+		`{"type":"system","subtype":"compact_boundary","content":"Conversation compacted"}`,
+		`{"type":"user","isCompactSummary":true,"message":{"role":"user","content":"This session is being continued"}}`,
+		`{"type":"user","isMeta":true,"message":{"role":"user","content":"<local-command-caveat>The command below was run directly in Claude Code</local-command-caveat>"}}`,
+		`{"type":"user","message":{"role":"user","content":"<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args></command-args>"}}`,
+		`{"type":"user","message":{"role":"user","content":"<local-command-stdout>\u001b[2mCompacted (ctrl+o to see full summary)\u001b[22m</local-command-stdout>"}}`,
+	}, "\n")
+	prompts := []string{
+		`{"type":"user","origin":{"kind":"human"},"message":{"role":"user","content":"go on"}}`,
+		`{"type":"user","message":{"role":"user","content":"<local-command-stdout>Compacted</local-command-stdout> why?"}}`,
+		`{"type":"user","origin":{"kind":"human"},"message":{"role":"user","content":[{"type":"text","text":"<local-command-stdout>Compacted</local-command-stdout>"}]}}`,
+		`{"type":"user","isMeta":true,"origin":{"kind":"peer","from":"x"},"message":{"role":"user","content":"Another Claude session sent a message"}}`,
+	}
+
+	var kinds [][]string
+
+	var grow func(prefix []string)
+	grow = func(prefix []string) {
+		kinds = append(kinds, prefix)
+		if len(prefix) < 3 {
+			grow(append(slices.Clone(prefix), idle))
+			grow(append(slices.Clone(prefix), manual))
+		}
+	}
+	grow(nil)
+
+	for _, base := range []string{closed, midTurn} {
+		for _, blocks := range kinds {
+			for at := -1; at <= len(blocks); at++ { // -1: no request
+				for _, prompt := range prompts {
+					parts := []string{base}
+
+					for i, b := range blocks {
+						if i == at {
+							parts = append(parts, prompt)
+						}
+
+						parts = append(parts, b)
+					}
+
+					if at == len(blocks) {
+						parts = append(parts, prompt)
+					}
+
+					chains = append(chains, strings.Join(parts, "\n"))
+					ended = append(ended, base == closed && at < 0)
+
+					if at < 0 {
+						break // one chain without a request is enough
+					}
+				}
+			}
+		}
+	}
+
+	return chains, ended
+}
+
+func TestLastTurnCompactionChains(t *testing.T) {
+	ns := t.TempDir()
+	dir := filepath.Join(ns, "projects", "-work")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+
+	chains, ended := compactionChains()
+	require.Len(t, chains, 2*(15+4*(1*1+2*2+4*3+8*4))) // 2 bases x (15 chains + 4 requests x the places in each)
+
+	closedAt := time.Date(2026, 10, 24, 12, 0, 6, 0, time.UTC)
+
+	for i, body := range chains {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "s1.jsonl"), []byte(body+"\n"), 0o600))
+
+		got, err := (&Registry{Namespace: ns}).Last("s1")
+		require.NoError(t, err)
+		assert.Equal(t, ended[i], got.Ended, body)
+
+		if ended[i] {
+			assert.True(t, closedAt.Equal(got.At), "the closing turn's time kept: %s", body)
+		}
+
+		if strings.Contains(body, "compact_boundary") {
+			assert.Zero(t, got.Context, "nothing read from before a compaction: %s", body)
+		}
 	}
 }
 

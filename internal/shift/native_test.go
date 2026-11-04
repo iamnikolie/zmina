@@ -227,6 +227,70 @@ func TestNativeAfterACompaction(t *testing.T) {
 	assert.Equal(t, []string{"[dispatcher] next"}, p.posted["sid-designer"])
 }
 
+// Compactions in a row, Claude Code's own or a /compact, leave a role between turns: with a background shell keeping
+// its status off idle its line is posted (and a typed one would land at its prompt). A request anywhere among them is
+// a turn: nothing goes.
+func TestNativeAfterCompactionChains(t *testing.T) {
+	reply := `{"type":"assistant","message":{"id":"m1","stop_reason":"end_turn","usage":{"input_tokens":9}}}`
+	closing := `{"type":"system","subtype":"turn_duration"}`
+	idle := strings.Join([]string{
+		`{"type":"system","subtype":"compact_boundary","content":"Conversation compacted"}`,
+		`{"type":"user","isCompactSummary":true,"message":{"role":"user","content":"This session is being continued"}}`,
+		`{"type":"system","subtype":"informational","content":"Compacted while idle"}`,
+	}, "\n")
+	manual := strings.Join([]string{
+		`{"type":"user","message":{"role":"user","content":"/compact"}}`,
+		`{"type":"system","subtype":"compact_boundary","content":"Conversation compacted"}`,
+		`{"type":"user","isCompactSummary":true,"message":{"role":"user","content":"This session is being continued"}}`,
+		`{"type":"user","isMeta":true,"message":{"role":"user","content":"<local-command-caveat>The command below was run directly in Claude Code</local-command-caveat>"}}`,
+		`{"type":"user","message":{"role":"user","content":"<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args></command-args>"}}`,
+		`{"type":"user","message":{"role":"user","content":"<local-command-stdout>Compacted</local-command-stdout>"}}`,
+	}, "\n")
+	prompt := `{"type":"user","origin":{"kind":"human"},"message":{"role":"user","content":"go on"}}`
+	pasted := `{"type":"user","message":{"role":"user","content":"<local-command-stdout>Compacted</local-command-stdout> why?"}}`
+
+	for name, c := range map[string]struct {
+		lines []string
+		goes  bool
+	}{
+		"idle, idle":                   {[]string{idle, idle}, true},
+		"idle, manual":                 {[]string{idle, manual}, true},
+		"manual, idle":                 {[]string{manual, idle}, true},
+		"manual, manual":               {[]string{manual, manual}, true},
+		"manual, idle, manual":         {[]string{manual, idle, manual}, true},
+		"idle, request, idle":          {[]string{idle, prompt, idle}, false},
+		"manual, pasted, manual":       {[]string{manual, pasted, manual}, false},
+		"idle, idle, request":          {[]string{idle, idle, prompt}, false},
+		"manual, idle, pasted request": {[]string{manual, idle, pasted}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ns := t.TempDir()
+			dir := filepath.Join(ns, "projects", "-work")
+			require.NoError(t, os.MkdirAll(dir, 0o700))
+
+			f, p := nativeFixture(t, crewYAML)
+			f.s.Reg = transcriptReg{f.rg, &registry.Registry{Namespace: ns}}
+			require.NoError(t, f.s.Up("designer"))
+			f.status("designer", "shell", *f.now)
+			*f.now = f.now.Add(3 * time.Minute)
+			require.NoError(t, f.s.Queue("designer", "[dispatcher] next"))
+
+			body := strings.Join(append([]string{reply, closing}, c.lines...), "\n") + "\n"
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "sid-designer.jsonl"), []byte(body), 0o600))
+
+			assert.Equal(t, c.goes, f.s.atPrompt("designer", *f.now), "a typed line would land")
+
+			if c.goes {
+				assert.NotEmpty(t, f.s.deliverInbox("designer", *f.now))
+				assert.Equal(t, []string{"[dispatcher] next"}, p.posted["sid-designer"])
+			} else {
+				assert.Empty(t, f.s.deliverInbox("designer", *f.now))
+				assert.Empty(t, p.posted["sid-designer"])
+			}
+		})
+	}
+}
+
 func TestNativeSlashCommandIsTyped(t *testing.T) {
 	f, p := nativeFixture(t, crewYAML)
 	require.NoError(t, f.s.Up("designer"))

@@ -173,16 +173,26 @@ func lastTurn(path string) (Turn, error) {
 		lines = append(lines, l)
 	}
 
-	// A compaction between turns (Claude Code's idle compaction, a /compact at the prompt) starts no turn: the lines
-	// before it say whether the last turn is over. Past it nothing is read of the context or an error.
-	if cut, ok := settledCompaction(lines); ok {
-		t := readTurn(lines[:cut])
-		t.Context, t.Error, t.ErrorID = 0, "", ""
+	// A compaction between turns (Claude Code's idle compaction, a /compact at the prompt) starts no turn, nor do
+	// several in a row: the lines before the run say whether the last turn is over. Past it nothing is read of the
+	// context or an error.
+	end, compacted := len(lines), false
 
-		return t, nil
+	for {
+		cut, ok := settledCompaction(lines[:end])
+		if !ok {
+			break
+		}
+
+		end, compacted = cut, true
 	}
 
-	return readTurn(lines), nil
+	t := readTurn(lines[:end])
+	if compacted {
+		t.Context, t.Error, t.ErrorID = 0, "", ""
+	}
+
+	return t, nil
 }
 
 // readTurn reads what the newest lines of a conversation say about its last turn.
@@ -246,8 +256,8 @@ func closesTurn(l *line) bool {
 // turnLine reports a line that starts, carries or closes a turn; attachments and notices do neither.
 func turnLine(l *line) bool { return l.Type == "user" || l.Type == "assistant" || closesTurn(l) }
 
-// settledCompaction reports a conversation whose newest turn lines are exactly what a compaction between turns
-// writes, and where the lines before it end: after the newest boundary its summary alone (Claude Code compacted on
+// settledCompaction reports a conversation whose newest turn lines are exactly what one compaction writes, and
+// where the lines before it end (lastTurn strips such blocks one by one): after the newest boundary its summary alone (Claude Code compacted on
 // its own), or the summary and a /compact run at the prompt — Claude Code's note on a local command, the command,
 // its output — with the /compact typed at the prompt just before the boundary. Each is told by how Claude Code marks
 // it (a compact summary, a meta note, no origin) and by its whole text, never by how a text starts: a line that
