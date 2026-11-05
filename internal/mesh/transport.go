@@ -98,6 +98,24 @@ func Command(ctx context.Context, a Addr, args ...string) *exec.Cmd {
 	return exec.CommandContext(ctx, "sh", "-c", a.Cmd+" "+words)
 }
 
+// InteractiveCommand runs the peer's zmina at a with args on this terminal: ssh gets -t, so a command that needs a
+// terminal there (attach) has one. A command line address that starts with ssh gets it too; any other runs as it is.
+// BatchMode stays: no password is ever asked.
+func InteractiveCommand(ctx context.Context, a Addr, args ...string) *exec.Cmd {
+	words := strings.Join(args, " ")
+	if a.SSH != "" {
+		return exec.CommandContext(ctx, "ssh", "-t", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "--", a.SSH,
+			`PATH="$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:$PATH" zmina `+words)
+	}
+
+	line := a.Cmd
+	if rest, ok := strings.CutPrefix(strings.TrimLeft(line, " "), "ssh "); ok {
+		line = "ssh -t " + rest
+	}
+
+	return exec.CommandContext(ctx, "sh", "-c", line+" "+words)
+}
+
 type cmdStream struct {
 	cmd    *exec.Cmd
 	in     io.WriteCloser

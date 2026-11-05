@@ -452,3 +452,16 @@ func TestReportCapabilityRequiresSignatureAndLegacyStillConnects(t *testing.T) {
 		})
 	}
 }
+
+// An interactive call gets a terminal on the far side: ssh -t, also for a command line address that is ssh.
+func TestInteractiveCommandAsksForATerminal(t *testing.T) {
+	c := InteractiveCommand(context.Background(), Addr{SSH: "box"}, "attach", "dev")
+	assert.Equal(t, []string{"ssh", "-t", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "--", "box"}, c.Args[:8])
+	assert.True(t, strings.HasSuffix(c.Args[8], " zmina attach dev"))
+
+	c = InteractiveCommand(context.Background(), Addr{Cmd: "ssh -o BatchMode=yes box sudo -n -iu ops zmina"}, "--config", "ops", "attach", "dev")
+	assert.Equal(t, []string{"sh", "-c", "ssh -t -o BatchMode=yes box sudo -n -iu ops zmina --config ops attach dev"}, c.Args)
+
+	c = InteractiveCommand(context.Background(), Addr{Cmd: "/opt/far-zmina"}, "attach", "dev")
+	assert.Equal(t, []string{"sh", "-c", "/opt/far-zmina attach dev"}, c.Args)
+}
