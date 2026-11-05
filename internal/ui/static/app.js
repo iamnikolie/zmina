@@ -1249,7 +1249,7 @@ async function chooseDialog(c, r, o) {
   const crew = node ? c.key.slice(node.length + 1) : c.key;
   openRow = "";
   try {
-    await postTo("api/chat/action", { node, crew, role: r.role, action: "choose:" + o.n + ":" + o.label });
+    await postTo("api/chat/action", { node, crew, role: r.role, action: "choose:" + o.n + ":" + r.dialog.id });
     toast(W.chose(r.role, o.label));
   } catch (e) {
     toast(W.notSent + e.message);

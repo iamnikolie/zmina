@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -35,10 +37,31 @@ func TestChooseAnswersTheQuestionOnScreen(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	a := &app{crew: file, out: io.Discard, err: io.Discard}
+	var id string
+	require.NoError(t, a.readState(func(s *shift.Shift) error {
+		v := viewOf(s, "dev")
+		require.NotNil(t, v)
+		require.ErrorContains(t, chooseDialog(s, "dev", "3:x"), "not waiting", "no session says it waits: nothing pressed")
+
+		// The session says it waits on a dialog, as Claude Code's registry does.
+		raw, err := json.Marshal(map[string]any{"pid": v.PID, "sessionId": "conv-1", "cwd": dir, "status": "waiting"})
+		require.NoError(t, err)
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, "ns", "sessions"), 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "ns", "sessions", strconv.Itoa(v.PID)+".json"), raw, 0o600))
+
+		return nil
+	}))
+	require.NoError(t, a.readState(func(s *shift.Shift) error {
+		v := viewOf(s, "dev")
+		require.NotNil(t, v.Dialog)
+		id = v.Dialog.ID
+		return nil
+	}))
 	require.NoError(t, a.withState(func(s *shift.Shift) error {
-		require.ErrorContains(t, chooseDialog(s, "dev", "2:Only remotely"), "changed")
-		require.ErrorContains(t, chooseDialog(s, "dev", "4:Type something."), "changed")
-		return chooseDialog(s, "dev", "3:No")
+		other := id[:15] + map[bool]string{true: "1", false: "0"}[id[15] == '0']
+		require.ErrorContains(t, chooseDialog(s, "dev", "2:"+other), "changed")
+		require.ErrorContains(t, chooseDialog(s, "dev", "4:"+id), "changed", "a choice that asks for words is not offered")
+		return chooseDialog(s, "dev", "3:"+id)
 	}))
 
 	var keys []byte

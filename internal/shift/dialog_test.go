@@ -35,3 +35,21 @@ func TestParseDialog(t *testing.T) {
 	assert.Nil(t, ParseDialog("⏺ done\n❯ "))
 	assert.Nil(t, ParseDialog("1. only one\nEnter to select"))
 }
+
+// Only a live dialog counts: its cursor on a choice and its footer last. A numbered list in the conversation, or a
+// dialog already answered with more output after it, is no question.
+func TestParseDialogNeedsALiveDialog(t *testing.T) {
+	assert.Nil(t, ParseDialog("Plan for later:\n1. Build\n2. Deploy\nStill working..."))
+	assert.Nil(t, ParseDialog("Plan:\n  1. Build\n  2. Deploy\nEnter to select"), "no cursor")
+	assert.Nil(t, ParseDialog(askScreen+"\n⏺ Released."), "answered: output after it")
+}
+
+// Two questions with the same choices are two dialogs.
+func TestDialogIDCoversTheQuestion(t *testing.T) {
+	a := ParseDialog(" ☐ Preview\n│ Preview a local report?\n❯ 1. Yes\n  2. No\nEnter to select")
+	b := ParseDialog(" ☐ Publish\n│ Publish the report publicly?\n❯ 1. Yes\n  2. No\nEnter to select")
+	require.NotNil(t, a)
+	require.NotNil(t, b)
+	assert.NotEqual(t, a.ID, b.ID)
+	assert.Equal(t, a.ID, ParseDialog(" ☐ Preview\n│ Preview a local report?\n  1. Yes\n❯ 2. No\nEnter to select").ID, "the cursor is no part of it")
+}

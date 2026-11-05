@@ -1,6 +1,9 @@
 package shift
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
@@ -12,6 +15,9 @@ type Dialog struct {
 	Question string         `json:"question"`
 	Options  []DialogOption `json:"options"`
 	Cursor   int            `json:"cursor"`
+	// ID is the dialog's fingerprint (its question and every choice): an answer names it, so it is never taken by
+	// another question that happens to have the same choices.
+	ID string `json:"id"`
 }
 
 // DialogOption is one numbered choice.
@@ -64,7 +70,26 @@ func ParseDialog(screen string) *Dialog {
 		}
 	}
 
-	if len(opts) < 2 || opts[0].N != 1 {
+	// A live dialog, not a numbered list in the conversation: the ❯ stands on a choice, and the screen ends with the
+	// dialog's own footer (nothing but choice descriptions and blank lines between).
+	if len(opts) < 2 || opts[0].N != 1 || cursor == 0 {
+		return nil
+	}
+
+	footer := false
+	for _, l := range lines[last+1:] {
+		t := strings.TrimSpace(l)
+		switch {
+		case t == "":
+		case strings.Contains(t, "Enter to select") || strings.Contains(t, "Esc to cancel"):
+			footer = true
+		case strings.HasPrefix(l, "     ") && !footer:
+		default:
+			return nil
+		}
+	}
+
+	if !footer {
 		return nil
 	}
 
@@ -106,6 +131,13 @@ func ParseDialog(screen string) *Dialog {
 	if len(d.Options) == 0 {
 		return nil
 	}
+
+	sum := sha256.New()
+	sum.Write([]byte(d.Question))
+	for _, o := range opts {
+		fmt.Fprintf(sum, "\x00%d\x00%s", o.N, o.Label)
+	}
+	d.ID = hex.EncodeToString(sum.Sum(nil))[:16]
 
 	return d
 }

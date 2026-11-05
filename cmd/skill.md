@@ -527,8 +527,9 @@ uncached; uploaded HTML/SVG is never executed or embedded. Files are never execu
 
 `POST /api/chat/action` accepts the same destination plus `action`: `start` explicitly starts a down
 role with its configured settings; `stop` sends one Ctrl+C only when the observed role is actively
-working and has no draft/dialog; `choose:<n>:<label>` answers the question on its screen (a Claude Code dialog with
-numbered choices) with choice n — only while the screen shows one and choice n still reads `<label>`, else refused —
+working and has no draft/dialog; `choose:<n>:<dialog id>` answers the question on its screen (a Claude Code dialog
+with numbered choices: the ❯ on a choice, its footer last) with choice n — only while the session's status is
+`waiting` and the dialog's id, a fingerprint of its question and every choice, is still the one given, else refused —
 by moving the dialog's cursor there and pressing Enter; `dismiss:<message ID>` sets aside an owner message whose delivery stayed unconfirmed
 (its conversation changed before it showed there; the page's Dismiss): it is no longer listed as pending, in any
 browser, and its receipt stays so a retry with that ID is still recognised. A message queued, sent or failed is
@@ -809,7 +810,7 @@ A machine without peers is a mesh of one. It opens the page in the browser.
 - **A question on a session's screen** (a dialog with numbered choices) stands first in your move: the row says the
   question, and opened offers each choice as a button (`chat/action choose`, on the node the session runs on); choices
   that ask for words (Type something, Chat about this) are left to Talk and its Terminal. `zmina ls --json` carries
-  it as `dialog: {question, options, cursor}`.
+  it as `dialog: {question, options, cursor, id}`.
 - **Talk**: every session card, and the holder line of an opened task, has «Talk»: the role's conversation (Chat) opens
   in a panel beside the cockpit, which stays in view and keeps updating behind it; on a phone the panel is the whole
   screen. Any role of any node: a peer's over the mesh as Chat reads it. «Open page» opens it as its own page; Esc

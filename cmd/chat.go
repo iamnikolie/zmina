@@ -293,11 +293,12 @@ func (a *app) localChatAction(key, role, action string) (chat.Snapshot, error) {
 	return a.localChatRead(key, role)
 }
 
-// chooseDialog answers the question on a role's screen with one of its numbered choices, "<n>:<label>": the label
-// must still be that choice's, so a question that changed since the owner read it is never answered blind. It moves
-// the dialog's cursor there and takes it, as the owner would with the arrows and Enter.
+// chooseDialog answers the question on a role's screen with one of its numbered choices, "<n>:<dialog id>": the id is
+// the fingerprint of the whole question the owner read, so a question that changed — even one with the same choices —
+// is never answered blind. Only while the session itself says it waits on a dialog. It moves the dialog's cursor there
+// and takes it, as the owner would with the arrows and Enter.
 func chooseDialog(s *shift.Shift, role, pick string) error {
-	ns, label, ok := strings.Cut(pick, ":")
+	ns, id, ok := strings.Cut(pick, ":")
 	n, err := strconv.Atoi(ns)
 	if !ok || err != nil || n < 1 || n > 9 {
 		return errors.New("choose:<n>:<label>")
@@ -309,12 +310,15 @@ func chooseDialog(s *shift.Shift, role, pick string) error {
 	if _, ok, err := s.Tmux.Prompt(role); err != nil || ok {
 		return errors.New("no question on its screen now")
 	}
+	if v := viewOf(s, role); v == nil || v.Status != "waiting" {
+		return errors.New("it is not waiting on a question now")
+	}
 	d := shift.ParseDialog(screen)
 	if d == nil {
 		return errors.New("no question on its screen now")
 	}
 	i := slices.IndexFunc(d.Options, func(o shift.DialogOption) bool { return o.N == n })
-	if i < 0 || d.Options[i].Label != label {
+	if i < 0 || d.ID != id {
 		return errors.New("the question on its screen changed: look again")
 	}
 	return s.PressKeys(role, d.ChooseKeys(n))
@@ -409,4 +413,14 @@ func (a *app) uiChat(mux *http.ServeMux) {
 			writeJSON(w, snapshot)
 		})
 	}
+}
+
+// viewOf is the role's view as ls shows it, nil when it has none.
+func viewOf(s *shift.Shift, role string) *shift.View {
+	for _, v := range s.Views() {
+		if v.Role == role {
+			return &v
+		}
+	}
+	return nil
 }
