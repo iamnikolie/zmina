@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -79,6 +80,26 @@ func TestRetireSaysWhereTheLiveCrewIs(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, out, "RETIRED")
 	assert.Contains(t, out, "STOPPED", "taking the mark off starts nothing")
+}
+
+// The crews most worth retiring are the ones whose project directories are gone.
+func TestRetireWithARoleDirGone(t *testing.T) {
+	gone := filepath.Join(t.TempDir(), "gone")
+	require.NoError(t, os.Mkdir(gone, 0o700))
+	file := testCrew(t, "  dev:\n    dir: "+gone+"\n")
+	require.NoError(t, os.Remove(gone))
+
+	_, _, err := zm(t, file, "retire", "--moved-to", "box/ops")
+	require.NoError(t, err)
+	assert.Contains(t, readString(t, file), "moved_to: box/ops")
+
+	_, _, err = zm(t, file, "retire", "--off")
+	require.NoError(t, err)
+	assert.NotContains(t, readString(t, file), "moved_to")
+
+	// Seats are still held to it.
+	_, _, err = zm(t, file, "seat", "set", "dev", "about=x")
+	require.ErrorContains(t, err, "not saved")
 }
 
 func readString(t *testing.T, file string) string {
@@ -219,6 +240,37 @@ func TestTellAsksTheFarNode(t *testing.T) {
 	st, err := shift.Read(filepath.Dir(far))
 	require.NoError(t, err)
 	assert.Len(t, st.Signals, 1)
+}
+
+// A report goes all the same, and warns once from what its own sessions learned: on first contact, and when what the
+// book held has changed since.
+func TestReportWarnsOfACrewNotRunning(t *testing.T) {
+	homeA := uiHome(t)
+	from := crewPathOf(t, "default")
+	_, _, err := zm(t, from, "node", "init", "--name", "laptop", "--owner")
+	require.NoError(t, err)
+
+	far := farBox(t, homeA, from)
+	stopped(t, far, time.Now().Add(-49*time.Hour))
+
+	_, errOut, err := zm(t, from, "tell", "box/ops", "--report-key", "first", "ready")
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(errOut, "box/ops is not running: stopped 2d ago"), errOut)
+
+	// The book says running; the far crew has stopped since.
+	beat(t, far)
+	a := &app{crew: far, out: io.Discard, err: io.Discard}
+	require.NoError(t, a.withState(func(s *shift.Shift) error { s.State.Stopped = time.Time{}; return nil }))
+
+	_, errOut, err = zm(t, from, "tell", "box/ops", "--report-key", "second", "ready")
+	require.NoError(t, err)
+	assert.NotContains(t, errOut, "not running")
+
+	stopped(t, far, time.Now().Add(-49*time.Hour))
+
+	_, errOut, err = zm(t, from, "tell", "box/ops", "--report-key", "third", "ready")
+	require.NoError(t, err)
+	assert.Contains(t, errOut, "box/ops is not running: stopped 2d ago")
 }
 
 // TestStoppedCrewNamesOthersOfItsName: no mark, no claim: a crew that stood still says so and names the crew of its

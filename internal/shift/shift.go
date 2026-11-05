@@ -166,8 +166,9 @@ type Shift struct {
 	warned bool
 	// OtherCrews names the crews of this crew's name elsewhere, each with how it stands; nil when none are known.
 	OtherCrews func() []string
-	// lastStop is the stop Start just lifted: the boot it goes on to is still the boot of a crew that stood still.
-	lastStop time.Time
+	// lastStop is the stop Start just lifted, lastBeat the beat before this one: the boot either goes on to is still
+	// the boot of a crew that stood still.
+	lastStop, lastBeat time.Time
 }
 
 // Presence is where a role is.

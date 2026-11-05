@@ -56,10 +56,6 @@ func (a *app) tellReport(cmd *cobra.Command, args []string, key, taskID, file st
 	if err != nil {
 		return err
 	}
-	// A report is durable by design: it is kept for that crew, and the sender hears who is not there to read it.
-	if h, at, ok := crewStanding(me, to); ok && !h.Running() {
-		fmt.Fprintln(a.err, "zmina: warning:", notRunning(to, h, at))
-	}
 	body := strings.Join(args[1:], " ")
 	if file != "" {
 		if body != "" {
@@ -198,6 +194,11 @@ func (a *app) tellReport(cmd *cobra.Command, args []string, key, taskID, file st
 
 	if err := a.pumpLocalReports(); err != nil {
 		return err
+	}
+	// A report is durable by design: it is kept for that crew, and the sender hears who is not there to read it. Asked
+	// last, so it reads what this report's own sessions learned.
+	if h, at, ok := crewStanding(me, to); ok && !h.Running() {
+		fmt.Fprintln(a.err, "zmina: warning:", notRunning(to, h, at))
 	}
 	fmt.Fprintf(a.out, "report %s queued; zmina message show %s reports observed stages, not assumed delivery\n", id, id)
 	return nil

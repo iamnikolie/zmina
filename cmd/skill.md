@@ -327,7 +327,7 @@ is box-ops/ops (zmina ls box-ops/ops; zmina task ls box-ops/ops). Its ledger, lo
 report them as the state of the work.` A crew with no mark that has stood still for over an hour (shift stopped, or its
 ticker silent) tells the same places, the boot only to its dispatcher, what is known: since when, that the work may have gone on elsewhere, and any crew of its name
 this node knows of (`Other crews of this name: box-ops/ops (running); one name does not prove one crew.`). It claims
-nothing beyond that. The boot `zmina start` goes on to says so too, of the stop it just lifted. A crew called `default` lists
+nothing beyond that. The boot `zmina start` goes on to says so too, of the stop it just lifted, as does the boot of a dispatcher the first beat after a silence restarts. A crew called `default` lists
 no others: every node's first crew has that name.
 
 ## Notes — signals for the dispatcher

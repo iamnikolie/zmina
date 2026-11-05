@@ -132,9 +132,15 @@ func (e *Edit) SetCrewKey(key, value string) {
 	}
 }
 
-// Save checks the edited file loads, keeps the old one as crew.yaml.bak, and writes it. A file that would not load
-// is not written.
-func (e *Edit) Save() error {
+// Save checks the edited file loads, a role's dir having to exist too, keeps the old one as crew.yaml.bak, and writes
+// it. A file that would not load is not written.
+func (e *Edit) Save() error { return e.save(LoadStrict) }
+
+// SaveCrewKeys is Save for an edit that touches no role: the file is held to what Load asks, since a crew is retired
+// most often after its project directories are gone.
+func (e *Edit) SaveCrewKeys() error { return e.save(Load) }
+
+func (e *Edit) save(check func(string) (*Crew, error)) error {
 	var buf bytes.Buffer
 
 	enc := yaml.NewEncoder(&buf)
@@ -150,7 +156,7 @@ func (e *Edit) Save() error {
 	}
 
 	// Loading the temp file checks it, with dir defaults resolved as for the real one.
-	if _, err := LoadStrict(tmp); err != nil {
+	if _, err := check(tmp); err != nil {
 		_ = os.Remove(tmp)
 
 		return fmt.Errorf("not saved, the crew would not load: %w", err)

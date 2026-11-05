@@ -1,6 +1,7 @@
 package shift
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -56,6 +57,29 @@ func TestStartTellsOfTheStopItLifted(t *testing.T) {
 
 	assert.Contains(t, s.Standing(), "This crew's shift was stopped")
 	assert.Contains(t, s.Standing(), "2d ago")
+}
+
+// The beat that finds the dispatcher down starts it on what it knew before that beat: a ticker back after days has
+// just written over when it last beat.
+func TestTickTellsTheDispatcherItStartsOfTheSilence(t *testing.T) {
+	s, tm, _, now := fixture(t)
+	s.State.LastTick = now.Add(-72 * time.Hour)
+
+	s.Tick()
+
+	assert.Contains(t, tm.starts, s.Crew.Dispatcher)
+	assert.Contains(t, strings.Join(tm.argv[s.Crew.Dispatcher], " "), "This crew's ticker last beat")
+	assert.True(t, s.State.LastTick.Equal(*now))
+}
+
+// A beat on time says nothing to whoever it starts.
+func TestTickOnTimeAddsNothing(t *testing.T) {
+	s, tm, _, now := fixture(t)
+	s.State.LastTick = now.Add(-time.Minute)
+
+	s.Tick()
+
+	assert.NotContains(t, strings.Join(tm.argv[s.Crew.Dispatcher], " "), "last beat")
 }
 
 func TestRetiredCrewStartsNothing(t *testing.T) {

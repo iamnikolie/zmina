@@ -78,7 +78,7 @@ func (a *app) setRetired(date, movedTo string) error {
 		e.SetCrewKey("retired", date)
 		e.SetCrewKey("moved_to", movedTo)
 
-		if err := e.Save(); err != nil {
+		if err := e.SaveCrewKeys(); err != nil {
 			return err
 		}
 

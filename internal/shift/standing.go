@@ -26,7 +26,12 @@ func (s *Shift) Standing() string {
 		stop = s.lastStop
 	}
 
-	switch last := s.State.LastTick; {
+	last := s.lastBeat
+	if last.IsZero() {
+		last = s.State.LastTick
+	}
+
+	switch {
 	case !stop.IsZero() && now.Sub(stop) > StaleAfter:
 		line = fmt.Sprintf("This crew's shift was stopped on %s, %s ago.", s.clock(stop), spanWords(now.Sub(stop)))
 	case !last.IsZero() && now.Sub(last) > StaleAfter:
