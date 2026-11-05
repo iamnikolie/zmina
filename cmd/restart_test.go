@@ -167,3 +167,10 @@ func TestRestartFromOwnSessionWaitsForTurnAndResumes(t *testing.T) {
 	assert.Contains(t, log, "restart-skipped")
 	assert.Contains(t, log, "restart-pending")
 }
+
+// Inside walks real parents with ps.
+func TestProcParentReadsPS(t *testing.T) {
+	got, err := procParent(os.Getpid())
+	require.NoError(t, err)
+	assert.Equal(t, os.Getppid(), got)
+}
