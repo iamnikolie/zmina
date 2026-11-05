@@ -78,36 +78,32 @@ func ParseDialog(screen string) *Dialog {
 		return nil
 	}
 
-	footer := false
-	for _, l := range lines[last+1:] {
-		t := strings.TrimSpace(l)
-		switch {
-		case t == "":
-		case strings.Contains(t, "Enter to select") || strings.Contains(t, "Esc to cancel"):
-			footer = true
-		case strings.HasPrefix(l, "     ") && !footer:
-		default:
+	// The footer is found by where it stands, never by words a description may also hold: the screen's last
+	// non-blank line, not indented as a description is. Between the last choice and it, only descriptions and blanks.
+	end := len(lines) - 1
+	for end > last && strings.TrimSpace(lines[end]) == "" {
+		end--
+	}
+
+	if end <= last || isDetail(lines[end]) || !(strings.Contains(lines[end], "Enter to select") || strings.Contains(lines[end], "Esc to cancel")) {
+		return nil
+	}
+
+	for _, l := range lines[last+1 : end] {
+		if strings.TrimSpace(l) != "" && !isDetail(l) {
 			return nil
 		}
 	}
 
-	if !footer {
-		return nil
-	}
-
-	// Each choice's description: the indented lines under it, up to the next choice or the footer.
+	// Each choice's description: the indented lines under it, up to the next choice or the footer, whatever they say.
 	at := -1
-	for _, l := range lines[first:] {
+	for _, l := range lines[first:end] {
 		if m := optionLine.FindStringSubmatch(l); m != nil {
 			n, _ := strconv.Atoi(m[2])
 			at = n - 1
 			continue
 		}
-		t := strings.TrimSpace(l)
-		if t == "" || strings.Contains(t, "Enter to select") || strings.Contains(t, "Esc to cancel") {
-			continue
-		}
-		if at >= 0 && at < len(opts) {
+		if t := strings.TrimSpace(l); t != "" && isDetail(l) && at >= 0 && at < len(opts) {
 			opts[at].Detail = strings.TrimSpace(opts[at].Detail + " " + t)
 		}
 	}
@@ -180,3 +176,6 @@ func (d *Dialog) ChooseKeys(n int) []string {
 
 	return append(keys, "Enter")
 }
+
+// isDetail reports a line drawn as a choice's description: indented past the choices' own numbers.
+func isDetail(l string) bool { return strings.HasPrefix(l, "     ") }

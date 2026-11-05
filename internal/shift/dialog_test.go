@@ -64,3 +64,14 @@ func TestDialogIDCoversTheDescriptions(t *testing.T) {
 	assert.Equal(t, "preview locally", a.Options[0].Detail)
 	assert.NotEqual(t, a.ID, b.ID)
 }
+
+// A description may say anything, the footer's words too: it stays a description, and a part of the question.
+func TestDialogDescriptionWithFooterWords(t *testing.T) {
+	a := ParseDialog(" ☐ Report\n│ Go on?\n❯ 1. Yes\n     Press Enter to select a local preview\n  2. No\nEnter to select · Esc to cancel")
+	b := ParseDialog(" ☐ Report\n│ Go on?\n❯ 1. Yes\n     Press Enter to select public publication\n  2. No\nEnter to select · Esc to cancel")
+	require.NotNil(t, a)
+	require.NotNil(t, b)
+	assert.Equal(t, "Press Enter to select a local preview", a.Options[0].Detail)
+	assert.NotEqual(t, a.ID, b.ID)
+	assert.Nil(t, ParseDialog("❯ 1. Yes\n  2. No\n     Enter to select"), "an indented line is no footer")
+}
