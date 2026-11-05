@@ -534,7 +534,7 @@ func (a *app) downRoles(names func(s *shift.Shift) ([]string, error), o shift.Do
 
 func (a *app) restartCommand() *cobra.Command {
 	var clear, fresh, continueLast bool
-	var afterTurn int
+	var own shift.Own
 
 	c := &cobra.Command{
 		Use:   "restart <role>",
@@ -542,24 +542,24 @@ func (a *app) restartCommand() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
-			if afterTurn != 0 {
-				return a.ownRestart(name, afterTurn, fresh, continueLast, clear)
+			if own.Pane != 0 {
+				return a.ownRestart(name, own, fresh, continueLast, clear)
 			}
 
 			var (
-				opts shift.UpOptions
-				pane int
+				opts   shift.UpOptions
+				asked  shift.Own
+				inside bool
 			)
 
 			err := a.withState(func(s *shift.Shift) error {
 				var err error
-				if p, inside := s.Inside(name, os.Getpid()); inside {
+				if asked, inside = s.Inside(name, os.Getpid(), callerSession()); inside {
 					// Checked now, so a restart that cannot go on fails here, to the role that asked.
 					if _, err = s.OwnRestartOptions(name, fresh, continueLast); err != nil {
 						return err
 					}
 
-					pane = p
 					s.Log(name, "restart-pending", "", "asked from its own session: once this turn ends")
 
 					return nil
@@ -572,8 +572,8 @@ func (a *app) restartCommand() *cobra.Command {
 				return err
 			}
 
-			if pane != 0 {
-				return a.handOwnRestart(name, pane, fresh, continueLast, clear)
+			if inside {
+				return a.handOwnRestart(name, asked, fresh, continueLast, clear)
 			}
 
 			return a.restart(name, opts, clear)
@@ -585,11 +585,23 @@ func (a *app) restartCommand() *cobra.Command {
 	c.Flags().BoolVar(&fresh, "fresh", false, "start a new conversation, ignoring resume policy")
 	c.Flags().BoolVar(&continueLast, "continue", false, "resume the last known conversation (fail if unknown)")
 	c.MarkFlagsMutuallyExclusive("fresh", "continue")
-	// The detached half of a restart a role ran from its own session: the pid in its pane when it asked.
-	c.Flags().IntVar(&afterTurn, "after-turn", 0, "")
+	// The detached half of a restart a role ran from its own session: the pid in its pane and its start then.
+	c.Flags().IntVar(&own.Pane, "after-turn", 0, "")
+	c.Flags().Int64Var(&own.Started, "started", 0, "")
 	_ = c.Flags().MarkHidden("after-turn")
+	_ = c.Flags().MarkHidden("started")
 
 	return c
+}
+
+// callerSession is the conversation this command runs in when a runtime's tool runs it: Claude Code and Codex name
+// theirs in their tools' environment (a shared Codex daemon's tools carry no ZMINA_ROLE, but their thread).
+func callerSession() string {
+	if id := os.Getenv("CLAUDE_CODE_SESSION_ID"); id != "" {
+		return id
+	}
+
+	return os.Getenv("CODEX_THREAD_ID")
 }
 
 // restart ends a role and starts it again with opts.
@@ -623,10 +635,11 @@ var (
 	ownRestartPoll = time.Second
 )
 
-// handOwnRestart hands a restart a role ran from its own session to a detached zmina: run here, the role's /exit
-// would end this very process with its tools, between the down and the up.
-func (a *app) handOwnRestart(name string, pane int, fresh, continueLast, clear bool) error {
-	args := []string{"--crew", a.crewPath(), "restart", name, "--after-turn", strconv.Itoa(pane)}
+// handOwnRestart hands a restart a role ran from its own session to a detached zmina: run here, putting the role down
+// would end this very command (a claude's /exit takes its tools along; a shared Codex bridge interrupts the turn).
+func (a *app) handOwnRestart(name string, own shift.Own, fresh, continueLast, clear bool) error {
+	args := []string{"--crew", a.crewPath(), "restart", name, "--after-turn", strconv.Itoa(own.Pane),
+		"--started", strconv.FormatInt(own.Started, 10)}
 	for _, f := range []struct {
 		flag string
 		on   bool
@@ -656,35 +669,22 @@ func (a *app) handOwnRestart(name string, pane int, fresh, continueLast, clear b
 	return nil
 }
 
-// errOwnRestartGone: the role a restart was asked for from its own session was put down or restarted meanwhile.
-var errOwnRestartGone = errors.New("its session ended before this turn did")
-
 // ownRestart is the detached half of a restart a role ran from its own session: it waits for that turn to end, then
-// restarts the role on its conversation. A failure is told to the dispatcher, as no one waits for this process.
-func (a *app) ownRestart(name string, pane int, fresh, continueLast, clear bool) error {
+// restarts that very session on its conversation. Whether it may is decided under the lock that begins the down,
+// so a session that replaced it, a new turn, or a competing restart is left alone. A failure is told to the
+// dispatcher, as no one waits for this process.
+func (a *app) ownRestart(name string, own shift.Own, fresh, continueLast, clear bool) error {
 	// The role's session going down must not take this one with it.
 	signal.Ignore(syscall.SIGHUP)
 
-	err := a.awaitOwnTurn(name, pane)
-	if err == nil {
-		var opts shift.UpOptions
-		err = a.withState(func(s *shift.Shift) error {
-			var err error
-			opts, err = s.OwnRestartOptions(name, fresh, continueLast)
-			return err
-		})
-
-		if err == nil {
-			err = a.restart(name, opts, clear)
-		}
-	}
-
+	err := a.runOwnRestart(name, own, fresh, continueLast, clear)
 	if err == nil {
 		return nil
 	}
 
+	gone := errors.Is(err, shift.ErrOwnGone)
 	_ = a.withState(func(s *shift.Shift) error {
-		if errors.Is(err, errOwnRestartGone) {
+		if gone {
 			s.Log(name, "restart-skipped", "", err.Error())
 
 			return nil
@@ -697,27 +697,78 @@ func (a *app) ownRestart(name string, pane int, fresh, continueLast, clear bool)
 		return nil
 	})
 
-	if errors.Is(err, errOwnRestartGone) {
+	if gone {
 		return nil
 	}
 
 	return err
 }
 
-// awaitOwnTurn waits up to ownRestartWait for the turn of the role's session that asked for the restart to end.
-func (a *app) awaitOwnTurn(name string, pane int) error {
+func (a *app) runOwnRestart(name string, own shift.Own, fresh, continueLast, clear bool) error {
+	var (
+		opts  shift.UpOptions
+		wait  bool
+		claim time.Time
+	)
+
+	for deadline := time.Now().Add(ownRestartWait); ; time.Sleep(ownRestartPoll) {
+		if err := a.awaitOwnTurn(name, own, deadline); err != nil {
+			return err
+		}
+
+		err := a.withState(func(s *shift.Shift) error {
+			var err error
+			opts, wait, claim, err = s.ClaimOwnRestart(name, own, fresh, continueLast, clear)
+			return err
+		})
+		if err == nil {
+			break
+		}
+
+		if !errors.Is(err, shift.ErrOwnTurnRuns) {
+			return err
+		}
+
+		if time.Now().After(deadline) {
+			return fmt.Errorf("its turn did not end within %s", ownRestartWait)
+		}
+	}
+
+	if wait {
+		s, err := a.newShift()
+		if err != nil {
+			return err
+		}
+
+		shift.WaitGone(s.Tmux, []string{name}, shift.ExitWait)
+	}
+
+	return a.withState(func(s *shift.Shift) error {
+		if err := s.FinishOwnRestart(name, claim, opts); err != nil {
+			return err
+		}
+
+		fmt.Fprintln(a.out, name, "restarted")
+
+		return nil
+	})
+}
+
+// awaitOwnTurn waits, without the lock, until the turn that asked for the restart looks over, so the lock is taken
+// only to check and claim it; the check that counts is ClaimOwnRestart's, under the lock.
+func (a *app) awaitOwnTurn(name string, own shift.Own, deadline time.Time) error {
 	s, err := a.newShift()
 	if err != nil {
 		return err
 	}
 
-	for deadline := time.Now().Add(ownRestartWait); ; time.Sleep(ownRestartPoll) {
+	for ; ; time.Sleep(ownRestartPoll) {
 		if st, err := shift.Read(s.Crew.StateDir()); err == nil {
 			s.State = st
 
-			over, gone := s.OwnTurnOver(name, pane)
+			over, gone := s.OwnTurnOver(name, own)
 			if gone {
-				return errOwnRestartGone
+				return shift.ErrOwnGone
 			}
 
 			if over {
