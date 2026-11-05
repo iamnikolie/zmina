@@ -14,6 +14,13 @@ const TypedReportPrefix = "[zmina-report-v1]"
 // TypedPublicationPrefix carries ordered publications under authenticated reports_v2 support.
 const TypedPublicationPrefix = "[zmina-report-v2]"
 
+// TellReceiptPrefix marks a signed receipt for a plain line: handed only to a peer that authenticated
+// tell_receipts, since an older node would take it for a plain line.
+const TellReceiptPrefix = "[zmina-tell-receipt-v1]"
+
+// IsTellReceipt reports a body in the tell receipt format.
+func IsTellReceipt(body string) bool { return strings.HasPrefix(body, TellReceiptPrefix) }
+
 // ReportWireVersion recognizes legacy queued publications too: their signed content_hash already
 // changes revision semantics even if an earlier writer used the v1 prefix.
 func ReportWireVersion(body string) int {

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"github.com/iamnikolie/zmina/internal/inbox"
 	"github.com/iamnikolie/zmina/internal/mesh"
@@ -10,10 +11,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
 )
+
+// reportID is a report's id: a line sent has its envelope id.
+var reportID = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 func messages(s *shift.Shift) message.Store {
 	return message.Store{Dir: filepath.Join(s.Crew.StateDir(), "messages")}
@@ -203,6 +208,9 @@ func (a *app) deliverReport(c uiCrew, from mesh.Address, envelopeID, body string
 	if err != nil {
 		return true, fmt.Errorf("%w: %v", mesh.ErrRefused, err)
 	}
+	if w.Kind == "tell_receipt" {
+		return true, a.applyTellReceipt(c, from, *w.TellReceipt)
+	}
 	me, err := mesh.Open(meshDir())
 	if err != nil {
 		return true, err
@@ -273,8 +281,13 @@ func refreshReportTransport(me *mesh.Node, v *message.Revision) error {
 	return nil
 }
 
-// reconcileMessages performs only local record/outbox work while the crew lock is held.
+// reconcileMessages performs only local record/outbox work while the crew lock is held: report records, and the
+// receipts of plain lines this crew took.
 func (a *app) reconcileMessages(s *shift.Shift) error {
+	return errors.Join(a.reconcileReports(s), a.reconcileTells(s))
+}
+
+func (a *app) reconcileReports(s *shift.Shift) error {
 	store := messages(s)
 	all, err := store.All()
 	if err != nil {
@@ -347,14 +360,15 @@ func (a *app) reconcileMessages(s *shift.Shift) error {
 					src, _ := mesh.ParseAddress(r.From)
 					locator := fmt.Sprintf("Report %s stored as data; read zmina --crew %s message show %s --revision %s; explicitly mark message read after consuming it", reportMarker(r), quoteCommandArg(s.Crew.Path), r.ID, r.Revision)
 					text, _ := remoteText(locator, reportInbox(r))
-					if _, err := s.NoteSent(remoteSource(src), text, r.At); err != nil {
+					if note, sigID, _, err := s.NoteSentAs(remoteSource(src), text, r.At); err != nil {
 						v.LastError = err.Error()
 					} else {
 						s.State.MessageStages[marker]["queued_dispatcher"] = s.Now().UTC()
 						if s.State.MessageLines == nil {
 							s.State.MessageLines = map[string]string{}
 						}
-						s.State.MessageLines[marker] = remoteSource(src) + ": " + text
+						s.State.MessageLines[marker] = note
+						s.BindMessage(marker, sigID)
 						v.LastError = ""
 					}
 				}
@@ -419,11 +433,20 @@ func (a *app) reconcileMessages(s *shift.Shift) error {
 }
 
 func (a *app) messageCommand() *cobra.Command {
-	c := &cobra.Command{Use: "message", Short: "Inspect end-to-end typed report observations and explicit read/relay receipts"}
+	c := &cobra.Command{Use: "message", Short: "Inspect end-to-end typed report observations, explicit read/relay receipts, and the receipts of plain lines sent"}
 	var revision string
 	var asJSON bool
 	show := &cobra.Command{Use: "show <id>", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		return a.readState(func(s *shift.Shift) error {
+			if t, err := tells(s).LoadOut(args[0]); err == nil {
+				if asJSON {
+					return a.printJSON(t)
+				}
+
+				return a.showTell(t)
+			} else if os.IsNotExist(err) && !reportID.MatchString(args[0]) {
+				return fmt.Errorf("no line sent or report %s in this crew (zmina message ls)", args[0])
+			}
 			m, err := messages(s).Load(args[0])
 			if err != nil {
 				return err
@@ -477,7 +500,7 @@ func (a *app) messageCommand() *cobra.Command {
 				v := m.Revisions[m.Latest]
 				fmt.Fprintf(a.out, "%s · %s · %s → %s\n", m.ID, v.Stage, v.Report.From, v.Report.To)
 			}
-			return nil
+			return a.listTells(s)
 		})
 	}}
 	c.AddCommand(show, ls)
@@ -607,12 +630,17 @@ func (a *app) pumpLocalReports() error {
 func quoteCommandArg(v string) string { return "'" + strings.ReplaceAll(v, "'", "'\"'\"'") + "'" }
 
 func removeReportNotice(s *shift.Shift, marker string) {
-	line := s.State.MessageLines[marker]
-	if line == "" {
+	line, id := s.State.MessageLines[marker], s.State.MessageIDs[marker]
+	if line == "" && id == "" {
 		return
 	}
-	s.State.Signals = slices.DeleteFunc(s.State.Signals, func(v string) bool { return v == line })
-	delete(s.State.SignalCounts, line)
-	delete(s.State.SignalSent, line)
+	for _, sig := range slices.Clone(s.State.Signals) {
+		// The notice is known by the signal it was queued as; a notice queued before ids were bound, by its text
+		// (it names the report's id and revision).
+		if id != "" && shift.QueuedSignalID(sig) == id || id == "" && shift.SignalBody(sig) == line {
+			s.DropSignal(sig)
+		}
+	}
 	delete(s.State.MessageLines, marker)
+	delete(s.State.MessageIDs, marker)
 }

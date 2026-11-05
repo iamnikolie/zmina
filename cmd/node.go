@@ -597,12 +597,32 @@ func (a *app) tellCommand() *cobra.Command {
 			from := mesh.Address{Node: me.Name, Crew: a.crewKey()}
 
 			if to.Node == me.Name {
-				id, err := a.deliverHere(to.Crew, from, body)
+				id, err := inbox.NewID()
 				if err != nil {
 					return err
 				}
 
-				fmt.Fprintf(a.out, "queued for %s's dispatcher%s\n", to, storedAs(id, ""))
+				// Kept before it goes, so its receipts have a record to land on.
+				receipts, err := recordTellOut(from, to, id, body, time.Now())
+				if err != nil {
+					return err
+				}
+
+				stored, err := a.deliverHere(to.Crew, from, id, body)
+				if err != nil {
+					return err
+				}
+
+				fmt.Fprintf(a.out, "queued for %s's dispatcher%s\n", to, storedAs(stored, ""))
+
+				if receipts {
+					// The receipt for the queued stage is in the outbox: take it in now.
+					if err := a.pumpLocalReports(); err != nil {
+						fmt.Fprintln(a.err, "zmina: warning:", err)
+					}
+
+					fmt.Fprint(a.out, a.tellHint(from, id))
+				}
 
 				return nil
 			}
@@ -619,6 +639,12 @@ func (a *app) tellCommand() *cobra.Command {
 			}
 
 			long := isLong(body)
+
+			// Kept before it goes, so its receipts have a record to land on.
+			receipts, err := recordTellOut(from, to, e.ID, body, time.Now())
+			if err != nil {
+				return err
+			}
 
 			if err := me.Queue(e); err != nil {
 				return err
@@ -641,16 +667,22 @@ func (a *app) tellCommand() *cobra.Command {
 				}
 			}
 
+			// The far node sends receipts (it said so in a signed hello): where the line is, and where to look later.
+			hint := ""
+			if receipts && peer.TellReceipts {
+				hint = a.tellHint(from, e.ID)
+			}
+
 			for _, s := range ss {
 				if s.Err == nil && !queued(me, e.ID) {
-					fmt.Fprintf(a.out, "delivered to %s%s\n", to, tail)
+					fmt.Fprintf(a.out, "delivered to %s%s\n%s", to, tail, hint)
 
 					return nil
 				}
 			}
 
-			fmt.Fprintf(a.out, "queued for %s: it goes with the next sync (the ticker, every minute) — zmina node ls%s\n",
-				to, tail)
+			fmt.Fprintf(a.out, "queued for %s: it goes with the next sync (the ticker, every minute) — zmina node ls%s\n%s",
+				to, tail, hint)
 
 			return nil
 		},
@@ -740,42 +772,63 @@ func localCrew(key string) (uiCrew, error) {
 }
 
 // deliverHere queues a line from another crew of this node for one of its crews' dispatcher, wrapped as data like
-// a line from another node. It returns the inbox id the whole text went to, empty when it was short enough to type.
-func (a *app) deliverHere(key string, from mesh.Address, body string) (string, error) {
+// a line from another node, under id (a new inbox id when empty): the inbox id of a long body, and the line's
+// receipt id. It returns the inbox id the whole text went to, empty when it was short enough to type.
+func (a *app) deliverHere(key string, from mesh.Address, id, body string) (string, error) {
 	c, err := localCrew(key)
 	if err != nil {
 		return "", err
 	}
 
-	id, err := inbox.NewID()
-	if err != nil {
-		return "", err
+	if id == "" {
+		if id, err = inbox.NewID(); err != nil {
+			return "", err
+		}
 	}
 
-	return a.noteRemote(c.Path, from, id, body, time.Now())
+	return a.noteRemote(c, from, id, id, body, time.Now())
 }
 
 // noteRemote queues a line from another crew for the crew's dispatcher: typed whole when it fits, else stored whole
 // in the crew's inbox under id and typed as its head and the id (remoteText). sent is when its writer sent it: the
-// typed line says so, and how late it comes (shift.Lateness). It returns the id when it stored it.
-func (a *app) noteRemote(path string, from mesh.Address, id, body string, sent time.Time) (string, error) {
+// typed line says so, and how late it comes (shift.Lateness). The line's stages go under message.TellMarker(tellID)
+// for its receipts (recordTellIn). It returns the id when it stored it.
+func (a *app) noteRemote(c uiCrew, from mesh.Address, id, tellID, body string, sent time.Time) (string, error) {
 	text, long := remoteText(body, id)
 
-	err := a.forCrew(path).withState(func(s *shift.Shift) error {
+	// Not a node: nobody to send a receipt to.
+	me, _ := mesh.Open(meshDir())
+
+	err := a.forCrew(c.Path).withState(func(s *shift.Shift) error {
 		if long {
 			if err := s.Inbox.Put(inbox.Entry{ID: id, From: remoteSource(from), Remote: true, Body: body}); err != nil {
 				return err
 			}
 		}
 
-		if _, err := s.NoteSent(remoteSource(from), text, sent); err != nil {
+		note, sigID, _, err := s.NoteSentAs(remoteSource(from), text, sent)
+		if err != nil {
 			return err
+		}
+
+		// The line is queued: a receipt record that fails to write must not fail its delivery (it would come again).
+		if me != nil {
+			here := mesh.Address{Node: me.Name, Crew: c.Key}
+			if err := recordTellIn(s, from, here, tellID, note, sigID, sent); err != nil && s.Warn != nil {
+				s.Warn(fmt.Errorf("receipt record for %s: %w", tellID, err))
+			}
 		}
 
 		s.Deliver()
 
 		return nil
 	})
+
+	// The queued stage is committed now: queue its receipt at once, so the sender's pull in this session takes it.
+	if err == nil && me != nil {
+		_ = a.forCrew(c.Path).withState(a.reconcileMessages)
+	}
+
 	if err != nil || !long {
 		return "", err
 	}
@@ -834,7 +887,7 @@ func (a *app) deliverFrom() mesh.Deliver {
 		if handled, e := a.deliverReport(c, src, id, body, sent); handled {
 			return e
 		}
-		_, err = a.noteRemote(c.Path, src, mesh.InboxID(id), body, sent)
+		_, err = a.noteRemote(c, src, mesh.InboxID(id), id, body, sent)
 
 		return err
 	}

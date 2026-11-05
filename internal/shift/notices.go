@@ -161,7 +161,7 @@ func (s *Shift) Report(source, key, text string) (bool, error) {
 		old.At = s.Now()
 		s.State.Reports[id] = old
 		for _, sig := range s.State.Signals {
-			if strings.HasPrefix(sig, source+": report "+key+": ") {
+			if strings.HasPrefix(signalBody(sig), source+": report "+key+": ") {
 				if s.State.SignalCounts == nil {
 					s.State.SignalCounts = map[string]int{}
 				}
@@ -175,13 +175,11 @@ func (s *Shift) Report(source, key, text string) (bool, error) {
 	}
 	if old.Key != "" {
 		prefix := source + ": report " + key + ": "
-		s.State.Signals = slices.DeleteFunc(s.State.Signals, func(v string) bool {
-			if strings.HasPrefix(v, prefix) {
-				delete(s.State.SignalCounts, v)
-				return true
+		for _, sig := range slices.Clone(s.State.Signals) {
+			if strings.HasPrefix(signalBody(sig), prefix) {
+				s.dropSignal(sig)
 			}
-			return false
-		})
+		}
 	}
 	queued, err := s.Note(source, "report "+key+": "+text, false)
 	if err != nil {

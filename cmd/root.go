@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -169,6 +172,7 @@ func (a *app) newShift() (*shift.Shift, error) {
 		Peer:              peer.Inbox{},
 		CodexInbox:        codex.Inbox{},
 		Self:              self(),
+		ProcArgs:          procArgs,
 		State:             shift.NewState(),
 		Tasks:             taskStore(c),
 		Later:             laterStore(c),
@@ -377,6 +381,13 @@ func (l *lazyTmux) KeepScreens(name string) error {
 }
 
 // self is this zmina's executable, for the hooks the roles it starts run; empty when it cannot be found.
+// procArgs is a process's command line, as ps shows it.
+func procArgs(pid int) (string, error) {
+	out, err := exec.Command("ps", "-o", "args=", "-p", strconv.Itoa(pid)).Output()
+
+	return strings.TrimSpace(string(out)), err
+}
+
 func self() string {
 	path, err := os.Executable()
 	if err != nil {

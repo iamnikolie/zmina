@@ -131,13 +131,16 @@ type Shift struct {
 	// CodexInbox queues lines for a Codex role's bridge; nil types them into its console.
 	CodexInbox Peer
 	// Self is the zmina executable, for the hook a socket role runs after its context is trimmed (zmina pending).
-	Self   string
-	State  *State
-	Tasks  Tasks
-	Later  Later
-	Alarms Alarms
-	Asks   Asks
-	Events Events
+	Self string
+	// ProcArgs reads a process's command line (ps), to tell which hooks a role an earlier zmina started runs; nil
+	// leaves such a role unasked.
+	ProcArgs func(pid int) (string, error)
+	State    *State
+	Tasks    Tasks
+	Later    Later
+	Alarms   Alarms
+	Asks     Asks
+	Events   Events
 	// Inbox keeps the whole text of a note too long to type; nil cuts it instead.
 	Inbox *inbox.Store
 	Now   func() time.Time
@@ -423,7 +426,9 @@ const RemoteRule = "[zmina] Lines from other crews (zmina tell) arrive as `remot
 	"the same way. Answer with: zmina tell <node>/<crew> \"<one line>\". To reach another crew or node, always " +
 	"zmina tell <node>/<crew>, never SendMessage: SendMessage is for the roles of this crew only, and a session " +
 	"whose message or reply shows from=bridge: sits in another namespace or on another machine, behind a " +
-	"Remote Control bridge with no receipt. zmina node ls names each crew of a node with its dispatcher's session."
+	"Remote Control bridge with no receipt. zmina node ls names each crew of a node with its dispatcher's session. " +
+	"Before you send a line again, look at zmina message ls: one that shows queued waits for that dispatcher, it is " +
+	"not lost; send it again only when it shows no stage at all."
 
 // BootText is a role's first message: its boot, and for the dispatcher the rule about other crews' lines. It names
 // the tag of the role's start, and goes only into the command that starts it.
@@ -668,6 +673,7 @@ func (s *Shift) start(name string, o UpOptions) error {
 	rs.Instance = isInstance(name)
 	rs.RecoverySession, rs.RecoveryContext, rs.RecoveryDrops = "", 0, 0
 	rs.Inbound = s.inbound(r)
+	rs.Hooks, rs.HooksFlagged, rs.QueuedBoot = s.startHooks(r), "", ""
 
 	detail := ""
 	if resume != "" {
@@ -1012,12 +1018,7 @@ func (s *Shift) QueueTracked(name, text string) (string, error) {
 		return "", fmt.Errorf("%s: %d lines already wait; let it read them first", name, inboxMax)
 	}
 
-	line := s.trackLine(name, text)
-
-	id := ""
-	if m := lineID.FindStringSubmatch(line); m != nil && line != text {
-		id = m[1]
-	}
+	line, id := s.trackLine(name, text)
 
 	return id, s.Queue(name, line)
 }
@@ -1039,9 +1040,18 @@ func (s *Shift) Note(from, text string, ifUp bool) (bool, error) {
 // NoteSent is Note for a line from another crew, with when its writer sent it: the line typed into the dispatcher
 // says when it was sent and, past remoteLateAfter, when it is delivered and how late (Lateness).
 func (s *Shift) NoteSent(from, text string, sent time.Time) (bool, error) {
+	_, _, queued, err := s.NoteSentAs(from, text, sent)
+
+	return queued, err
+}
+
+// NoteSentAs is NoteSent that also returns the note as it was queued, without its id, and the id of the signal it
+// waits in: a line that coalesced into a signal still queued shares that signal's id. Receipts follow the id
+// (BindMessage).
+func (s *Shift) NoteSentAs(from, text string, sent time.Time) (string, string, bool, error) {
 	note, queued, err := s.note(from, text, false)
 	if err != nil || note == "" || sent.IsZero() {
-		return queued, err
+		return signalBody(note), queuedSignalID(note), queued, err
 	}
 
 	if _, ok := s.State.SignalSent[note]; !ok {
@@ -1052,7 +1062,7 @@ func (s *Shift) NoteSent(from, text string, sent time.Time) (bool, error) {
 		s.State.SignalSent[note] = sent
 	}
 
-	return queued, nil
+	return signalBody(note), queuedSignalID(note), queued, nil
 }
 
 // note queues a note and returns it as queued (or as it already waits).
@@ -1087,20 +1097,28 @@ func (s *Shift) note(from, text string, ifUp bool) (string, bool, error) {
 	if s.State.SignalCounts == nil {
 		s.State.SignalCounts = map[string]int{}
 	}
-	if slices.Contains(s.State.Signals, note) {
-		s.State.SignalCounts[note] = max(1, s.State.SignalCounts[note]) + 1
-		return note, false, nil
+	if i := slices.IndexFunc(s.State.Signals, func(v string) bool { return signalBody(v) == note }); i >= 0 {
+		sig := s.State.Signals[i]
+		s.State.SignalCounts[sig] = max(1, s.State.SignalCounts[sig]) + 1
+		return sig, false, nil
 	}
 
 	if len(s.State.Signals) >= signalsMax {
 		return "", false, fmt.Errorf("%d notes already wait for the dispatcher; it is not reading them", signalsMax)
 	}
 
-	s.State.Signals = append(s.State.Signals, note)
-	s.State.SignalCounts[note] = 1
-	s.log(d, "noted", "", note)
+	// The id comes with the note, not with its delivery: zmina queue ls and the recovery pack show it, and a line
+	// the dispatcher acks while it still waits is never posted (AckLines).
+	sig := note
+	if id := s.noteID(note); id != "" {
+		sig = id + " " + note
+	}
 
-	return note, true, nil
+	s.State.Signals = append(s.State.Signals, sig)
+	s.State.SignalCounts[sig] = 1
+	s.log(d, "noted", "", sig)
+
+	return sig, true, nil
 }
 
 // oneLine folds whitespace, newlines included, to single spaces and drops control characters: a note is typed as
@@ -1177,7 +1195,7 @@ func (s *Shift) Retry(name string) (int, error) {
 	lines := make([]string, 0, len(rs.Failed)+len(rs.Inbox))
 
 	for _, f := range rs.Failed {
-		lines = append(lines, f.Line)
+		lines = append(lines, s.giveBack(name, f.Line, f.IDs, f.Parts)...)
 	}
 
 	n := len(rs.Failed)
@@ -1200,7 +1218,7 @@ func (s *Shift) Drop(name string, all bool) (int, error) {
 
 	if all {
 		n += len(rs.Inbox)
-		rs.Inbox, rs.Attempts = nil, 0
+		rs.Inbox, rs.Attempts, rs.QueuedIDs = nil, 0, nil
 
 		if name == s.Crew.Dispatcher {
 			n += len(s.State.Signals) + len(s.State.Notes)

@@ -34,8 +34,9 @@ const (
 var (
 	// signalID is the id at the head of a dispatcher's signal part: "S-12 mrs: …".
 	signalID = regexp.MustCompile(`^(S-[0-9]+) `)
-	// lineID is the id in a queued line's tail: "… (zmina S-14)", "… (zmina S-14, still pending since …)".
-	lineID = regexp.MustCompile(`\(zmina (S-[0-9]+)[,)]`)
+	// trackedTail is the id in a tracked line's tail, at its very end, the only place zmina puts it:
+	// "… (zmina S-14)", "… (zmina S-14, still pending since …)".
+	trackedTail = regexp.MustCompile(`\(zmina (S-[0-9]+)(?:, still pending since [^()]*)?\)$`)
 )
 
 // signalBody is a signal without the id and the "still pending" mark it carries once it was delivered.
@@ -106,23 +107,22 @@ func (s *Shift) acking(name string) bool {
 	return err == nil && s.inbound(r)
 }
 
-// trackLine gives a queued line its id when its role acks; it returns the line to queue.
-func (s *Shift) trackLine(role, line string) string {
+// trackLine gives a queued line its id when its role acks: it returns the line to queue and its id, "" for none.
+// The id is kept with the line (QueuedIDs) from here on; the line's text is never read for it.
+func (s *Shift) trackLine(role, line string) (string, string) {
 	if !s.acking(role) {
-		return line
+		return line, ""
 	}
 
 	a := s.State.Acks[s.newAck(role, line)]
+	line += s.lineSuffix(a)
+	s.carryIDs(role, line, []string{a.ID})
 
-	return line + s.lineSuffix(a)
+	return line, a.ID
 }
 
-// delivered marks the tracked line or signal parts in a delivered line as delivered now.
-func (s *Shift) delivered(line string, ids []string, now time.Time) {
-	if m := lineID.FindStringSubmatch(line); m != nil {
-		ids = append(ids, m[1])
-	}
-
+// delivered marks the tracked lines of these ids as delivered now.
+func (s *Shift) delivered(ids []string, now time.Time) {
 	for _, id := range ids {
 		if a := s.State.Acks[id]; a != nil {
 			if a.First.IsZero() {
@@ -134,6 +134,19 @@ func (s *Shift) delivered(line string, ids []string, now time.Time) {
 	}
 }
 
+// SignalBody is a dispatcher's signal without its id and its "still pending" mark: the note as it was taken.
+func SignalBody(sig string) string { return signalBody(sig) }
+
+// noteID is the id a new signal for the dispatcher waits for its ack under, "" for none: a watch's note has its
+// own ack, and a dispatcher started by an earlier zmina is not told of acks.
+func (s *Shift) noteID(note string) string {
+	if src, _, _ := strings.Cut(note, ": "); s.Crew.Watches[src] != nil || !s.acking(s.Crew.Dispatcher) {
+		return ""
+	}
+
+	return s.newAck(s.Crew.Dispatcher, note)
+}
+
 // signalPart is a dispatcher's signal as its line carries it: with its id, a new one for a signal never delivered
 // (watch notes have their own ack, and are left as they are). It returns the part and its id, "" for none.
 func (s *Shift) signalPart(sig string) (string, string) {
@@ -141,11 +154,10 @@ func (s *Shift) signalPart(sig string) (string, string) {
 		return sig, m[1]
 	}
 
-	if src, _, _ := strings.Cut(sig, ": "); s.Crew.Watches[src] != nil || !s.acking(s.Crew.Dispatcher) {
+	id := s.noteID(sig)
+	if id == "" {
 		return sig, ""
 	}
-
-	id := s.newAck(s.Crew.Dispatcher, sig)
 
 	return id + " " + sig, id
 }
@@ -181,27 +193,34 @@ func (s *Shift) renotify(now time.Time) {
 			s.State.Signals = append(s.State.Signals, a.ID+" (still pending since "+s.clock(a.First)+") "+a.Text)
 		} else {
 			rs := s.State.Role(a.Role)
-			rs.Inbox = append(rs.Inbox, a.Text+s.lineSuffix(a))
+			line := a.Text + s.lineSuffix(a)
+			rs.Inbox = append(rs.Inbox, line)
+			s.carryIDs(a.Role, line, []string{a.ID})
 		}
 
 		s.log(a.Role, "renoted", "", a.ID+" "+a.Text)
 	}
 }
 
-// inFlight reports whether a tracked line is queued, typed but not landed, or posted but not seen.
+// inFlight reports whether a tracked line is queued, typed but not landed, or posted but not seen: by the ids each
+// of those keeps, never by a line's text.
 func (s *Shift) inFlight(a *Ack) bool {
-	re := regexp.MustCompile(`\b` + regexp.QuoteMeta(a.ID) + `\b`)
-
-	if a.Role == s.Crew.Dispatcher && slices.ContainsFunc(s.State.Signals, re.MatchString) {
+	if a.Role == s.Crew.Dispatcher && slices.ContainsFunc(s.State.Signals, func(sig string) bool {
+		return queuedSignalID(sig) == a.ID
+	}) {
 		return true
 	}
 
 	rs := s.State.Role(a.Role)
-	if slices.ContainsFunc(rs.Inbox, re.MatchString) || rs.Sent != nil && re.MatchString(rs.Sent.Line) {
+	if slices.ContainsFunc(rs.Inbox, func(l string) bool { return slices.Contains(rs.QueuedIDs[l], a.ID) }) {
 		return true
 	}
 
-	return slices.ContainsFunc(rs.Posted, func(p Posted) bool { return re.MatchString(p.Line) })
+	if rs.Sent != nil && slices.Contains(rs.Sent.IDs, a.ID) {
+		return true
+	}
+
+	return slices.ContainsFunc(rs.Posted, func(p Posted) bool { return slices.Contains(p.IDs, a.ID) })
 }
 
 // AckLines acks lines by id, or with all every line of the role. An id that waits for no ack (acked already, said
@@ -246,10 +265,231 @@ func (s *Shift) AckLines(ids []string, all bool, role, caller string) ([]string,
 		a := s.State.Acks[id]
 		delete(s.State.Acks, id)
 		s.log(a.Role, "acked", "", id+" "+a.Text)
+		s.dropQueued(a)
+
+		// A plain tell is read once its line is acked; a report only when the dispatcher says it consumed the
+		// report itself (zmina message read), never by acking the notice that points to it.
+		if a.Role == s.Crew.Dispatcher {
+			s.stageIDs([]string{id}, "read", TellPrefix)
+		}
 	}
 
 	return acked, warn
 }
+
+// dropQueued takes what its reader acked out of where it still waits: the dispatcher's signals (one it read in zmina
+// queue ls, or one said again), a role's queue. What the reader already has is not posted again. A queued item is
+// known by the ids zmina keeps with it (a signal's leading id, a queued line's QueuedIDs), never by what its text
+// quotes; a queued line that carries other ids too keeps waiting for them.
+func (s *Shift) dropQueued(a *Ack) {
+	if a.Role == s.Crew.Dispatcher {
+		for _, sig := range slices.Clone(s.State.Signals) {
+			if queuedSignalID(sig) == a.ID {
+				s.dropSignal(sig)
+				s.log(a.Role, "acked-queued", "", sig)
+			}
+		}
+	}
+
+	rs := s.State.Roles[a.Role]
+	if rs == nil {
+		return
+	}
+
+	for line, ids := range rs.QueuedIDs {
+		if !slices.Contains(ids, a.ID) {
+			continue
+		}
+
+		if ids = slices.DeleteFunc(slices.Clone(ids), func(id string) bool { return id == a.ID }); len(ids) > 0 {
+			rs.QueuedIDs[line] = ids
+
+			continue
+		}
+
+		delete(rs.QueuedIDs, line)
+
+		if slices.Contains(rs.Inbox, line) {
+			rs.Inbox = slices.DeleteFunc(rs.Inbox, func(v string) bool { return v == line })
+			s.log(a.Role, "acked-queued", "", line)
+		}
+	}
+}
+
+// giveBack puts what never reached a role back where it waited, each item with its own ids: a line or post to the
+// dispatcher by its parts (its own queued lines back in its queue, signals back in the signals, notices back in the
+// notes), any other line whole. An item whose every id its reader acked meanwhile stays out: the reader has it. It
+// returns the lines for the head of the role's queue.
+func (s *Shift) giveBack(name, line string, ids []string, parts []Part) []string {
+	acked := func(ids []string) bool {
+		return len(ids) > 0 && !slices.ContainsFunc(ids, func(id string) bool { return s.State.Acks[id] != nil })
+	}
+
+	if len(parts) == 0 {
+		if acked(ids) {
+			s.log(name, "acked-queued", "", line)
+
+			return nil
+		}
+
+		s.carryIDs(name, line, ids)
+
+		return []string{line}
+	}
+
+	var lines, sigs, notes []string
+
+	for _, p := range parts {
+		switch {
+		case acked(p.IDs):
+			s.log(name, "acked-queued", "", p.Line+p.Signal)
+		case p.Line != "":
+			lines = append(lines, p.Line)
+			s.carryIDs(name, p.Line, p.IDs)
+		case p.Signal != "":
+			if slices.Contains(s.State.Signals, p.Signal) || slices.Contains(sigs, p.Signal) {
+				continue
+			}
+
+			sigs = append(sigs, p.Signal)
+
+			if p.Count > 1 {
+				if s.State.SignalCounts == nil {
+					s.State.SignalCounts = map[string]int{}
+				}
+
+				s.State.SignalCounts[p.Signal] = p.Count
+			}
+
+			if !p.Sent.IsZero() {
+				if s.State.SignalSent == nil {
+					s.State.SignalSent = map[string]time.Time{}
+				}
+
+				s.State.SignalSent[p.Signal] = p.Sent
+			}
+		default:
+			for _, n := range p.Notes {
+				if !slices.Contains(s.State.Notes, n) && !slices.Contains(notes, n) {
+					notes = append(notes, n)
+				}
+			}
+		}
+	}
+
+	s.State.Signals = append(sigs, s.State.Signals...)
+	s.State.Notes = append(notes, s.State.Notes...)
+
+	return lines
+}
+
+// QueuedSignalID is queuedSignalID for the node's reports.
+func QueuedSignalID(sig string) string { return queuedSignalID(sig) }
+
+// carryIDs keeps the S-ids a line given back to a role's queue carries, for when it goes again.
+func (s *Shift) carryIDs(name, line string, ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+
+	rs := s.State.Role(name)
+	if rs.QueuedIDs == nil {
+		rs.QueuedIDs = map[string][]string{}
+	}
+
+	for _, id := range ids {
+		if !slices.Contains(rs.QueuedIDs[line], id) {
+			rs.QueuedIDs[line] = append(rs.QueuedIDs[line], id)
+		}
+	}
+}
+
+// takeIDs are the S-ids a role's queued line carries, for a line that leaves the queue.
+func (s *Shift) takeIDs(name, line string) []string {
+	rs := s.State.Role(name)
+	ids := slices.Clone(rs.QueuedIDs[line])
+	delete(rs.QueuedIDs, line)
+
+	return ids
+}
+
+// queuedSignalID is the id a dispatcher's signal waits under: the one at its head, "" for none.
+func queuedSignalID(sig string) string {
+	if m := signalID.FindStringSubmatch(sig); m != nil {
+		return m[1]
+	}
+
+	return ""
+}
+
+// DropSignal is dropSignal for the node's reports.
+func (s *Shift) DropSignal(sig string) { s.dropSignal(sig) }
+
+// dropSignal takes a signal out of the dispatcher's queue with what is kept about it; the ack of one never delivered
+// goes with it.
+func (s *Shift) dropSignal(sig string) {
+	s.State.Signals = slices.DeleteFunc(s.State.Signals, func(v string) bool { return v == sig })
+	delete(s.State.SignalCounts, sig)
+	delete(s.State.SignalSent, sig)
+
+	if m := signalID.FindStringSubmatch(sig); m != nil {
+		if a := s.State.Acks[m[1]]; a != nil && a.First.IsZero() {
+			delete(s.State.Acks, m[1])
+		}
+	}
+}
+
+// stageIDs records a stage for the lines of other crews bound to these signal ids (MessageIDs), only those whose
+// marker starts with prefix when one is given.
+func (s *Shift) stageIDs(ids []string, stage string, prefix ...string) {
+	for marker, id := range s.State.MessageIDs {
+		if len(prefix) > 0 && !strings.HasPrefix(marker, prefix[0]) {
+			continue
+		}
+
+		if slices.Contains(ids, id) {
+			s.markerStage(marker, stage)
+		}
+	}
+}
+
+// BindMessage binds a line of another crew (its marker) to the signal it was queued as, by the signal's id.
+func (s *Shift) BindMessage(marker, id string) {
+	if id == "" {
+		return
+	}
+
+	if s.State.MessageIDs == nil {
+		s.State.MessageIDs = map[string]string{}
+	}
+
+	s.State.MessageIDs[marker] = id
+}
+
+// ForgetMessage drops what is kept of a line of another crew by its marker.
+func (s *Shift) ForgetMessage(marker string) {
+	delete(s.State.MessageStages, marker)
+	delete(s.State.MessageLines, marker)
+	delete(s.State.MessageIDs, marker)
+}
+
+// markerStage records a stage of a line from another crew by its marker, the first time it is reached.
+func (s *Shift) markerStage(marker, stage string) {
+	if s.State.MessageStages == nil {
+		s.State.MessageStages = map[string]map[string]time.Time{}
+	}
+
+	if s.State.MessageStages[marker] == nil {
+		s.State.MessageStages[marker] = map[string]time.Time{}
+	}
+
+	if _, ok := s.State.MessageStages[marker][stage]; !ok {
+		s.State.MessageStages[marker][stage] = s.Now().UTC()
+	}
+}
+
+// TellPrefix opens the marker of a line another crew sent with plain zmina tell: "tell/<envelope id>".
+const TellPrefix = "tell/"
 
 // Pending is the lines that wait for an ack, oldest first; one role's, or every role's when role is empty.
 func (s *Shift) Pending(role string) []Ack {
@@ -329,8 +569,10 @@ func (s *Shift) roleSettings(name string) string {
 		start := []any{map[string]any{"type": "command", "command": base + " pending --role " + shellWord(name) + " --brief"}}
 		stop := []any{map[string]any{"type": "command", "timeout": turnEndTimeout,
 			"command": base + " _turn-end --role " + shellWord(name) + " >/dev/null 2>&1 || true"}}
+		// A compaction ends no turn, so no Stop hook runs after it: the start hook Claude Code runs once it is over
+		// (source compact) has what waits posted too.
 		settings["hooks"] = map[string]any{
-			"SessionStart": []any{map[string]any{"hooks": start}},
+			"SessionStart": []any{map[string]any{"hooks": start}, map[string]any{"matcher": "compact", "hooks": stop}},
 			"Stop":         []any{map[string]any{"hooks": stop}},
 		}
 	}

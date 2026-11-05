@@ -35,10 +35,14 @@ var (
 type State struct {
 	// AcceptanceNotified commits alert deduplication with its dispatcher queue entry. Keys include the
 	// submitted session/time; legacy task/packet keys remain readable until a fresh submission.
-	AcceptanceNotified map[string]time.Time            `json:"acceptance_notified,omitempty"`
-	MessageLines       map[string]string               `json:"message_lines,omitempty"`
-	MessageStages      map[string]map[string]time.Time `json:"message_stages,omitempty"`
-	RemoteBatches      int                             `json:"remote_batches,omitempty"`
+	AcceptanceNotified map[string]time.Time `json:"acceptance_notified,omitempty"`
+	MessageLines       map[string]string    `json:"message_lines,omitempty"`
+	// MessageIDs binds a line of another crew (its marker) to the S-id of the signal it was queued as: its
+	// receipts follow that signal, never a later line with the same text. Lines that coalesced into one queued
+	// signal share its id.
+	MessageIDs    map[string]string               `json:"message_ids,omitempty"`
+	MessageStages map[string]map[string]time.Time `json:"message_stages,omitempty"`
+	RemoteBatches int                             `json:"remote_batches,omitempty"`
 	// Acks are the delivered lines that wait for their reader's ack; AckSeq numbers them (S-<n>).
 	Acks           map[string]*Ack        `json:"acks,omitempty"`
 	AckSeq         int                    `json:"ack_seq,omitempty"`
@@ -151,6 +155,18 @@ type RoleState struct {
 	// Tag is the random tag of this start: its boot line names it, every line posted to it carries it, so a message
 	// another session sends cannot pass for zmina's.
 	Tag string `json:"tag,omitempty"`
+	// Hooks is the zmina whose hooks this start runs (the turn-end hook, the start hook), "-" for a start without
+	// them, empty when an earlier zmina started it without saying (its process is asked); HooksFlagged is the
+	// session the dispatcher was told runs without working hooks.
+	Hooks        string `json:"hooks,omitempty"`
+	HooksFlagged string `json:"hooks_flagged,omitempty"`
+	// QueuedBoot is the boot line a clear queued for the role: it goes alone, before anything else waiting for it.
+	QueuedBoot string `json:"queued_boot,omitempty"`
+	// QueuedIDs are the S-ids each queued line carries, by the line: a tracked line's own id from the moment it is
+	// queued, those of a line given back (its conversation ended before it showed, a failed line retried). A queued
+	// line is known by them alone; its text is never searched for an id. A line queued by a zmina that kept no ids
+	// has none, for good: no ack takes it out; it leaves by delivery or zmina queue drop.
+	QueuedIDs map[string][]string `json:"queued_ids,omitempty"`
 	// Dir is where the role was started when not its crew dir (zmina up --task: the task's worktree); Trusted
 	// that zmina answered Claude Code's "trust this folder" there.
 	Dir     string `json:"dir,omitempty"`
@@ -162,6 +178,10 @@ type Sent struct {
 	Line  string    `json:"line"`
 	At    time.Time `json:"at"`
 	Tries int       `json:"tries,omitempty"`
+	// IDs are the S-ids the line carries (the dispatcher's signals).
+	IDs []string `json:"ids,omitempty"`
+	// Parts are what a line to the dispatcher was made of, given back each on its own when it never lands.
+	Parts []Part `json:"parts,omitempty"`
 }
 
 // Posted is a line posted to a role's inbox socket: the message's id, and the session it went to.
@@ -170,6 +190,21 @@ type Posted struct {
 	MsgID   string    `json:"msg_id"`
 	Session string    `json:"session"`
 	At      time.Time `json:"at"`
+	// IDs are the S-ids the post carries, as zmina put them in it; a line's text is never searched for them.
+	IDs []string `json:"ids,omitempty"`
+	// Parts are what a post to the dispatcher was made of, given back each on its own when it never shows.
+	Parts []Part `json:"parts,omitempty"`
+}
+
+// Part is one item of a line or post to the dispatcher, kept so that what never reached it goes back where it
+// waited, each item with its own ids: a queued line of its own, a signal (with its id at its head), the notices.
+type Part struct {
+	Line   string    `json:"line,omitempty"`
+	Signal string    `json:"signal,omitempty"`
+	Count  int       `json:"count,omitempty"`
+	Sent   time.Time `json:"sent,omitzero"`
+	Notes  []string  `json:"notes,omitempty"`
+	IDs    []string  `json:"ids,omitempty"`
 }
 
 // Failed is a queued line that could not be typed.
@@ -177,6 +212,9 @@ type Failed struct {
 	Line  string    `json:"line"`
 	Error string    `json:"error"`
 	At    time.Time `json:"at"`
+	// IDs are the S-ids the line carries, kept for its retry; Parts what a line to the dispatcher was made of.
+	IDs   []string `json:"ids,omitempty"`
+	Parts []Part   `json:"parts,omitempty"`
 }
 
 // Role is the state of one role, made on first use.

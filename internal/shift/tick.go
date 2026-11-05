@@ -6,10 +6,12 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/iamnikolie/zmina/internal/crew"
+	"github.com/iamnikolie/zmina/internal/inbox"
 	"github.com/iamnikolie/zmina/internal/registry"
 	"github.com/iamnikolie/zmina/internal/task"
 	"github.com/iamnikolie/zmina/internal/tmux"
@@ -52,6 +54,7 @@ func (s *Shift) Tick() []string {
 		s.pruneTaskInbox(name)
 	}
 	s.NotifyRecords()
+	s.NotifyClosed()
 	s.acceptanceAlerts()
 	held := s.held()
 	stopped := !s.State.Stopped.IsZero()
@@ -155,6 +158,10 @@ func (s *Shift) Tick() []string {
 
 		if up {
 			notes = append(notes, s.watchScreen(name, now)...)
+
+			if note := s.hooksNote(name, r); note != "" {
+				notes = append(notes, note)
+			}
 		}
 	}
 
@@ -302,6 +309,7 @@ func (s *Shift) trim(name string, r *crew.Role, now time.Time, tasks []string) s
 	// clear's hook gives the tag.
 	if boot := s.bootText(r, false); do == crew.ContextClear && !r.IsCodex() && boot != "" {
 		rs.Inbox = append(rs.Inbox, boot)
+		rs.QueuedBoot = boot
 	}
 
 	if recoveryPath != "" && (do != crew.ContextClear || r.IsCodex()) {
@@ -652,14 +660,13 @@ func (s *Shift) atPrompt(name string, now time.Time) bool {
 	return err == nil && ok && draft == ""
 }
 
-// deliver types the waiting signals and health notes into the dispatcher as one line when it is up, booted and idle.
-// Signals go first: they are work.
+// deliver gives the dispatcher what waits for it: the signals (work, with their ids), the lines of other crews and
+// the health notes. Posted to its own channel, one post takes everything (postDispatcher); typed, it is one line when
+// it is up, booted and idle (typeDispatcher).
 func (s *Shift) deliver(now time.Time) string {
 	d := s.Crew.Dispatcher
 	s.pruneTaskInbox(d)
 
-	// A line from another crew goes as a line of its own, never joined with this crew's signals and notes: one
-	// per beat, after them.
 	var local, remote []string
 
 	for _, sig := range s.State.Signals {
@@ -677,7 +684,297 @@ func (s *Shift) deliver(now time.Time) string {
 	}
 
 	notes := s.currentNotes()
-	alone := len(remote) > 0 && (len(local)+len(notes) == 0 || s.State.RemoteBatches >= 3)
+
+	if sess := s.native(d, now); sess != nil {
+		return s.postDispatcher(d, sess, local, remote, notes, now)
+	}
+
+	return s.typeDispatcher(d, local, remote, notes, now)
+}
+
+// postMax is the most one post to the dispatcher carries, in bytes; what does not fit goes in the next.
+const postMax = 12 << 10
+
+// postDispatcher posts what waits for the dispatcher as one message, a line each: its own queued lines (the recovery
+// line), this crew's signals, each other crew's line on a line of its own (a remote body holds no line break, so it
+// cannot start a line that reads as zmina's), the notices last. It goes once the post before it showed and the
+// dispatcher is between turns. Into a turn it is in (delivery_mid_turn) only the lines that wait for its ack go —
+// Claude Code puts them into the turn at its next tool call — never into a dialog; notices and its own queue wait
+// for the turn's end. A boot line queued after a clear goes alone first (deliverInbox): the lines belong to a
+// dispatcher that knows its job.
+func (s *Shift) postDispatcher(d string, sess *registry.Session, local, remote, notes []string, now time.Time) string {
+	rs := s.State.Role(d)
+	if rs.QueuedBoot != "" && !slices.Contains(rs.Inbox, rs.QueuedBoot) {
+		rs.QueuedBoot = ""
+	}
+
+	if s.followPosted(d, now) || slices.ContainsFunc(rs.Inbox, func(l string) bool { return s.isBoot(d, l) }) {
+		return ""
+	}
+
+	quiet := s.quiet(d, sess)
+	if !quiet && !s.midTurn(d, sess) {
+		return ""
+	}
+
+	var own []string
+
+	if quiet {
+		for _, l := range rs.Inbox {
+			if !postable(l) {
+				break
+			}
+
+			own = append(own, l)
+		}
+	} else {
+		// Into a turn: only what waits for an ack.
+		acked := func(sig string) bool { return !signalID.MatchString(sig) }
+		local = slices.DeleteFunc(slices.Clone(local), acked)
+		remote = slices.DeleteFunc(slices.Clone(remote), acked)
+		notes = nil
+	}
+
+	var (
+		lines, ids, fresh []string
+		parts             []Part
+		size              int
+		took              = map[string]bool{}
+		full              bool
+	)
+
+	add := func(line string) bool {
+		if full || len(lines) > 0 && size+len(line)+1 > postMax {
+			full = true
+
+			return false
+		}
+
+		lines = append(lines, line)
+		size += len(line) + 1
+
+		return true
+	}
+
+	// Each signal that goes is kept as a part, with its id at its head, for it to go back as it waited.
+	var sigParts []Part
+	part := func(sig string) (string, string) {
+		p, id := s.signalPart(sig)
+		if id != "" && !signalID.MatchString(sig) {
+			fresh = append(fresh, id)
+		}
+
+		kept := Part{Signal: p, Count: s.State.SignalCounts[sig], Sent: s.State.SignalSent[sig]}
+		if id != "" {
+			kept.IDs = []string{id}
+		}
+		sigParts = append(sigParts, kept)
+
+		return repeated(p, s.State.SignalCounts[sig]), id
+	}
+
+	nOwn := 0
+	for _, l := range own {
+		// A queued line that no post could carry goes as a bounded one: its whole text stored, the line its head
+		// and where the rest is, still the same line (its ids).
+		bounded, err := s.boundLine(d, l, postMax)
+		if err != nil {
+			s.log(d, "post-failed", "", "a queued line over "+strconv.Itoa(postMax)+" bytes could not be stored: "+err.Error())
+
+			break
+		}
+
+		if !add(bounded) {
+			break
+		}
+		nOwn++
+	}
+
+	// This crew's signals share a line, as many as fit: the line is measured whole, its separators, ids and
+	// wrapper included, against what the post has left.
+	var localParts, partIDs []string
+	localLine := func(parts, ids []string) string { return "[zmina] " + strings.Join(parts, " · ") + ackTail(ids) }
+	for _, sig := range local {
+		p, id := part(sig)
+		withIDs := partIDs
+		if id != "" {
+			withIDs = append(slices.Clone(partIDs), id)
+		}
+
+		if size+len(localLine(append(slices.Clone(localParts), p), withIDs))+1 > postMax && (len(lines) > 0 || len(localParts) > 0) {
+			sigParts = sigParts[:len(sigParts)-1]
+			full = true
+
+			break
+		}
+
+		localParts, partIDs = append(localParts, p), withIDs
+		took[sig] = true
+	}
+
+	if len(localParts) > 0 {
+		line := localLine(localParts, partIDs)
+		lines = append(lines, line)
+		size += len(line) + 1
+		ids = append(ids, partIDs...)
+	}
+
+	for _, sig := range remote {
+		p, id := part(sig)
+		var tail []string
+		if id != "" {
+			tail = []string{id}
+		}
+
+		if !add("[zmina] " + p + s.lateness(sig, now) + ackTail(tail)) {
+			sigParts = sigParts[:len(sigParts)-1]
+
+			break
+		}
+
+		took[sig] = true
+		ids = append(ids, tail...)
+	}
+
+	if len(notes) > 0 && add("[zmina] "+strings.Join(notes, " · ")) {
+		took["\x00notes"] = true
+	}
+
+	if len(lines) == 0 {
+		for _, id := range fresh {
+			delete(s.State.Acks, id)
+		}
+
+		return ""
+	}
+
+	text := strings.Join(lines, "\n")
+
+	if err := s.post(d, sess, text, now); err != nil {
+		s.log(d, "post-failed", "", err.Error())
+
+		for _, id := range fresh {
+			delete(s.State.Acks, id)
+		}
+
+		return ""
+	}
+
+	// An id given here to a signal queued without one that did not fit goes with it: it gets one when it goes.
+	for _, id := range fresh {
+		if !slices.Contains(ids, id) {
+			delete(s.State.Acks, id)
+		}
+	}
+
+	for _, l := range own[:nOwn] {
+		lineIDs := s.takeIDs(d, l)
+		parts = append(parts, Part{Line: l, IDs: lineIDs})
+		ids = append(ids, lineIDs...)
+		s.submittedTask(d, l)
+	}
+
+	parts = append(parts, sigParts...)
+	if took["\x00notes"] {
+		parts = append(parts, Part{Notes: slices.Clone(notes)})
+	}
+
+	rs.Inbox = rs.Inbox[nOwn:]
+	rs.Attempts = 0
+	rs.Posted[len(rs.Posted)-1].IDs = slices.Clone(ids)
+	rs.Posted[len(rs.Posted)-1].Parts = parts
+	s.delivered(ids, now)
+
+	for sig := range took {
+		if sig == "\x00notes" {
+			continue
+		}
+
+		s.State.Signals = slices.DeleteFunc(s.State.Signals, func(v string) bool { return v == sig })
+		delete(s.State.SignalCounts, sig)
+		delete(s.State.SignalSent, sig)
+	}
+
+	if took["\x00notes"] {
+		s.State.Notes, s.State.NoticeMeta = nil, nil
+	}
+
+	s.State.RemoteBatches = 0
+	s.Told = true
+	s.log(d, "told", "", text)
+
+	return text
+}
+
+// boundLine is a queued line as a post can carry it, within limit bytes: whole when it fits, else its text stored
+// whole in the crew's inbox and the line its head and where the rest is (Pointer), with the tail zmina tracks it by
+// kept at its end.
+func (s *Shift) boundLine(name, line string, limit int) (string, error) {
+	if len(line) <= limit {
+		return line, nil
+	}
+
+	// The tail a tracked line ends with stays at its end, for its reader: what it is known by is its ids.
+	body, tail := line, ""
+	if loc := trackedTail.FindStringIndex(line); loc != nil && len(s.State.Role(name).QueuedIDs[line]) > 0 {
+		body, tail = strings.TrimRight(line[:loc[0]], " "), " "+line[loc[0]:]
+	}
+
+	store := s.Inbox
+	if store == nil {
+		store = &inbox.Store{Dir: s.Crew.Layout().Inbox(), Now: s.Now}
+	}
+
+	id, err := inbox.NewID()
+	if err == nil {
+		err = store.Put(inbox.Entry{ID: id, From: "queue " + name, Body: body})
+	}
+
+	if err != nil {
+		return "", err
+	}
+
+	room := []rune(body)
+	n := len(room)
+	for n > 1 {
+		out := Pointer(body, id, n) + tail
+		if len(out) <= limit {
+			return out, nil
+		}
+
+		n = n * 3 / 4
+	}
+
+	return Pointer(body, id, 1) + tail, nil
+}
+
+// midTurn reports whether the dispatcher's acked lines may go into the turn it is in: the crew allows it, it is a
+// Claude session (Claude Code queues a message that comes mid-turn and puts it into the turn at its next tool call),
+// and no dialog waits on the owner.
+func (s *Shift) midTurn(d string, sess *registry.Session) bool {
+	r, err := s.Role(d)
+
+	return err == nil && s.Crew.MidTurn() && !r.IsCodex() && sess.Status != "waiting"
+}
+
+// isBoot reports whether a queued line is the role's boot line, queued after a clear (a state written before
+// QueuedBoot was kept: a line that starts with the role's boot).
+func (s *Shift) isBoot(name, line string) bool {
+	if q := s.State.Role(name).QueuedBoot; q != "" {
+		return line == q
+	}
+
+	r, err := s.Role(name)
+
+	return err == nil && strings.TrimSpace(r.Boot) != "" && strings.HasPrefix(line, strings.TrimSpace(r.Boot))
+}
+
+// typeDispatcher types the waiting signals and health notes into the dispatcher as one line when it is up, booted
+// and idle. Signals go first: they are work. A line from another crew goes as a line of its own, never joined with
+// this crew's signals and notes: one per beat, after this crew's signals, and before the notices — a notice never
+// goes alone while another crew's line waits.
+func (s *Shift) typeDispatcher(d string, local, remote, notes []string, now time.Time) string {
+	alone := len(remote) > 0 && (len(local) == 0 || s.State.RemoteBatches >= 3)
 
 	// A line queued for the dispatcher itself goes first: after a clear it is the boot line, and the signals
 	// belong to a dispatcher that knows its job.
@@ -685,37 +982,35 @@ func (s *Shift) deliver(now time.Time) string {
 		return ""
 	}
 
-	// Posted to its inbox socket, the line needs no empty input line: it waits until the one before it showed and
-	// the dispatcher is between turns.
-	sess := s.native(d, now)
-	if sess != nil {
-		if s.followPosted(d, now) || !s.quiet(d, sess) {
-			return ""
-		}
-	} else {
-		// The line typed last has to land first: landed presses Enter on it while it still sits in the input line,
-		// whatever the dispatcher's status says.
-		if !s.landed(d, now) || !s.atPrompt(d, now) {
-			return ""
-		}
-
-		// Never into a draft: the owner's half-typed words would go out joined with the line.
-		if draft, ok, err := s.Tmux.Prompt(d); err == nil && ok && draft != "" {
-			return ""
-		}
+	// The line typed last has to land first: landed presses Enter on it while it still sits in the input line,
+	// whatever the dispatcher's status says.
+	if !s.landed(d, now) || !s.atPrompt(d, now) {
+		return ""
 	}
 
-	// Each signal goes with its id, and the line ends with how to ack them (watch notes have their own ack).
-	var ids, fresh []string
+	// Never into a draft: the owner's half-typed words would go out joined with the line.
+	if draft, ok, err := s.Tmux.Prompt(d); err == nil && ok && draft != "" {
+		return ""
+	}
+
+	// Each signal goes with its id, and the line ends with how to ack them (watch notes have their own ack). What
+	// the line is made of is kept (kept), for it to go back as it waited if it never lands.
+	var (
+		ids, fresh []string
+		kept       []Part
+	)
 
 	part := func(sig string) string {
 		p, id := s.signalPart(sig)
+		k := Part{Signal: p, Count: s.State.SignalCounts[sig], Sent: s.State.SignalSent[sig]}
 		if id != "" {
 			ids = append(ids, id)
+			k.IDs = []string{id}
 			if !signalID.MatchString(sig) {
 				fresh = append(fresh, id)
 			}
 		}
+		kept = append(kept, k)
 
 		return repeated(p, s.State.SignalCounts[sig])
 	}
@@ -728,20 +1023,15 @@ func (s *Shift) deliver(now time.Time) string {
 			parts = append(parts, part(sig))
 		}
 		parts = append(parts, notes...)
+
+		if len(notes) > 0 {
+			kept = append(kept, Part{Notes: slices.Clone(notes)})
+		}
 	}
 
 	line := "[zmina] " + strings.Join(parts, " · ") + ackTail(ids)
 
-	var err error
-	if sess != nil {
-		if err = s.post(d, sess, line, now); err != nil {
-			s.log(d, "post-failed", "", err.Error())
-		}
-	} else if err = s.typeLine(d, line); err == nil {
-		s.State.Role(d).Sent = &Sent{Line: line, At: now}
-	}
-
-	if err != nil {
+	if err := s.typeLine(d, line); err != nil {
 		for _, id := range fresh {
 			delete(s.State.Acks, id)
 		}
@@ -749,12 +1039,14 @@ func (s *Shift) deliver(now time.Time) string {
 		return ""
 	}
 
-	s.delivered(line, ids, now)
+	s.State.Role(d).Sent = &Sent{Line: line, At: now, IDs: ids, Parts: kept}
+	s.delivered(ids, now)
+	s.stageIDs(ids, "submitted")
 
 	if alone {
 		delete(s.State.SignalSent, remote[0])
 		delete(s.State.SignalCounts, remote[0])
-		s.State.Signals = append(slices.Clone(local), remote[1:]...)
+		s.State.Signals = slices.DeleteFunc(slices.Clone(s.State.Signals), func(v string) bool { return v == remote[0] })
 		s.State.RemoteBatches = 0
 	} else {
 		if len(remote) > 0 {
@@ -882,7 +1174,7 @@ func (s *Shift) deliverInbox(name string, now time.Time) string {
 			return ""
 		}
 
-		rs.Failed = append(rs.Failed, Failed{Line: head, Error: err.Error(), At: now})
+		rs.Failed = append(rs.Failed, Failed{Line: head, Error: err.Error(), At: now, IDs: s.takeIDs(name, head)})
 		rs.Inbox, rs.Attempts = rs.Inbox[1:], 0
 
 		return name + ": a queued line failed " + fmt.Sprint(typeTries) + " times, kept in zmina queue: " + head
@@ -890,12 +1182,13 @@ func (s *Shift) deliverInbox(name string, now time.Time) string {
 
 	rs.Inbox, rs.Attempts = rs.Inbox[1:], 0
 	s.log(name, "typed", "", head)
-	s.delivered(head, nil, now)
+	ids := s.takeIDs(name, head)
+	s.delivered(ids, now)
 	s.submittedTask(name, head)
 
 	// A slash command may not change the status; only a line for the conversation is watched until it lands.
 	if !strings.HasPrefix(head, "/") {
-		rs.Sent = &Sent{Line: head, At: now}
+		rs.Sent = &Sent{Line: head, At: now, IDs: ids}
 	}
 
 	return "typed into " + name + ": " + head
@@ -917,15 +1210,18 @@ func (s *Shift) postInbox(name string, sess *registry.Session, now time.Time) st
 		}
 
 		s.deliveryFailure(name, head, err.Error())
-		rs.Failed = append(rs.Failed, Failed{Line: head, Error: err.Error(), At: now})
+		rs.Failed = append(rs.Failed, Failed{Line: head, Error: err.Error(), At: now, IDs: s.takeIDs(name, head)})
 		rs.Inbox, rs.Attempts = rs.Inbox[1:], 0
 
 		return name + ": a queued line could not be posted, kept in zmina queue: " + head
 	}
 
+	ids := s.takeIDs(name, head)
+	rs.Posted[len(rs.Posted)-1].IDs = ids
+
 	rs.Inbox, rs.Attempts = rs.Inbox[1:], 0
 	s.submittedTask(name, head)
-	s.delivered(head, nil, now)
+	s.delivered(ids, now)
 
 	return "posted to " + name + ": " + head
 }

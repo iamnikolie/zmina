@@ -50,10 +50,11 @@ type Receipt struct {
 	At            time.Time `json:"at"`
 }
 type Wire struct {
-	Version int      `json:"version"`
-	Kind    string   `json:"kind"`
-	Report  *Report  `json:"report,omitempty"`
-	Receipt *Receipt `json:"receipt,omitempty"`
+	Version     int          `json:"version"`
+	Kind        string       `json:"kind"`
+	Report      *Report      `json:"report,omitempty"`
+	Receipt     *Receipt     `json:"receipt,omitempty"`
+	TellReceipt *TellReceipt `json:"tell_receipt,omitempty"`
 }
 type Intent struct {
 	Envelope mesh.Envelope `json:"envelope"`
@@ -119,6 +120,11 @@ func Advance(r *Revision, stage string, at time.Time) error {
 func Encode(w Wire) (string, error) {
 	w.Version = 1
 	prefix := Prefix
+	if w.TellReceipt != nil {
+		w.Kind = "tell_receipt"
+		raw, err := json.Marshal(w)
+		return mesh.TellReceiptPrefix + string(raw), err
+	}
 	if (w.Report != nil && (w.Report.Version == 2 || w.Report.ContentHash != "")) || (w.Receipt != nil && w.Receipt.ReportVersion >= 2) {
 		w.Version = 2
 		prefix = mesh.TypedPublicationPrefix
@@ -128,6 +134,19 @@ func Encode(w Wire) (string, error) {
 }
 func Decode(body string) (Wire, bool, error) {
 	prefix, version := Prefix, 1
+	if mesh.IsTellReceipt(body) {
+		var w Wire
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(body, mesh.TellReceiptPrefix)), &w); err != nil {
+			return w, true, err
+		}
+		if w.Version != 1 {
+			return w, true, fmt.Errorf("unsupported tell receipt version")
+		}
+		if w.Kind != "tell_receipt" || w.TellReceipt == nil || w.Report != nil || w.Receipt != nil {
+			return w, true, fmt.Errorf("invalid tell receipt payload")
+		}
+		return w, true, nil
+	}
 	if strings.HasPrefix(body, mesh.TypedPublicationPrefix) {
 		prefix, version = mesh.TypedPublicationPrefix, 2
 	} else if !strings.HasPrefix(body, Prefix) {
@@ -141,7 +160,7 @@ func Decode(body string) (Wire, bool, error) {
 	if w.Version != version {
 		return w, true, fmt.Errorf("unsupported report payload version")
 	}
-	if (w.Kind == "report" && w.Report != nil && w.Receipt == nil) || (w.Kind == "receipt" && w.Receipt != nil && w.Report == nil) {
+	if w.TellReceipt == nil && ((w.Kind == "report" && w.Report != nil && w.Receipt == nil) || (w.Kind == "receipt" && w.Receipt != nil && w.Report == nil)) {
 		return w, true, nil
 	}
 	return w, true, fmt.Errorf("invalid typed report payload")
@@ -233,14 +252,19 @@ func (s Store) Save(m Message) error {
 	if !hashID.MatchString(m.ID) || m.Version != 1 {
 		return fmt.Errorf("invalid message identity")
 	}
-	if err := os.MkdirAll(s.Dir, 0700); err != nil {
+	return writeAtomic(s.Dir, m.ID+".json", m)
+}
+
+// writeAtomic writes v as indented JSON to dir/name through a synced temporary file.
+func writeAtomic(dir, name string, v any) error {
+	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
-	raw, err := json.MarshalIndent(m, "", "  ")
+	raw, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(s.Dir, ".message-*")
+	f, err := os.CreateTemp(dir, ".message-*")
 	if err != nil {
 		return err
 	}
@@ -256,7 +280,7 @@ func (s Store) Save(m Message) error {
 	if err = f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(f.Name(), filepath.Join(s.Dir, m.ID+".json"))
+	return os.Rename(f.Name(), filepath.Join(dir, name))
 }
 func (s Store) All() ([]Message, error) {
 	paths, err := filepath.Glob(filepath.Join(s.Dir, "*.json"))

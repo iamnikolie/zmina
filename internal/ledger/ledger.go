@@ -174,6 +174,8 @@ type Change struct {
 	Budget string
 	// Force closes a task although its worktree has uncommitted changes.
 	Force bool
+	// By is who makes the change (a role, "hand"); a task it closes keeps it (Task.Closed).
+	By string
 }
 
 // ErrDirty is returned when a task would close over uncommitted work.
@@ -270,6 +272,15 @@ func (l *Ledger) Set(id string, c Change) (task.Task, error) {
 	}
 
 	t.Updated = l.Now()
+
+	switch {
+	case c.State == "":
+	case c.State.Active():
+		t.Closed = nil
+	case c.By != "":
+		t.Closed = &task.Closure{By: c.By, At: t.Updated, State: c.State, Note: c.Note}
+	}
+
 	if err := l.Store.Put(t); err != nil {
 		return t, err
 	}
