@@ -437,18 +437,25 @@ var hasTranscript = func(ns, id string) bool {
 		return false
 	}
 
-	// A projects dir that cannot be read is no proof either way: claude is left to say.
-	if _, err := os.Stat(filepath.Join(ns, "projects")); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return true
+	// Each project dir by name, never a glob: a namespace path may hold [ ] * ? as plain characters. A listing or a
+	// lookup that fails for any reason but absence is no proof either way: claude is left to say.
+	dirs, err := os.ReadDir(filepath.Join(ns, "projects"))
+	if err != nil {
+		return !errors.Is(err, os.ErrNotExist)
 	}
 
-	// Each project dir by name, never a glob: a namespace path may hold [ ] * ? as plain characters.
-	dirs, _ := os.ReadDir(filepath.Join(ns, "projects"))
+	unsure := false
+
 	for _, d := range dirs {
-		if _, err := os.Stat(filepath.Join(ns, "projects", d.Name(), id+".jsonl")); err == nil {
+		_, err := os.Stat(filepath.Join(ns, "projects", d.Name(), id+".jsonl"))
+		if err == nil {
 			return true
+		}
+
+		if !errors.Is(err, os.ErrNotExist) {
+			unsure = true
 		}
 	}
 
-	return false
+	return unsure
 }

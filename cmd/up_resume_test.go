@@ -81,3 +81,22 @@ func TestHasTranscriptWithSpacesAndASymlink(t *testing.T) {
 	assert.True(t, realHasTranscript(link, "abc-1"))
 	assert.False(t, realHasTranscript(link, "abc-2"))
 }
+
+// A projects dir that cannot be listed, or a project dir that cannot be searched, proves nothing: the resume goes on.
+func TestHasTranscriptOfAnUnreadableNamespace(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads everything")
+	}
+
+	ns := t.TempDir()
+	projects := filepath.Join(ns, "projects")
+	require.NoError(t, os.MkdirAll(filepath.Join(projects, "p"), 0o700))
+	require.NoError(t, os.Chmod(projects, 0o111))
+	t.Cleanup(func() { _ = os.Chmod(projects, 0o700) })
+	assert.True(t, realHasTranscript(ns, "abc-1"), "cannot list: unknown, not missing")
+
+	require.NoError(t, os.Chmod(projects, 0o700))
+	require.NoError(t, os.Chmod(filepath.Join(projects, "p"), 0o600))
+	t.Cleanup(func() { _ = os.Chmod(filepath.Join(projects, "p"), 0o700) })
+	assert.True(t, realHasTranscript(ns, "abc-1"), "cannot search a project: unknown, not missing")
+}
