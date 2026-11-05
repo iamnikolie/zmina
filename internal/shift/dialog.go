@@ -85,7 +85,11 @@ func ParseDialog(screen string) *Dialog {
 		end--
 	}
 
-	if end <= last || isDetail(lines[end]) || !(strings.Contains(lines[end], "Enter to select") || strings.Contains(lines[end], "Esc to cancel")) {
+	if end <= last || isDetail(lines[end]) {
+		return nil
+	}
+
+	if footerWords := strings.Contains(lines[end], "Enter to select") || strings.Contains(lines[end], "Esc to cancel"); !footerWords {
 		return nil
 	}
 
