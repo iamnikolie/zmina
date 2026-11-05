@@ -568,3 +568,8 @@ body.fv-on { overflow: hidden; }
 .parked-line { display: block; width: 100%; min-height: 44px; padding: 0 0 0 14px; border: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
   background: none; color: var(--muted); font: 600 .8rem var(--sans); letter-spacing: .04em; text-transform: uppercase; text-align: left; cursor: pointer; }
 .parked-line:hover { color: var(--ink); }
+
+/* D-07 s2 · a spare crew: a quiet word and a hollow dot, never red. */
+.chips .ns.spare { color: var(--faint); font-weight: 400; }
+.tick.spare { color: var(--faint); }
+.tick.spare i { background: none; box-shadow: inset 0 0 0 1px var(--faint); }

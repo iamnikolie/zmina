@@ -50,6 +50,7 @@ day_start: "09:00"                       # when morning, tomorrow, thu or a date
 # prefix: ops-                           # default session names (default zm-)
 # retired: "2026-11-05"                  # zmina retire writes these two: this crew is no longer the live one
 # moved_to: box-ops/ops                  # ... and went on as this crew; alone it marks the crew retired too
+# spare: true                            # the owner's standby copy: no ticker by design; the cockpit never shows it red
 # projects:                              # the ui page's colour per task project (default: one of five, by name)
 #   site: {tint: p3}                     # p1 … p5: pin one when two projects collide
 roles:
@@ -798,6 +799,10 @@ A machine without peers is a mesh of one. It opens the page in the browser.
   in a panel beside the cockpit, which stays in view and keeps updating behind it; on a phone the panel is the whole
   screen. Any role of any node: a peer's over the mesh as Chat reads it. «Open page» opens it as its own page; Esc
   closes it. Only Chat may be framed, and only by the cockpit itself.
+- **Red means act now**: a live crew's ticker overdue, a peer node offline, a role down that holds an active task
+  (not one asleep). Nothing else is red. A `spare: true` crew shows the quiet word «spare» and is never red; a crew
+  retired into another (`zmina retire --moved-to`) leaves the page, the switch and every count; one retired with no
+  successor sits in the stopped line as «retired».
 - **Stopped crews**: a crew stopped on purpose (`zmina stop`) with nothing waiting on the owner leaves «All»: one
   muted line names them, a tap shows one. A crew whose ticker has been silent for an hour without a stop stays,
   its chip marked `silent 1h`; a stopped crew that still holds something waiting on the owner stays too.

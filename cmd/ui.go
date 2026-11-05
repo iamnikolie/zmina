@@ -699,6 +699,11 @@ type uiCrewView struct {
 	Dormant bool   `json:"dormant,omitempty"`
 	// Silent is a crew not stopped whose ticker has not beaten for an hour: it stays on the page, marked.
 	Silent bool `json:"silent,omitempty"`
+	// Spare is the owner's standby crew (spare: true): no ticker by design, never red. Retired is a crew the owner
+	// retired (zmina retire), MovedTo the crew it went on as: it leaves the page.
+	Spare   bool   `json:"spare,omitempty"`
+	Retired bool   `json:"retired,omitempty"`
+	MovedTo string `json:"moved_to,omitempty"`
 }
 
 // Each list across crews carries the crew's key.
@@ -811,6 +816,7 @@ func (a *app) uiSnapshot() uiSnapshot {
 			}
 
 			cv.LastTick, cv.Stopped, cv.Stuck = s.State.LastTick, s.State.Stopped, s.Crew.StuckMinutes
+			cv.Spare, cv.Retired, cv.MovedTo = s.Crew.Spare, s.Crew.IsRetired(), s.Crew.MovedTo
 
 			// The first crew to pin a project's tint has it.
 			for p, tint := range s.Crew.Tints() {

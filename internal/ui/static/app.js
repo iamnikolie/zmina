@@ -52,6 +52,7 @@ const W = {
   alAsWords: (w) => "set as «" + w + "»", alDue: "due now", backTag: "back",
   seen: (a) => "seen " + a, staleN: (a) => "stale" + (a ? " " + a : ""), stale: "stale", offline: "offline", stoppedList: "stopped:",
   silent: (a) => "silent" + (a ? " " + a : ""),
+  spare: "spare", retiredW: "retired", downHolds: (r, ts) => r + ": down, holds " + ts,
   answerOn: (n) => "answer on " + n, detailsOn: (n) => "details on " + n,
   talk: "Talk", talkTo: (r) => "Talk to " + r,
   ev: {
@@ -141,8 +142,11 @@ const key = (crew, id) => crew + "/" + id;
 const otherKey = (w) => "others:" + key(w.crew, w.id);
 // A crew stopped on purpose with nothing waiting on the owner (dormant) is folded away from «all» (unless every crew
 // is); its name in the crew switch, or its node's chip, brings it back.
-const folded = (c) => !!c.dormant && snap.crews.some((x) => !x.dormant);
+const folded = (c) => (!!c.dormant || (c.retired && !c.moved_to)) && snap.crews.some((x) => !x.dormant && !x.retired);
+// away is a crew the owner retired into another (D-07 s4): gone from the page, the switch and every count.
+const away = (crew) => { const c = crewOf(crew); return !!(c && c.retired && c.moved_to); };
 const shows = (crew) => {
+  if (away(crew)) return false;
   if (filter === "all") { const c = crewOf(crew); return !c || !folded(c); }
   if (filter.startsWith("node:")) return nodeOf(crew) === filter.slice(5);
   return filter === crew;
@@ -246,11 +250,16 @@ function sayParts(say, hold, asks, going, parked) {
     s.dataset.to = target;
     say.append(s);
   });
-  // A folded crew is told in the crew switch, not here; a peer read long ago says «stale», not «ticker stopped».
+  // Red means act now (D-07 s5): a live crew's ticker overdue, or a role down that holds an active task (a peer node
+  // offline is red on its chip). A stopped, retired or spare crew is never red here; a peer read long ago says
+  // «stale», not «ticker stopped».
   const dead = [];
-  for (const c of snap.crews.filter((c) => !folded(c) && !c.stale)) {
-    if (!zero(c.stopped)) dead.push(W.shiftStopped(crewLabel(c.key)));
-    else if (tickerDead(c)) dead.push(W.stopped(crewLabel(c.key), zero(c.last_tick) ? "" : ago(c.last_tick)));
+  for (const c of snap.crews.filter((c) => !folded(c) && !c.stale && !c.retired && !c.spare)) {
+    if (zero(c.stopped) && tickerDead(c)) dead.push(W.stopped(crewLabel(c.key), zero(c.last_tick) ? "" : ago(c.last_tick)));
+    if (!zero(c.stopped)) continue;
+    for (const r of c.roles || []) {
+      if (r.state !== "up" && (r.tasks || []).length && zero(r.asleep || "")) dead.push(W.downHolds(who(c.key, r.role) || r.role, r.tasks.join(", ")));
+    }
   }
   for (const d of dead) say.append(" · ", el("span", "k x", d));
 
@@ -284,7 +293,9 @@ function favicon(color) {
 function crewChip(k, label, cls, note) {
   const b = button([filter === k ? "on" : "", cls].filter(Boolean).join(" "), label, () => { filter = k; localStorage.setItem("zmina.crew", k); render(); });
   b.setAttribute("aria-pressed", filter === k ? "true" : "false");
-  if (note) b.append(el("span", "ns bad", note));
+  const c = crewOf(k);
+  if (c && c.spare) b.append(el("span", "ns spare", W.spare));
+  else if (note) b.append(el("span", "ns bad", note));
   return b;
 }
 
@@ -315,10 +326,10 @@ function renderChips() {
     // One group per node: the node, then its crews that are not folded away.
     for (const n of snap.nodes) {
       const g = el("span", "ng");
-      g.append(nodeChip(n), ...(n.crews || []).map(crewOf).filter((c) => c && !folded(c)).map((c) => crewChip(c.key, c.key.split("/").pop(), "", silent(c))));
+      g.append(nodeChip(n), ...(n.crews || []).map(crewOf).filter((c) => c && !folded(c) && !away(c.key)).map((c) => crewChip(c.key, c.key.split("/").pop(), "", silent(c))));
       items.push(g);
     }
-  } else items.push(...snap.crews.filter((c) => !folded(c)).map((c) => crewChip(c.key, c.name, "", silent(c))));
+  } else items.push(...snap.crews.filter((c) => !folded(c) && !away(c.key)).map((c) => crewChip(c.key, c.name, "", silent(c))));
   // The folded crews: one muted line, each name brings its crew back.
   const off = snap.crews.filter(folded);
   if (off.length) {
@@ -326,7 +337,7 @@ function renderChips() {
     g.append(el("span", "", W.stoppedList));
     for (const c of off) {
       const age = ago(zero(c.stopped) ? c.last_tick : c.stopped);
-      g.append(crewChip(c.key, crewLabel(c.key) + (age ? " " + age : "")));
+      g.append(crewChip(c.key, crewLabel(c.key) + (c.retired ? " " + W.retiredW : age ? " " + age : "")));
     }
     items.push(g);
   }
@@ -1137,8 +1148,8 @@ function renderBand(crews) {
   if (down.length) counts.title = W.notUp + down.join(", ");
   h.append(el("span", "dl", W.sessions), counts);
   for (const c of crews) {
-    const tick = el("span", "tick" + (c.stale ? " stale" : tickerDead(c) ? " dead" : ""));
-    tick.append(el("i"), (crews.length > 1 ? crewLabel(c.key) + " " : W.tick) + (zero(c.last_tick) ? "—" : hhmm(c.last_tick)) + (c.stale ? " · " + W.stale : ""));
+    const tick = el("span", "tick" + (c.spare ? " spare" : c.stale ? " stale" : tickerDead(c) ? " dead" : ""));
+    tick.append(el("i"), (crews.length > 1 ? crewLabel(c.key) + " " : W.tick) + (c.spare ? W.spare : zero(c.last_tick) ? "—" : hhmm(c.last_tick)) + (c.stale ? " · " + W.stale : ""));
     tick.title = W.tick + crewLabel(c.key);
     h.append(tick);
   }

@@ -338,7 +338,7 @@ func markDormant(snap *uiSnapshot) {
 	for i, c := range snap.Crews {
 		silent := c.LastTick.IsZero() || snap.Now.Sub(c.LastTick) > uiDormant
 		snap.Crews[i].Dormant = !c.Stopped.IsZero() && c.Waiting == 0
-		snap.Crews[i].Silent = c.Stopped.IsZero() && silent
+		snap.Crews[i].Silent = c.Stopped.IsZero() && silent && !c.Spare
 	}
 
 	sort.SliceStable(snap.Crews, func(i, j int) bool { return !snap.Crews[i].Dormant && snap.Crews[j].Dormant })
