@@ -15,7 +15,7 @@
   <p class="ev" id="ev"></p>
   <div class="say" id="say" aria-live="polite"><i class="ph" style="width:min(560px,80%)"></i></div>
   <div class="tools">
-    <a href="chat.html">Chat</a>
+    <button type="button" class="talk" id="talk-open" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg><span>Talk</span></button>
     <span class="mark" id="mark" aria-hidden="true"></span>
     <nav class="chips" id="chips" aria-label="Crew"></nav>
     <div class="clock" id="clock"><i></i><span></span></div>
@@ -78,10 +78,16 @@
 
 <div class="toasts" id="toasts" aria-live="polite"></div>
 <div class="full" id="full" hidden></div>
-<aside class="drawer talk" id="talk" aria-labelledby="talk-h" hidden>
-  <div class="drawer-h"><h2 id="talk-h"></h2><span class="fill"></span><a class="q" id="talk-page" target="_blank" rel="noreferrer">Open page</a><button type="button" class="q" id="talk-close" aria-label="Close">✕</button></div>
-  <iframe id="talk-frame" title="Conversation"></iframe>
-</aside>
+<section class="side-panel" id="side" aria-labelledby="side-who" hidden>
+  <div class="panel-h">
+    <button type="button" class="back" id="side-back" aria-label="Back">‹</button>
+    <span class="lamp" id="side-lamp" aria-hidden="true"></span>
+    <h2 class="who" id="side-who"></h2>
+    <label class="pick"><span class="sr">Talk to</span><select id="side-pick"></select></label>
+    <div class="tools2"><a id="side-term" target="_blank" rel="noreferrer">Terminal</a><a id="side-full" target="_blank" rel="noreferrer">Full screen</a><button type="button" id="side-close" aria-label="Close">✕</button></div>
+  </div>
+  <iframe id="side-frame" title="Conversation"></iframe>
+</section>
 <aside class="drawer" id="history" aria-labelledby="history-h" hidden>
   <div class="drawer-h"><h2 id="history-h"></h2><button type="button" class="q" id="history-close" aria-label="Close">✕</button></div>
   <div class="feed" id="feed"></div>

@@ -207,6 +207,7 @@ function render() {
   seenNow.clear();
   if (!$("history").hidden) renderFeed();
   renderFull();
+  renderSide();
   applyHover();
   indent();
   refocus(focused);
@@ -1158,7 +1159,10 @@ function renderBand(crews) {
 function sessionCard(c, r) {
   const busy = r.status === "busy";
   const need = r.prompt || r.stuck;
-  const card = el("div", "role card " + (busy ? "busy" : "idle") + (need ? " need" : "") + stl(c.key));
+  const card = el("button", "role card " + (busy ? "busy" : "idle") + (need ? " need" : "") + stl(c.key));
+  card.type = "button";
+  card.dataset.k = "card:" + c.key + "/" + r.role;
+  card.addEventListener("click", (e) => openTalk(c.key, r.role, e.currentTarget));
   const tip = r.keep === "always" ? [W.always] : [];
   const h = el("div", "role-h");
   h.append(glyph(r.icon), el("span", "role-n", r.role));
@@ -1189,9 +1193,7 @@ function sessionCard(c, r) {
     m.title = W.spentTip;
     line.append(m);
   }
-  const talk = button("q talk-b", W.talk, () => openTalk(c.key, r.role), W.talkTo(r.role));
-  talk.setAttribute("aria-label", W.talkTo(r.role));
-  h.append(talk);
+  card.setAttribute("aria-label", W.talkTo(r.role) + (where ? " · " + where : ""));
   card.append(h, line);
   const now = nowLine(r) || plain(r.now);
   card.append(el("div", "role-now", now || ""));
@@ -1473,7 +1475,7 @@ function renderFull() {
   if (role) {
     const holder = el("span", "", [who(full.crew, role), rs].filter(Boolean).join(" · ") + " ");
     const crewKey = full.crew;
-    holder.append(button("q talk-b", W.talk, () => openTalk(crewKey, role), W.talkTo(role)));
+    holder.append(button("q", W.talkTo(role), () => openTalk(crewKey, role)));
     fact(W.fvHolder, holder);
   }
   if (t && t.delivery) fact("Handoff", t.delivery.accepted_at ? "Accepted" : t.delivery.sent_at ? "Sent, awaiting acceptance" : "Queued, awaiting acceptance");
@@ -1625,33 +1627,112 @@ $("say").addEventListener("click", (e) => {
 });
 $("history-close").addEventListener("click", () => { $("history").hidden = true; render(); });
 
-// ---- talk: a role's conversation in a panel beside the cockpit (any role of any node: a peer's over the mesh, signed
-// with the owner's key, as Chat does). The cockpit stays in view and keeps updating behind it.
+// ---- the side panel (D-07 p1–p7): a role's conversation (Chat) as a layer over the right zone; your move, the readouts
+// and the header stay in view and keep updating. Any role of any node: a peer's over the mesh, signed with the owner's
+// key, as Chat does. One panel at a time; Esc and ✕ close it and the focus goes back to what opened it.
 
-function openTalk(crewKey, role) {
+let side = null; // {crew, role}: what the panel shows
+let sideFrom = null; // the element that opened it
+let lastTalk = null; // the last conversation, for the header's Talk
+
+function placeSide() {
+  const mid = document.querySelector(".dcol.mid");
+  const r = mid && mid.offsetParent ? mid.getBoundingClientRect() : null;
+  const pane = $("side");
+  pane.style.setProperty("--side-top", r ? Math.max(0, r.top) + "px" : "0px");
+  pane.style.setProperty("--side-left", r ? r.left + "px" : "0px");
+}
+
+// talkTarget is where the header's Talk goes: the last conversation, else the dispatcher of the crew the switch shows
+// (All: this node's default crew).
+function talkTarget() {
+  if (lastTalk) return lastTalk;
+  const f = crewOf(filter);
+  const node = filter.startsWith("node:") ? filter.slice(5) : "";
+  const c = f || snap.crews.find((x) => x.key === "default" && !x.remote && !node)
+    || snap.crews.find((x) => (node ? x.node === node : !x.remote)) || snap.crews[0];
+  if (!c) return null;
+  const d = c.roles.find((r) => r.role === c.dispatcher) || c.roles.find((r) => /dispatcher/.test(r.role)) || c.roles[0];
+  return d ? { crew: c.key, role: d.role } : null;
+}
+
+function openTalk(crewKey, role, from) {
+  side = { crew: crewKey, role };
+  lastTalk = side;
+  sideFrom = from || document.activeElement;
   const c = crewOf(crewKey);
   const node = c && c.remote ? nodeOf(crewKey) : "";
   const crew = node ? crewKey.slice(node.length + 1) : crewKey;
   const q = new URLSearchParams({ node, crew, role });
+  const frame = $("side-frame");
   const src = "chat.html?" + q + "&embed=1";
-  const frame = $("talk-frame");
   if (frame.getAttribute("src") !== src) frame.setAttribute("src", src);
-  $("talk-page").href = "chat.html?" + q;
-  setText($("talk-h"), W.talkTo(who(crewKey, role) || role));
+  $("side-full").href = "chat.html?" + q;
+  $("side-term").href = "terminals.html?" + new URLSearchParams({ node, crew, role, view: "terminal" });
   $("history").hidden = true;
-  $("talk").hidden = false;
-  $("talk-close").focus();
+  placeSide();
+  $("side").hidden = false;
+  renderSide();
+  $("talk-open").setAttribute("aria-expanded", "true");
+  $("side-close").focus();
 }
 
 function closeTalk() {
-  $("talk").hidden = true;
+  side = null;
+  $("side").hidden = true;
+  $("talk-open").setAttribute("aria-expanded", "false");
   render();
+  if (sideFrom && sideFrom.isConnected) sideFrom.focus();
 }
 
-$("talk-close").addEventListener("click", closeTalk);
+// renderSide is the panel's head: the role's glyph as its lamp, its name, node/crew, its state and since when, and the
+// picker of every role of every node, grouped by node/crew, up ones first.
+function renderSide() {
+  if (!side || !snap) return;
+  placeSide();
+  const r = roleOf(side.crew, side.role);
+  const busy = r && r.status === "busy";
+  const need = r && (r.prompt || r.stuck);
+  const lamp = $("side-lamp");
+  lamp.className = "lamp" + (busy ? " busy" : "");
+  const g = glyph(r ? r.icon : "generic");
+  if (g) patch(lamp, [g]);
+  const st = !r || r.state !== "up" ? W.fvDown : (r.prompt ? W.onScreen : busy ? W.working : W.free) + (zero(r.since) ? "" : " · " + ago(r.since));
+  patch($("side-who"), [side.role + " ", el("span", "k", shownLabel(side.crew, true) || crewLabel(side.crew)), " ",
+    el("span", "st" + (need ? " need" : busy ? " busy" : ""), st)]);
+  const pick = $("side-pick");
+  if (document.activeElement !== pick) {
+    const groups = snap.crews.filter((c) => (c.roles || []).length).map((c) => {
+      const og = el("optgroup");
+      og.label = crewLabel(c.key) || c.key;
+      const roles = [...c.roles].sort((a, b) => (a.state === "up" ? 0 : 1) - (b.state === "up" ? 0 : 1));
+      for (const x of roles) {
+        const o = el("option", "", x.role + (x.state === "up" ? "" : " · " + W.fvDown));
+        o.value = c.key + "\n" + x.role;
+        o.selected = c.key === side.crew && x.role === side.role;
+        og.append(o);
+      }
+      return og;
+    });
+    pick.replaceChildren(...groups);
+  }
+}
+
+$("side-pick").addEventListener("change", (e) => {
+  const [crew, role] = e.target.value.split("\n");
+  openTalk(crew, role, sideFrom);
+});
+$("side-close").addEventListener("click", closeTalk);
+$("side-back").addEventListener("click", closeTalk);
+$("talk-open").addEventListener("click", (e) => {
+  if (side) { closeTalk(); return; }
+  const t = talkTarget();
+  if (t) openTalk(t.crew, t.role, e.currentTarget);
+});
+addEventListener("resize", () => { if (side) placeSide(); });
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
-  if (!$("talk").hidden) closeTalk();
+  if (side) closeTalk();
   else if (full) closeFull();
   else if (!$("history").hidden) { $("history").hidden = true; render(); } else if (openRow) {
     const k = openRow;

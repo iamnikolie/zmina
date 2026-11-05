@@ -214,6 +214,10 @@
     const query = new URLSearchParams(destination); history.replaceState(null, "", location.pathname + "?" + query);
     $("terminal-link").href = "terminals.html?" + new URLSearchParams({...destination, view: "terminal"});
     $("session-title").textContent = `${destination.crew} / ${destination.role}`; settings.open = false;
+    // Where the words go, always in sight: another node's role is reached over the mesh, signed with the owner's key.
+    const to = $("compose-to"); to.hidden = false;
+    to.textContent = "to " + (destination.node ? destination.node + "/" : "") + destination.crew + " " + destination.role + (destination.node ? " · over the mesh, signed" : "");
+    input.placeholder = "Message " + destination.role + "…";
     $("agent-state").textContent = "Loading conversation…"; $("empty-chat").hidden = false; $("empty-chat").textContent = "Loading messages…";
     restoreDraft();
     const version = generation, selected = {...destination};
