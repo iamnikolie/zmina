@@ -170,8 +170,13 @@ func (s *Shift) wake(a *alarm.Alarm, late string) (line, note string) {
 			err.Error() + "; the line waits in its queue"
 	}
 
+	// What the start did, not what it was asked: a conversation gone from the namespace started the role fresh.
+	if r := s.Resumed(name); r != "" {
+		return line + ", resumed " + r, ""
+	}
+
 	if o.Resume != "" {
-		return line + ", resumed " + o.Resume, ""
+		return line + ", started fresh (" + o.Resume + " is gone)", ""
 	}
 
 	return line + ", started", ""

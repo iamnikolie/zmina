@@ -2,6 +2,7 @@ package shift
 
 import (
 	"errors"
+	"github.com/iamnikolie/zmina/internal/alarm"
 	"os"
 	"path/filepath"
 	"slices"
@@ -1159,4 +1160,17 @@ func TestWakeOfAConversationNotInTheNamespaceStartsFresh(t *testing.T) {
 	assert.NotContains(t, f.tm.argv["designer"], "--resume")
 	assert.True(t, f.ev.has("designer", "resume-missing"))
 	assert.Empty(t, f.s.Resumed("designer"))
+}
+
+// A wake whose conversation is gone says it started fresh, not that it resumed.
+func TestWakeReportsWhatTheStartDid(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	require.NoError(t, f.s.Up("designer"))
+	f.status("designer", "idle", *f.now)
+	require.NoError(t, f.s.Down("designer", DownOptions{}))
+	f.s.HasTranscript = func(string, string) bool { return false }
+
+	line, _ := f.s.wake(&alarm.Alarm{ID: "R-1", Kind: alarm.Sleep, Role: "designer", Text: "wake"}, "")
+	assert.Contains(t, line, "started fresh (sid-designer is gone)")
+	assert.NotContains(t, line, "resumed")
 }
