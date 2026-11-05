@@ -80,9 +80,14 @@ func (a *app) lsCommand() *cobra.Command {
 	var asJSON, all, wide bool
 
 	c := &cobra.Command{
-		Use:   "ls [role...]",
-		Short: "List the roles: up ones a line each, the down ones in one line (--all, --wide, or name roles for more)",
+		Use:   "ls [<node>/<crew>] [role...]",
+		Short: "List the roles: up ones a line each, the down ones in one line (--all, --wide, or name roles for more); <node>/<crew>: another crew's",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			done, args, err := a.remote(cmd, args, false)
+			if done || err != nil {
+				return err
+			}
+
 			return a.readState(func(s *shift.Shift) error {
 				views, err := pickViews(s.Views(), args)
 				if err != nil {
@@ -830,10 +835,22 @@ func (a *app) peekCommand() *cobra.Command {
 	)
 
 	c := &cobra.Command{
-		Use:   "peek <role>",
-		Short: "A role's state, then the last lines of its screen without blank lines, rules and footer (--raw: as is)",
-		Args:  cobra.ExactArgs(1),
+		Use:   "peek [<node>/<crew>] <role>",
+		Short: "A role's state, then the last lines of its screen without blank lines, rules and footer (--raw: as is); <node>/<crew>: another crew's",
+		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			done, args, err := a.remote(cmd, args, false)
+			if done || err != nil {
+				return err
+			}
+
+			switch len(args) {
+			case 0:
+				return errors.New("peek takes a role after the address: zmina peek <node>/<crew> <role>")
+			case 2:
+				return fmt.Errorf("%q is no <node>/<crew> address: zmina peek <role>, or zmina peek <node>/<crew> <role>", args[0])
+			}
+
 			return a.readState(func(s *shift.Shift) error {
 				if raw {
 					if lines <= 0 {

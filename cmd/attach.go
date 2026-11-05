@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -19,10 +20,22 @@ import (
 func (a *app) attachCommand() *cobra.Command {
 	var raw bool
 	c := &cobra.Command{
-		Use:   "attach <role>",
-		Short: "Open a role's terminal (shared Codex: native TUI; --raw: tmux bridge)",
-		Args:  cobra.ExactArgs(1),
+		Use:   "attach [<node>/<crew>] <role>",
+		Short: "Open a role's terminal (shared Codex: native TUI; --raw: tmux bridge); <node>/<crew>: another crew's, over ssh -t",
+		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			done, args, err := a.remote(cmd, args, true)
+			if done || err != nil {
+				return err
+			}
+
+			switch len(args) {
+			case 0:
+				return errors.New("attach takes a role after the address: zmina attach <node>/<crew> <role>")
+			case 2:
+				return fmt.Errorf("%q is no <node>/<crew> address: zmina attach <role>, or zmina attach <node>/<crew> <role>", args[0])
+			}
+
 			process, err := a.attachProcess(args[0], raw)
 			if err != nil {
 				return err
