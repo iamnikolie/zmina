@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -447,12 +449,33 @@ var hasTranscript = func(ns, id string) bool {
 	unsure := false
 
 	for _, d := range dirs {
-		_, err := os.Stat(filepath.Join(ns, "projects", d.Name(), id+".jsonl"))
+		dir := filepath.Join(ns, "projects", d.Name())
+
+		// Only a project directory can hold a conversation: a file there (.DS_Store), or a link to one, is skipped. A
+		// link that cannot be followed is unknown.
+		if !d.IsDir() {
+			if d.Type()&fs.ModeSymlink == 0 {
+				continue
+			}
+
+			fi, err := os.Stat(dir)
+			if err == nil && !fi.IsDir() || errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+
+			if err != nil {
+				unsure = true
+
+				continue
+			}
+		}
+
+		_, err := os.Stat(filepath.Join(dir, id+".jsonl"))
 		if err == nil {
 			return true
 		}
 
-		if !errors.Is(err, os.ErrNotExist) {
+		if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
 			unsure = true
 		}
 	}

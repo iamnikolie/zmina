@@ -100,3 +100,20 @@ func TestHasTranscriptOfAnUnreadableNamespace(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(filepath.Join(projects, "p"), 0o700) })
 	assert.True(t, realHasTranscript(ns, "abc-1"), "cannot search a project: unknown, not missing")
 }
+
+// Files under projects (.DS_Store, a link to a file, a dangling link) hold no conversation and prove nothing either
+// way: a missing id is still missing.
+func TestHasTranscriptSkipsFilesUnderProjects(t *testing.T) {
+	ns := t.TempDir()
+	projects := filepath.Join(ns, "projects")
+	require.NoError(t, os.MkdirAll(filepath.Join(projects, "p"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(projects, ".DS_Store"), nil, 0o600))
+	require.NoError(t, os.Symlink(filepath.Join(projects, ".DS_Store"), filepath.Join(projects, "to-file")))
+	require.NoError(t, os.Symlink(filepath.Join(ns, "nowhere"), filepath.Join(projects, "dangling")))
+	assert.False(t, realHasTranscript(ns, "missing"))
+
+	other := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(other, "abc-1.jsonl"), nil, 0o600))
+	require.NoError(t, os.Symlink(other, filepath.Join(projects, "linked-dir")))
+	assert.True(t, realHasTranscript(ns, "abc-1"), "a link to a project directory is followed")
+}
