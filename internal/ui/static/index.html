@@ -85,7 +85,8 @@
     <button type="button" class="back" id="side-back" aria-label="Back">‹</button>
     <span class="lamp" id="side-lamp" aria-hidden="true"></span>
     <h2 class="who" id="side-who"></h2>
-    <label class="pick"><span class="sr">Talk to</span><select id="side-pick"></select></label>
+    <span class="pick"><button type="button" id="side-pick" aria-haspopup="listbox" aria-expanded="false">Other role ▾</button>
+      <span class="pickmenu" id="side-menu" hidden><input id="side-filter" type="search" placeholder="Find a role…" aria-label="Find a role"><span id="side-roles" role="listbox"></span></span></span>
     <div class="tools2"><a id="side-term" target="_blank" rel="noreferrer">Terminal</a><a id="side-full" target="_blank" rel="noreferrer">Full screen</a><button type="button" id="side-close" aria-label="Close">✕</button></div>
   </div>
   <iframe id="side-frame" title="Conversation"></iframe>

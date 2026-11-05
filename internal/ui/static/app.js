@@ -52,7 +52,7 @@ const W = {
   alAsWords: (w) => "set as «" + w + "»", alDue: "due now", backTag: "back",
   seen: (a) => "seen " + a, staleN: (a) => "stale" + (a ? " " + a : ""), stale: "stale", offline: "offline", stoppedList: "stopped:",
   silent: (a) => "ticker stopped" + (a ? " " + a : ""),
-  spare: "spare", retiredW: "retired", fixTicker: (c) => "zmina" + (c === "default" ? "" : " --config " + c.split("/").pop()) + " ticker status",
+  spare: "spare", retiredW: "retired", notUpN: (n) => "+" + n + " not up", fixTicker: (c) => "zmina" + (c === "default" ? "" : " --config " + c.split("/").pop()) + " ticker status",
   fixDown: (r) => "start it, or hand its task on: zmina up " + r, onScreenN: (n) => n + " on screen", crewsN: (n) => n + " crews", nothingOn: (w) => "Nothing waits on you on " + w + ".",
   elsewhere: (h, q) => "Elsewhere: " + h + " hold · " + q + " answer → All", downHolds: (r, ts) => r + ": down, holds " + ts,
   answerOn: (n) => "answer on " + n, detailsOn: (n) => "details on " + n,
@@ -1841,7 +1841,13 @@ function closeTalk() {
 // renderSide is the panel's head: the role's glyph as its lamp, its name, node/crew, its state and since when, and the
 // picker of every role of every node, grouped by node/crew, up ones first.
 function renderSide() {
-  if (!side || !snap) return;
+  if (!snap) return;
+  if (!side || side.kind !== "talk") {
+    // The header's Talk says whom it opens.
+    const t = talkTarget();
+    setText($("talk-open").lastElementChild, t ? W.talk + " · " + t.role + " " + (shownLabel(t.crew, true) || crewLabel(t.crew)) : W.talk);
+  }
+  if (!side) return;
   placeSide();
   if (side.kind !== "talk") { renderList(); return; }
   const r = roleOf(side.crew, side.role);
@@ -1855,22 +1861,35 @@ function renderSide() {
   const st = !r || r.state !== "up" ? W.fvDown : (r.prompt ? W.onScreen : busy ? W.working : W.free) + (zero(r.since) ? "" : " · " + ago(r.since));
   patch($("side-who"), [side.role + " ", el("span", "k", shownLabel(side.crew, true) || crewLabel(side.crew)), " ",
     el("span", "st" + (need ? " need" : busy ? " busy" : ""), st)]);
-  const pick = $("side-pick");
-  if (document.activeElement !== pick) {
-    const groups = snap.crews.filter((c) => (c.roles || []).length).map((c) => {
-      const og = el("optgroup");
-      og.label = crewLabel(c.key) || c.key;
-      const roles = [...c.roles].sort((a, b) => (a.state === "up" ? 0 : 1) - (b.state === "up" ? 0 : 1));
-      for (const x of roles) {
-        const o = el("option", "", x.role + (x.state === "up" ? "" : " · " + W.fvDown));
-        o.value = c.key + "\n" + x.role;
-        o.selected = c.key === side.crew && x.role === side.role;
-        og.append(o);
-      }
-      return og;
-    });
-    pick.replaceChildren(...groups);
+  if (!$("side-menu").hidden) renderPick();
+  setText($("talk-open").lastElementChild, W.talk + " · " + side.role + " " + (shownLabel(side.crew, true) || crewLabel(side.crew)));
+}
+
+// renderPick is the panel's role list (Fable 3): every crew of every node, up roles first with their state and since
+// when, the ones not up folded into «+N not up»; typing filters it.
+let pickAll = "";
+function renderPick() {
+  const q = $("side-filter").value.trim().toLowerCase();
+  const out = [];
+  for (const c of snap.crews.filter((c) => (c.roles || []).length && !away(c.key))) {
+    const label = shownLabel(c.key, true) || crewLabel(c.key) || c.name;
+    const match = (r) => !q || (label + " " + r.role).toLowerCase().includes(q);
+    const up = c.roles.filter((r) => r.state === "up" && match(r));
+    const down = c.roles.filter((r) => r.state !== "up" && match(r));
+    if (!up.length && !down.length) continue;
+    out.push(el("span", "pg", label));
+    const item = (r) => {
+      const st = r.state !== "up" ? W.fvDown : (r.prompt ? W.onScreen : r.status === "busy" ? W.working : W.free) + (zero(r.since) ? "" : " · " + ago(r.since));
+      const b = button("pi" + (side && side.crew === c.key && side.role === r.role ? " on" : ""), "", () => { $("side-menu").hidden = true; openTalk(c.key, r.role, sideFrom); });
+      b.setAttribute("role", "option");
+      b.append(el("span", "pr", r.role), el("span", "ps" + (r.prompt ? " need" : r.status === "busy" ? " busy" : ""), st));
+      return b;
+    };
+    out.push(...up.map(item));
+    if (down.length && (q || pickAll === c.key)) out.push(...down.map(item));
+    else if (down.length) out.push(button("pmore", W.notUpN(down.length), () => { pickAll = c.key; renderPick(); }));
   }
+  patch($("side-roles"), out);
 }
 
 // renderList is the panel's Parked (filter chips, older than a week first) or Done today (by crew) with its History tab.
@@ -1925,10 +1944,13 @@ function renderList() {
   patch($("side-list"), out);
 }
 
-$("side-pick").addEventListener("change", (e) => {
-  const [crew, role] = e.target.value.split("\n");
-  openTalk(crew, role, sideFrom);
+$("side-pick").addEventListener("click", () => {
+  const m = $("side-menu");
+  m.hidden = !m.hidden;
+  $("side-pick").setAttribute("aria-expanded", m.hidden ? "false" : "true");
+  if (!m.hidden) { $("side-filter").value = ""; pickAll = ""; renderPick(); $("side-filter").focus(); }
 });
+$("side-filter").addEventListener("input", renderPick);
 $("side-close").addEventListener("click", closeTalk);
 $("side-back").addEventListener("click", closeTalk);
 $("talk-open").addEventListener("click", (e) => {

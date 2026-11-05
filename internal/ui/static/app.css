@@ -238,7 +238,19 @@ section { padding: 18px 0 6px; }
 .panel-h .lamp { width: 1.15rem; height: 1.15rem; color: var(--muted); flex: none; }
 .panel-h .lamp.busy { color: var(--busy); }
 .panel-h .lamp svg { width: 100%; height: 100%; }
-.panel-h .pick select { max-width: 14rem; height: 1.9rem; background: none; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; font: .8rem var(--sans); }
+.panel-h .pick { position: relative; }
+.panel-h .pick > button { height: 1.9rem; padding: 0 .6rem; background: none; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; font: .8rem var(--sans); }
+.pickmenu { position: absolute; right: 0; top: 2.3rem; z-index: 9; width: 20rem; max-height: 60vh; overflow: auto; display: flex; flex-direction: column; gap: 1px;
+  padding: 6px; background: var(--panel); border: 1px solid var(--line2); border-radius: 9px; box-shadow: 0 12px 32px rgba(0, 0, 0, .4); }
+.pickmenu[hidden] { display: none; }
+.pickmenu input { height: 2rem; margin-bottom: 4px; padding: 0 .6rem; background: var(--bg); color: var(--ink); border: 1px solid var(--line2); border-radius: 6px; font: .85rem var(--sans); }
+.pickmenu #side-roles { display: flex; flex-direction: column; gap: 1px; }
+.pickmenu .pg { margin: 6px 6px 2px; font: .72rem var(--mono); color: var(--faint); }
+.pickmenu .pi { display: flex; justify-content: space-between; gap: .6rem; padding: 5px 8px; border: 0; border-radius: 6px; background: none; color: var(--ink2); font: .85rem var(--sans); text-align: left; cursor: pointer; }
+.pickmenu .pi:hover, .pickmenu .pi.on { background: var(--panel2); color: var(--ink); }
+.pickmenu .ps { font-size: .75rem; color: var(--faint); white-space: nowrap; }
+.pickmenu .ps.busy { color: var(--busy); } .pickmenu .ps.need { color: var(--need); }
+.pickmenu .pmore { padding: 4px 8px; border: 0; background: none; color: var(--faint); font: .75rem var(--sans); text-align: left; cursor: pointer; }
 .panel-h .tools2 { display: flex; gap: .15rem; align-items: center; }
 .panel-h .tools2 a, .panel-h .tools2 button { display: inline-flex; align-items: center; height: 1.9rem; padding: 0 .55rem; border: 0; border-radius: 6px; background: none; color: var(--muted); font: 500 .8rem var(--sans); text-decoration: none; }
 .panel-h .tools2 a:hover, .panel-h .tools2 button:hover { background: var(--panel2); color: var(--ink); }
