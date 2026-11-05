@@ -878,7 +878,8 @@ Bound to 127.0.0.1 by default and only answers requests that name it (`Host`), s
 write through the browser. Writes need the page's own header. A non-loopback `--addr` is refused unless
 `--token <secret>` (or `$ZMINA_UI_TOKEN`) is set: the page then needs `?token=` once on a new device (it is kept in a 90-day HttpOnly, SameSite Strict cookie, renewed on authenticated page loads); on this machine `zmina ui` signs the browser in with a one-time login code, and the address it prints carries no token.
 Live over server-sent events; the files are inside the binary. Each update is patched in: what did not change stays
-the very element it was, so its focus, its scroll and an agent's reference to it hold.
+the very element it was, so its focus, its scroll and an agent's reference to it hold; an element with a handler is
+always the one just drawn, so it acts on what it shows (`testdata/patch.html` checks it in a browser).
 
 ## Later — the parked list
 
@@ -1081,8 +1082,9 @@ alone for the beat — never taken as ended; a role being put down is left alone
    this beat and nothing waiting for it (for the dispatcher: no signals or notes), gets `/compact` —
    the conversation goes on, summarised. A compaction also reaches a role whose turn is over while a background shell
    or agent it started keeps its status off idle (a dispatcher with a watcher running would otherwise never be
-   compacted); a clear does not. Over its limit by more than a quarter, it waits 2 min idle instead of 5: a dispatcher
-   that gets a line every few minutes is seldom idle for five. With `context_action: clear` it gets `/clear` once idle
+   compacted); a clear does not. Idle counts from the later of the status's change and the turn's end (a role off
+   idle whose turn end is unknown is left alone). Over its limit by more than a quarter, it waits 2 min idle instead
+   of 5: a dispatcher that gets a line every few minutes is seldom idle for five. With `context_action: clear` it gets `/clear` once idle
    `idle_minutes` and with no terminal attached, and then its boot line on the
    next beat, before any signal: a fresh conversation (`resume: always` then resumes that one). A
    role holding an active task is compacted, never cleared. At most once per 30 min per role;
