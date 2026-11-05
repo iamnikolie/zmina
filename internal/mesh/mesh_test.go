@@ -482,7 +482,8 @@ func TestOwnerLineAsSSHReadsIt(t *testing.T) {
 		t.Skip("no ssh")
 	}
 
-	for _, line := range []string{"ssh -T box zmina", "ssh -o BatchMode=no -o RequestTTY=no box zmina", "ssh box zmina"} {
+	for _, line := range []string{"ssh -T box zmina", "ssh -o BatchMode=no -o RequestTTY=no box zmina", "ssh box zmina",
+		"ssh -t box zmina", "ssh -tt box zmina", "ssh -oRequestTTY=force -T box zmina"} {
 		f := strings.Fields(ownerLine(line, true))
 		host := slices.Index(f, "box")
 		args := append([]string{"-G", "-F", "/dev/null"}, f[1:host+1]...)
