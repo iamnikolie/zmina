@@ -36,7 +36,7 @@ const W = {
   fvCreated: "created", fvUpdated: "changed", fvRepo: "repo", fvBranch: "branch", fvWorktree: "worktree", fvLink: "link",
   fvDown: "not up", fvNoScreen: "the session is not up", fvLoading: "…", fvNoLog: "nothing in the log yet", ctxOf: (n, max) => n + " of " + max + " before compact", ctxPast: " · compacts when idle", move: "your move", roDone: "done today", oldest: "oldest · ", nobody: "nobody",
   withRec: (n) => n + " with an answer ready", upOf: (u, t) => u + " up of " + t, rolesWorking: (n) => n + (n === 1 ? " role" : " roles") + " working",
-  bandCounts: (w, u, d) => w + " working · " + u + " up · " + d + " not started", parkedLine: (n, old, back) => "Parked " + n + (old ? " · oldest " + old : "") + (back ? " · " + back + " come back" : ""), noDue: "no due date",
+  bandCounts: (w, u) => w + " working · " + u + " up", parkedLine: (n, old, back) => "Parked " + n + (old ? " · oldest " + old : "") + (back ? " · " + back + " come back" : ""), noDue: "no due date",
   people: (n) => n + " " + (n === 1 ? "person" : "people"),
   roSpent: "spent today", spentWeek: (v) => "7 days " + v, spentNone: "API-equivalent",
   spentRole: (v) => v + " today", spentTip: "API-equivalent dollars: what these tokens would cost at API rates; the crews run on a subscription", fvCost: "cost",
@@ -48,11 +48,12 @@ const W = {
   min: "min", h: "h", d: "d", lessMin: "<1 min", busyLive: "working", notLive: "not working",
   alarms: "Alarms", alSet: "Set", alNew: "Remind me", alWhat: "What to remind you of", alWhen: "tomorrow 09:00, +2h", alWhenLabel: "When: tomorrow 09:00, +2h, thu, a date",
   alMove: "Move", alOff: "Off", alMoved: "Moved", alOffDone: "Taken off", alSetDone: "Set", alNone: "no alarms set",
-  alFor: (f) => (f === "you" ? "for you" : "for " + f), alWakes: (r) => r + " wakes", alBack: "back: ", alIn: (d) => "in " + d,
+  alFor: (f) => (f === "you" ? "" : "for " + f), alWakes: (r) => r + " wakes", alBack: "back: ", alIn: (d) => "in " + d,
   alAsWords: (w) => "set as «" + w + "»", alDue: "due now", backTag: "back",
   seen: (a) => "seen " + a, staleN: (a) => "stale" + (a ? " " + a : ""), stale: "stale", offline: "offline", stoppedList: "stopped:",
-  silent: (a) => "silent" + (a ? " " + a : ""),
-  spare: "spare", retiredW: "retired", crewsN: (n) => n + " crews", nothingOn: (w) => "Nothing waits on you on " + w + ".",
+  silent: (a) => "ticker stopped" + (a ? " " + a : ""),
+  spare: "spare", retiredW: "retired", fixTicker: (c) => "zmina" + (c === "default" ? "" : " --config " + c.split("/").pop()) + " ticker status",
+  fixDown: (r) => "start it, or hand its task on: zmina up " + r, onScreenN: (n) => n + " on screen", crewsN: (n) => n + " crews", nothingOn: (w) => "Nothing waits on you on " + w + ".",
   elsewhere: (h, q) => "Elsewhere: " + h + " hold · " + q + " answer → All", downHolds: (r, ts) => r + ": down, holds " + ts,
   answerOn: (n) => "answer on " + n, detailsOn: (n) => "details on " + n,
   talk: "Talk", talkTo: (r) => "Talk to " + r,
@@ -251,17 +252,7 @@ function sayParts(say, hold, asks, going, parked) {
     s.dataset.to = target;
     say.append(s);
   });
-  // Red means act now (D-07 s5): a live crew's ticker overdue, or a role down that holds an active task (a peer node
-  // offline is red on its chip). A stopped, retired or spare crew is never red here; a peer read long ago says
-  // «stale», not «ticker stopped».
-  const dead = [];
-  for (const c of snap.crews.filter((c) => !folded(c) && !c.stale && !c.retired && !c.spare)) {
-    if (zero(c.stopped) && tickerDead(c)) dead.push(W.stopped(crewLabel(c.key), zero(c.last_tick) ? "" : ago(c.last_tick)));
-    if (!zero(c.stopped)) continue;
-    for (const r of c.roles || []) {
-      if (r.state !== "up" && (r.tasks || []).length && zero(r.asleep || "")) dead.push(W.downHolds(who(c.key, r.role) || r.role, r.tasks.join(", ")));
-    }
-  }
+  const dead = redList().map((d) => d.text);
   for (const d of dead) say.append(" · ", el("span", "k x", d));
 
   $("clock").classList.toggle("dead", dead.length > 0);
@@ -275,6 +266,26 @@ function sayParts(say, hold, asks, going, parked) {
   const newest = snap.crews.map((c) => c.last_tick || "").sort().pop() || "";
   if (newest && lastTick && newest !== lastTick) beat();
   lastTick = newest;
+}
+
+// redList is what is red, act now (D-07 s5): a live crew's ticker overdue, a role down that holds an active task (a peer
+// node offline is red on its chip). A stopped, retired or spare crew is never red; a peer read long ago says «stale».
+// Each names what to do: the crew's dispatcher to open, or the role.
+function redList() {
+  const out = [];
+  for (const c of snap.crews.filter((c) => !folded(c) && !c.stale && !c.retired && !c.spare && shows(c.key))) {
+    if (!zero(c.stopped)) continue;
+    if (tickerDead(c)) {
+      out.push({ text: W.stopped(crewLabel(c.key) || c.name, zero(c.last_tick) ? "" : ago(c.last_tick)), crew: c.key,
+        role: c.dispatcher || "dispatcher", fix: W.fixTicker(c.key) });
+    }
+    for (const r of c.roles || []) {
+      if (r.state !== "up" && (r.tasks || []).length && zero(r.asleep || "")) {
+        out.push({ text: W.downHolds(who(c.key, r.role) || r.role, r.tasks.join(", ")), crew: c.key, role: r.role, fix: W.fixDown(r.role) });
+      }
+    }
+  }
+  return out;
 }
 
 function beat() {
@@ -1060,12 +1071,13 @@ function renderCockpit(hold, asks, others, parked) {
   setText($("brand-s"), W.shift);
   renderEv();
   const crews = snap.crews.filter((c) => shows(c.key));
+  const screens = crews.flatMap((c) => (c.roles || []).filter((r) => r.state === "up" && r.prompt).map((r) => [c, r]));
   const roles = crews.flatMap((c) => c.roles);
   const up = roles.filter((r) => r.state === "up");
   const persons = new Set(others.map((w) => w.on || "")).size;
   const oldest = hold.length ? Math.max(...hold.map((it) => nowMs() - T(it.created))) : 0;
   const cells = [
-    [W.hold, hold.length, hold.length ? W.oldest + dur(oldest) : W.nobody, "need"],
+    [W.hold, hold.length + screens.length, [hold.length ? W.oldest + dur(oldest) : "", screens.length ? W.onScreenN(screens.length) : ""].filter(Boolean).join(" · ") || W.nobody, "need"],
     [W.ask, asks.length, asks.length ? W.withRec(asks.filter((it) => it.rec).length) : W.noAsk, "ink"],
     [W.go, snap.work.filter((w) => w.lane === "go" && shows(w.crew)).length, W.rolesWorking(up.filter((r) => r.status === "busy").length), "busy"],
     [W.others, others.length, others.length ? W.people(persons) : W.nobody, "dim"],
@@ -1088,10 +1100,11 @@ function renderCockpit(hold, asks, others, parked) {
     return ro;
   }));
 
+  // A session that shows a question on its screen waits on the owner: first in his move.
   // Your move: holds first, then the questions and checks, one line each with the recommendation as the chip.
   setText($("move-h"), W.move);
   const live = (it) => !gone(key(it.crew, it.id));
-  const holds = hold.filter(live).map((it) => moveRow(it, true));
+  const holds = [...screens.map(([c, r]) => screenRow(c, r)), ...hold.filter(live).map((it) => moveRow(it, true))];
   if (!holds.length && !asks.filter(live).length && filter !== "all") {
     const where = filter.startsWith("node:") ? filter.slice(5) : crewLabel(filter) || filter;
     holds.push(el("p", "dnone", W.nothingOn(where)));
@@ -1103,7 +1116,7 @@ function renderCockpit(hold, asks, others, parked) {
     }
   } else if (!holds.length) holds.push(el("p", "dnone", W.noHold));
   patch($("move-rows"), [...holds]);
-  const qs = asks.filter(live);
+  const qs = [...asks.filter(live).filter((it) => it.kind !== "check"), ...asks.filter(live).filter((it) => it.kind === "check")];
   setText($("move-ask-h"), qs.length ? W.ask : "");
   patch($("move-asks"), [...qs.map((it) => moveRow(it, false))]);
   patch($("move-al-h"), [...alarmHead()]);
@@ -1141,9 +1154,19 @@ function renderEv() {
   const evs = snap.log.filter((e) => shows(e.crew));
   const answered = new Set(evs.filter((e) => e.event === "answered").map((e) => e.crew + "/" + ((e.detail || "").match(/^(A-\d+)/) || [])[1]));
   const e = evs.map((x) => feedLine(x, answered)).find(Boolean);
-  const whole = e ? [hhmm(e.ts), who(e.crew, e.role || e.by), e.text].filter(Boolean).join(" · ") : "";
-  patch($("ev"), e ? [el("i"), clause(whole, 80)] : []);
-  $("ev").title = whole;
+  const whole = e ? [who(e.crew, e.role || e.by), e.text].filter(Boolean).join(" · ") : "";
+  const red = redList();
+  $("ev").classList.toggle("red", red.length > 0);
+  if (red.length) {
+    patch($("ev"), red.map((d) => {
+      const b = button("redb", d.text, () => openTalk(d.crew, d.role), d.fix);
+      return b;
+    }));
+    $("ev").title = whole;
+    return;
+  }
+  patch($("ev"), e ? [el("i"), clause(whole, 60)] : []);
+  $("ev").title = e ? hhmm(e.ts) + " · " + whole : "";
 }
 
 // clause is a text's first sentence, cut at a word to n characters with «…» (D-07 h1).
@@ -1154,7 +1177,7 @@ function clause(t, n) {
   return (cut.lastIndexOf(" ") > n / 2 ? cut.slice(0, cut.lastIndexOf(" ")) : cut) + "…";
 }
 
-$("ev").addEventListener("click", () => openHistory());
+$("ev").addEventListener("click", (e) => { if (!e.target.closest("button")) openHistory(); });
 
 // moveRow is a row of your move: a hold carries its note and «ops · waits on dispatcher» under the title, a question its
 // reason beside it; both open like the lean page's rows (b1, p1–p5).
@@ -1180,12 +1203,28 @@ function moveRow(it, holds) {
     const why = it.kind === "decision" ? it.reason : it.note;
     if (why) words.append(el("span", "gr", why));
   }
-  const tag = chip(it) || (it.kind === "check" ? el("span", "chip ghost", W.check)
-    : it.kind === "later" ? el("span", "chip ghost", W.backTag) : null);
+  const tag = chip(it) || (it.kind === "later" ? el("span", "chip ghost", W.backTag) : null);
   const row = rowShell(key(it.crew, it.id), "mv " + (holds ? "hold" : "ask") + stl(it.crew), words, holds ? ageOf(it) : null, tag, null, itemPanel(it, holds));
   row.title = ids(idOf(it.crew, it.id), it.task && idOf(it.crew, it.task));
   if (it.task) row.dataset.w = key(it.crew, it.task);
   if (it.project) row.dataset.p = it.project;
+  return row;
+}
+
+// screenRow is a session with a question on its screen: amber like a hold; opened, its last line and Talk (the panel
+// has its Terminal).
+function screenRow(c, r) {
+  const words = el("div", "words");
+  words.append(el("span", "tt", r.role + " · " + W.onScreen));
+  const meta = el("span", "mvm");
+  const cl = crewTag(c.key, true);
+  if (cl) meta.append(cl);
+  if (r.now) meta.append(el("span", "", plain(r.now)));
+  words.append(meta);
+  const p = el("div");
+  if (r.now) p.append(el("p", "pn", r.now));
+  p.append(button("btn", W.talkTo(r.role), () => openTalk(c.key, r.role)));
+  const row = rowShell("screen:" + c.key + "/" + r.role, "mv hold screen", words, el("span", "age", ago(r.since)), null, null, p);
   return row;
 }
 
@@ -1212,7 +1251,7 @@ function renderBand(crews) {
   const up = crews.flatMap((c) => c.roles.filter((r) => r.state === "up").map((r) => [c, r]));
   const down = crews.flatMap((c) => c.roles.filter((r) => r.state !== "up").map((r) => who(c.key, r.role)));
   const h = el("div", "dh");
-  const counts = el("span", "dc", W.bandCounts(up.filter(([, r]) => r.status === "busy").length, up.length, down.length));
+  const counts = el("span", "dc", W.bandCounts(up.filter(([, r]) => r.status === "busy").length, up.length));
   if (down.length) counts.title = W.notUp + down.join(", ");
   h.append(el("span", "dl", W.sessions), counts);
   // Only the crews whose tick is not fresh, or that are spare, stand on the line; the fresh ones are in its tooltip
@@ -1221,14 +1260,15 @@ function renderBand(crews) {
   if (crews.length > 1 && fresh.length) h.title = fresh.map((c) => crewLabel(c.key) + " " + hhmm(c.last_tick)).join(" · ");
   for (const c of crews.length > 1 ? crews.filter((c) => !fresh.includes(c)) : crews) {
     const tick = el("span", "tick" + (c.spare ? " spare" : c.stale ? " stale" : tickerDead(c) ? " dead" : ""));
-    tick.append(el("i"), (crews.length > 1 ? crewLabel(c.key) + " " : W.tick) + (c.spare ? W.spare : zero(c.last_tick) ? "—" : hhmm(c.last_tick)) + (c.stale ? " · " + W.stale : ""));
+    const said = c.spare ? W.spare : tickerDead(c) && !c.stale ? W.silent(zero(c.last_tick) ? "" : ago(c.last_tick)) : zero(c.last_tick) ? "—" : hhmm(c.last_tick);
+    tick.append(el("i"), (crews.length > 1 ? crewLabel(c.key) + " · " : W.tick) + said + (c.stale ? " · " + W.stale : ""));
     tick.title = W.tick + crewLabel(c.key);
     h.append(tick);
   }
   // The working ones and those that need you stand in the band; the idle ones lie in one stack after them, the one
   // that went idle last on top, until the owner spreads them (kept in the browser).
   const awake = (r) => r.status === "busy" || r.prompt || r.stuck;
-  const lit = up.filter(([, r]) => awake(r));
+  const lit = up.filter(([, r]) => awake(r)).sort((a, b) => (b[1].prompt || b[1].stuck ? 1 : 0) - (a[1].prompt || a[1].stuck ? 1 : 0));
   const idle = up.filter(([, r]) => !awake(r)).sort((a, b) => T(b[1].since) - T(a[1].since));
   const spread = stacked.has("sessions") || idle.length < 2;
   if (idle.length > 1) {
@@ -1272,7 +1312,7 @@ function sessionCard(c, r) {
     const said = W.ctxOf(Math.round(r.context / 1000) + "k", Math.round(r.context_max / 1000) + "k") + (share > 1 ? W.ctxPast : "");
     if (p < 0.75) tip.push(said);
     else {
-      const ring = el("span", "ring" + (p >= 0.9 ? " bad" : " need") + (share > 1 ? " over" : ""));
+      const ring = el("span", "ring need" + (share > 1 ? " over" : ""));
       ring.style.setProperty("--deg", Math.round(p * 360) + "deg");
       ring.title = said;
       ring.append(el("span", "", share > 1 ? "100+" : String(Math.round(share * 100))));
@@ -1370,7 +1410,8 @@ function personGroups(ws) {
     head.append(el("span", "chev", "›"), el("span", "kb-gn", g || W.setAside(items.length).replace(/^\d+\s*/, "")),
       el("span", "kb-gc", String(items.length)), el("span", "kb-ga", W.oldest + ago(items[0].created)));
     const cards = items.map((w) => boardRow(w, "others", false));
-    return isOpen || cards.length === 1 ? [head, ...cards] : [head, ...stackOf([cards[0]], cards.length - 1, toggle)];
+    // Every item shows, a row each (Fable 9): a stack hid the second item of every person behind a click.
+    return [head, ...cards];
   });
 }
 
@@ -1868,12 +1909,16 @@ function renderList() {
     out.push(fl);
     if (side.tab === "history") out.push(...feedRows());
     else {
-      const today = new Date(nowMs()).toDateString();
-      const done = (e) => e.event === "task" && taskChange(e.detail || "").state === "done" && new Date(e.ts).toDateString() === today;
-      for (const c of snap.crews.filter((c) => shows(c.key))) {
-        const rows = feedRows((e) => e.crew === c.key && done(e));
-        if (!rows.length) continue;
-        out.push(el("div", "gh", crewLabel(c.key) || c.name), ...rows);
+      for (const c of snap.crews.filter((c) => shows(c.key) && (c.done || []).length)) {
+        out.push(el("div", "gh", (crewLabel(c.key) || c.name) + " " + c.done.length));
+        for (const d of [...c.done].sort((a, b) => T(b.at) - T(a.at))) {
+          const row = el("div", "e");
+          row.append(el("time", "", hhmm(d.at)));
+          const t = el("span");
+          t.append(el("b", "", d.id), " · " + d.title, el("i", "", d.role ? " · " + d.role : ""));
+          row.append(t);
+          out.push(row);
+        }
       }
     }
   }

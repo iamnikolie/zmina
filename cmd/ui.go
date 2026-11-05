@@ -677,6 +677,14 @@ type milestone struct {
 	At   time.Time `json:"at"`
 }
 
+// uiDone is a task closed as done today, as the Done today list shows it.
+type uiDone struct {
+	ID    string    `json:"id"`
+	Title string    `json:"title"`
+	Role  string    `json:"role,omitempty"`
+	At    time.Time `json:"at"`
+}
+
 // uiCrewView is one crew's header and roles.
 type uiCrewView struct {
 	Key      string    `json:"key"`
@@ -687,9 +695,11 @@ type uiCrewView struct {
 	Roles    []uiRole  `json:"roles"`
 	// Waiting is how many todo items the crew has; DoneToday how many tasks it closed as done today; Error why it
 	// could not be read.
-	Waiting   int    `json:"waiting"`
-	DoneToday int    `json:"done_today"`
-	Error     string `json:"error,omitempty"`
+	Waiting   int `json:"waiting"`
+	DoneToday int `json:"done_today"`
+	// Done are the tasks it closed as done today, newest first: what the Done today readout counts and opens.
+	Done  []uiDone `json:"done,omitempty"`
+	Error string   `json:"error,omitempty"`
 	// Node is the mesh node the crew runs on (empty without a mesh); Remote a peer's crew, read over the mesh and
 	// shown read-only; Stale when that read is older than it should be; Dormant a crew stopped on purpose with
 	// nothing waiting on the owner, folded away on the page.
@@ -701,9 +711,11 @@ type uiCrewView struct {
 	Silent bool `json:"silent,omitempty"`
 	// Spare is the owner's standby crew (spare: true): no ticker by design, never red. Retired is a crew the owner
 	// retired (zmina retire), MovedTo the crew it went on as: it leaves the page.
-	Spare   bool   `json:"spare,omitempty"`
-	Retired bool   `json:"retired,omitempty"`
-	MovedTo string `json:"moved_to,omitempty"`
+	Spare bool `json:"spare,omitempty"`
+	// Dispatcher is the crew's dispatcher role: where the page's Talk goes for the crew.
+	Dispatcher string `json:"dispatcher,omitempty"`
+	Retired    bool   `json:"retired,omitempty"`
+	MovedTo    string `json:"moved_to,omitempty"`
 }
 
 // Each list across crews carries the crew's key.
@@ -816,7 +828,7 @@ func (a *app) uiSnapshot() uiSnapshot {
 			}
 
 			cv.LastTick, cv.Stopped, cv.Stuck = s.State.LastTick, s.State.Stopped, s.Crew.StuckMinutes
-			cv.Spare, cv.Retired, cv.MovedTo = s.Crew.Spare, s.Crew.IsRetired(), s.Crew.MovedTo
+			cv.Spare, cv.Retired, cv.MovedTo, cv.Dispatcher = s.Crew.Spare, s.Crew.IsRetired(), s.Crew.MovedTo, s.Crew.Dispatcher
 
 			// The first crew to pin a project's tint has it.
 			for p, tint := range s.Crew.Tints() {
@@ -950,6 +962,7 @@ func (a *app) readCrew(s *shift.Shift, key string, cv *uiCrewView, snap *uiSnaps
 	for _, t := range tasks {
 		if t.State == task.Done && !t.Updated.Before(today) {
 			cv.DoneToday++
+			cv.Done = append(cv.Done, uiDone{ID: t.ID, Title: t.Headline(), Role: t.Role, At: t.Updated})
 		}
 
 		if !t.State.Active() {

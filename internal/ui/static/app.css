@@ -591,3 +591,38 @@ body.fv-on { overflow: hidden; }
 .chipmenu .ns { margin-left: .4rem; font-size: 11px; }
 .chipmenu .ns.bad { color: var(--late); }
 .chipmenu .off { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; margin-top: 2px; padding-top: 4px; border-top: 1px solid var(--line); font: 12px var(--sans); color: var(--faint); }
+
+/* Fable 1 · what is red takes the header's event slot, each a button that opens the crew or the role. */
+.ev.red { display: flex; gap: .4rem; flex-wrap: wrap; overflow: hidden; }
+.ev .redb { border: 1px solid color-mix(in srgb, var(--late) 45%, var(--line2)); border-radius: 6px; background: none; color: var(--late);
+  font: 500 .8rem var(--sans); padding: .15rem .55rem; white-space: nowrap; cursor: pointer; }
+.ev .redb:hover { background: color-mix(in srgb, var(--late) 10%, transparent); }
+/* Fable 2 · a session with a question on screen stands in your move, amber like a hold. */
+.mv.screen { --t: var(--need); }
+.mv.screen .tt { color: var(--need); }
+@media (min-width: 1400px) {
+  /* Fable 4 · a question is two lines: its title, then its crew and its reason; the chip has its own slot, and hover
+     actions go under the row, never over the chip. */
+  .deck .mv.ask > .words { flex-wrap: wrap; white-space: normal; row-gap: 2px; }
+  .deck .mv.ask > .words .tt { flex-basis: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .deck .mv.ask > .words .cl, .deck .mv.ask > .words .gr { font: .75rem var(--mono); color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .deck .mv .chip { max-width: 14rem; }
+  .deck .row:not(.open):hover > .hov, .deck .row:not(.open):focus-within > .hov { position: static; grid-column: 1 / -1; padding: 2px 0 0; background: none; justify-content: flex-start; }
+  /* Fable 8 · a task on the board is one row: id · title · holder · age, no note line (it is on the holder's card). */
+  .deck .kbr { padding: .45rem .75rem; border-radius: 6px; }
+  .deck .kbr > .words.kc { flex-direction: row; align-items: baseline; gap: .6rem; flex-wrap: nowrap; }
+  .deck .kbr .kc-h { display: contents; }
+  .deck .kbr .kb-id { order: 1; flex: none; }
+  .deck .kbr .tt { order: 2; flex: 1; min-width: 0; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; -webkit-line-clamp: unset; font-size: .9rem; }
+  .deck .kbr .kc-f { order: 3; flex: none; max-width: 30%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .deck .kbr .kc-age { order: 4; flex: none; }
+  .deck .kbr .kc-x { order: 5; }
+  .deck .kbr:not(.open) .kc-n { display: none; }
+  .deck .row.open.kbr > .words.kc { flex-wrap: wrap; }
+  /* Fable 15 · money is not the brightest number on the strip. */
+  .strip .ro:last-child .ro-n { color: var(--ink2); font-size: 1.8rem; }
+}
+@media (max-width: 860px) {
+  /* Fable 11 · on a phone the chip has its own line under the title. */
+  .row > .chip { grid-area: auto; grid-column: 1 / -1; justify-self: start; max-width: 100%; margin-top: 4px; }
+}
