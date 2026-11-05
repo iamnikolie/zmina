@@ -29,6 +29,7 @@ import (
 	"github.com/iamnikolie/zmina/internal/events"
 	"github.com/iamnikolie/zmina/internal/later"
 	"github.com/iamnikolie/zmina/internal/ledger"
+	"github.com/iamnikolie/zmina/internal/mesh"
 	"github.com/iamnikolie/zmina/internal/record"
 	"github.com/iamnikolie/zmina/internal/shift"
 	"github.com/iamnikolie/zmina/internal/task"
@@ -382,8 +383,7 @@ func (a *app) uiHandler(bound string, loopback bool, token string, allowHosts ..
 			return
 		}
 
-		if !map[string]bool{"yes": true, "done": true, "answer": true, "park": true, "ignore": true, "back": true,
-			"drop": true, "mine": true}[in.Action] {
+		if !todoActions[in.Action] {
 			http.Error(w, "action: yes, done, answer, park, ignore, back, drop or mine", http.StatusBadRequest)
 
 			return
@@ -391,19 +391,11 @@ func (a *app) uiHandler(bound string, loopback bool, token string, allowHosts ..
 
 		var line string
 
-		// The answer goes to the dispatcher of the item's own crew; «mine» changes the task itself.
-		c, err := a.crewApp(in.Crew)
-		if err == nil {
-			err = c.withState(func(s *shift.Shift) error {
-				var err error
-				if in.Action == "mine" {
-					line, err = c.takeBack(s, in.ID)
-				} else {
-					line, err = answerTodo(s, "ui", in.Action, in.ID, in.Text)
-				}
-
-				return err
-			})
+		var err error
+		if node, crew, ok := peerCrew(in.Crew); ok {
+			line, err = a.peerAct(r.Context(), node, "todo/act", mesh.TerminalRequest{Crew: crew, Action: in.Action, ID: in.ID, Text: in.Text})
+		} else {
+			line, err = a.localTodoAct(in.Crew, in.Action, in.ID, in.Text)
 		}
 
 		if err != nil {
@@ -428,16 +420,12 @@ func (a *app) uiHandler(bound string, loopback bool, token string, allowHosts ..
 
 		var line string
 
-		c, err := a.crewApp(in.Crew)
-		if err == nil {
-			err = c.withState(func(s *shift.Shift) error {
-				s.By = "ui"
-
-				var err error
-				line, err = alarmAction(s, in.Action, in.ID, in.When, in.Text, in.Role)
-
-				return err
-			})
+		var err error
+		if node, crew, ok := peerCrew(in.Crew); ok {
+			line, err = a.peerAct(r.Context(), node, "alarm/act", mesh.TerminalRequest{Crew: crew, Action: in.Action, ID: in.ID,
+				When: in.When, Text: in.Text, Role: in.Role})
+		} else {
+			line, err = a.localAlarmAct(in.Crew, in.Action, in.ID, in.When, in.Text, in.Role)
 		}
 
 		if err != nil {
@@ -571,8 +559,13 @@ func guardLogins(next http.Handler, bound string, loopback bool, token string, l
 
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
+		// Only Chat may be framed, and only by the cockpit itself (its talk panel); every other page by nobody.
+		ancestors := "'none'"
+		if r.URL.Path == "/chat.html" {
+			ancestors = "'self'"
+		}
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; "+
-			"img-src 'self' data:; frame-ancestors 'none'")
+			"img-src 'self' data:; frame-ancestors "+ancestors)
 		next.ServeHTTP(w, r)
 	})
 }

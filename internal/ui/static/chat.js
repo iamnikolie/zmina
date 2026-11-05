@@ -5,6 +5,8 @@
   const node = $("node"), target = $("target"), settings = $("session-settings"), input = $("message");
   const conversation = $("conversation"), messages = $("messages"), send = $("send-message"), mic = $("dictate");
   const params = new URLSearchParams(location.search), language = $("speech-language");
+  // Inside the cockpit's talk panel: the panel is the page's way back, not the header's link.
+  document.body.classList.toggle("embed", params.get("embed") === "1");
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   let targets = [], destination = null, snapshot = null, generation = 0, pollTimer = null, readRequest = null;
   let loadingTargets = false, posting = false, draftID = "", cleared = null, recognition = null, listening = false, firstPaint = true;

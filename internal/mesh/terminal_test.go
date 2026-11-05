@@ -284,3 +284,45 @@ func TestCrewStatusIsOwnerOnlyAndRelayed(t *testing.T) {
 	_, err = owner.CrewStatus(ctx, transport, "old", "")
 	require.ErrorContains(t, err, "update zmina")
 }
+
+// The owner answers a peer's item from its own cockpit: signed with the owner's key, relayed, done on the item's node;
+// a certified peer that is not the owner cannot, and an older node says to update.
+func TestActIsOwnerOnlyAndRelayed(t *testing.T) {
+	owner := newOwner(t, "owner")
+	jump := enroll(t, owner, "jump")
+	worker := enroll(t, owner, "worker")
+	old := enroll(t, owner, "old")
+	addPeer(t, owner, "jump")
+	addPeer(t, owner, "old")
+	addPeer(t, jump, "worker")
+	require.NoError(t, owner.UpdatePeers(func(ps []Peer) []Peer { return append(ps, Peer{Name: "worker", Through: []string{"jump"}}) }))
+	var did []string
+	service := &TerminalServices{
+		TodoAct: func(crew, action, id, text string) (string, error) {
+			did = append(did, crew+" "+action+" "+id+" "+text)
+			return id + " · " + action + " · queued for the dispatcher", nil
+		},
+		AlarmAct: func(crew, action, id, when, text, role string) (string, error) {
+			did = append(did, crew+" "+action+" "+id+" "+when)
+			return id + " moved", nil
+		},
+	}
+	transport := &terminalPipes{nodes: map[string]*Node{"jump": jump, "worker": worker, "old": old},
+		services: map[string]*TerminalServices{"worker": service, "old": {}}}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	line, err := owner.Act(ctx, transport, "worker", "todo/act", TerminalRequest{Crew: "ops", Action: "answer", ID: "A-3", Text: "go"})
+	require.NoError(t, err)
+	require.Equal(t, "A-3 · answer · queued for the dispatcher", line)
+	line, err = owner.Act(ctx, transport, "worker", "alarm/act", TerminalRequest{Crew: "ops", Action: "move", ID: "R-2", When: "+2h"})
+	require.NoError(t, err)
+	require.Equal(t, "R-2 moved", line)
+	require.Equal(t, []string{"ops answer A-3 go", "ops move R-2 +2h"}, did)
+
+	_, err = jump.Act(ctx, transport, "worker", "todo/act", TerminalRequest{Crew: "ops", Action: "yes", ID: "A-3"})
+	require.ErrorContains(t, err, "owner node")
+	_, err = owner.Act(ctx, transport, "old", "todo/act", TerminalRequest{Crew: "ops", Action: "yes", ID: "A-3"})
+	require.ErrorContains(t, err, "update zmina")
+	require.Len(t, did, 2)
+}

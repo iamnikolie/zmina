@@ -790,8 +790,14 @@ A machine without peers is a mesh of one. It opens the page in the browser.
   every peer: an older one answers `update zmina on this node`.
 - **One view**: «All» merges every node's crews; every item, a question too, is labelled `node/crew` once there is more
   than one node (a crew's key on a peer is `<node>/<crew>`; the label is dropped once the switch narrows to that node or
-  crew); the switch filters by node or by crew. A peer's items open in place read-only, `answer on <node>` where
-  the actions would be (answer on that node's cockpit or through its dispatcher).
+  crew); the switch filters by node or by crew. A peer's items are answered in place like this node's: the answer,
+  Done, Later, a reminder set or moved, goes to the item's own node as an owner-signed mesh write (`todo/act`,
+  `alarm/act`, through relays like a terminal), which does it as its own page would — to that crew's dispatcher — and
+  says what it did. A node older than this one answers `update zmina on this node`, and the row says so.
+- **Talk**: every session card, and the holder line of an opened task, has «Talk»: the role's conversation (Chat) opens
+  in a panel beside the cockpit, which stays in view and keeps updating behind it; on a phone the panel is the whole
+  screen. Any role of any node: a peer's over the mesh as Chat reads it. «Open page» opens it as its own page; Esc
+  closes it. Only Chat may be framed, and only by the cockpit itself.
 - **Stopped crews**: a crew stopped on purpose (`zmina stop`) with nothing waiting on the owner leaves «All»: one
   muted line names them, a tap shows one. A crew whose ticker has been silent for an hour without a stop stays,
   its chip marked `silent 1h`; a stopped crew that still holds something waiting on the owner stays too.

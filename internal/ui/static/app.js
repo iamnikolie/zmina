@@ -119,6 +119,7 @@ const W = {
   seen: (a) => "seen " + a, staleN: (a) => "stale" + (a ? " " + a : ""), stale: "stale", offline: "offline", stoppedList: "stopped:",
   silent: (a) => "silent" + (a ? " " + a : ""),
   answerOn: (n) => "answer on " + n, detailsOn: (n) => "details on " + n,
+  talk: "Talk", talkTo: (r) => "Talk to " + r,
   ev: {
     alarm: "alarm: ", sleep: "asleep ",
     new: "started: ", waitingOn: "waits on you: ", waitingWho: (w) => "waits on " + w + ": ", done: "done", dropped: "dropped",
@@ -461,7 +462,6 @@ function rowShell(k, cls, words, age, chip, hov, panel) {
 
 // act sends the action after a 5 s undo; k is the row it hides, the item's own key unless that row has another.
 function act(it, action, text, word, k = key(it.crew, it.id)) {
-  if (remote(it.crew)) { toast(W.answerOn(nodeOf(it.crew))); return; } // a peer's crew is read-only here
   openRow = "";
   full = null;
   draft = { k: "", text: "" };
@@ -578,10 +578,6 @@ function panel(o) {
     }
     p.append(m);
   }
-  if (o.crew && remote(o.crew)) {
-    p.append(el("p", "onpeer", W.answerOn(nodeOf(o.crew))));
-    return p;
-  }
   // The field, then the buttons as one group: when the line is too narrow the group moves under the field whole
   // and the field takes the width (f2). In a column narrower still, the muted ones move under the primary together;
   // a button never wraps alone.
@@ -644,7 +640,7 @@ function itemPanel(it, holds) {
   else if (it.kind !== "check") muted.push([W.no, () => act(it, "answer", W.noText, W.sentTo), "x"]);
   return panel({
     body: it.id.startsWith("T-") ? taskBody(it.text, it.title, it.note)
-      : [says(it.text, it.title || it.text) ? it.text : "", rec ? it.reason : it.note, rec && remote(it.crew) ? W.rec + it.rec : ""],
+      : [says(it.text, it.title || it.text) ? it.text : "", rec ? it.reason : it.note],
     meta: [holds ? W.waits(who(it.crew, it.blocks || it.role) || "—") : it.role && W.from(who(it.crew, it.role))], url: it.url,
     reply: it, primary, muted, crew: it.crew,
   });
@@ -680,15 +676,15 @@ function ageOf(it) {
 
 // chip is the recommended answer in its own words; a tap takes it (b2).
 function chip(it) {
-  if (!(it.kind === "decision" && it.rec) || remote(it.crew)) return null; // a peer's recommendation is told in the opened row
+  if (!(it.kind === "decision" && it.rec)) return null;
   const c = button("chip", it.rec.length > 28 ? [...it.rec].slice(0, 27).join("") + "…" : it.rec, () => act(it, "yes", "", W.sentTo), W.rec + it.rec);
   c.setAttribute("aria-label", W.yes + ": " + it.rec);
   return c;
 }
 
-// ownHov is the in-place actions of a row; a peer's crew has none.
+// ownHov is the in-place actions of a row. A peer's crew has them too: the answer goes to that node, signed with the
+// owner's key, and is done there (POST /api/todo routes it).
 function ownHov(crew, hov) {
-  if (remote(crew)) hov.replaceChildren();
   return hov;
 }
 
@@ -870,12 +866,12 @@ function alarmHead() {
 }
 
 // alarmCrew is the crew a new reminder goes to: the one shown, else the shown node's (or this node's) default, else its
-// first; none while a peer's crew or node is shown.
+// first. A peer's crew takes it on its own node (POST /api/alarm routes it there).
 function alarmCrew() {
   const f = crewOf(filter);
-  if (f) return f.remote ? "" : f.key;
+  if (f) return f.key;
   const node = filter.startsWith("node:") ? filter.slice(5) : "";
-  const own = snap.crews.filter((c) => !c.remote && (!node || c.node === node));
+  const own = snap.crews.filter((c) => (node ? c.node === node : !c.remote));
   const awake = own.filter((c) => !folded(c));
   const from = awake.length ? awake : own;
   return (from.find((c) => c.key === "default") || from[0] || {}).key || "";
@@ -907,10 +903,6 @@ function alarmPanel(a, k) {
   if (a.note) p.append(el("p", "pn", a.note));
   const left = T(a.at) - nowMs();
   p.append(el("p", "meta", [left > 0 ? W.alIn(dur(left)) : W.alDue, a.when ? W.alAsWords(a.when) : ""].filter(Boolean).join(" · ")));
-  if (remote(a.crew)) {
-    p.append(el("p", "onpeer", W.answerOn(nodeOf(a.crew))));
-    return p;
-  }
   const line = el("div", "ctl");
   const f = whenField(k, (v) => { draft = { k, text: v }; });
   if (draft.k === k) f.value = draft.text;
@@ -973,7 +965,6 @@ function newAlarmRow(cls) {
 
 // alarmAct posts set, move or off at once (a time typed is seen before it goes); off waits the 5 s undo.
 function alarmAct(a, action, when, text, word, k) {
-  if (remote(a.crew)) { toast(W.answerOn(nodeOf(a.crew))); return; }
   openRow = "";
   draft = { k: "", text: "" };
   const go = async () => {
@@ -1264,6 +1255,9 @@ function sessionCard(c, r) {
     m.title = W.spentTip;
     line.append(m);
   }
+  const talk = button("q talk-b", W.talk, () => openTalk(c.key, r.role), W.talkTo(r.role));
+  talk.setAttribute("aria-label", W.talkTo(r.role));
+  h.append(talk);
   card.append(h, line);
   const now = nowLine(r) || plain(r.now);
   card.append(el("div", "role-now", now || ""));
@@ -1542,7 +1536,12 @@ function renderFull() {
   const role = (w && w.role) || (t && t.role);
   const r = roleOf(full.crew, role);
   const rs = !r ? "" : r.state !== "up" ? W.fvDown : (r.status === "busy" ? W.working : W.free) + (zero(r.since) ? "" : " · " + ago(r.since));
-  fact(W.fvHolder, [who(full.crew, role), rs].filter(Boolean).join(" · "));
+  if (role) {
+    const holder = el("span", "", [who(full.crew, role), rs].filter(Boolean).join(" · ") + " ");
+    const crewKey = full.crew;
+    holder.append(button("q talk-b", W.talk, () => openTalk(crewKey, role), W.talkTo(role)));
+    fact(W.fvHolder, holder);
+  }
   if (t && t.delivery) fact("Handoff", t.delivery.accepted_at ? "Accepted" : t.delivery.sent_at ? "Sent, awaiting acceptance" : "Queued, awaiting acceptance");
   fact(W.fvWaits, (w && w.on) || (t && t.on));
   fact(W.fvProject, project);
@@ -1687,9 +1686,35 @@ function renderFeed() {
 }
 
 $("history-close").addEventListener("click", () => { $("history").hidden = true; render(); });
+
+// ---- talk: a role's conversation in a panel beside the cockpit (any role of any node: a peer's over the mesh, signed
+// with the owner's key, as Chat does). The cockpit stays in view and keeps updating behind it.
+
+function openTalk(crewKey, role) {
+  const c = crewOf(crewKey);
+  const node = c && c.remote ? nodeOf(crewKey) : "";
+  const crew = node ? crewKey.slice(node.length + 1) : crewKey;
+  const q = new URLSearchParams({ node, crew, role });
+  const src = "chat.html?" + q + "&embed=1";
+  const frame = $("talk-frame");
+  if (frame.getAttribute("src") !== src) frame.setAttribute("src", src);
+  $("talk-page").href = "chat.html?" + q;
+  setText($("talk-h"), W.talkTo(who(crewKey, role) || role));
+  $("history").hidden = true;
+  $("talk").hidden = false;
+  $("talk-close").focus();
+}
+
+function closeTalk() {
+  $("talk").hidden = true;
+  render();
+}
+
+$("talk-close").addEventListener("click", closeTalk);
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
-  if (full) closeFull();
+  if (!$("talk").hidden) closeTalk();
+  else if (full) closeFull();
   else if (!$("history").hidden) { $("history").hidden = true; render(); } else if (openRow) {
     const k = openRow;
     openRow = "";

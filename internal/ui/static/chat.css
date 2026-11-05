@@ -84,3 +84,6 @@ html.chat-document { height: 100%; overflow: hidden; }
 #attach-file { font-size: 24px; }
 
 .chat-message.session { font-size: 15px; }
+
+/* In the cockpit's talk panel the cockpit is already on screen: no link back to it. */
+.chat-page.embed .term-head > a { display: none; }

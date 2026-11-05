@@ -217,6 +217,13 @@ section { padding: 18px 0 6px; }
 @keyframes slide { from { transform: translateX(24px); opacity: 0; } }
 .drawer-h { display: flex; align-items: center; justify-content: space-between; padding: 14px 20px; border-bottom: 1px solid var(--line); }
 .drawer-h h2 { margin: 0; font: 600 15px var(--sans); }
+/* The talk panel: a role's conversation beside the cockpit, which stays in view on its left; the whole screen below 860. */
+.drawer.talk { width: min(640px, 46vw); z-index: 7; }
+.drawer.talk .drawer-h { gap: 8px; }
+.drawer.talk .fill { flex: 1; }
+.drawer.talk .q { text-decoration: none; }
+.drawer.talk iframe { flex: 1; width: 100%; border: 0; background: var(--bg); }
+.role .talk-b { margin-left: 6px; }
 .feed { overflow: auto; padding: 4px 20px 20px; }
 .e { display: grid; grid-template-columns: 44px 1fr; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); font: 13px/1.4 var(--sans); color: var(--muted); }
 .e time { font: 12px var(--mono); color: var(--faint); padding-top: 1px; }
@@ -254,7 +261,7 @@ body.hp .rows > .row:not(.lit), body.hp .sub .row:not(.lit) { opacity: .55; }
   .ctl .field { flex-basis: 100%; max-width: none; height: 44px; }
   .ctl .btn, .ib { height: 44px; }
   .ctl .field:focus { height: calc(4 * 1.4em + 18px); }
-  .drawer { width: 100vw; }
+  .drawer, .drawer.talk { width: 100vw; }
   .foot { flex-wrap: wrap; padding-bottom: calc(28px + env(safe-area-inset-bottom)); }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
