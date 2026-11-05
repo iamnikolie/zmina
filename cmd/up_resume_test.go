@@ -68,3 +68,16 @@ func TestHasTranscriptInAGlobLikeNamespace(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(ns, "projects", "p", "abc-1.jsonl"), nil, 0o600))
 	assert.True(t, realHasTranscript(ns, "abc-1"))
 }
+
+// Spaces in the namespace and a namespace reached through a symlink find their transcript too.
+func TestHasTranscriptWithSpacesAndASymlink(t *testing.T) {
+	real := filepath.Join(t.TempDir(), "my claude home")
+	require.NoError(t, os.MkdirAll(filepath.Join(real, "projects", "a b"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(real, "projects", "a b", "abc-1.jsonl"), nil, 0o600))
+	assert.True(t, realHasTranscript(real, "abc-1"))
+
+	link := filepath.Join(t.TempDir(), "ns")
+	require.NoError(t, os.Symlink(real, link))
+	assert.True(t, realHasTranscript(link, "abc-1"))
+	assert.False(t, realHasTranscript(link, "abc-2"))
+}
