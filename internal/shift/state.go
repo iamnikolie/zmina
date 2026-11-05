@@ -118,10 +118,8 @@ type RoleState struct {
 	// start queued, taken out again (from the inbox and the failed lines) at the next start.
 	Title        string `json:"title,omitempty"`
 	QueuedRename string `json:"queued_rename,omitempty"`
-	// RenameOf and RenameFrom are the conversation that rename is for and the title it had: a rename never typed
-	// leaves the conversation under its old title.
-	RenameOf   string `json:"rename_of,omitempty"`
-	RenameFrom string `json:"rename_from,omitempty"`
+	// RenameOf is the conversation that rename is for: its title in State.Titles changes only once the rename is typed.
+	RenameOf string `json:"rename_of,omitempty"`
 	// Inbox holds lines typed into the role the next time it is idle; Attempts counts failed tries of the first.
 	Inbox    []string `json:"inbox,omitempty"`
 	Attempts int      `json:"attempts,omitempty"`

@@ -690,29 +690,20 @@ func (s *Shift) start(name string, o UpOptions) error {
 	// the old one): /rename gives it the new one, typed once the role is booted. A start whose name is not known yet
 	// renames too, once: the name is recorded from now on.
 	// A rename an earlier start queued and never typed belongs to that start's conversation: it goes.
+	// A conversation's title (State.Titles) changes only when a rename is typed into it (typeNext), so a rename that
+	// never went — dropped, failed, or left by a stop — changes nothing, and nothing is rolled back over a newer title.
 	if rs.QueuedRename != "" {
-		failed := slices.ContainsFunc(rs.Failed, func(f Failed) bool { return f.Line == rs.QueuedRename })
-		if (failed || slices.Contains(rs.Inbox, rs.QueuedRename)) && rs.RenameOf != "" {
-			if rs.RenameFrom == "" {
-				delete(s.State.Titles, rs.RenameOf)
-			} else {
-				s.State.Titles[rs.RenameOf] = rs.RenameFrom
-			}
-		}
 		rs.Inbox = slices.DeleteFunc(rs.Inbox, func(l string) bool { return l == rs.QueuedRename })
 		rs.Failed = slices.DeleteFunc(rs.Failed, func(f Failed) bool { return f.Line == rs.QueuedRename })
-		rs.QueuedRename, rs.RenameOf, rs.RenameFrom = "", "", ""
+		rs.QueuedRename, rs.RenameOf = "", ""
 	}
 	if resume != "" && runtime == "claude" && s.State.Titles[resume] != r.Session {
-		rs.RenameOf, rs.RenameFrom = resume, s.State.Titles[resume]
+		rs.RenameOf = resume
 		rs.QueuedRename = "/rename " + r.Session
 		rs.Inbox = append([]string{rs.QueuedRename}, rs.Inbox...)
 		s.log(name, "rename", "", strings.TrimSpace(s.State.Titles[resume]+" → "+r.Session))
 	}
 	rs.Title = r.Session
-	if resume != "" {
-		s.State.noteTitle(resume, r.Session)
-	}
 
 	detail := ""
 	if resume != "" {
@@ -986,8 +977,10 @@ func (s *Shift) remember(name string, p tmux.Pane) {
 			}
 		}
 		s.State.Role(name).LastSession = sess.SessionID
-		if t := s.State.Role(name).Title; t != "" {
-			s.State.noteTitle(sess.SessionID, t)
+		// A conversation started under this name has it; one resumed with a rename pending gets it once the rename is
+		// typed (typeNext).
+		if rs := s.State.Role(name); rs.Title != "" && rs.RenameOf != sess.SessionID {
+			s.State.noteTitle(sess.SessionID, rs.Title)
 		}
 		r, _ := s.Role(name)
 		s.State.Role(name).LastRuntime = r.Runtime

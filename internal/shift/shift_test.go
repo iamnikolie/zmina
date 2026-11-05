@@ -1138,58 +1138,62 @@ func TestResumeUnderANewNameRenames(t *testing.T) {
 	assert.Equal(t, "ops-designer", f.s.State.Role("designer").Title)
 }
 
-// The title is a conversation's, not the role's: another conversation resumed under the same name is renamed if it
-// ran under another; a rename queued for one start never reaches the next.
+// typeQueued lets a role's first queued line be typed: booted, idle, a beat.
+func typeQueued(f fix, role string) {
+	*f.now = f.now.Add(3 * time.Minute)
+	f.status(role, "idle", f.now.Add(-time.Minute))
+	f.s.Tick()
+}
+
+// The title is a conversation's, changed only by a rename typed into it: another conversation resumed under the same
+// name is renamed if it ran under another; a rename that never went (a stop, a drop, a failed line) changes nothing,
+// and a later start renames again.
 func TestRenameBelongsToAConversationAndAStart(t *testing.T) {
 	f := fixtureWith(t, crewYAML)
-	require.NoError(t, f.s.Up("designer"))
-	f.status("designer", "idle", *f.now)
-	require.NoError(t, f.s.Down("designer", DownOptions{}))
-	rs := f.s.State.Role("designer")
 	f.s.State.noteTitle("old-sid", "ops-designer")
 
 	require.NoError(t, f.s.UpWith("designer", UpOptions{Resume: "old-sid"}))
-	assert.Equal(t, "/rename zm-designer", rs.Inbox[0], "the same role name, another conversation: renamed")
+	rs := f.s.State.Role("designer")
+	assert.Equal(t, "/rename zm-designer", rs.Inbox[0])
 
-	// Down before the rename was typed, then a fresh start: the old start's rename is gone.
+	// Stopped before it was typed, then dropped from the queue: the title stays, the next resume renames again.
 	require.NoError(t, f.s.Down("designer", DownOptions{}))
+	rs.Inbox = nil
 	require.NoError(t, f.s.UpWith("designer", UpOptions{Fresh: true}))
-	assert.NotContains(t, rs.Inbox, "/rename zm-designer")
-	assert.Empty(t, rs.QueuedRename)
-
-	// The rename was never typed: resumed again, the conversation is renamed again.
+	assert.Equal(t, "ops-designer", f.s.State.Titles["old-sid"])
 	require.NoError(t, f.s.Down("designer", DownOptions{}))
 	require.NoError(t, f.s.UpWith("designer", UpOptions{Resume: "old-sid"}))
 	assert.Equal(t, "/rename zm-designer", rs.Inbox[0])
 
-	// Typed this time: the next resume under the same name leaves it.
-	rs.Inbox = rs.Inbox[1:]
+	// Typed: the conversation runs under the name now, and the next resume under it leaves it.
+	typeQueued(f, "designer")
+	assert.Contains(t, f.tm.typed["designer"], "/rename zm-designer")
+	assert.Equal(t, "zm-designer", f.s.State.Titles["old-sid"])
 	require.NoError(t, f.s.Down("designer", DownOptions{}))
 	require.NoError(t, f.s.UpWith("designer", UpOptions{Resume: "old-sid"}))
-	assert.NotContains(t, rs.Inbox, "/rename zm-designer", "renamed: it runs under this name now")
+	assert.NotContains(t, rs.Inbox, "/rename zm-designer")
 }
 
-// One conversation resumed by two roles in turn keeps one title, the crew's: each switch renames it; a rename that
-// failed to type, and a later fresh start, never let a retry type the old one.
+// One conversation resumed by two roles in turn keeps one title, the crew's: each switch renames it; a role whose
+// rename never went does not roll back the name another role gave it since.
 func TestRenameAcrossRolesAndFailedLines(t *testing.T) {
 	f := fixtureWith(t, crewYAML)
 	f.s.State.noteTitle("conv", "zm-designer")
 
 	require.NoError(t, f.s.UpWith("harvester", UpOptions{Resume: "conv"}))
-	harvester := f.s.State.Role("harvester")
-	require.Equal(t, "/rename zm-harvester", harvester.Inbox[0])
-	harvester.Inbox = harvester.Inbox[1:] // typed
+	typeQueued(f, "harvester")
+	assert.Equal(t, "zm-harvester", f.s.State.Titles["conv"])
 	require.NoError(t, f.s.Down("harvester", DownOptions{}))
 
 	require.NoError(t, f.s.UpWith("designer", UpOptions{Resume: "conv"}))
 	designer := f.s.State.Role("designer")
 	require.Equal(t, "/rename zm-designer", designer.Inbox[0], "back to the first role: renamed back")
 
-	// It failed to type and sits in the failed lines; then a fresh start: no retry can type it now.
+	// It failed to type and sits in the failed lines; then a fresh start: no retry can type it, nothing rolled back.
 	designer.Inbox = designer.Inbox[1:]
 	designer.Failed = append(designer.Failed, Failed{Line: "/rename zm-designer"})
 	require.NoError(t, f.s.Down("designer", DownOptions{}))
 	require.NoError(t, f.s.UpWith("designer", UpOptions{Fresh: true}))
 	assert.Empty(t, designer.Failed)
-	assert.Equal(t, "zm-harvester", f.s.State.Titles["conv"], "never typed: the conversation keeps the title it had")
+	assert.Equal(t, "zm-harvester", f.s.State.Titles["conv"])
 }

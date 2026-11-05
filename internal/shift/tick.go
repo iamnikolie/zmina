@@ -1183,6 +1183,12 @@ func (s *Shift) deliverInbox(name string, now time.Time) string {
 
 	rs.Inbox, rs.Attempts = rs.Inbox[1:], 0
 	s.log(name, "typed", "", head)
+
+	// The rename this start queued is typed: from now on the conversation runs under that name.
+	if head == rs.QueuedRename && rs.RenameOf != "" {
+		s.State.noteTitle(rs.RenameOf, strings.TrimPrefix(head, "/rename "))
+		rs.QueuedRename, rs.RenameOf = "", ""
+	}
 	ids := s.takeIDs(name, head)
 	s.delivered(ids, now)
 	s.submittedTask(name, head)
