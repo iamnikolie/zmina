@@ -844,7 +844,10 @@ func (a *app) peekCommand() *cobra.Command {
 				return err
 			}
 
-			if len(args) != 1 {
+			switch len(args) {
+			case 0:
+				return errors.New("peek takes a role after the address: zmina peek <node>/<crew> <role>")
+			case 2:
 				return fmt.Errorf("%q is no <node>/<crew> address: zmina peek <role>, or zmina peek <node>/<crew> <role>", args[0])
 			}
 

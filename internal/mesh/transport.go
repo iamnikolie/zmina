@@ -98,22 +98,71 @@ func Command(ctx context.Context, a Addr, args ...string) *exec.Cmd {
 	return exec.CommandContext(ctx, "sh", "-c", a.Cmd+" "+words)
 }
 
-// InteractiveCommand runs the peer's zmina at a with args on this terminal: ssh gets -t, so a command that needs a
-// terminal there (attach) has one. A command line address that starts with ssh gets it too; any other runs as it is.
-// BatchMode stays: no password is ever asked.
-func InteractiveCommand(ctx context.Context, a Addr, args ...string) *exec.Cmd {
+// OwnerCommand runs the peer's zmina at a with args for the owner at this terminal (zmina ls/peek/attach <node>/<crew>),
+// never asking for a password: ssh, the --ssh address or a command line that starts with ssh, runs with
+// BatchMode=yes ahead of the line's own options (ssh takes an option's first value), and with tty a terminal is
+// requested (-t just before the host, after any -T or RequestTTY of the line). Any other command line runs as it is.
+func OwnerCommand(ctx context.Context, a Addr, tty bool, args ...string) *exec.Cmd {
 	words := strings.Join(args, " ")
 	if a.SSH != "" {
-		return exec.CommandContext(ctx, "ssh", "-t", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "--", a.SSH,
-			`PATH="$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:$PATH" zmina `+words)
+		argv := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=10"}
+		if tty {
+			argv = append(argv, "-t")
+		}
+
+		return exec.CommandContext(ctx, "ssh", append(argv, "--", a.SSH,
+			`PATH="$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:$PATH" zmina `+words)...)
 	}
 
-	line := a.Cmd
-	if rest, ok := strings.CutPrefix(strings.TrimLeft(line, " "), "ssh "); ok {
-		line = "ssh -t " + rest
+	return exec.CommandContext(ctx, "sh", "-c", ownerLine(a.Cmd, tty)+" "+words)
+}
+
+// sshArgOpts are ssh's one-letter options that take an argument.
+const sshArgOpts = "BbcDEeFIiJLlmOoPpQRSWw"
+
+// ownerLine is a command line address made safe for the owner's terminal: one that starts with ssh gets
+// -o BatchMode=yes first and, with tty, -t before its host. Its words are split on blanks, as the owner wrote them.
+func ownerLine(line string, tty bool) string {
+	f := strings.Fields(line)
+	if len(f) == 0 || f[0] != "ssh" {
+		return line
 	}
 
-	return exec.CommandContext(ctx, "sh", "-c", line+" "+words)
+	out := []string{"ssh", "-o", "BatchMode=yes"}
+
+	host := len(f)
+	for i := 1; i < len(f); i++ {
+		w := f[i]
+		if w == "--" {
+			host = i
+
+			break
+		}
+
+		if len(w) < 2 || w[0] != '-' {
+			host = i
+
+			break
+		}
+
+		// A run of flags; the first that takes an argument takes the rest of the word, or the next one.
+		for j := 1; j < len(w); j++ {
+			if strings.IndexByte(sshArgOpts, w[j]) >= 0 {
+				if j == len(w)-1 {
+					i++
+				}
+
+				break
+			}
+		}
+	}
+
+	out = append(out, f[1:min(host, len(f))]...)
+	if tty {
+		out = append(out, "-t")
+	}
+
+	return strings.Join(append(out, f[min(host, len(f)):]...), " ")
 }
 
 type cmdStream struct {

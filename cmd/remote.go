@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -51,6 +52,11 @@ func (a *app) remote(cmd *cobra.Command, args []string, interactive bool) (bool,
 		return false, rest, err
 	}
 
+	// peek and attach name one role (ls none or several): said here, not by a far zmina's arity error.
+	if cmd.Name() != "ls" && len(rest) != 1 {
+		return false, nil, fmt.Errorf("%s takes a role after the address: zmina %s <node>/<crew> <role>", cmd.Name(), cmd.Name())
+	}
+
 	me, err := mesh.Open(meshDir())
 	if err != nil {
 		return false, nil, fmt.Errorf("%s: this machine is no node (zmina node init): %w", ad, err)
@@ -76,10 +82,8 @@ func (a *app) remote(cmd *cobra.Command, args []string, interactive bool) (bool,
 		return false, nil, err
 	}
 
-	words := []string{}
-	if ad.Crew != "default" {
-		words = append(words, "--config", ad.Crew)
-	}
+	// Always named, the default crew too (--config default): the far zmina's $ZMINA_CREW never picks the crew.
+	words := []string{"--config", ad.Crew}
 
 	words = append(words, cmd.Name())
 	words = append(words, rest...)
@@ -104,10 +108,10 @@ func (a *app) remote(cmd *cobra.Command, args []string, interactive bool) (bool,
 			return false, nil, fmt.Errorf("no terminal here; run it in one: zmina %s %s", cmd.Name(), strings.Join(args, " "))
 		}
 
-		c = mesh.InteractiveCommand(context.Background(), addr, words...)
+		c = mesh.OwnerCommand(context.Background(), addr, true, words...)
 		c.Stdin = os.Stdin
 	} else {
-		c = mesh.Command(context.Background(), addr, words...)
+		c = mesh.OwnerCommand(context.Background(), addr, false, words...)
 	}
 
 	c.Stdout, c.Stderr = a.out, a.err
@@ -145,6 +149,13 @@ func peerAddr(me *mesh.Node, name string) (mesh.Addr, error) {
 	}
 
 	p := peers[i]
+	for _, ad := range p.Addrs {
+		if f := strings.Fields(ad.Cmd); slices.ContainsFunc(f, func(w string) bool { return w == "--crew" || strings.HasPrefix(w, "--crew=") }) {
+			return mesh.Addr{}, fmt.Errorf("node %q: its address picks a crew file itself (--crew in %q), so no crew of it can "+
+				"be named; give it a command line that ends in zmina (zmina node peer add %s --cmd …)", name, ad.Cmd, name)
+		}
+	}
+
 	if len(p.Addrs) == 0 {
 		how := "it calls in"
 		if len(p.Through) > 0 {
@@ -164,8 +175,17 @@ func checkFarCrew(addr mesh.Addr, ad mesh.Address) error {
 	ctx, cancel := context.WithTimeout(context.Background(), remoteLookup)
 	defer cancel()
 
-	out, err := runPeer(ctx, addr, nil, "node", "ls", "--json")
+	c := mesh.OwnerCommand(ctx, addr, false, "node", "ls", "--json")
+
+	var errb bytes.Buffer
+	c.Stderr = &errb
+
+	out, err := c.Output()
 	if err != nil {
+		if msg := strings.TrimSpace(errb.String()); msg != "" {
+			return fmt.Errorf("%s: %s", ad.Node, msg)
+		}
+
 		return fmt.Errorf("%s: %w", ad.Node, err)
 	}
 

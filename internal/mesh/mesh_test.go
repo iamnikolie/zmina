@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -453,15 +455,40 @@ func TestReportCapabilityRequiresSignatureAndLegacyStillConnects(t *testing.T) {
 	}
 }
 
-// An interactive call gets a terminal on the far side: ssh -t, also for a command line address that is ssh.
-func TestInteractiveCommandAsksForATerminal(t *testing.T) {
-	c := InteractiveCommand(context.Background(), Addr{SSH: "box"}, "attach", "dev")
-	assert.Equal(t, []string{"ssh", "-t", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "--", "box"}, c.Args[:8])
+// The owner's calls never ask for a password and, for attach, get a terminal on the far side: BatchMode=yes ahead of
+// a command line's own options, -t just before its host, after any -T.
+func TestOwnerCommand(t *testing.T) {
+	c := OwnerCommand(context.Background(), Addr{SSH: "box"}, true, "attach", "dev")
+	assert.Equal(t, []string{"ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-t", "--", "box"}, c.Args[:8])
 	assert.True(t, strings.HasSuffix(c.Args[8], " zmina attach dev"))
+	assert.NotContains(t, OwnerCommand(context.Background(), Addr{SSH: "box"}, false, "ls").Args, "-t")
 
-	c = InteractiveCommand(context.Background(), Addr{Cmd: "ssh -o BatchMode=yes box sudo -n -iu ops zmina"}, "--config", "ops", "attach", "dev")
-	assert.Equal(t, []string{"sh", "-c", "ssh -t -o BatchMode=yes box sudo -n -iu ops zmina --config ops attach dev"}, c.Args)
+	for line, want := range map[string]string{
+		"ssh -o BatchMode=yes box sudo -n -iu ops zmina": "ssh -o BatchMode=yes -o BatchMode=yes -t box sudo -n -iu ops zmina",
+		"ssh -T box zmina":                     "ssh -o BatchMode=yes -T -t box zmina",
+		"ssh -o BatchMode=no -p 22 box zmina":  "ssh -o BatchMode=yes -o BatchMode=no -p 22 -t box zmina",
+		"ssh -qp 22 -oRequestTTY=no box zmina": "ssh -o BatchMode=yes -qp 22 -oRequestTTY=no -t box zmina",
+		"ssh -i key -- box zmina":              "ssh -o BatchMode=yes -i key -t -- box zmina",
+		"/opt/far-zmina":                       "/opt/far-zmina",
+	} {
+		assert.Equal(t, want, ownerLine(line, true), line)
+	}
+	assert.Equal(t, "ssh -o BatchMode=yes box zmina", ownerLine("ssh box zmina", false))
+}
 
-	c = InteractiveCommand(context.Background(), Addr{Cmd: "/opt/far-zmina"}, "attach", "dev")
-	assert.Equal(t, []string{"sh", "-c", "/opt/far-zmina attach dev"}, c.Args)
+// What ssh makes of the owner's line (ssh -G: no connection): batch mode and a terminal, whatever the line said.
+func TestOwnerLineAsSSHReadsIt(t *testing.T) {
+	if _, err := exec.LookPath("ssh"); err != nil {
+		t.Skip("no ssh")
+	}
+
+	for _, line := range []string{"ssh -T box zmina", "ssh -o BatchMode=no -o RequestTTY=no box zmina", "ssh box zmina"} {
+		f := strings.Fields(ownerLine(line, true))
+		host := slices.Index(f, "box")
+		args := append([]string{"-G", "-F", "/dev/null"}, f[1:host+1]...)
+		out, err := exec.Command("ssh", args...).Output()
+		require.NoError(t, err, line)
+		assert.Contains(t, string(out), "\nbatchmode yes\n", line)
+		assert.Regexp(t, `\nrequesttty (yes|true|force)\n`, string(out), line)
+	}
 }

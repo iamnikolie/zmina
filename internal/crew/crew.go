@@ -275,8 +275,16 @@ func DefaultPath() string {
 	return ExpandHome("~/.zmina/crew.yaml")
 }
 
-// ConfigPath is the crew file of a named config: ~/.zmina/<name>/crew.yaml.
+// DefaultConfig is the name the mesh gives a node's default crew, ~/.zmina/crew.yaml: --config default selects it,
+// whatever $ZMINA_CREW says.
+const DefaultConfig = "default"
+
+// ConfigPath is the crew file of a named config: ~/.zmina/<name>/crew.yaml, ~/.zmina/crew.yaml for DefaultConfig.
 func ConfigPath(name string) string {
+	if name == DefaultConfig {
+		return ExpandHome("~/.zmina/crew.yaml")
+	}
+
 	return filepath.Join(ExpandHome("~/.zmina"), filepath.Base(name), "crew.yaml")
 }
 

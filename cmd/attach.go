@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -28,7 +29,10 @@ func (a *app) attachCommand() *cobra.Command {
 				return err
 			}
 
-			if len(args) != 1 {
+			switch len(args) {
+			case 0:
+				return errors.New("attach takes a role after the address: zmina attach <node>/<crew> <role>")
+			case 2:
 				return fmt.Errorf("%q is no <node>/<crew> address: zmina attach <role>, or zmina attach <node>/<crew> <role>", args[0])
 			}
 
