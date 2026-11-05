@@ -217,7 +217,8 @@ func TestAckOldRoleIsLeftAsItWas(t *testing.T) {
 	assert.Equal(t, "[zmina] dev: T-5 result ready", g.s.deliver(*g.now))
 }
 
-func TestAckFailedDeliveryLeavesNoID(t *testing.T) {
+// A signal has its id from the moment it is noted: a failed post leaves it queued with the same id, never delivered.
+func TestAckFailedDeliveryKeepsTheQueuedID(t *testing.T) {
 	f, p := nativeFixture(t, crewYAML)
 	upNative(t, f, "dispatcher")
 	p.err = assert.AnError
@@ -225,8 +226,13 @@ func TestAckFailedDeliveryLeavesNoID(t *testing.T) {
 	_, err := f.s.Note("dev", "T-5 result ready", false)
 	require.NoError(t, err)
 	assert.Empty(t, f.s.deliver(*f.now))
-	assert.Empty(t, f.s.State.Acks, "an id is kept only for a delivered line")
-	assert.Equal(t, []string{"dev: T-5 result ready"}, f.s.State.Signals)
+	require.Contains(t, f.s.State.Acks, "S-1")
+	assert.True(t, f.s.State.Acks["S-1"].First.IsZero(), "never delivered")
+	assert.Equal(t, []string{"S-1 dev: T-5 result ready"}, f.s.State.Signals)
+	assert.Empty(t, f.s.PendingBrief("dispatcher", false), "a queued line is not one waiting for an ack after a compaction")
+
+	p.err = nil
+	assert.Equal(t, "[zmina] S-1 dev: T-5 result ready (zmina S-1)", f.s.deliver(*f.now))
 }
 
 func TestAckBrokenPostKeepsItsIDs(t *testing.T) {
@@ -275,10 +281,49 @@ func TestAckHookInSettings(t *testing.T) {
 
 	require.NoError(t, json.Unmarshal([]byte(raw), &got))
 	assert.Equal(t, "accept", got.Inbound)
-	require.Len(t, got.Hooks.SessionStart, 1)
+	require.Len(t, got.Hooks.SessionStart, 2)
 	assert.Empty(t, got.Hooks.SessionStart[0].Matcher, "every start: new, resumed, compacted, cleared")
 	assert.Equal(t, "'/opt/zmina' --crew '"+f.s.Crew.Path+"' pending --role 'designer' --brief",
 		got.Hooks.SessionStart[0].Hooks[0].Command)
+	assert.Equal(t, "compact", got.Hooks.SessionStart[1].Matcher, "a compaction ends no turn: its start hook posts")
+	assert.Equal(t, "'/opt/zmina' --crew '"+f.s.Crew.Path+"' _turn-end --role 'designer' >/dev/null 2>&1 || true",
+		got.Hooks.SessionStart[1].Hooks[0].Command)
+}
+
+// The zmina a role's turn-end hook runs is read from its command line, quoted as zmina writes it.
+func TestHooksInCommandLine(t *testing.T) {
+	f, _ := nativeFixture(t, crewYAML)
+	f.s.Self = "/opt/it's zmina"
+	args := "claude --settings " + f.s.roleSettings("designer") + " --disallowedTools=Agent --name x"
+	assert.Equal(t, "/opt/it's zmina", hooksIn(args))
+
+	f.s.Self = ""
+	assert.Equal(t, hooksNone, hooksIn("claude --settings "+f.s.roleSettings("designer")+" --name x"))
+	assert.Equal(t, hooksNone, hooksIn("claude --settings {\"hooks\":{\"SessionStart\":[]}} --name x"))
+	assert.Equal(t, hooksNone, hooksIn("claude --name x"))
+}
+
+// A role an earlier zmina started is asked once: its command line tells the hooks it runs.
+func TestHooksOfAnEarlierStartAreAsked(t *testing.T) {
+	f, _ := nativeFixture(t, crewYAML)
+	upNative(t, f, "dispatcher")
+	f.s.Self = "/opt/zmina-now"
+	f.s.State.Role("dispatcher").Hooks = "" // an earlier zmina did not record them
+
+	asked := 0
+	f.s.ProcArgs = func(int) (string, error) {
+		asked++
+
+		return `claude --settings {"crossSessionInbound":"accept","hooks":{"SessionStart":[{"hooks":[{"command":"'/gone/zmina' --crew 'c' pending --role 'dispatcher' --brief","type":"command"}]}]}} --name d`, nil
+	}
+
+	r, err := f.s.Role("dispatcher")
+	require.NoError(t, err)
+	note := f.s.hooksNote("dispatcher", r)
+	assert.Contains(t, note, "dispatcher: runs without zmina's turn-end hook")
+	assert.Empty(t, f.s.hooksNote("dispatcher", r), "once per session")
+	assert.Equal(t, 1, asked)
+	assert.Equal(t, hooksNone, f.s.State.Role("dispatcher").Hooks, "kept for the session")
 }
 
 func TestAckInRecoveryPackAndBootRule(t *testing.T) {

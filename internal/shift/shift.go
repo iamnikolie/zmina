@@ -131,13 +131,16 @@ type Shift struct {
 	// CodexInbox queues lines for a Codex role's bridge; nil types them into its console.
 	CodexInbox Peer
 	// Self is the zmina executable, for the hook a socket role runs after its context is trimmed (zmina pending).
-	Self   string
-	State  *State
-	Tasks  Tasks
-	Later  Later
-	Alarms Alarms
-	Asks   Asks
-	Events Events
+	Self string
+	// ProcArgs reads a process's command line (ps), to tell which hooks a role an earlier zmina started runs; nil
+	// leaves such a role unasked.
+	ProcArgs func(pid int) (string, error)
+	State    *State
+	Tasks    Tasks
+	Later    Later
+	Alarms   Alarms
+	Asks     Asks
+	Events   Events
 	// Inbox keeps the whole text of a note too long to type; nil cuts it instead.
 	Inbox *inbox.Store
 	Now   func() time.Time
@@ -668,6 +671,7 @@ func (s *Shift) start(name string, o UpOptions) error {
 	rs.Instance = isInstance(name)
 	rs.RecoverySession, rs.RecoveryContext, rs.RecoveryDrops = "", 0, 0
 	rs.Inbound = s.inbound(r)
+	rs.Hooks, rs.HooksFlagged, rs.QueuedBoot = s.startHooks(r), "", ""
 
 	detail := ""
 	if resume != "" {
@@ -1087,20 +1091,28 @@ func (s *Shift) note(from, text string, ifUp bool) (string, bool, error) {
 	if s.State.SignalCounts == nil {
 		s.State.SignalCounts = map[string]int{}
 	}
-	if slices.Contains(s.State.Signals, note) {
-		s.State.SignalCounts[note] = max(1, s.State.SignalCounts[note]) + 1
-		return note, false, nil
+	if i := slices.IndexFunc(s.State.Signals, func(v string) bool { return signalBody(v) == note }); i >= 0 {
+		sig := s.State.Signals[i]
+		s.State.SignalCounts[sig] = max(1, s.State.SignalCounts[sig]) + 1
+		return sig, false, nil
 	}
 
 	if len(s.State.Signals) >= signalsMax {
 		return "", false, fmt.Errorf("%d notes already wait for the dispatcher; it is not reading them", signalsMax)
 	}
 
-	s.State.Signals = append(s.State.Signals, note)
-	s.State.SignalCounts[note] = 1
-	s.log(d, "noted", "", note)
+	// The id comes with the note, not with its delivery: zmina queue ls and the recovery pack show it, and a line
+	// the dispatcher acks while it still waits is never posted (AckLines).
+	sig := note
+	if id := s.noteID(note); id != "" {
+		sig = id + " " + note
+	}
 
-	return note, true, nil
+	s.State.Signals = append(s.State.Signals, sig)
+	s.State.SignalCounts[sig] = 1
+	s.log(d, "noted", "", sig)
+
+	return sig, true, nil
 }
 
 // oneLine folds whitespace, newlines included, to single spaces and drops control characters: a note is typed as

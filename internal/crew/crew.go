@@ -210,6 +210,11 @@ type Crew struct {
 	// Delivery is how lines reach a role: native (the default: its agent's own channel — a Claude session's inbox
 	// socket, a Codex bridge's inbox) or tmux (typed into its input line).
 	Delivery string `yaml:"delivery"`
+	// DeliveryMidTurn lets the dispatcher's lines that wait for its ack (crew results, other crews' lines) be posted
+	// into a turn it is in: Claude Code puts them into that turn at its next tool call. Notices and the dispatcher's
+	// own queue still wait for the turn's end, and nothing goes into a dialog. Default true; false waits for every
+	// turn's end.
+	DeliveryMidTurn *bool `yaml:"delivery_mid_turn"`
 	// BootGrace is how long a started role is left to boot before lines are typed into it (default 2m).
 	BootGrace string `yaml:"boot_grace"`
 	// DropEnv lists environment variables (NAME, or PREFIX*) kept from the roles, on top of the built-in list.
@@ -442,6 +447,9 @@ func (c *Crew) DeliveryFor(r *Role) string {
 
 	return or(r.Delivery, or(c.Delivery, DeliveryNative))
 }
+
+// MidTurn reports whether the dispatcher's acked lines may be posted into a turn it is in (delivery_mid_turn).
+func (c *Crew) MidTurn() bool { return c.DeliveryMidTurn == nil || *c.DeliveryMidTurn }
 
 // SystemdUnit is the crew's ticker on Linux: zmina (.service and .timer), or zmina-<name>.
 func (c *Crew) SystemdUnit() string { return suffixed("zmina", "-", c.Name) }

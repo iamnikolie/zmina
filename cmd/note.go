@@ -44,7 +44,14 @@ func (a *app) noteCommand() *cobra.Command {
 					return nil
 				}
 
-				fmt.Fprintln(a.out, "queued for the dispatcher: typed once it is idle")
+				// It goes now when the dispatcher can take it (between turns, or into its turn), not at the next beat.
+				if line := s.Deliver(); line != "" {
+					fmt.Fprintln(a.out, "delivered to the dispatcher")
+
+					return nil
+				}
+
+				fmt.Fprintln(a.out, "queued for the dispatcher: it goes once it can take it")
 
 				return nil
 			})

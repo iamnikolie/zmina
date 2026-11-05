@@ -147,6 +147,10 @@ func (s *Shift) followPosted(name string, now time.Time) bool {
 		switch {
 		case err == nil && seen:
 			s.log(name, "seen", "", p.Line)
+
+			if name == s.Crew.Dispatcher {
+				s.markSubmitted(p.Line)
+			}
 		case sess != nil && sess.SessionID != p.Session:
 			back = append(back, p)
 			s.log(name, "requeued", "", "its conversation ended before it showed: "+p.Line)

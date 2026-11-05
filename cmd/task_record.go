@@ -113,6 +113,8 @@ func (a *app) saveRecordFile(id, kind, file string, cmd *cobra.Command) error {
 			s.Log(t.Role, kind, t.ID, ref.Revision+" (worker-reported)")
 		}
 		s.NotifyRecords()
+		// The notice goes now when the dispatcher can take it, not at the next beat.
+		s.Deliver()
 		fmt.Fprintf(a.out, "%s %s %s\n", t.ID, kind, ref.Revision)
 		return nil
 	})

@@ -151,6 +151,13 @@ type RoleState struct {
 	// Tag is the random tag of this start: its boot line names it, every line posted to it carries it, so a message
 	// another session sends cannot pass for zmina's.
 	Tag string `json:"tag,omitempty"`
+	// Hooks is the zmina whose hooks this start runs (the turn-end hook, the start hook), "-" for a start without
+	// them, empty when an earlier zmina started it without saying (its process is asked); HooksFlagged is the
+	// session the dispatcher was told runs without working hooks.
+	Hooks        string `json:"hooks,omitempty"`
+	HooksFlagged string `json:"hooks_flagged,omitempty"`
+	// QueuedBoot is the boot line a clear queued for the role: it goes alone, before anything else waiting for it.
+	QueuedBoot string `json:"queued_boot,omitempty"`
 	// Dir is where the role was started when not its crew dir (zmina up --task: the task's worktree); Trusted
 	// that zmina answered Claude Code's "trust this folder" there.
 	Dir     string `json:"dir,omitempty"`

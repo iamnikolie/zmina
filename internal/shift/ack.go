@@ -134,6 +134,19 @@ func (s *Shift) delivered(line string, ids []string, now time.Time) {
 	}
 }
 
+// SignalBody is a dispatcher's signal without its id and its "still pending" mark: the note as it was taken.
+func SignalBody(sig string) string { return signalBody(sig) }
+
+// noteID is the id a new signal for the dispatcher waits for its ack under, "" for none: a watch's note has its
+// own ack, and a dispatcher started by an earlier zmina is not told of acks.
+func (s *Shift) noteID(note string) string {
+	if src, _, _ := strings.Cut(note, ": "); s.Crew.Watches[src] != nil || !s.acking(s.Crew.Dispatcher) {
+		return ""
+	}
+
+	return s.newAck(s.Crew.Dispatcher, note)
+}
+
 // signalPart is a dispatcher's signal as its line carries it: with its id, a new one for a signal never delivered
 // (watch notes have their own ack, and are left as they are). It returns the part and its id, "" for none.
 func (s *Shift) signalPart(sig string) (string, string) {
@@ -141,11 +154,10 @@ func (s *Shift) signalPart(sig string) (string, string) {
 		return sig, m[1]
 	}
 
-	if src, _, _ := strings.Cut(sig, ": "); s.Crew.Watches[src] != nil || !s.acking(s.Crew.Dispatcher) {
+	id := s.noteID(sig)
+	if id == "" {
 		return sig, ""
 	}
-
-	id := s.newAck(s.Crew.Dispatcher, sig)
 
 	return id + " " + sig, id
 }
@@ -246,10 +258,97 @@ func (s *Shift) AckLines(ids []string, all bool, role, caller string) ([]string,
 		a := s.State.Acks[id]
 		delete(s.State.Acks, id)
 		s.log(a.Role, "acked", "", id+" "+a.Text)
+		s.dropQueued(a)
+
+		if a.Role == s.Crew.Dispatcher {
+			s.messageStage(a.Text, "read")
+		}
 	}
 
 	return acked, warn
 }
+
+// dropQueued takes a line its reader acked out of where it still waits: the dispatcher's signals (one it read in
+// zmina queue ls, or one said again), a role's queue. A line the reader already has is not posted again.
+func (s *Shift) dropQueued(a *Ack) {
+	match := func(line string) bool {
+		if m := signalID.FindStringSubmatch(line); m != nil && m[1] == a.ID {
+			return true
+		}
+
+		m := lineID.FindStringSubmatch(line)
+
+		return m != nil && m[1] == a.ID
+	}
+
+	if a.Role == s.Crew.Dispatcher {
+		for _, sig := range slices.Clone(s.State.Signals) {
+			if match(sig) {
+				s.dropSignal(sig)
+				s.log(a.Role, "acked-queued", "", sig)
+			}
+		}
+	}
+
+	rs := s.State.Roles[a.Role]
+	if rs == nil {
+		return
+	}
+
+	for _, line := range slices.Clone(rs.Inbox) {
+		if match(line) {
+			rs.Inbox = slices.DeleteFunc(rs.Inbox, func(v string) bool { return v == line })
+			s.log(a.Role, "acked-queued", "", line)
+		}
+	}
+}
+
+// DropSignal is dropSignal for the node's reports.
+func (s *Shift) DropSignal(sig string) { s.dropSignal(sig) }
+
+// dropSignal takes a signal out of the dispatcher's queue with what is kept about it; the ack of one never delivered
+// goes with it.
+func (s *Shift) dropSignal(sig string) {
+	s.State.Signals = slices.DeleteFunc(s.State.Signals, func(v string) bool { return v == sig })
+	delete(s.State.SignalCounts, sig)
+	delete(s.State.SignalSent, sig)
+
+	if m := signalID.FindStringSubmatch(sig); m != nil {
+		if a := s.State.Acks[m[1]]; a != nil && a.First.IsZero() {
+			delete(s.State.Acks, m[1])
+		}
+	}
+}
+
+// messageStage records a stage of a line another crew sent with zmina tell, by the note it was queued as: the node
+// sends it back to the sender as a receipt (read: the dispatcher acked it).
+func (s *Shift) messageStage(note, stage string) {
+	note = signalBody(note)
+
+	for marker, line := range s.State.MessageLines {
+		if strings.HasPrefix(marker, TellPrefix) && line == note {
+			s.markerStage(marker, stage)
+		}
+	}
+}
+
+// markerStage records a stage of a line from another crew by its marker, the first time it is reached.
+func (s *Shift) markerStage(marker, stage string) {
+	if s.State.MessageStages == nil {
+		s.State.MessageStages = map[string]map[string]time.Time{}
+	}
+
+	if s.State.MessageStages[marker] == nil {
+		s.State.MessageStages[marker] = map[string]time.Time{}
+	}
+
+	if _, ok := s.State.MessageStages[marker][stage]; !ok {
+		s.State.MessageStages[marker][stage] = s.Now().UTC()
+	}
+}
+
+// TellPrefix opens the marker of a line another crew sent with plain zmina tell: "tell/<envelope id>".
+const TellPrefix = "tell/"
 
 // Pending is the lines that wait for an ack, oldest first; one role's, or every role's when role is empty.
 func (s *Shift) Pending(role string) []Ack {
@@ -329,8 +428,10 @@ func (s *Shift) roleSettings(name string) string {
 		start := []any{map[string]any{"type": "command", "command": base + " pending --role " + shellWord(name) + " --brief"}}
 		stop := []any{map[string]any{"type": "command", "timeout": turnEndTimeout,
 			"command": base + " _turn-end --role " + shellWord(name) + " >/dev/null 2>&1 || true"}}
+		// A compaction ends no turn, so no Stop hook runs after it: the start hook Claude Code runs once it is over
+		// (source compact) has what waits posted too.
 		settings["hooks"] = map[string]any{
-			"SessionStart": []any{map[string]any{"hooks": start}},
+			"SessionStart": []any{map[string]any{"hooks": start}, map[string]any{"matcher": "compact", "hooks": stop}},
 			"Stop":         []any{map[string]any{"hooks": stop}},
 		}
 	}

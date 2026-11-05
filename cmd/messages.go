@@ -611,8 +611,10 @@ func removeReportNotice(s *shift.Shift, marker string) {
 	if line == "" {
 		return
 	}
-	s.State.Signals = slices.DeleteFunc(s.State.Signals, func(v string) bool { return v == line })
-	delete(s.State.SignalCounts, line)
-	delete(s.State.SignalSent, line)
+	for _, sig := range slices.Clone(s.State.Signals) {
+		if shift.SignalBody(sig) == line {
+			s.DropSignal(sig)
+		}
+	}
 	delete(s.State.MessageLines, marker)
 }
