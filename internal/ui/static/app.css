@@ -573,3 +573,21 @@ body.fv-on { overflow: hidden; }
 .chips .ns.spare { color: var(--faint); font-weight: 400; }
 .tick.spare { color: var(--faint); }
 .tick.spare i { background: none; box-shadow: inset 0 0 0 1px var(--faint); }
+
+/* D-07 x2 · quieter session cards: working is said by the breathing lamp and the teal word, not by an outline or glow. */
+@media (min-width: 1400px) {
+  .card.busy { border-color: var(--line2); background: var(--panel); box-shadow: none; }
+}
+.elsewhere { margin-top: .4rem; padding: 0; border: 0; background: none; color: var(--ink2); text-decoration: underline; text-underline-offset: 3px; font: .9rem var(--sans); cursor: pointer; }
+.ev { cursor: pointer; }
+
+/* D-07 h3 · a node's crews in a menu under «N crews ▾». */
+.chips .nm { color: var(--faint); font-size: 12px; padding: 4px 6px; }
+.chipmenu { position: fixed; z-index: 8; min-width: 12rem; max-width: 16rem; display: flex; flex-direction: column; gap: 2px; padding: 4px;
+  background: var(--panel); border: 1px solid var(--line2); border-radius: 9px; box-shadow: 0 12px 32px rgba(0, 0, 0, .35); }
+.chipmenu[hidden] { display: none; }
+.chipmenu button { text-align: left; font: 500 13px var(--sans); color: var(--muted); background: none; border: 0; border-radius: 6px; padding: 6px 10px; }
+.chipmenu button:hover, .chipmenu .on { background: var(--panel2); color: var(--ink); }
+.chipmenu .ns { margin-left: .4rem; font-size: 11px; }
+.chipmenu .ns.bad { color: var(--late); }
+.chipmenu .off { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; margin-top: 2px; padding-top: 4px; border-top: 1px solid var(--line); font: 12px var(--sans); color: var(--faint); }

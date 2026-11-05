@@ -52,7 +52,8 @@ const W = {
   alAsWords: (w) => "set as «" + w + "»", alDue: "due now", backTag: "back",
   seen: (a) => "seen " + a, staleN: (a) => "stale" + (a ? " " + a : ""), stale: "stale", offline: "offline", stoppedList: "stopped:",
   silent: (a) => "silent" + (a ? " " + a : ""),
-  spare: "spare", retiredW: "retired", downHolds: (r, ts) => r + ": down, holds " + ts,
+  spare: "spare", retiredW: "retired", crewsN: (n) => n + " crews", nothingOn: (w) => "Nothing waits on you on " + w + ".",
+  elsewhere: (h, q) => "Elsewhere: " + h + " hold · " + q + " answer → All", downHolds: (r, ts) => r + ": down, holds " + ts,
   answerOn: (n) => "answer on " + n, detailsOn: (n) => "details on " + n,
   talk: "Talk", talkTo: (r) => "Talk to " + r,
   ev: {
@@ -291,7 +292,7 @@ function favicon(color) {
 
 // crewChip is one choice of the crew switch: «all», a node (node:name) or a crew; note is a word after the name.
 function crewChip(k, label, cls, note) {
-  const b = button([filter === k ? "on" : "", cls].filter(Boolean).join(" "), label, () => { filter = k; localStorage.setItem("zmina.crew", k); render(); });
+  const b = button([filter === k ? "on" : "", cls].filter(Boolean).join(" "), label, () => { filter = k; menuNode = ""; localStorage.setItem("zmina.crew", k); render(); });
   b.setAttribute("aria-pressed", filter === k ? "true" : "false");
   const c = crewOf(k);
   if (c && c.spare) b.append(el("span", "ns spare", W.spare));
@@ -322,16 +323,29 @@ function renderChips() {
   if (!multi()) return;
   nav.classList.toggle("mesh", multiNode());
   const items = [crewChip("all", W.all)];
+  const menu = $("chipmenu");
   if (multiNode()) {
-    // One group per node: the node, then its crews that are not folded away.
+    // D-07 h3: the switch is nodes. A node with more than one crew reads «box-ops 3 crews ▾» and opens a menu of its crews
+    // (spare and silent words, then its stopped line); a crew chosen shows as «box-ops / acme ✕».
     for (const n of snap.nodes) {
       const g = el("span", "ng");
-      g.append(nodeChip(n), ...(n.crews || []).map(crewOf).filter((c) => c && !folded(c) && !away(c.key)).map((c) => crewChip(c.key, c.key.split("/").pop(), "", silent(c))));
+      const crews = (n.crews || []).map(crewOf).filter((c) => c && !away(c.key));
+      g.append(nodeChip(n));
+      const chosen = crewOf(filter);
+      if (chosen && chosen.node === n.name && crews.length > 1) {
+        g.append(crewChip("node:" + n.name, "/ " + chosen.key.split("/").pop() + " ✕", "on"));
+      } else if (crews.length > 1) {
+        const m = button("nm", W.crewsN(crews.length) + " ▾", () => { menuNode = menuNode === n.name ? "" : n.name; render(); });
+        m.dataset.node = n.name;
+        m.setAttribute("aria-expanded", menuNode === n.name ? "true" : "false");
+        m.setAttribute("aria-haspopup", "menu");
+        g.append(m);
+      }
       items.push(g);
     }
   } else items.push(...snap.crews.filter((c) => !folded(c) && !away(c.key)).map((c) => crewChip(c.key, c.name, "", silent(c))));
-  // The folded crews: one muted line, each name brings its crew back.
-  const off = snap.crews.filter(folded);
+  // The folded crews: one muted line, each name brings its crew back (with nodes, in each node's menu).
+  const off = multiNode() ? [] : snap.crews.filter(folded);
   if (off.length) {
     const g = el("span", "ng off");
     g.append(el("span", "", W.stoppedList));
@@ -342,9 +356,40 @@ function renderChips() {
     items.push(g);
   }
   patch(nav, [...items]);
+  renderChipMenu(menu);
   // The edge fades only when the chips scroll.
   nav.classList.toggle("over", nav.scrollWidth > nav.clientWidth + 1);
 }
+
+let menuNode = "";
+
+// renderChipMenu draws the open node's crews under its «N crews ▾».
+function renderChipMenu(menu) {
+  const n = (snap.nodes || []).find((x) => x.name === menuNode);
+  const opener = n && document.querySelector(`.chips .nm[data-node="${CSS.escape(n.name)}"]`);
+  if (!n || !opener) { menu.hidden = true; return; }
+  const crews = (n.crews || []).map(crewOf).filter((c) => c && !away(c.key));
+  const items = crews.filter((c) => !folded(c)).map((c) => crewChip(c.key, c.key.split("/").pop(), "", silent(c)));
+  const off = crews.filter(folded);
+  if (off.length) {
+    const g = el("div", "off");
+    g.append(el("span", "", W.stoppedList));
+    for (const c of off) {
+      const age = ago(zero(c.stopped) ? c.last_tick : c.stopped);
+      g.append(crewChip(c.key, c.key.split("/").pop() + (c.retired ? " " + W.retiredW : age ? " " + age : "")));
+    }
+    items.push(g);
+  }
+  patch(menu, items);
+  const r = opener.getBoundingClientRect();
+  menu.style.top = r.bottom + 6 + "px";
+  menu.style.left = Math.max(8, Math.min(r.left, innerWidth - 260)) + "px";
+  menu.hidden = false;
+}
+
+document.addEventListener("click", (e) => {
+  if (menuNode && !e.target.closest(".chipmenu, .chips .nm")) { menuNode = ""; render(); }
+});
 
 function heading(id, label, n, cls) {
   patch($(id), [label + " ", el("b", cls || "", String(n))]);
@@ -603,6 +648,8 @@ function backPanel(it) {
 
 // ids is what the row's title attribute carries: the ids leave the screen.
 const ids = (...xs) => [...new Set(xs.filter(Boolean))].join(" · ");
+// idOf is an id as it reads where its crew is not in the same row (D-07 l1): «acme L-5» once more than one crew shows.
+const idOf = (crew, id) => (multi() && filter === "all" ? (crew.split("/").pop() + " ") : "") + id;
 
 function itemWords(it, holds) {
   const words = el("div", "words");
@@ -645,7 +692,7 @@ function renderHold(hold) {
     const hov = el("div");
     hov.append(button("q m", W.park, () => act(it, "park", "", W.parkedTo)), button("q m", W.ignore, () => act(it, "ignore", "", W.ignored)));
     const row = rowShell(k, stl(it.crew), itemWords(it, true), ageOf(it), chip(it), ownHov(it.crew, hov), itemPanel(it, true));
-    row.title = ids(it.id, it.task);
+    row.title = ids(idOf(it.crew, it.id), it.task && idOf(it.crew, it.task));
     if (it.task) row.dataset.w = key(it.crew, it.task);
     return tint(row, it.project);
   });
@@ -665,7 +712,7 @@ function askRow(it) {
   hov.append(button("q", W.park, () => act(it, "park", "", W.parkedTo)));
   if (it.kind !== "check") hov.append(button("q", W.no, () => act(it, "answer", W.noText, W.sentTo)));
   const row = rowShell(k, stl(it.crew), itemWords(it, false), ageOf(it), chip(it), ownHov(it.crew, hov), itemPanel(it, false));
-  row.title = ids(it.id, it.task);
+  row.title = ids(idOf(it.crew, it.id), it.task && idOf(it.crew, it.task));
   if (it.task) row.dataset.w = key(it.crew, it.task);
   return tint(row, it.project);
 }
@@ -744,7 +791,7 @@ function renderGo(going) {
       body: taskBody(w.why, w.title, w.milestone && w.milestone.text),
       meta: [w.on ? W.waits(who(w.crew, w.on)) : ""], url: w.url,
     }));
-    row.title = w.id;
+    row.title = idOf(w.crew, w.id);
     row.dataset.w = k;
     return tint(row, w.project);
   });
@@ -778,7 +825,7 @@ function laterRow(it) {
   const hov = el("div");
   hov.append(button("q", W.back, () => act(it, "back", "", W.broughtBack)), button("q m", W.drop, () => act(it, "drop", "", W.dropped)));
   const row = rowShell(key(it.crew, it.id), "parked" + (old ? " old" : "") + stl(it.crew), words, el("span", "age" + (old ? "" : " m"), dur(a)), null, ownHov(it.crew, hov), laterPanel(it));
-  row.title = it.id;
+  row.title = idOf(it.crew, it.id);
   return row;
 }
 
@@ -989,7 +1036,7 @@ function otherRow(w) {
     meta: [w.on ? W.waits(w.on) : ""], url: w.url,
     primary: { label: W.mine, fn: () => act(w, "mine", "", W.madeMine, k), icon: "mine" },
   }));
-  row.title = w.id;
+  row.title = idOf(w.crew, w.id);
   row.dataset.w = key(w.crew, w.id);
   return tint(row, w.project);
 }
@@ -1045,7 +1092,16 @@ function renderCockpit(hold, asks, others, parked) {
   setText($("move-h"), W.move);
   const live = (it) => !gone(key(it.crew, it.id));
   const holds = hold.filter(live).map((it) => moveRow(it, true));
-  if (!holds.length) holds.push(el("p", "dnone", W.noHold));
+  if (!holds.length && !asks.filter(live).length && filter !== "all") {
+    const where = filter.startsWith("node:") ? filter.slice(5) : crewLabel(filter) || filter;
+    holds.push(el("p", "dnone", W.nothingOn(where)));
+    const all = snap.todo.filter((it) => !away(it.crew));
+    const h = all.filter((it) => it.holds).length, q = all.length - h;
+    if (all.length) {
+      const b = button("q elsewhere", W.elsewhere(h, q), () => { filter = "all"; localStorage.setItem("zmina.crew", "all"); render(); });
+      holds.push(b);
+    }
+  } else if (!holds.length) holds.push(el("p", "dnone", W.noHold));
   patch($("move-rows"), [...holds]);
   const qs = asks.filter(live);
   setText($("move-ask-h"), qs.length ? W.ask : "");
@@ -1085,8 +1141,20 @@ function renderEv() {
   const evs = snap.log.filter((e) => shows(e.crew));
   const answered = new Set(evs.filter((e) => e.event === "answered").map((e) => e.crew + "/" + ((e.detail || "").match(/^(A-\d+)/) || [])[1]));
   const e = evs.map((x) => feedLine(x, answered)).find(Boolean);
-  patch($("ev"), e ? [el("i"), [hhmm(e.ts), who(e.crew, e.role || e.by), e.text].filter(Boolean).join(" · ")] : []);
+  const whole = e ? [hhmm(e.ts), who(e.crew, e.role || e.by), e.text].filter(Boolean).join(" · ") : "";
+  patch($("ev"), e ? [el("i"), clause(whole, 80)] : []);
+  $("ev").title = whole;
 }
+
+// clause is a text's first sentence, cut at a word to n characters with «…» (D-07 h1).
+function clause(t, n) {
+  const first = t.split(/(?<=[.!?;])\s/)[0];
+  if (first.length <= n) return first;
+  const cut = first.slice(0, n - 1);
+  return (cut.lastIndexOf(" ") > n / 2 ? cut.slice(0, cut.lastIndexOf(" ")) : cut) + "…";
+}
+
+$("ev").addEventListener("click", () => openHistory());
 
 // moveRow is a row of your move: a hold carries its note and «ops · waits on dispatcher» under the title, a question its
 // reason beside it; both open like the lean page's rows (b1, p1–p5).
@@ -1115,7 +1183,7 @@ function moveRow(it, holds) {
   const tag = chip(it) || (it.kind === "check" ? el("span", "chip ghost", W.check)
     : it.kind === "later" ? el("span", "chip ghost", W.backTag) : null);
   const row = rowShell(key(it.crew, it.id), "mv " + (holds ? "hold" : "ask") + stl(it.crew), words, holds ? ageOf(it) : null, tag, null, itemPanel(it, holds));
-  row.title = ids(it.id, it.task);
+  row.title = ids(idOf(it.crew, it.id), it.task && idOf(it.crew, it.task));
   if (it.task) row.dataset.w = key(it.crew, it.task);
   if (it.project) row.dataset.p = it.project;
   return row;
@@ -1147,7 +1215,11 @@ function renderBand(crews) {
   const counts = el("span", "dc", W.bandCounts(up.filter(([, r]) => r.status === "busy").length, up.length, down.length));
   if (down.length) counts.title = W.notUp + down.join(", ");
   h.append(el("span", "dl", W.sessions), counts);
-  for (const c of crews) {
+  // Only the crews whose tick is not fresh, or that are spare, stand on the line; the fresh ones are in its tooltip
+  // (D-07 x3).
+  const fresh = crews.filter((c) => !c.spare && !c.stale && !tickerDead(c));
+  if (crews.length > 1 && fresh.length) h.title = fresh.map((c) => crewLabel(c.key) + " " + hhmm(c.last_tick)).join(" · ");
+  for (const c of crews.length > 1 ? crews.filter((c) => !fresh.includes(c)) : crews) {
     const tick = el("span", "tick" + (c.spare ? " spare" : c.stale ? " stale" : tickerDead(c) ? " dead" : ""));
     tick.append(el("i"), (crews.length > 1 ? crewLabel(c.key) + " " : W.tick) + (c.spare ? W.spare : zero(c.last_tick) ? "—" : hhmm(c.last_tick)) + (c.stale ? " · " + W.stale : ""));
     tick.title = W.tick + crewLabel(c.key);
@@ -1321,7 +1393,7 @@ function boardRow(w, lane, isBusy) {
   holder.append(whoTag(w.crew, w.role), lane === "go" && isBusy ? " · " + W.working : lane === "go" && w.on ? " · " + W.waits(who(w.crew, w.on)) : "");
   words.append(holder);
   const row = rowShell("kb:" + key(w.crew, w.id), "kbr " + lane + stl(w.crew), words, null, null, null, boardPane(w, lane));
-  row.title = w.id;
+  row.title = idOf(w.crew, w.id);
   row.dataset.w = key(w.crew, w.id);
   if (w.project) row.dataset.p = w.project;
   return row;
@@ -1347,7 +1419,7 @@ function laterBoardRow(it) {
   const cl = shownLabel(it.crew, true);
   if (cl) words.append(el("div", "kc-f cl", cl));
   const row = rowShell(key(it.crew, it.id), "kbr later parked" + stl(it.crew), words, null, null, null, laterPanel(it));
-  row.title = it.id;
+  row.title = idOf(it.crew, it.id);
   return row;
 }
 

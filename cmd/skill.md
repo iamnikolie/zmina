@@ -795,6 +795,10 @@ A machine without peers is a mesh of one. It opens the page in the browser.
   Done, Later, a reminder set or moved, goes to the item's own node as an owner-signed mesh write (`todo/act`,
   `alarm/act`, through relays like a terminal), which does it as its own page would — to that crew's dispatcher — and
   says what it did. A node older than this one answers `update zmina on this node`, and the row says so.
+- **The switch** is nodes: «All», then each node with its health dot; a node with more than one crew reads «box-ops 3 crews
+  ▾» and opens a menu of its crews (spare and silent words, then its stopped line); a crew chosen shows as «/ acme ✕».
+  The newest event in the header is one clause cut at a word to 80 characters, whole in its tooltip; a click opens
+  History. A filter with nothing in your move says so and links back to All with what waits elsewhere.
 - **Talk**: every session card, and the holder line of an opened task, has «Talk»: the role's conversation (Chat) opens
   in a panel beside the cockpit, which stays in view and keeps updating behind it; on a phone the panel is the whole
   screen. Any role of any node: a peer's over the mesh as Chat reads it. «Open page» opens it as its own page; Esc
