@@ -205,6 +205,8 @@ func TestTrimCompactsARoleWithABackgroundShell(t *testing.T) {
 	f.rg.context["sid-dispatcher"] = 170_000
 	f.rg.context["sid-dev"] = 170_000
 	f.rg.ended = map[string]bool{"sid-dispatcher": true, "sid-dev": true}
+	f.rg.endedAt["sid-dispatcher"] = f.now.Add(-10 * time.Minute)
+	f.rg.endedAt["sid-dev"] = f.now.Add(-time.Hour)
 
 	f.status("dispatcher", "shell", f.now.Add(-10*time.Minute))
 	f.status("dev", "shell", f.now.Add(-time.Hour))
@@ -229,4 +231,33 @@ func TestTrimFarOverWaitsLess(t *testing.T) {
 	f.rg.context["sid-dispatcher"] = 213_000
 	f.s.Tick()
 	assert.Equal(t, []string{"/compact"}, f.tm.typed["dispatcher"])
+}
+
+// Off idle, a background shell's status is older than the turn: the wait runs from when the turn ended, and a role whose
+// turn end is unknown is left alone.
+func TestTrimWaitsFromTheTurnEnd(t *testing.T) {
+	for _, c := range []struct {
+		ended   time.Duration // ago; 0: unknown
+		context int
+		typed   bool
+	}{
+		{time.Second, 213_000, false},
+		{119 * time.Second, 213_000, false},
+		{120 * time.Second, 213_000, true},
+		{4 * time.Minute, 170_000, false},
+		{5 * time.Minute, 170_000, true},
+		{0, 213_000, false},
+	} {
+		f := fixtureWith(t, trimCrew)
+		f.s.Tick()
+		*f.now = f.now.Add(10 * time.Minute)
+		f.rg.context["sid-dispatcher"] = c.context
+		f.rg.ended = map[string]bool{"sid-dispatcher": true}
+		if c.ended > 0 {
+			f.rg.endedAt["sid-dispatcher"] = f.now.Add(-c.ended)
+		}
+		f.status("dispatcher", "shell", f.now.Add(-10*time.Minute))
+		f.s.Tick()
+		assert.Equal(t, c.typed, len(f.tm.typed["dispatcher"]) == 1, "ended %s ago, %d", c.ended, c.context)
+	}
 }

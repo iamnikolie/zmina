@@ -11,75 +11,7 @@ const el = (tag, cls, text) => {
   return e;
 };
 
-// ---- patching: a snapshot comes every time anything in any crew moves, every couple of seconds. Each section is
-// drawn anew and patched into the page, so what did not change stays the very element it was: its scroll, its focus
-// and an agent's reference to it hold. An element that carries handlers (a button, a field, a link, a row, an open
-// panel) is never patched in place — its handlers close over the snapshot it was drawn from — but swapped whole.
-
-const handles = (n) => n.nodeType === 1 && (["BUTTON", "A", "INPUT", "TEXTAREA", "SELECT"].includes(n.nodeName)
-  || n.classList.contains("row") || n.classList.contains("panel") || !!n.onclick || !!n.onkeydown);
-
-// patch makes parent's children the nodes given (strings are text), keeping each old child equal to its new one,
-// and those of the same data-k or place where only plain containers differ.
-function patch(parent, nodes) {
-  const want = nodes.filter((n) => n !== null && n !== undefined && n !== false)
-    .map((n) => (typeof n === "string" ? document.createTextNode(n) : n));
-  const old = [...parent.childNodes];
-  const byKey = new Map(old.filter((n) => n.dataset?.k).map((n) => [n.dataset.k, n]));
-  const used = new Set();
-  want.forEach((n, i) => {
-    let o = n.dataset?.k ? byKey.get(n.dataset.k) : old[i];
-    if (!o || used.has(o) || (o.dataset?.k || "") !== (n.dataset?.k || "")) o = null;
-    let keep = n;
-    if (o) {
-      used.add(o);
-      keep = morph(o, n);
-    }
-    if (parent.childNodes[i] !== keep) parent.insertBefore(keep, parent.childNodes[i] || null);
-  });
-  while (parent.childNodes.length > want.length) parent.lastChild.remove();
-}
-
-// morph turns old into nu and returns the node that stays: old itself when only plain containers differ.
-function morph(old, nu) {
-  // An open panel's indent is measured after it is drawn (indent): the new one starts where the old one stands.
-  const op = old.nodeType === 1 && old.querySelector(":scope > .panel");
-  const np = op && nu.querySelector(":scope > .panel");
-  if (np) np.style.setProperty("--in", op.style.getPropertyValue("--in"));
-  if (old.isEqualNode(nu)) return old;
-  if (old.nodeType !== 1 || old.nodeName !== nu.nodeName || handles(old) || handles(nu)) {
-    if (old.parentNode) old.replaceWith(nu);
-    return nu;
-  }
-  for (const a of [...old.attributes]) if (!nu.hasAttribute(a.name)) old.removeAttribute(a.name);
-  for (const a of [...nu.attributes]) if (old.getAttribute(a.name) !== a.value) old.setAttribute(a.name, a.value);
-  patch(old, [...nu.childNodes]);
-  return old;
-}
-
-// setText writes a text only when it changes.
-function setText(e, t) { if (e.textContent !== t) e.textContent = t; }
-
-// focusMark notes what has the focus, as something a redrawn page can find again: its row or section, its kind and
-// its name. refocus puts the focus back on that element when it was swapped for a new one.
-function focusMark() {
-  const a = document.activeElement;
-  if (!a || a === document.body || a.classList.contains("field")) return null;
-  const host = a.closest("[data-k]") || a.closest("[id]");
-  if (!host) return null;
-  return { el: a, host: host.dataset.k ? `[data-k="${CSS.escape(host.dataset.k)}"]` : "#" + CSS.escape(host.id),
-    sig: a.nodeName + "|" + a.className + "|" + (a.getAttribute("aria-label") || a.textContent.trim()) };
-}
-
-function refocus(m) {
-  if (!m || m.el.isConnected) return;
-  for (const h of document.querySelectorAll(m.host)) {
-    if (!h.offsetParent && h.id !== "full") continue;
-    const sig = (x) => x.nodeName + "|" + x.className + "|" + (x.getAttribute("aria-label") || x.textContent.trim());
-    const f = [h, ...h.querySelectorAll("button, a, [tabindex]")].find((x) => sig(x) === m.sig);
-    if (f) { f.focus({ preventScroll: true }); return; }
-  }
-}
+// ---- patching: patch.js (patch, setText, focusMark, refocus), loaded before this file.
 
 // ---- words: English only; task notes and todo text are shown as written
 
@@ -304,8 +236,10 @@ function sayParts(say, hold, asks, going, parked) {
     [W.sayGo(going.length), "b", "go"], [W.sayLater(parked.length), "m", "later"]];
   parts.forEach(([text, cls, target], i) => {
     if (i) say.append(" · ");
+    // The line is a live region: its parts carry no handler of their own (one listener on the line below), so an
+    // update that changes nothing in it changes nothing in the page.
     const s = el("span", "k " + cls, text);
-    s.onclick = () => $(target).scrollIntoView({ behavior: "smooth", block: "start" });
+    s.dataset.to = target;
     say.append(s);
   });
   // A folded crew is told in the crew switch, not here; a peer read long ago says «stale», not «ticker stopped».
@@ -1686,6 +1620,10 @@ function renderFeed() {
   }));
 }
 
+$("say").addEventListener("click", (e) => {
+  const to = e.target.closest?.("[data-to]")?.dataset.to;
+  if (to) $(to).scrollIntoView({ behavior: "smooth", block: "start" });
+});
 $("history-close").addEventListener("click", () => { $("history").hidden = true; render(); });
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;

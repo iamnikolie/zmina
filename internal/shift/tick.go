@@ -287,7 +287,16 @@ func (s *Shift) trim(name string, r *crew.Role, now time.Time, tasks []string) s
 		wait = trimIdleOver
 	}
 
-	if now.Sub(sess.StatusSince()) < wait {
+	// Idle since the later of the status's change and the turn's end: a background shell keeps a status from before
+	// the turn, so its time says nothing of when the reply was given. Off idle with no known end, it waits.
+	since := sess.StatusSince()
+	if turn.At.After(since) {
+		since = turn.At
+	} else if sess.Status != "idle" && turn.At.IsZero() {
+		return ""
+	}
+
+	if now.Sub(since) < wait {
 		return ""
 	}
 
