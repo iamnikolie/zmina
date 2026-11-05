@@ -69,7 +69,8 @@ func (s *Shift) hooksNote(name string, r *crew.Role) string {
 	s.log(name, "hooks-missing", "", problem)
 
 	return name + ": " + problem + ": its lines wait for the next beat after each turn and are not said again after " +
-		"a compaction; restart it (zmina restart " + name + ") to start it with this zmina's hooks"
+		"a compaction; restart it on its conversation to start it with this zmina's hooks: zmina restart " + name +
+		" --continue (from its own session too: the restart then waits for that turn to end)"
 }
 
 // hooksIn reads the zmina a claude command line's --settings run as its turn-end hook, hooksNone when there is none.
