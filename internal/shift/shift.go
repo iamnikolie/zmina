@@ -691,25 +691,27 @@ func (s *Shift) start(name string, o UpOptions) error {
 	// renames too, once: the name is recorded from now on.
 	// A rename an earlier start queued and never typed belongs to that start's conversation: it goes.
 	if rs.QueuedRename != "" {
-		if slices.Contains(rs.Inbox, rs.QueuedRename) && rs.RenameOf != "" {
+		failed := slices.ContainsFunc(rs.Failed, func(f Failed) bool { return f.Line == rs.QueuedRename })
+		if (failed || slices.Contains(rs.Inbox, rs.QueuedRename)) && rs.RenameOf != "" {
 			if rs.RenameFrom == "" {
-				delete(rs.Titles, rs.RenameOf)
+				delete(s.State.Titles, rs.RenameOf)
 			} else {
-				rs.Titles[rs.RenameOf] = rs.RenameFrom
+				s.State.Titles[rs.RenameOf] = rs.RenameFrom
 			}
 		}
 		rs.Inbox = slices.DeleteFunc(rs.Inbox, func(l string) bool { return l == rs.QueuedRename })
+		rs.Failed = slices.DeleteFunc(rs.Failed, func(f Failed) bool { return f.Line == rs.QueuedRename })
 		rs.QueuedRename, rs.RenameOf, rs.RenameFrom = "", "", ""
 	}
-	if resume != "" && runtime == "claude" && rs.Titles[resume] != r.Session {
-		rs.RenameOf, rs.RenameFrom = resume, rs.Titles[resume]
+	if resume != "" && runtime == "claude" && s.State.Titles[resume] != r.Session {
+		rs.RenameOf, rs.RenameFrom = resume, s.State.Titles[resume]
 		rs.QueuedRename = "/rename " + r.Session
 		rs.Inbox = append([]string{rs.QueuedRename}, rs.Inbox...)
-		s.log(name, "rename", "", strings.TrimSpace(rs.Titles[resume]+" → "+r.Session))
+		s.log(name, "rename", "", strings.TrimSpace(s.State.Titles[resume]+" → "+r.Session))
 	}
 	rs.Title = r.Session
 	if resume != "" {
-		rs.noteTitle(resume, r.Session)
+		s.State.noteTitle(resume, r.Session)
 	}
 
 	detail := ""
@@ -985,7 +987,7 @@ func (s *Shift) remember(name string, p tmux.Pane) {
 		}
 		s.State.Role(name).LastSession = sess.SessionID
 		if t := s.State.Role(name).Title; t != "" {
-			s.State.Role(name).noteTitle(sess.SessionID, t)
+			s.State.noteTitle(sess.SessionID, t)
 		}
 		r, _ := s.Role(name)
 		s.State.Role(name).LastRuntime = r.Runtime

@@ -1146,7 +1146,7 @@ func TestRenameBelongsToAConversationAndAStart(t *testing.T) {
 	f.status("designer", "idle", *f.now)
 	require.NoError(t, f.s.Down("designer", DownOptions{}))
 	rs := f.s.State.Role("designer")
-	rs.Titles["old-sid"] = "ops-designer"
+	f.s.State.noteTitle("old-sid", "ops-designer")
 
 	require.NoError(t, f.s.UpWith("designer", UpOptions{Resume: "old-sid"}))
 	assert.Equal(t, "/rename zm-designer", rs.Inbox[0], "the same role name, another conversation: renamed")
@@ -1167,4 +1167,29 @@ func TestRenameBelongsToAConversationAndAStart(t *testing.T) {
 	require.NoError(t, f.s.Down("designer", DownOptions{}))
 	require.NoError(t, f.s.UpWith("designer", UpOptions{Resume: "old-sid"}))
 	assert.NotContains(t, rs.Inbox, "/rename zm-designer", "renamed: it runs under this name now")
+}
+
+// One conversation resumed by two roles in turn keeps one title, the crew's: each switch renames it; a rename that
+// failed to type, and a later fresh start, never let a retry type the old one.
+func TestRenameAcrossRolesAndFailedLines(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	f.s.State.noteTitle("conv", "zm-designer")
+
+	require.NoError(t, f.s.UpWith("harvester", UpOptions{Resume: "conv"}))
+	harvester := f.s.State.Role("harvester")
+	require.Equal(t, "/rename zm-harvester", harvester.Inbox[0])
+	harvester.Inbox = harvester.Inbox[1:] // typed
+	require.NoError(t, f.s.Down("harvester", DownOptions{}))
+
+	require.NoError(t, f.s.UpWith("designer", UpOptions{Resume: "conv"}))
+	designer := f.s.State.Role("designer")
+	require.Equal(t, "/rename zm-designer", designer.Inbox[0], "back to the first role: renamed back")
+
+	// It failed to type and sits in the failed lines; then a fresh start: no retry can type it now.
+	designer.Inbox = designer.Inbox[1:]
+	designer.Failed = append(designer.Failed, Failed{Line: "/rename zm-designer"})
+	require.NoError(t, f.s.Down("designer", DownOptions{}))
+	require.NoError(t, f.s.UpWith("designer", UpOptions{Fresh: true}))
+	assert.Empty(t, designer.Failed)
+	assert.Equal(t, "zm-harvester", f.s.State.Titles["conv"], "never typed: the conversation keeps the title it had")
 }
