@@ -226,6 +226,9 @@ type Peer struct {
 	BodyMax   int  `json:"body_max,omitempty"`
 	ReportsV1 bool `json:"reports_v1,omitempty"`
 	ReportsV2 bool `json:"reports_v2,omitempty"`
+	// TellReceipts: the peer authenticated tell_receipts in its last session with this node — it takes receipts
+	// for the plain lines it sent, and sends them for the lines it took.
+	TellReceipts bool `json:"tell_receipts,omitempty"`
 }
 
 // Takes is the longest body the peer takes: what it told, else what an older zmina takes.
