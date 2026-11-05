@@ -1958,7 +1958,7 @@ $("talk-open").addEventListener("click", (e) => {
   const t = talkTarget();
   if (t) openTalk(t.crew, t.role, e.currentTarget);
 });
-addEventListener("resize", () => { if (side) placeSide(); });
+globalThis.addEventListener?.("resize", () => { if (side) placeSide(); });
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (side) closeTalk();

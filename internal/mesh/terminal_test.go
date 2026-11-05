@@ -326,3 +326,28 @@ func TestActIsOwnerOnlyAndRelayed(t *testing.T) {
 	require.ErrorContains(t, err, "update zmina")
 	require.Len(t, did, 2)
 }
+
+// A write signed for one node is not done by another: a peer that got the owner's proof cannot pass it to a session
+// with a third node.
+func TestActIsDoneOnlyByTheNodeItNames(t *testing.T) {
+	owner := newOwner(t, "owner")
+	worker := enroll(t, owner, "worker")
+	addPeer(t, owner, "worker")
+	ran := false
+	service := &TerminalServices{TodoAct: func(crew, action, id, text string) (string, error) { ran = true; return "done", nil }}
+	transport := &terminalPipes{nodes: map[string]*Node{"worker": worker}, services: map[string]*TerminalServices{"worker": service}}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	rw, c, err := owner.terminalConnect(ctx, transport, "worker")
+	require.NoError(t, err)
+	defer func() { _ = rw.Close() }()
+	require.NoError(t, owner.terminalRequest(c, "todo/act", TerminalRequest{Crew: "ops", Action: "yes", ID: "A-1", To: "jump"}))
+	_, err = c.expect("act/result")
+	require.ErrorContains(t, err, `this request is for node "jump", not worker`)
+	require.False(t, ran)
+
+	line, err := owner.Act(ctx, transport, "worker", "todo/act", TerminalRequest{Crew: "ops", Action: "yes", ID: "A-1"})
+	require.NoError(t, err)
+	require.Equal(t, "done", line)
+}

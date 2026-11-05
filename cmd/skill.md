@@ -797,7 +797,8 @@ A machine without peers is a mesh of one. It opens the page in the browser.
   than one node (a crew's key on a peer is `<node>/<crew>`; the label is dropped once the switch narrows to that node or
   crew); the switch filters by node or by crew. A peer's items are answered in place like this node's: the answer,
   Done, Later, a reminder set or moved, goes to the item's own node as an owner-signed mesh write (`todo/act`,
-  `alarm/act`, through relays like a terminal), which does it as its own page would — to that crew's dispatcher — and
+  `alarm/act`, through relays like a terminal; the owner signs the node it is for, and only that node does it), which
+  does it as its own page would — to that crew's dispatcher — and
   says what it did. A node older than this one answers `update zmina on this node`, and the row says so.
 - **The switch** is nodes: «All», then each node with its health dot; a node with more than one crew reads «box-ops 3 crews
   ▾» and opens a menu of its crews (spare and silent words, then its stopped line); a crew chosen shows as «/ acme ✕».

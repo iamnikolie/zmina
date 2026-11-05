@@ -72,6 +72,9 @@ type TerminalRequest struct {
 	FileID string       `json:"file_id,omitempty"`
 	// When is an alarm's time, as the owner wrote it (alarm/act).
 	When string `json:"when,omitempty"`
+	// To is the node the owner meant the request for, inside what the owner signs: a write (todo/act, alarm/act) is
+	// done only by the node it names, so a peer that got it cannot pass it on to another node's session.
+	To string `json:"to,omitempty"`
 }
 
 func terminalMessage(op string, challenge []byte, req TerminalRequest) []byte {
@@ -120,6 +123,9 @@ func (n *Node) serveTerminal(ctx context.Context, c *conn, w wire, s *TerminalSe
 		return c.send(wire{Op: "crew/status-result", Data: data})
 	}
 	if w.Op == "todo/act" || w.Op == "alarm/act" {
+		if req.To != n.Name {
+			return fail(fmt.Errorf("this request is for node %q, not %s", req.To, n.Name))
+		}
 		var line string
 		var err error
 		switch {
@@ -516,6 +522,7 @@ func (n *Node) Act(ctx context.Context, t Transport, node, op string, request Te
 		return "", err
 	}
 	defer func() { _ = rw.Close() }()
+	request.To = node
 	if err = n.terminalRequest(c, op, request); err != nil {
 		return "", err
 	}
