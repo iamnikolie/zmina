@@ -563,3 +563,8 @@ body.fv-on { overflow: hidden; }
   .fv-log li { grid-template-columns: 5.5rem minmax(0, 1fr); }
   .fv-who { display: none; }
 }
+
+/* D-07 r4 · on the lean page Parked is one line that opens its list. */
+.parked-line { display: block; width: 100%; min-height: 44px; padding: 0 0 0 14px; border: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+  background: none; color: var(--muted); font: 600 .8rem var(--sans); letter-spacing: .04em; text-transform: uppercase; text-align: left; cursor: pointer; }
+.parked-line:hover { color: var(--ink); }

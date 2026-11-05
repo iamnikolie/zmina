@@ -19,8 +19,8 @@ const el = (tag, cls, text) => {
 localStorage.removeItem("zmina.lang");
 
 const W = {
-  hold: "You hold", ask: "Answer", go: "Going", later: "Parked", others: "Waiting on others", all: "All",
-  sayHold: (n) => "You hold " + n, sayAsk: (n) => "answer " + n, sayGo: (n) => "going " + n, sayLater: (n) => "parked " + n,
+  hold: "You hold", ask: "Answer", go: "In progress", later: "Parked", others: "Waiting on others", all: "All",
+  sayHold: (n) => "You hold " + n, sayAsk: (n) => "answer " + n, sayGo: (n) => "in progress " + n, sayLater: (n) => "parked " + n,
   noHold: "you hold nobody up", noAsk: "no questions", noGo: "nothing goes right now",
   yes: "Yes", no: "No", noText: "no", done: "Done", answer: "Answer…", park: "Later", ignore: "Hide", send: "Send", cancel: "Cancel",
   sentTo: "Sent to the dispatcher", parkedTo: "Parked", ignored: "Hidden", broughtBack: "Brought back", dropped: "Discarded",
@@ -35,7 +35,8 @@ const W = {
   fvDetails: "Details", fvScreen: "Screen", fvHolder: "held by", fvWaits: "waits on", fvProject: "project", fvCrew: "crew",
   fvCreated: "created", fvUpdated: "changed", fvRepo: "repo", fvBranch: "branch", fvWorktree: "worktree", fvLink: "link",
   fvDown: "not up", fvNoScreen: "the session is not up", fvLoading: "…", fvNoLog: "nothing in the log yet", ctxOf: (n, max) => n + " of " + max + " before compact", ctxPast: " · compacts when idle", move: "your move", roDone: "done today", oldest: "oldest · ", nobody: "nobody",
-  withRec: (n) => n + " with an answer ready", upOf: (u, t) => u + " up of " + t, noDue: "no due date",
+  withRec: (n) => n + " with an answer ready", upOf: (u, t) => u + " up of " + t, rolesWorking: (n) => n + (n === 1 ? " role" : " roles") + " working",
+  bandCounts: (w, u, d) => w + " working · " + u + " up · " + d + " not started", parkedLine: (n, old, back) => "Parked " + n + (old ? " · oldest " + old : "") + (back ? " · " + back + " come back" : ""), noDue: "no due date",
   people: (n) => n + " " + (n === 1 ? "person" : "people"),
   roSpent: "spent today", spentWeek: (v) => "7 days " + v, spentNone: "API-equivalent",
   spentRole: (v) => v + " today", spentTip: "API-equivalent dollars: what these tokens would cost at API rates; the crews run on a subscription", fvCost: "cost",
@@ -746,8 +747,13 @@ function renderGo(going) {
 function renderLater(parked) {
   const live = parked.filter((it) => !gone(key(it.crew, it.id)));
   $("later").hidden = !parked.length;
-  heading("later-h", W.later, parked.length);
-  patch($("later-rows"), [...live.map(laterRow)]);
+  // D-07 r4: one line, «Parked 53 · oldest 12 d · 4 come back ›», that opens the list (the whole screen on a phone).
+  patch($("later-h"), []);
+  const oldest = live.length ? dur(Math.max(...live.map((it) => nowMs() - T(it.created)))) : "";
+  const back = live.filter((it) => (snap.alarms || []).some((a) => a.crew === it.crew && a.later === it.id)).length;
+  const line = button("parked-line", W.parkedLine(live.length, oldest, back) + " ›", () => openList("parked"));
+  line.setAttribute("aria-expanded", side && side.kind === "parked" ? "true" : "false");
+  patch($("later-rows"), [line]);
 }
 
 // laterRow is a parked item on the lean page; opened, its whole text shows in place, with «Bring back» and a muted
@@ -1003,7 +1009,7 @@ function renderCockpit(hold, asks, others, parked) {
   const cells = [
     [W.hold, hold.length, hold.length ? W.oldest + dur(oldest) : W.nobody, "need"],
     [W.ask, asks.length, asks.length ? W.withRec(asks.filter((it) => it.rec).length) : W.noAsk, "ink"],
-    [W.go, up.filter((r) => r.status === "busy").length, W.upOf(up.length, roles.length), "busy"],
+    [W.go, snap.work.filter((w) => w.lane === "go" && shows(w.crew)).length, W.rolesWorking(up.filter((r) => r.status === "busy").length), "busy"],
     [W.others, others.length, others.length ? W.people(persons) : W.nobody, "dim"],
     [W.later, parked.length, parked.length ? W.oldest.trim() + " " + dur(Math.max(...parked.map((it) => nowMs() - T(it.created)))) : W.noDue, "dim", "", "", "parked"],
     [W.roDone, crews.reduce((n, c) => n + (c.done_today || 0), 0), W.andHistory, "dim", "", "", "done"],
@@ -1127,7 +1133,7 @@ function renderBand(crews) {
   const up = crews.flatMap((c) => c.roles.filter((r) => r.state === "up").map((r) => [c, r]));
   const down = crews.flatMap((c) => c.roles.filter((r) => r.state !== "up").map((r) => who(c.key, r.role)));
   const h = el("div", "dh");
-  const counts = el("span", "dc", [W.upN(up.length), W.downN(down.length)].join(" · "));
+  const counts = el("span", "dc", W.bandCounts(up.filter(([, r]) => r.status === "busy").length, up.length, down.length));
   if (down.length) counts.title = W.notUp + down.join(", ");
   h.append(el("span", "dl", W.sessions), counts);
   for (const c of crews) {
