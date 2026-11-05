@@ -686,6 +686,15 @@ func (s *Shift) start(name string, o UpOptions) error {
 	rs.Inbound = s.inbound(r)
 	rs.Hooks, rs.HooksFlagged, rs.QueuedBoot = s.startHooks(r), "", ""
 
+	// A Claude conversation resumed under a name it was not started under keeps its stored title (Remote Control shows
+	// the old one): /rename gives it the new one, typed once the role is booted. A start whose name is not known yet
+	// renames too, once: the name is recorded from now on.
+	if resume != "" && runtime == "claude" && rs.Title != r.Session {
+		rs.Inbox = append([]string{"/rename " + r.Session}, rs.Inbox...)
+		s.log(name, "rename", "", strings.TrimSpace(rs.Title+" → "+r.Session))
+	}
+	rs.Title = r.Session
+
 	detail := ""
 	if resume != "" {
 		detail = "resumed " + resume

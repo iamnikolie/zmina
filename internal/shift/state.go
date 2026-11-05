@@ -111,6 +111,9 @@ type RoleState struct {
 	LastDir     string `json:"last_dir,omitempty"`
 	// LastSession is the role's last conversation id, for --resume.
 	LastSession string `json:"last_session,omitempty"`
+	// Title is the session name the role's conversation was last started under (claude --name): a conversation
+	// resumed under another name keeps its stored title until it is renamed.
+	Title string `json:"title,omitempty"`
 	// Inbox holds lines typed into the role the next time it is idle; Attempts counts failed tries of the first.
 	Inbox    []string `json:"inbox,omitempty"`
 	Attempts int      `json:"attempts,omitempty"`

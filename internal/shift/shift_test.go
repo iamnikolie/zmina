@@ -1116,3 +1116,24 @@ func TestExplicitFreshBypassesResumePolicyAndSleep(t *testing.T) {
 	require.NoError(t, f.s.UpWith("designer", UpOptions{Resume: "last"}))
 	assert.Contains(t, strings.Join(f.tm.argv["designer"], " "), "--resume old-conversation")
 }
+
+// A conversation resumed under a new session name is renamed to it, once; resumed under the name it already has, it is
+// left as it is.
+func TestResumeUnderANewNameRenames(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	require.NoError(t, f.s.Up("designer"))
+	f.status("designer", "idle", *f.now)
+	require.NoError(t, f.s.Down("designer", DownOptions{}))
+	assert.Equal(t, "zm-designer", f.s.State.Role("designer").Title)
+
+	require.NoError(t, f.s.UpWith("designer", UpOptions{Resume: "last"}))
+	assert.NotContains(t, f.s.State.Role("designer").Inbox, "/rename zm-designer", "same name: nothing to rename")
+	f.status("designer", "idle", *f.now)
+	require.NoError(t, f.s.Down("designer", DownOptions{}))
+
+	f.s.Crew.Roles["designer"].Session = "ops-designer"
+	require.NoError(t, f.s.UpWith("designer", UpOptions{Resume: "last"}))
+	assert.Equal(t, "/rename ops-designer", f.s.State.Role("designer").Inbox[0])
+	assert.True(t, f.ev.has("designer", "rename"))
+	assert.Equal(t, "ops-designer", f.s.State.Role("designer").Title)
+}
