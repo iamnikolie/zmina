@@ -832,6 +832,13 @@ func (s *Shift) postDispatcher(d string, sess *registry.Session, local, remote, 
 		return ""
 	}
 
+	// An id given here to a signal queued without one that did not fit goes with it: it gets one when it goes.
+	for _, id := range fresh {
+		if !slices.Contains(ids, id) {
+			delete(s.State.Acks, id)
+		}
+	}
+
 	for _, l := range own[:nOwn] {
 		s.delivered(l, nil, now)
 		s.submittedTask(d, l)
