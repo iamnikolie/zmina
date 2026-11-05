@@ -426,7 +426,9 @@ const RemoteRule = "[zmina] Lines from other crews (zmina tell) arrive as `remot
 	"the same way. Answer with: zmina tell <node>/<crew> \"<one line>\". To reach another crew or node, always " +
 	"zmina tell <node>/<crew>, never SendMessage: SendMessage is for the roles of this crew only, and a session " +
 	"whose message or reply shows from=bridge: sits in another namespace or on another machine, behind a " +
-	"Remote Control bridge with no receipt. zmina node ls names each crew of a node with its dispatcher's session."
+	"Remote Control bridge with no receipt. zmina node ls names each crew of a node with its dispatcher's session. " +
+	"Before you send a line again, look at zmina message ls: one that shows queued waits for that dispatcher, it is " +
+	"not lost; send it again only when it shows no stage at all."
 
 // BootText is a role's first message: its boot, and for the dispatcher the rule about other crews' lines. It names
 // the tag of the role's start, and goes only into the command that starts it.
@@ -1043,9 +1045,17 @@ func (s *Shift) Note(from, text string, ifUp bool) (bool, error) {
 // NoteSent is Note for a line from another crew, with when its writer sent it: the line typed into the dispatcher
 // says when it was sent and, past remoteLateAfter, when it is delivered and how late (Lateness).
 func (s *Shift) NoteSent(from, text string, sent time.Time) (bool, error) {
+	_, queued, err := s.NoteSentAs(from, text, sent)
+
+	return queued, err
+}
+
+// NoteSentAs is NoteSent that also returns the note as it was queued, without its id: what a receipt matches the
+// line by.
+func (s *Shift) NoteSentAs(from, text string, sent time.Time) (string, bool, error) {
 	note, queued, err := s.note(from, text, false)
 	if err != nil || note == "" || sent.IsZero() {
-		return queued, err
+		return signalBody(note), queued, err
 	}
 
 	if _, ok := s.State.SignalSent[note]; !ok {
@@ -1056,7 +1066,7 @@ func (s *Shift) NoteSent(from, text string, sent time.Time) (bool, error) {
 		s.State.SignalSent[note] = sent
 	}
 
-	return queued, nil
+	return signalBody(note), queued, nil
 }
 
 // note queues a note and returns it as queued (or as it already waits).

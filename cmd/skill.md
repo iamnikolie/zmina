@@ -350,7 +350,7 @@ network under it is a transport and an address: today ssh, or any command line t
 | `zmina node peer add <n> --ssh … \| --cmd …` / `peer rm <n>` | the address book by hand. |
 | `zmina node ls [--json]` | this node and its crews, each with its dispatcher's session name (`ops (ops-dispatcher)`; `--json`: `dispatchers`); each peer: how known (`hand`, `called` — it called in, `told` — another node told of it), its addresses or the peers that reach it (`through`), last good session, last failure; what waits to leave. |
 | `zmina node sync [--peer <n>]` | one round now. Exit 1 when a peer failed. |
-| `zmina tell <node>[/<crew>] <text>` | one line for that crew's dispatcher (no crew: the node's default crew, or its only one). On this node it is queued at once; for another it is signed, queued in `outbox/`, and handed over now if that peer answers, else by the next round. A long line is stored whole on the far side (below). |
+| `zmina tell <node>[/<crew>] <text>` | one line for that crew's dispatcher (no crew: the node's default crew, or its only one). On this node it is queued at once; for another it is signed, queued in `outbox/`, and handed over now if that peer answers, else by the next round. A long line is stored whole on the far side (below). Receipts follow as the far dispatcher takes it (queued, submitted, read): `zmina message ls`. |
 | `zmina inbox [ls]` / `zmina inbox show <id>` | the whole text of lines too long to type: a line from another crew or a long note, kept 30 days in `inbox/` next to the crew file. `show` prints a header, then every line of the text after `\| `; a line from another crew is marked as data first, with its quote marks taken out as in the note. |
 
 A round (the ticker runs one every minute, whichever crew's ticker comes first, and holds each session open 40 s;
@@ -398,6 +398,19 @@ node has not said it stores long lines and may type the head only. On this node:
 dispatcher (long: stored as in-…)`. `tick.log` gets a `mesh:` line when lines move or
 are not taken, and when a peer starts or stops failing. A `zmina tell` to another crew of the same node is wrapped
 the same way.
+
+Receipts for plain lines: a node that says `tell_receipts` in its signed hello sends back, for each line its
+crew takes, `queued_dispatcher` (queued for the dispatcher), `submitted` (the post carrying it is in the
+dispatcher's conversation) and `read` (the dispatcher acked it) — each once, from committed state, as a signed
+envelope to the sending crew. `tell` then adds a line: `receipts: queued for its dispatcher; zmina message show
+<envelope id> (queued, submitted, read as the far dispatcher takes it)` — the queued receipt usually comes back in
+the same session. `zmina message ls` lists the lines this crew sent (`<id> · tell · <stage> <time> · from → to ·
+sent … · head`), `zmina message show <envelope id> [--json]` every stage with the far node's time and when its
+receipt came. A line that is only queued is waiting for the dispatcher, not lost: do not send it again (every
+dispatcher's boot rule says so). A far node that has not said `tell_receipts` (an older zmina, or reached only
+through another node) sends none: `tell` says `delivered to …` as before and `message ls` says `no receipts`. A
+receipt counts only from the crew the line went to; records are kept 30 days. A `tell` to a crew of the same node
+gets the same receipts.
 
 ## Browser chat
 
@@ -1219,7 +1232,7 @@ create tasks. `--status` may explicitly supersede an earlier status revision; or
 requests stay intact. Repeated deliveries coalesce instead of adding another notification.
 
 `zmina message ls` and `message show <id> [--revision <hash>] [--json]` expose observations and pending
-errors. Stages are `queued_origin`, `received`, `queued_dispatcher`, `submitted`, `read`, `relayed`.
+errors, and the lines this crew sent with plain `tell` and their receipts (Nodes). Stages are `queued_origin`, `received`, `queued_dispatcher`, `submitted`, `read`, `relayed`.
 A transport ACK alone never proves dispatcher submission or reading. Queued/submitted receipts require
 committed queue state; a crash before that commit leaves confirmation pending. Source and local observation
 times are separate; monotonic revision/stage ordering does not trust clock ordering between nodes.
