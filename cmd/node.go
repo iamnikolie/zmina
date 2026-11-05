@@ -356,11 +356,14 @@ func (a *app) nodePeer() *cobra.Command {
 
 // nodeView is `zmina node ls --json`.
 type nodeView struct {
-	Name   string          `json:"name"`
-	Owner  bool            `json:"owner"`
-	Crews  []string        `json:"crews"`
-	Peers  []mesh.Peer     `json:"peers"`
-	Outbox []mesh.Envelope `json:"outbox"`
+	Name  string   `json:"name"`
+	Owner bool     `json:"owner"`
+	Crews []string `json:"crews"`
+	// Dispatchers maps a crew to its dispatcher's session name: the name a SendMessage from it shows, so a
+	// dispatcher can tell which <node>/<crew> to answer with zmina tell.
+	Dispatchers map[string]string `json:"dispatchers,omitempty"`
+	Peers       []mesh.Peer       `json:"peers"`
+	Outbox      []mesh.Envelope   `json:"outbox"`
 }
 
 func (a *app) nodeLs() *cobra.Command {
@@ -376,7 +379,7 @@ func (a *app) nodeLs() *cobra.Command {
 				return err
 			}
 
-			v := nodeView{Name: me.Name, Owner: me.IsOwner(), Crews: crewKeys()}
+			v := nodeView{Name: me.Name, Owner: me.IsOwner(), Crews: crewKeys(), Dispatchers: crewDispatchers()}
 			if v.Peers, err = me.Peers(); err != nil {
 				return err
 			}
@@ -394,7 +397,16 @@ func (a *app) nodeLs() *cobra.Command {
 				owner = " · owner"
 			}
 
-			fmt.Fprintf(a.out, "node %s%s · crews: %s\n", v.Name, owner, strings.Join(v.Crews, ", "))
+			crews := make([]string, 0, len(v.Crews))
+			for _, c := range v.Crews {
+				if d := v.Dispatchers[c]; d != "" {
+					c += " (" + d + ")"
+				}
+
+				crews = append(crews, c)
+			}
+
+			fmt.Fprintf(a.out, "node %s%s · crews: %s\n", v.Name, owner, strings.Join(crews, ", "))
 
 			now := time.Now()
 			for _, p := range v.Peers {
@@ -684,6 +696,25 @@ func crewKeys() []string {
 	var out []string
 	for _, c := range uiCrews("") {
 		out = append(out, c.Key)
+	}
+
+	return out
+}
+
+// crewDispatchers maps each crew of this node to its dispatcher's session name; a crew file that does not load is
+// left out.
+func crewDispatchers() map[string]string {
+	out := map[string]string{}
+
+	for _, c := range uiCrews("") {
+		cr, err := crew.Load(c.Path)
+		if err != nil {
+			continue
+		}
+
+		if r, err := cr.Role(cr.Dispatcher); err == nil && r.Session != "" {
+			out[c.Key] = r.Session
+		}
 	}
 
 	return out

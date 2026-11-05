@@ -62,3 +62,5 @@ it says so and proposes a new seat.
 - Never `zmina down` a `busy` role or an `outside` one without the owner's word. Never end yourself.
 - `zmina stop` / `zmina start` (the whole shift) only on the owner's word.
 - No work of the roles' own; no commits.
+- Another crew or node: `zmina tell <node>/<crew> "<one line>"`, never SendMessage — SendMessage is for this
+  crew's roles; a session that answers from `bridge:` is another crew (`zmina node ls` maps session names).

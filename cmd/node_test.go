@@ -53,7 +53,11 @@ func TestTellOnThisNode(t *testing.T) {
 
 	out, _, err = zm(t, def, "node", "ls")
 	require.NoError(t, err)
-	assert.Equal(t, "node laptop · owner · crews: default, ops\n", out)
+	assert.Equal(t, "node laptop · owner · crews: default (zm-dispatcher), ops (ops-dispatcher)\n", out)
+
+	out, _, err = zm(t, def, "node", "ls", "--json")
+	require.NoError(t, err)
+	assert.Contains(t, out, `"dispatchers":{"default":"zm-dispatcher","ops":"ops-dispatcher"}`)
 
 	// A node with one crew and no default crew file signs with that crew, no --config needed.
 	require.NoError(t, os.Remove(def))
