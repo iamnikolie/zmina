@@ -644,3 +644,10 @@ body.fv-on { overflow: hidden; }
 .choices .choice { justify-content: flex-start; text-align: left; white-space: normal; height: auto; min-height: 36px; padding: 6px 12px; }
 .choices .choice { flex-direction: column; align-items: flex-start; }
 .choices .choice .cd { font-size: .78rem; font-weight: 400; color: var(--muted); }
+
+/* A card's header never pushes its context ring past the card: the role's name gives way first. */
+@media (min-width: 1400px) {
+  .card .role-n { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .card .role-h .keep { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card .role-h .ring, .card .role-h .ctx { flex: none; }
+}

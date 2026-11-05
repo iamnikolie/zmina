@@ -13,8 +13,10 @@
 const handles = (n) => n.nodeType === 1 && (["BUTTON", "A", "INPUT", "TEXTAREA", "SELECT"].includes(n.nodeName)
   || n.classList.contains("row") || n.classList.contains("panel") || !!n.onclick || !!n.onkeydown);
 
-// keyed is a handler element whose handler is told by its markup: a row, by its data-k.
-const keyed = (n) => n.nodeType === 1 && n.classList.contains("row") && !!n.dataset.k;
+// keyed is a handler element whose handler is told by its markup: a row or a session card, by its data-k. Such an
+// element is patched in place like a container (its own attributes and children), so an animation on it — a working
+// session's breathing lamp — runs on instead of starting over at every snapshot.
+const keyed = (n) => n.nodeType === 1 && (n.classList.contains("row") || n.classList.contains("card")) && !!n.dataset.k;
 
 // patch makes parent's children the nodes given (strings are text), keeping each old child equal to its new one, and
 // those of the same data-k or place where only plain containers differ.
@@ -47,8 +49,12 @@ function morph(old, nu) {
   const swap = () => { if (old.parentNode) old.replaceWith(nu); return nu; };
   if (old.nodeType !== nu.nodeType || old.nodeName !== nu.nodeName) return swap();
   if (handles(old) || handles(nu)) {
-    if (keyed(old) && keyed(nu) && old.dataset.k === nu.dataset.k && old.isEqualNode(nu)) { adopt(old, nu); return old; }
-    return swap();
+    if (!keyed(old) || !keyed(nu) || old.dataset.k !== nu.dataset.k) return swap();
+    if (old.isEqualNode(nu)) { adopt(old, nu); return old; }
+    for (const a of [...old.attributes]) if (!nu.hasAttribute(a.name)) old.removeAttribute(a.name);
+    for (const a of [...nu.attributes]) if (old.getAttribute(a.name) !== a.value) old.setAttribute(a.name, a.value);
+    patch(old, [...nu.childNodes]);
+    return old;
   }
   if (old.isEqualNode(nu)) { adopt(old, nu); return old; }
   if (old.nodeType !== 1) return swap();

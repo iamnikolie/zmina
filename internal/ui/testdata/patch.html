@@ -57,6 +57,19 @@
     after.click();
     assert(opened === "done:T-2", "the panel's button acts on its row");
 
+    // F: a changed keyed row or card stays the same element (an animation on it runs on); its words change, its
+    // buttons are the new ones.
+    const band = el("div"); stage.append(band);
+    const card = (k, words) => { const c = el("button", "card"); c.dataset.k = k; c.addEventListener("click", () => { opened = k; }); c.append(el("span", "lamp", "o"), el("span", "now", words)); return c; };
+    patch(band, [card("card:a/dev", "working · 1 min")]);
+    const lit = band.firstChild;
+    patch(band, [card("card:a/dev", "working · 2 min")]);
+    assert(band.firstChild === lit && lit.querySelector(".now").textContent === "working · 2 min", "a changed card is patched in place");
+    lit.click();
+    assert(opened === "card:a/dev", "a patched card opens its own role");
+    patch(rows, [row("T-2", "two, changed", false)]);
+    assert(rows.querySelector('[data-k="T-2"]') === kept && kept.querySelector(".tt").textContent === "two, changed", "a changed row is patched in place");
+
     // E: focus on a swapped button comes back to its twin.
     const box = el("div"); box.id = "box"; stage.append(box);
     const b = () => { const x = el("button", "q", "Set"); x.addEventListener("click", () => {}); return x; };
