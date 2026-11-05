@@ -7,6 +7,12 @@
   const params = new URLSearchParams(location.search), language = $("speech-language");
   // Inside the cockpit's talk panel: the panel is the page's way back, not the header's link.
   document.body.classList.toggle("embed", params.get("embed") === "1");
+  // Embedded in the cockpit's panel, Esc closes the panel (the parent page), unless a picker or dictation has it.
+  if (params.get("embed") === "1" && window.parent !== window) {
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !e.defaultPrevented) window.parent.postMessage("zmina:close", location.origin);
+    });
+  }
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   let targets = [], destination = null, snapshot = null, generation = 0, pollTimer = null, readRequest = null;
   let loadingTargets = false, posting = false, draftID = "", cleared = null, recognition = null, listening = false, firstPaint = true;

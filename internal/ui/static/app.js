@@ -110,9 +110,11 @@ const remote = (crew) => !!crewOf(crew)?.remote;
 const nodeOf = (crew) => crewOf(crew)?.node || crew.split("/")[0];
 // crewLabel names a crew on the page: its name; with more than one node, node/crew, the node alone for «default».
 function crewLabel(crew) {
-  if (!multiNode()) return crewName(crew);
+  const c = crewOf(crew);
+  const moved = c && c.retired && c.moved_to ? " → " + c.moved_to : "";
+  if (!multiNode()) return crewName(crew) + moved;
   const full = remote(crew) || !snap.self ? crew : snap.self + "/" + crew;
-  return full.replace(/\/default$/, "");
+  return full.replace(/\/default$/, "") + moved;
 }
 // shownLabel is the label a row carries: «always» also for the node's default crew when there is one node. With more
 // than one node it drops what the crew switch already says: a crew drops all of it, a node drops the node.
@@ -147,8 +149,15 @@ const otherKey = (w) => "others:" + key(w.crew, w.id);
 const folded = (c) => (!!c.dormant || (c.retired && !c.moved_to)) && snap.crews.some((x) => !x.dormant && !x.retired);
 // away is a crew the owner retired into another (D-07 s4): gone from the page, the switch and every count.
 const away = (crew) => { const c = crewOf(crew); return !!(c && c.retired && c.moved_to); };
+// successor is the page's key of the crew a retired one went on as: this node's crews go by their bare name.
+const successor = (c) => (snap.self && c.moved_to.startsWith(snap.self + "/") ? c.moved_to.slice(snap.self.length + 1) : c.moved_to);
 const shows = (crew) => {
-  if (away(crew)) return false;
+  // A retired crew leaves the switch, the sessions and the counts of crews, but what it still holds stays in sight:
+  // under All and under the crew it went on as, labelled «crew → successor», answered on its own crew (D-07 s4).
+  if (away(crew)) {
+    const s = successor(crewOf(crew));
+    return filter === "all" || filter === s || (filter.startsWith("node:") && nodeOf(s) === filter.slice(5));
+  }
   if (filter === "all") { const c = crewOf(crew); return !c || !folded(c); }
   if (filter.startsWith("node:")) return nodeOf(crew) === filter.slice(5);
   return filter === crew;
@@ -1070,7 +1079,7 @@ function renderQuiet() {
 function renderCockpit(hold, asks, others, parked) {
   setText($("brand-s"), W.shift);
   renderEv();
-  const crews = snap.crews.filter((c) => shows(c.key));
+  const crews = snap.crews.filter((c) => shows(c.key) && !away(c.key));
   const screens = crews.flatMap((c) => (c.roles || []).filter((r) => r.state === "up" && r.prompt).map((r) => [c, r]));
   const roles = crews.flatMap((c) => c.roles);
   const up = roles.filter((r) => r.state === "up");
@@ -1770,6 +1779,7 @@ $("history-close").addEventListener("click", () => { $("history").hidden = true;
 
 let side = null; // {crew, role}: what the panel shows
 let sideFrom = null; // the element that opened it
+let sideMark = null; // the same, as something a redrawn page finds again (patch.js focusMark)
 let lastTalk = null; // the last conversation, for the header's Talk
 
 function placeSide() {
@@ -1797,6 +1807,7 @@ function openTalk(crewKey, role, from) {
   side = { kind: "talk", crew: crewKey, role };
   lastTalk = side;
   sideFrom = from || document.activeElement;
+  sideMark = markOf(sideFrom);
   const c = crewOf(crewKey);
   const node = c && c.remote ? nodeOf(crewKey) : "";
   const crew = node ? crewKey.slice(node.length + 1) : crewKey;
@@ -1815,6 +1826,7 @@ function openTalk(crewKey, role, from) {
 function openList(kind, from, tab) {
   side = { kind, f: "all", tab: tab || "done" };
   sideFrom = from || document.activeElement;
+  sideMark = markOf(sideFrom);
   $("talk-open").setAttribute("aria-expanded", "false");
   showSide(false);
 }
@@ -1836,6 +1848,15 @@ function closeTalk() {
   $("talk-open").setAttribute("aria-expanded", "false");
   render();
   if (sideFrom && sideFrom.isConnected) sideFrom.focus();
+  else if (sideMark) refocus(sideMark);
+}
+
+// markOf is focusMark for a given element: its row or section, its kind and its name.
+function markOf(e) {
+  if (!e || !e.closest) return null;
+  const host = e.closest("[data-k]") || e.closest("[id]");
+  if (!host) return null;
+  return { el: e, host: host.dataset.k ? `[data-k="${CSS.escape(host.dataset.k)}"]` : "#" + CSS.escape(host.id), sig: focusSig(e) };
 }
 
 // renderSide is the panel's head: the role's glyph as its lamp, its name, node/crew, its state and since when, and the
@@ -1952,6 +1973,10 @@ $("side-pick").addEventListener("click", () => {
 });
 $("side-filter").addEventListener("input", renderPick);
 $("side-close").addEventListener("click", closeTalk);
+// The conversation is a frame of this page: its Esc arrives as a message, accepted only from that frame and this origin.
+globalThis.addEventListener?.("message", (e) => {
+  if (e.origin === location.origin && e.source === $("side-frame").contentWindow && e.data === "zmina:close" && side) closeTalk();
+});
 $("side-back").addEventListener("click", closeTalk);
 $("talk-open").addEventListener("click", (e) => {
   if (side) { closeTalk(); return; }
