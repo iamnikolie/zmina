@@ -642,3 +642,5 @@ body.fv-on { overflow: hidden; }
 /* A session's question answered from the cockpit: one button per choice, the whole label readable. */
 .choices { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
 .choices .choice { justify-content: flex-start; text-align: left; white-space: normal; height: auto; min-height: 36px; padding: 6px 12px; }
+.choices .choice { flex-direction: column; align-items: flex-start; }
+.choices .choice .cd { font-size: .78rem; font-weight: 400; color: var(--muted); }

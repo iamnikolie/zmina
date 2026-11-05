@@ -1236,7 +1236,11 @@ function screenRow(c, r) {
   if (d) {
     if (d.question) p.append(el("p", "pn", d.question));
     const ch = el("div", "choices");
-    for (const o of d.options) ch.append(button("btn choice", o.n + ". " + o.label, () => chooseDialog(c, r, o)));
+    for (const o of d.options) {
+      const b = button("btn choice", o.n + ". " + o.label, () => chooseDialog(c, r, o));
+      if (o.detail) b.append(el("span", "cd", o.detail));
+      ch.append(b);
+    }
     p.append(ch);
   } else if (r.now) p.append(el("p", "pn", r.now));
   p.append(button("q", W.talkTo(r.role), () => openTalk(c.key, r.role)));

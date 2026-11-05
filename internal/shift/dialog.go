@@ -24,6 +24,8 @@ type Dialog struct {
 type DialogOption struct {
 	N     int    `json:"n"`
 	Label string `json:"label"`
+	// Detail is the description under the choice, the lines Claude Code draws indented beneath it.
+	Detail string `json:"detail,omitempty"`
 }
 
 var optionLine = regexp.MustCompile(`^\s*(❯\s*)?([1-9])\.\s+(.+?)\s*$`)
@@ -93,6 +95,23 @@ func ParseDialog(screen string) *Dialog {
 		return nil
 	}
 
+	// Each choice's description: the indented lines under it, up to the next choice or the footer.
+	at := -1
+	for _, l := range lines[first:] {
+		if m := optionLine.FindStringSubmatch(l); m != nil {
+			n, _ := strconv.Atoi(m[2])
+			at = n - 1
+			continue
+		}
+		t := strings.TrimSpace(l)
+		if t == "" || strings.Contains(t, "Enter to select") || strings.Contains(t, "Esc to cancel") {
+			continue
+		}
+		if at >= 0 && at < len(opts) {
+			opts[at].Detail = strings.TrimSpace(opts[at].Detail + " " + t)
+		}
+	}
+
 	d := &Dialog{Cursor: cursor}
 	for _, o := range opts {
 		free := false
@@ -135,7 +154,7 @@ func ParseDialog(screen string) *Dialog {
 	sum := sha256.New()
 	sum.Write([]byte(d.Question))
 	for _, o := range opts {
-		fmt.Fprintf(sum, "\x00%d\x00%s", o.N, o.Label)
+		fmt.Fprintf(sum, "\x00%d\x00%s\x00%s", o.N, o.Label, o.Detail)
 	}
 	d.ID = hex.EncodeToString(sum.Sum(nil))[:16]
 

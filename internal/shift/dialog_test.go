@@ -24,7 +24,8 @@ func TestParseDialog(t *testing.T) {
 	d := ParseDialog(askScreen)
 	require.NotNil(t, d)
 	assert.Equal(t, "Release v0.2.0 The dispatcher says you said go: merge, tag v0.2.0, push, release. Confirm?", d.Question)
-	assert.Equal(t, []DialogOption{{1, "Yes, release it all"}, {2, "Only locally"}, {3, "No, wait"}}, d.Options)
+	assert.Equal(t, []DialogOption{{1, "Yes, release it all", "merge, tag, push, release, install"},
+		{2, "Only locally", "merge and install, no push"}, {3, "No, wait", "touch nothing"}}, d.Options)
 	assert.Equal(t, 1, d.Cursor)
 	assert.Equal(t, []string{"Down", "Enter"}, d.ChooseKeys(2))
 	assert.Equal(t, []string{"Enter"}, d.ChooseKeys(1))
@@ -52,4 +53,14 @@ func TestDialogIDCoversTheQuestion(t *testing.T) {
 	require.NotNil(t, b)
 	assert.NotEqual(t, a.ID, b.ID)
 	assert.Equal(t, a.ID, ParseDialog(" ☐ Preview\n│ Preview a local report?\n  1. Yes\n❯ 2. No\nEnter to select").ID, "the cursor is no part of it")
+}
+
+// A choice's description is part of the question: the same labels with another meaning are another dialog.
+func TestDialogIDCoversTheDescriptions(t *testing.T) {
+	a := ParseDialog(" ☐ Report\n│ Go on?\n❯ 1. Yes\n     preview locally\n  2. No\nEnter to select")
+	b := ParseDialog(" ☐ Report\n│ Go on?\n❯ 1. Yes\n     publish publicly\n  2. No\nEnter to select")
+	require.NotNil(t, a)
+	require.NotNil(t, b)
+	assert.Equal(t, "preview locally", a.Options[0].Detail)
+	assert.NotEqual(t, a.ID, b.ID)
 }
