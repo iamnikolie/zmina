@@ -2,7 +2,6 @@ package shift
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 	"time"
 
@@ -173,38 +172,76 @@ func TestQueuedLineQuotingATrackedTailStays(t *testing.T) {
 	assert.Equal(t, []string{quote}, f.s.State.Role("designer").Inbox)
 }
 
-// A state written before ids were kept with the lines is read for them once: its queued tracked lines and the lines
-// it typed or posted keep waiting under their ids, and an ack still takes a queued one out.
-func TestStateWithoutKeptIDsIsAdopted(t *testing.T) {
+// A state written before ids were kept with the lines keeps its lines without ids: what a line's text says (a
+// tracked tail, an id it quotes) never makes it another line's. No ack takes such a line out of the queue, a post or
+// failed line of it goes back whole, and a typed one is never dropped by an ack.
+func TestLegacyLinesKeepNoIDs(t *testing.T) {
 	raw := `{"version":2,"ack_seq":3,
 "acks":{"S-1":{"id":"S-1","role":"designer","text":"[dispatcher] look at T-1"},
         "S-2":{"id":"S-2","role":"designer","text":"[dispatcher] then T-2","first":"2026-01-02T10:00:00Z"},
         "S-3":{"id":"S-3","role":"dispatcher","text":"dev: T-3 result ready","first":"2026-01-02T10:00:00Z"}},
-"roles":{"designer":{"inbox":["[dispatcher] look at T-1 (zmina S-1)","[dispatcher] untracked"],
-                     "sent":{"line":"[dispatcher] then T-2 (zmina S-2)","at":"2026-01-02T10:00:00Z"}},
-         "dispatcher":{"posted":[{"line":"[zmina] S-3 dev: T-3 result ready (zmina S-3)","msg_id":"m-1","session":"s-1","at":"2026-01-02T10:00:00Z"}]}}}`
+"roles":{"designer":{"inbox":["[dispatcher] look at T-1 (zmina S-1)","[dispatcher] why does the sample name S-1?"],
+                     "sent":{"line":"[dispatcher] about S-2: then T-2 (zmina S-2)","at":"2026-01-02T10:00:00Z"},
+                     "failed":[{"line":"[owner] the log mentions S-2","error":"x","at":"2026-01-02T10:00:00Z"}]},
+         "dispatcher":{"posted":[{"line":"[owner] explain why the sample mentions S-3","msg_id":"m-1","session":"s-1","at":"2026-01-02T10:00:00Z"}]}}}`
 
-	st, legacy, err := decode([]byte(raw))
+	st, _, err := decode([]byte(raw))
 	require.NoError(t, err)
-	assert.False(t, legacy)
-	assert.True(t, st.IDsKept)
 
 	d := st.Roles["designer"]
-	assert.Equal(t, map[string][]string{"[dispatcher] look at T-1 (zmina S-1)": {"S-1"}}, d.QueuedIDs)
-	assert.Equal(t, []string{"S-2"}, d.Sent.IDs)
-	assert.Equal(t, []string{"S-3"}, st.Roles["dispatcher"].Posted[0].IDs)
+	assert.Empty(t, d.QueuedIDs, "a tail or a quote in the text is no id")
+	assert.Empty(t, d.Sent.IDs)
+	assert.Empty(t, d.Failed[0].IDs)
+	assert.Empty(t, st.Roles["dispatcher"].Posted[0].IDs)
 
-	// Written back, it is not read for ids again.
-	out, err := json.Marshal(st)
+	// The dispatcher stays as it was started here; the old lines join this crew's state.
+	f, _ := nativeFixture(t, crewYAML)
+	upNative(t, f, "dispatcher")
+	f.s.State.Acks, f.s.State.AckSeq = st.Acks, st.AckSeq
+	f.s.State.Roles["designer"] = d
+	f.s.State.Role("dispatcher").Posted = st.Roles["dispatcher"].Posted
+
+	acked, _ := f.s.AckLines([]string{"S-1", "S-2", "S-3"}, false, "", "hand")
+	assert.Equal(t, []string{"S-1", "S-2", "S-3"}, acked)
+	assert.Len(t, d.Inbox, 2, "no ack takes a line without ids out of the queue")
+	assert.NotNil(t, d.Sent)
+
+	_, err = f.s.Retry("designer")
 	require.NoError(t, err)
-	assert.True(t, strings.Contains(string(out), `"ids_kept":true`))
+	assert.Contains(t, d.Inbox, "[owner] the log mentions S-2", "retried whole")
 
-	f := fixtureWith(t, crewYAML)
+	f.rg.byPID[f.tm.up["dispatcher"]].SessionID = "sid-dispatcher-2"
+	f.s.followPosted("dispatcher", *f.now)
+	assert.Contains(t, f.s.State.Role("dispatcher").Inbox, "[owner] explain why the sample mentions S-3", "given back whole")
+}
+
+// An untracked line posted to the dispatcher, written by a zmina that kept no ids, is given back whole after an ack
+// of a real signal whose id it quotes.
+func TestLegacyUntrackedQuoteSurvivesAck(t *testing.T) {
+	f, _ := nativeFixture(t, crewYAML)
+	upNative(t, f, "dispatcher")
+
+	_, err := f.s.Note("dev", "real tracked work", false)
+	require.NoError(t, err)
+
+	line := "[owner] explain why the sample mentions S-1 before continuing"
+	require.NoError(t, f.s.Queue("dispatcher", line))
+	require.NotEmpty(t, f.s.postInbox("dispatcher", f.s.session("dispatcher"), *f.now))
+	require.Empty(t, f.s.State.Role("dispatcher").Posted[0].IDs)
+
+	raw, err := json.Marshal(f.s.State)
+	require.NoError(t, err)
+
+	st, _, err := decode(raw)
+	require.NoError(t, err)
 	f.s.State = st
-	acked, _ := f.s.AckLines([]string{"S-1"}, false, "designer", "hand")
-	assert.Equal(t, []string{"S-1"}, acked)
-	assert.Equal(t, []string{"[dispatcher] untracked"}, st.Roles["designer"].Inbox)
-	assert.Empty(t, st.Roles["designer"].QueuedIDs)
+
+	acked, _ := f.s.AckLines([]string{"S-1"}, false, "dispatcher", "dispatcher")
+	require.Equal(t, []string{"S-1"}, acked)
+
+	f.rg.byPID[f.tm.up["dispatcher"]].SessionID = "sid-dispatcher-2"
+	f.s.followPosted("dispatcher", *f.now)
+	assert.Contains(t, f.s.State.Role("dispatcher").Inbox, line)
 }
 
 // ackIDOf is the id a signal with this text waits for its ack under.

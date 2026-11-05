@@ -117,6 +117,18 @@ type Task struct {
 	Later string `json:"later,omitempty"`
 	// Budget is what the task may cost, in API-equivalent dollars, before the ticker tells the dispatcher; 0: none.
 	Budget float64 `json:"budget,omitempty"`
+	// Closed is who closed the task, when, and with what note; nil while it is active, or closed by a zmina that
+	// did not keep it.
+	Closed *Closure `json:"closed,omitempty"`
+}
+
+// Closure is how a task was closed: by whom (a role, "hand" for the owner), when, as what, and the note it was
+// closed with.
+type Closure struct {
+	By    string    `json:"by"`
+	At    time.Time `json:"at"`
+	State State     `json:"state"`
+	Note  string    `json:"note,omitempty"`
 }
 
 // titleMax is how much of the asked text stands in for a missing title.

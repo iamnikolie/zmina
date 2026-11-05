@@ -44,10 +44,7 @@ type State struct {
 	MessageStages map[string]map[string]time.Time `json:"message_stages,omitempty"`
 	RemoteBatches int                             `json:"remote_batches,omitempty"`
 	// Acks are the delivered lines that wait for their reader's ack; AckSeq numbers them (S-<n>).
-	Acks map[string]*Ack `json:"acks,omitempty"`
-	// IDsKept is set once every queued and delivered line keeps its ids with it (QueuedIDs, Sent/Posted/Failed
-	// IDs); a state written before is read for them once (adoptIDs).
-	IDsKept        bool                   `json:"ids_kept,omitempty"`
+	Acks           map[string]*Ack        `json:"acks,omitempty"`
 	AckSeq         int                    `json:"ack_seq,omitempty"`
 	RecordNotified map[string]bool        `json:"record_notified,omitempty"`
 	NoticeMeta     map[string]NoticeMeta  `json:"notice_meta,omitempty"`
@@ -167,7 +164,8 @@ type RoleState struct {
 	QueuedBoot string `json:"queued_boot,omitempty"`
 	// QueuedIDs are the S-ids each queued line carries, by the line: a tracked line's own id from the moment it is
 	// queued, those of a line given back (its conversation ended before it showed, a failed line retried). A queued
-	// line is known by them alone; its text is never searched for an id.
+	// line is known by them alone; its text is never searched for an id. A line queued by a zmina that kept no ids
+	// has none, for good: no ack takes it out; it leaves by delivery or zmina queue drop.
 	QueuedIDs map[string][]string `json:"queued_ids,omitempty"`
 	// Dir is where the role was started when not its crew dir (zmina up --task: the task's worktree); Trusted
 	// that zmina answered Claude Code's "trust this folder" there.
@@ -428,7 +426,7 @@ func (l *Locked) Release() {
 
 // NewState is an empty state.
 func NewState() *State {
-	s := &State{Version: stateVersion, IDsKept: true}
+	s := &State{Version: stateVersion}
 	s.init()
 
 	return s
@@ -447,11 +445,6 @@ func (s *State) init() {
 		if r == nil {
 			delete(s.Roles, name)
 		}
-	}
-
-	if !s.IDsKept {
-		s.adoptIDs()
-		s.IDsKept = true
 	}
 }
 

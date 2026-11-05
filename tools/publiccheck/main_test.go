@@ -14,19 +14,44 @@ func TestSSHHosts(t *testing.T) {
 		"  HostName localhost",
 		"Host beta gamma#not-a-comment",
 		`Host "quoted host" delta`,
+		"Host 'single' 'two words'",
+		`Host it\'s back\\slash sp\ ace "in\"side"`,
+		`Host mid"dle"word`,
 		"Host=epsilon",
 		"Host = zeta",
 		"host *.wild one? !negated eta",
 		"Match host theta",
+		`Host 'unclosed`,
 		"",
 		"\tHost\tiota",
 	}, "\n")
 
 	got := sshHosts(strings.NewReader(config))
-	want := []string{"alpha", "beta", "gamma#not-a-comment", "quoted host", "delta", "epsilon", "zeta", "eta", "iota"}
+	want := []string{"alpha", "beta", "gamma#not-a-comment", "quoted host", "delta", "single", "two words",
+		"it's", `back\slash`, "sp ace", `in"side`, "middleword", "epsilon", "zeta", "eta", "iota"}
 
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("hosts = %q, want %q", got, want)
+	}
+}
+
+// A host alias written in quotes is the alias itself: a source line naming it bare is a finding.
+func TestSSHQuotedHostIsBanned(t *testing.T) {
+	for _, config := range []string{"Host 'alpha'\n HostName localhost\n", "Host \"alpha\"\n", "Host=alpha\n"} {
+		home := writeHome(t, config)
+
+		rules, err := banned(home, "HEAD")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if hits := check(rules, "fixture:1", "ssh alpha"); len(hits) != 1 {
+			t.Fatalf("%q: alias not protected: %v", config, hits)
+		}
+
+		if hits := check(rules, "fixture:2", "ssh 'alpha'"); len(hits) != 1 {
+			t.Fatalf("%q: quoted use not found: %v", config, hits)
+		}
 	}
 }
 

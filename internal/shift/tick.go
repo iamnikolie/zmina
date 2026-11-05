@@ -54,6 +54,7 @@ func (s *Shift) Tick() []string {
 		s.pruneTaskInbox(name)
 	}
 	s.NotifyRecords()
+	s.NotifyClosed()
 	s.acceptanceAlerts()
 	held := s.held()
 	stopped := !s.State.Stopped.IsZero()

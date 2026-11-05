@@ -406,7 +406,7 @@ func (a *app) setTask(id string, st task.State, o taskChange) error {
 		}
 
 		t, err := a.ledger(s).Set(id, ledger.Change{State: st, On: o.on, Note: o.note, Role: o.role, Force: o.force,
-			Title: o.title, Project: o.project, URL: o.url, Budget: o.budget})
+			Title: o.title, Project: o.project, URL: o.url, Budget: o.budget, By: by()})
 		if err != nil {
 			return err
 		}
@@ -420,6 +420,10 @@ func (a *app) setTask(id string, st task.State, o taskChange) error {
 
 		if st != "" && !st.Active() {
 			closed = &t
+
+			// A role that closes a task tells the dispatcher, with its note, like a result does.
+			s.NotifyClosed()
+			s.Deliver()
 		}
 
 		return nil

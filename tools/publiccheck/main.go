@@ -201,16 +201,15 @@ func banned(home, base string) ([]rule, error) {
 	return rules, nil
 }
 
-// sshHosts are the names the Host lines of an ssh config give, read as ssh reads them: the keyword is followed by
-// whitespace or "=", arguments may be quoted, an unquoted word that starts with # ends the line (a comment), and a
-// pattern (wildcards) or a negated one names no host.
+// sshHosts are the names the Host lines of an ssh config give, read as ssh reads them (sshWords); a pattern
+// (wildcards) or a negated one names no host. A line ssh would refuse (an unclosed quote) gives none.
 func sshHosts(r io.Reader) []string {
 	var hosts []string
 
 	sc := bufio.NewScanner(r)
 	for sc.Scan() {
-		words := sshWords(sc.Text())
-		if len(words) < 2 || !strings.EqualFold(words[0], "host") {
+		words, ok := sshWords(sc.Text())
+		if !ok || len(words) < 2 || !strings.EqualFold(words[0], "host") {
 			continue
 		}
 
@@ -224,58 +223,73 @@ func sshHosts(r io.Reader) []string {
 	return hosts
 }
 
-// sshWords splits an ssh config line into its keyword and arguments, quotes taken off, a comment left out.
-func sshWords(line string) []string {
+// sshWords splits an ssh config line as OpenSSH does: the keyword ends at whitespace or "=" ("Host=alex",
+// "Host = alex"); its arguments are split as argv_split splits them — single or double quotes group a word and
+// are taken off, a backslash escapes a quote, a backslash, or (outside quotes) a space, and an unquoted word that
+// starts with # ends the line. ok is false for a line with an unclosed quote, which ssh refuses.
+func sshWords(line string) (words []string, ok bool) {
 	line = strings.TrimSpace(line)
 	if line == "" || strings.HasPrefix(line, "#") {
-		return nil
+		return nil, true
 	}
 
-	// The keyword ends at whitespace or "=" ("Host=alex", "Host = alex").
 	end := strings.IndexFunc(line, func(r rune) bool { return r == '=' || unicode.IsSpace(r) })
 	if end < 0 {
-		return []string{line}
+		return []string{line}, true
 	}
 
-	words := []string{line[:end]}
+	words = []string{line[:end]}
 	rest := strings.TrimLeftFunc(line[end:], unicode.IsSpace)
 	rest = strings.TrimLeftFunc(strings.TrimPrefix(rest, "="), unicode.IsSpace)
 
+	in := []rune(rest)
+	for i := 0; i < len(in); {
+		switch {
+		case unicode.IsSpace(in[i]):
+			i++
+		case in[i] == '#':
+			return words, true
+		default:
+			var word string
+			if word, i, ok = sshWord(in, i); !ok {
+				return nil, false
+			}
+
+			words = append(words, word)
+		}
+	}
+
+	return words, true
+}
+
+// sshWord is the word of an ssh config line that starts at i, and where the next one may start; ok is false when
+// it opens a quote it never closes.
+func sshWord(in []rune, i int) (string, int, bool) {
 	var (
-		word    strings.Builder
-		quoted  bool
-		started bool
+		word  []rune
+		quote rune
 	)
 
-	flush := func() {
-		if started {
-			words = append(words, word.String())
-		}
+	for ; i < len(in); i++ {
+		c := in[i]
 
-		word.Reset()
-		started = false
-	}
-
-	for _, r := range rest {
 		switch {
-		case r == '"':
-			quoted = !quoted
-			started = true
-		case quoted:
-			word.WriteRune(r)
-		case unicode.IsSpace(r):
-			flush()
-		case r == '#' && !started:
-			return words
+		case quote == 0 && unicode.IsSpace(c):
+			return string(word), i, true
+		case c == '\\' && i+1 < len(in) && (in[i+1] == '\'' || in[i+1] == '"' || in[i+1] == '\\' ||
+			quote == 0 && in[i+1] == ' '):
+			i++
+			word = append(word, in[i])
+		case quote == 0 && (c == '\'' || c == '"'):
+			quote = c
+		case quote != 0 && c == quote:
+			quote = 0
 		default:
-			word.WriteRune(r)
-			started = true
+			word = append(word, c)
 		}
 	}
 
-	flush()
-
-	return words
+	return string(word), i, quote == 0
 }
 
 // neutral are the names fixtures and docs use on purpose.

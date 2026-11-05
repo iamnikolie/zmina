@@ -422,19 +422,6 @@ func queuedSignalID(sig string) string {
 	return ""
 }
 
-// tracks reports whether a line is this tracked line: its text with the suffix zmina gave it, queued
-// (" (zmina S-14)") or said again (" (zmina S-14, still pending since …)"). Only a state written before ids were
-// kept with the lines is read this way, once (adoptIDs).
-func (a *Ack) tracks(line string) bool {
-	if line == a.Text+" (zmina "+a.ID+")" {
-		return true
-	}
-
-	rest, ok := strings.CutPrefix(line, a.Text+" (zmina "+a.ID+", still pending since ")
-
-	return ok && strings.HasSuffix(rest, ")") && !strings.ContainsAny(rest[:len(rest)-1], "()")
-}
-
 // DropSignal is dropSignal for the node's reports.
 func (s *Shift) DropSignal(sig string) { s.dropSignal(sig) }
 
@@ -593,56 +580,4 @@ func (s *Shift) roleSettings(name string) string {
 	raw, _ := json.Marshal(settings)
 
 	return string(raw)
-}
-
-// adoptIDs gives the lines of a state written before ids were kept with them their ids, once: a queued tracked line
-// its own (the suffix zmina gave it, checked against its record), a typed, posted or failed line the ids of its
-// role's acks it names, as that zmina found them.
-func (st *State) adoptIDs() {
-	for name, rs := range st.Roles {
-		for _, line := range rs.Inbox {
-			m := trackedTail.FindStringSubmatch(line)
-			if m == nil || len(rs.QueuedIDs[line]) > 0 {
-				continue
-			}
-
-			if a := st.Acks[m[1]]; a != nil && a.Role == name && a.tracks(line) {
-				if rs.QueuedIDs == nil {
-					rs.QueuedIDs = map[string][]string{}
-				}
-
-				rs.QueuedIDs[line] = []string{a.ID}
-			}
-		}
-
-		named := func(line string) []string {
-			var ids []string
-
-			for id, a := range st.Acks {
-				if a.Role == name && regexp.MustCompile(`\b`+regexp.QuoteMeta(id)+`\b`).MatchString(line) {
-					ids = append(ids, id)
-				}
-			}
-
-			slices.SortFunc(ids, func(a, b string) int { return ackNum(a) - ackNum(b) })
-
-			return ids
-		}
-
-		if rs.Sent != nil && len(rs.Sent.IDs) == 0 {
-			rs.Sent.IDs = named(rs.Sent.Line)
-		}
-
-		for i := range rs.Posted {
-			if len(rs.Posted[i].IDs) == 0 {
-				rs.Posted[i].IDs = named(rs.Posted[i].Line)
-			}
-		}
-
-		for i := range rs.Failed {
-			if len(rs.Failed[i].IDs) == 0 {
-				rs.Failed[i].IDs = named(rs.Failed[i].Line)
-			}
-		}
-	}
 }

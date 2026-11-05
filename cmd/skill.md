@@ -697,7 +697,7 @@ directory, readable or not, and never replaces a file; `task ls` and `doctor` na
 | `zmina task ls [--all] [--role r] [--json]` | active tasks (`--all`: closed too). |
 | `zmina task show <id> [--full]` | one task: what was asked and its latest note (each clipped to 300 characters), its handoff, result and checkpoint in one line each (revision, time, the summary's start), its cost line (see Usage) and its last 8 events, one line each. `--full`: the asked text, note, result and checkpoint whole and the last 20 events. Ids: `T-14`, `t-14` or `14`. |
 | `zmina task set <id> [state] [--on <who>] [--note …] [--role r] [--title …] [--project …] [--url …] [--budget …]` | change state, note, title, project, url or budget (`-` clears one), or hand it to another role. `waiting --on <who>`: it waits on someone other than the owner — a role of the crew or a person (`--on -`: the owner again); it stays off the owner's todo. Any other state clears it. |
-| `zmina task done <id>` / `task drop <id>` | close it, and print its cost line when turns are found for it. Refuses while its worktree has uncommitted changes (`--force` closes anyway; the worktree stays). |
+| `zmina task done <id>` / `task drop <id>` | close it, and print its cost line when turns are found for it; closed by a role, the dispatcher gets a signal with the note (see results). Refuses while its worktree has uncommitted changes (`--force` closes anyway; the worktree stays). |
 | `zmina task park <id> [--note "<what remains>"]` | move an active task to the later list: a new `L-n` with what remains (default: the task's title), note `from T-48 (designer)`, and the role and its conversation (the running one, else its last) for `later take --resume`. The task closes as `parked L-n`; its worktree stays as it is. `task set <id> parked` is refused: parking goes through here. Prints `T-48 · designer · parked L-15`, then its cost line. |
 | `zmina task gc [--dry-run]` | remove worktrees and branches of closed tasks once clean and merged into their base. `--force` also removes dropped tasks' unmerged branches. |
 
@@ -1187,6 +1187,12 @@ than 12 when another record starts the same). `task show` and the cockpit task s
 `dev: T-1 result ready (worker-reported): <the summary's first sentence> (zmina task result T-1 --revision <12 hex>)`
 (longer when another revision of the task starts the same); two revisions whose summaries start alike are two
 notices, and each command opens its own revision, not the latest; the ticker reconciles record files after a crash independently of task state or event-log retention. Legacy tasks can still close without a result. This does not send Telegram or authorize push/publish/deploy/merge.
+
+A role that closes a task (`task done` / `task drop`, `$ZMINA_ROLE` set, not the dispatcher) tells the dispatcher too,
+with its note: `dev: T-1 done: <note> (zmina task show T-1)` (`, no note` without one) — unless a result of the same
+assignment (saved since its packet was accepted, else since the task was made) told it already. The task keeps who
+closed it, when and with what note (`closed`, cleared when it is reopened); the ticker reconciles a closure the
+queue lost, once each. Closed by the owner's hand or by the dispatcher, or by a zmina that kept no closure: no signal.
 
 ### Task conversation memory
 
