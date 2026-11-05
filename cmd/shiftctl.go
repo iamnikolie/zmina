@@ -23,23 +23,28 @@ func (a *app) stopCommand() *cobra.Command {
 
 			fmt.Fprintln(a.out, "shift stopped: the ticker starts nothing until 'zmina start'")
 
-			return a.downRoles(func(s *shift.Shift) ([]string, error) {
-				var names []string
-
-				for _, v := range s.Views() {
-					if v.State == shift.PresenceUp || v.State == shift.PresenceDead {
-						names = append(names, v.Role)
-					}
-				}
-
-				return names, nil
-			}, shift.DownOptions{Force: true, Clear: clear}, true)
+			return a.downEveryRole(clear)
 		},
 	}
 
 	c.Flags().BoolVar(&clear, "clear", false, "drop drafts (C-c) and close dialogs (Escape) first instead of refusing")
 
 	return c
+}
+
+// downEveryRole puts every role that is up or dead down, the dispatcher too.
+func (a *app) downEveryRole(clear bool) error {
+	return a.downRoles(func(s *shift.Shift) ([]string, error) {
+		var names []string
+
+		for _, v := range s.Views() {
+			if v.State == shift.PresenceUp || v.State == shift.PresenceDead {
+				names = append(names, v.Role)
+			}
+		}
+
+		return names, nil
+	}, shift.DownOptions{Force: true, Clear: clear}, true)
 }
 
 func (a *app) startCommand() *cobra.Command {

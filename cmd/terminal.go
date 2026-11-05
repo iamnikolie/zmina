@@ -66,7 +66,7 @@ func (a *app) terminalHistory(ctx context.Context, node, key, role string, lines
 	if node == "" {
 		return a.localTerminalHistory(key, role, lines)
 	}
-	n, err := mesh.Open(meshDir())
+	n, err := openNode()
 	if err != nil {
 		return "", err
 	}
@@ -126,7 +126,7 @@ func (a *app) terminalList(ctx context.Context, node string) ([]mesh.TerminalTar
 	if node == "" {
 		return a.localTerminals()
 	}
-	n, err := mesh.Open(meshDir())
+	n, err := openNode()
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +139,7 @@ func (a *app) openTerminal(ctx context.Context, node, crew, role string, cols, r
 	if node == "" {
 		return a.localTerminal(ctx, crew, role, cols, rows)
 	}
-	n, err := mesh.Open(meshDir())
+	n, err := openNode()
 	if err != nil {
 		return nil, err
 	}

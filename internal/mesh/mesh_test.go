@@ -518,3 +518,65 @@ func TestOwnerLineAsSSHReadsIt(t *testing.T) {
 		assert.Regexp(t, `\nrequesttty (yes|true|force)\n`, string(out), line)
 	}
 }
+
+// A node tells how its crews stand in its signed hello, both ways; the session after an older zmina's says nothing
+// is known, and a name that is not plain never reaches anyone's terminal.
+func TestHelloTellsCrewHealth(t *testing.T) {
+	a := newOwner(t, "a")
+	b := enroll(t, a, "b")
+
+	addPeer(t, a, "b")
+
+	a.Health = func() []CrewHealth { return []CrewHealth{{Crew: "ops", TickAge: 10}} }
+	b.Health = func() []CrewHealth { return []CrewHealth{{Crew: "ops", Stopped: 3600, TickAge: 5, MovedTo: "c/ops"}} }
+
+	net := &pipes{nodes: map[string]*Node{"b": b}, inboxes: map[string]*inbox{"b": {}}, down: map[string]bool{}}
+
+	ss := a.Sync(context.Background(), net, []Discovery{Book{Node: a}}, (&inbox{}).deliver, "", time.Second, 0, time.Now)
+	require.Len(t, ss, 1)
+	require.NoError(t, ss[0].Err)
+
+	seen, err := a.Peers()
+	require.NoError(t, err)
+	require.Len(t, seen[0].Crews, 1)
+	assert.False(t, seen[0].Crews[0].Running())
+	assert.Equal(t, "stopped 1h ago", seen[0].Crews[0].Why())
+	assert.Equal(t, "c/ops", seen[0].Crews[0].MovedTo)
+	assert.False(t, seen[0].CrewsAt.IsZero())
+
+	other, err := b.Peers()
+	require.NoError(t, err)
+	require.Len(t, other, 1)
+	require.Len(t, other[0].Crews, 1)
+	assert.True(t, other[0].Crews[0].Running())
+
+	// An older zmina tells nothing: what was known of it is known no more.
+	b.Health = nil
+	ss = a.Sync(context.Background(), net, []Discovery{Book{Node: a}}, (&inbox{}).deliver, "", time.Second, 0, time.Now)
+	require.NoError(t, ss[0].Err)
+
+	seen, err = a.Peers()
+	require.NoError(t, err)
+	assert.Empty(t, seen[0].Crews)
+}
+
+func TestCrewHealthReading(t *testing.T) {
+	got := readCrewHealth([]byte(`[{"crew":"ops","tick_age":1,"moved_to":"x/y; rm"},{"crew":"bad name","tick_age":1},` +
+		`{"crew":"new","tick_age":1,"field_of_a_newer_zmina":true}]`))
+	require.Len(t, got, 2)
+	assert.Empty(t, got[0].MovedTo)
+	assert.Equal(t, "new", got[1].Crew)
+
+	assert.Nil(t, readCrewHealth([]byte(`not json`)))
+	assert.False(t, CrewHealth{Crew: "c", TickAge: -1}.Running())
+	assert.False(t, CrewHealth{Crew: "c", TickAge: 301}.Running())
+	assert.True(t, CrewHealth{Crew: "c", TickAge: 299}.Running())
+	assert.Equal(t, "retired", CrewHealth{Retired: true, TickAge: 1}.Why())
+}
+
+// A hello's crew health is signed over the other side's nonce and the bytes as sent.
+func TestCrewHealthSignatureBindsBytesAndNonce(t *testing.T) {
+	assert.NotEqual(t, crewsMessage("server", []byte{1}, []byte("[]")), crewsMessage("client", []byte{1}, []byte("[]")))
+	assert.NotEqual(t, crewsMessage("server", []byte{1}, []byte("[]")), crewsMessage("server", []byte{2}, []byte("[]")))
+	assert.NotEqual(t, crewsMessage("server", []byte{1}, []byte("[]")), crewsMessage("server", []byte{1}, []byte("[1]")))
+}

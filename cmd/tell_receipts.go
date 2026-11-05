@@ -131,7 +131,7 @@ func (a *app) reconcileTells(s *shift.Shift) error {
 	var errs []error
 
 	if len(all) > 0 {
-		me, err := mesh.Open(meshDir())
+		me, err := openNode()
 		if err != nil {
 			return err
 		}
@@ -255,7 +255,7 @@ func (a *app) reconcileTell(s *shift.Shift, store message.TellStore, me *mesh.No
 // applyTellReceipt records a receipt that came to crew c from from (verified): a receipt for a line this crew
 // holds no record of is taken and dropped, one that does not match the line is refused.
 func (a *app) applyTellReceipt(c uiCrew, from mesh.Address, r message.TellReceipt) error {
-	me, err := mesh.Open(meshDir())
+	me, err := openNode()
 	if err != nil {
 		return err
 	}
@@ -285,11 +285,21 @@ var tellStageWords = map[string]string{
 
 // tellSummary is where a sent line is, as its receipts say.
 func tellSummary(t message.TellOut, peer mesh.Peer, node string) string {
+	to, _ := mesh.ParseAddress(t.To)
+
 	if t.Stage != "" {
-		return fmt.Sprintf("%s %s", tellStageWords[t.Stage], t.Stages[t.Stage].Local().Format("15:04:05"))
+		line := fmt.Sprintf("%s %s", tellStageWords[t.Stage], t.Stages[t.Stage].Local().Format("15:04:05"))
+
+		// Queued is not read: say so while nobody is there to take it.
+		if t.Stage == "queued_dispatcher" {
+			if h, _, ok := standingIn(node, peer, to); ok && !h.Running() {
+				line += " (not running: " + h.Why() + ")"
+			}
+		}
+
+		return line
 	}
 
-	to, _ := mesh.ParseAddress(t.To)
 	if to.Node != node && !peer.TellReceipts {
 		return "no receipts: " + to.Node + " has not said it sends them (an older zmina, or not met directly)"
 	}
@@ -356,7 +366,7 @@ func (a *app) showTell(t message.TellOut) error {
 
 // tellBook is this node's name and address book, empty when it is not a node.
 func (a *app) tellBook() (string, []mesh.Peer) {
-	me, err := mesh.Open(meshDir())
+	me, err := openNode()
 	if err != nil {
 		return "", nil
 	}

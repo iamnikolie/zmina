@@ -57,7 +57,7 @@ func (s *Shift) Tick() []string {
 	s.NotifyClosed()
 	s.acceptanceAlerts()
 	held := s.held()
-	stopped := !s.State.Stopped.IsZero()
+	stopped := !s.State.Stopped.IsZero() || s.Crew.IsRetired()
 	s.State.LastTick = now
 
 	// Alarms first: a role an alarm starts is up for the rest of the beat.

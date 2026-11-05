@@ -101,7 +101,7 @@ func (a *app) nodeInit() *cobra.Command {
 				return json.NewEncoder(a.out).Encode(r)
 			}
 
-			if _, err := mesh.Open(meshDir()); err == nil {
+			if _, err := openNode(); err == nil {
 				fmt.Fprintf(a.out, "node %s · certified\n", name)
 
 				return nil
@@ -190,7 +190,7 @@ func (a *app) nodeEnroll() *cobra.Command {
 				return err
 			}
 
-			me, err := mesh.Open(meshDir())
+			me, err := openNode()
 			if err != nil {
 				return err
 			}
@@ -301,7 +301,7 @@ func (a *app) nodePeer() *cobra.Command {
 				return err
 			}
 
-			me, err := mesh.Open(meshDir())
+			me, err := openNode()
 			if err != nil {
 				return err
 			}
@@ -322,7 +322,7 @@ func (a *app) nodePeer() *cobra.Command {
 		Short: "Forget a peer (another node may tell of it again; its certificate still counts)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			me, err := mesh.Open(meshDir())
+			me, err := openNode()
 			if err != nil {
 				return err
 			}
@@ -365,8 +365,10 @@ type nodeView struct {
 	// Dispatchers maps a crew to its dispatcher's session name: the name a SendMessage from it shows, so a
 	// dispatcher can tell which <node>/<crew> to answer with zmina tell.
 	Dispatchers map[string]string `json:"dispatchers,omitempty"`
-	Peers       []mesh.Peer       `json:"peers"`
-	Outbox      []mesh.Envelope   `json:"outbox"`
+	// Health is how each crew of this node stands: what it tells its peers in a hello.
+	Health []mesh.CrewHealth `json:"health,omitempty"`
+	Peers  []mesh.Peer       `json:"peers"`
+	Outbox []mesh.Envelope   `json:"outbox"`
 }
 
 func (a *app) nodeLs() *cobra.Command {
@@ -377,12 +379,12 @@ func (a *app) nodeLs() *cobra.Command {
 		Short: "This node, its crews, the peers it knows and how the last try went, what waits to leave",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			me, err := mesh.Open(meshDir())
+			me, err := openNode()
 			if err != nil {
 				return err
 			}
 
-			v := nodeView{Name: me.Name, Owner: me.IsOwner(), Crews: crewKeys(), CrewFiles: crewFiles(), Dispatchers: crewDispatchers()}
+			v := nodeView{Name: me.Name, Owner: me.IsOwner(), Crews: crewKeys(), CrewFiles: crewFiles(), Dispatchers: crewDispatchers(), Health: crewHealth()}
 			if v.Peers, err = me.Peers(); err != nil {
 				return err
 			}
@@ -402,11 +404,16 @@ func (a *app) nodeLs() *cobra.Command {
 
 			crews := make([]string, 0, len(v.Crews))
 			for _, c := range v.Crews {
+				word := c
 				if d := v.Dispatchers[c]; d != "" {
-					c += " (" + d + ")"
+					word += " (" + d + ")"
 				}
 
-				crews = append(crews, c)
+				if i := slices.IndexFunc(v.Health, func(h mesh.CrewHealth) bool { return h.Crew == c }); i >= 0 && !v.Health[i].Running() {
+					word += " [" + v.Health[i].Why() + "]"
+				}
+
+				crews = append(crews, word)
 			}
 
 			fmt.Fprintf(a.out, "node %s%s · crews: %s\n", v.Name, owner, strings.Join(crews, ", "))
@@ -458,6 +465,21 @@ func peerLine(p mesh.Peer, now time.Time) string {
 		parts = append(parts, "failed: "+p.Err)
 	}
 
+	if len(p.Crews) > 0 {
+		crews := make([]string, 0, len(p.Crews))
+
+		for _, h := range p.Crews {
+			word := h.Crew
+			if !h.Running() {
+				word += " [" + h.Why() + "]"
+			}
+
+			crews = append(crews, word)
+		}
+
+		parts = append(parts, "crews: "+strings.Join(crews, ", ")+seenAgo(p.CrewsAt, now))
+	}
+
 	return strings.Join(parts, " · ")
 }
 
@@ -478,7 +500,7 @@ func (a *app) nodeSync() *cobra.Command {
 		Short: "One round now: meet every peer that has an address, hand what is for it, take what it has (the ticker does this every minute)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			me, err := mesh.Open(meshDir())
+			me, err := openNode()
 			if err != nil {
 				return err
 			}
@@ -549,7 +571,7 @@ func (a *app) nodeServe() *cobra.Command {
 				return errors.New("only --stdio: a peer runs this over ssh")
 			}
 
-			me, err := mesh.Open(meshDir())
+			me, err := openNode()
 			if err != nil {
 				return err
 			}
@@ -574,9 +596,9 @@ type stdioRW struct {
 
 func (a *app) tellCommand() *cobra.Command {
 	var reportKey, reportTask, file string
-	var status bool
+	var status, onPurpose bool
 	c := &cobra.Command{
-		Use:   "tell <node>[/<crew>] <text...>",
+		Use:   "tell [--queue] <node>[/<crew>] <text...>",
 		Short: "Send one line to another crew's dispatcher, on this node or another; it waits here until it gets there",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -591,13 +613,22 @@ func (a *app) tellCommand() *cobra.Command {
 				return err
 			}
 
-			me, err := mesh.Open(meshDir())
+			me, err := openNode()
 			if err != nil {
 				return err
 			}
 
 			body := strings.Join(strings.Fields(strings.Join(args[1:], " ")), " ")
 			from := mesh.Address{Node: me.Name, Crew: a.crewKey()}
+
+			// Told before anything is queued: a line for a crew that is not running would only look delivered.
+			reached := a.freshStanding(cmd.Context(), me, to)
+
+			if h, at, ok := crewStanding(me, to); ok && !h.Running() && !onPurpose {
+				cmd.SilenceUsage = true
+
+				return fmt.Errorf("%s. To queue it on purpose: zmina tell --queue %s <text>", notRunning(to, h, at), to)
+			}
 
 			if to.Node == me.Name {
 				id, err := inbox.NewID()
@@ -617,6 +648,7 @@ func (a *app) tellCommand() *cobra.Command {
 				}
 
 				fmt.Fprintf(a.out, "queued for %s's dispatcher%s\n", to, storedAs(stored, ""))
+				a.sayWaits(me, to)
 
 				if receipts {
 					// The receipt for the queued stage is in the outbox: take it in now.
@@ -655,8 +687,11 @@ func (a *app) tellCommand() *cobra.Command {
 
 			// Hand it over now, beside a round the ticker may hold open (a second copy is taken once); the ticker
 			// tries again within seconds otherwise.
-			ss := me.Sync(cmd.Context(), mesh.Exec{}, []mesh.Discovery{mesh.Book{Node: me}}, a.deliverFrom(),
-				to.Node, peerTimeout, 0, time.Now)
+			var ss []mesh.Session
+			if reached {
+				ss = me.Sync(cmd.Context(), mesh.Exec{}, []mesh.Discovery{mesh.Book{Node: me}}, a.deliverFrom(),
+					to.Node, peerTimeout, 0, time.Now)
+			}
 
 			// The hello just now told what the peer is; a long line is stored whole only by a zmina that says so.
 			peer = peerOf(me, to.Node)
@@ -678,7 +713,8 @@ func (a *app) tellCommand() *cobra.Command {
 
 			for _, s := range ss {
 				if s.Err == nil && !queued(me, e.ID) {
-					fmt.Fprintf(a.out, "delivered to %s%s\n%s", to, tail, hint)
+					fmt.Fprintf(a.out, "handed over to %s: it waits for that dispatcher%s\n%s", to, tail, hint)
+					a.sayWaits(me, to)
 
 					return nil
 				}
@@ -686,6 +722,7 @@ func (a *app) tellCommand() *cobra.Command {
 
 			fmt.Fprintf(a.out, "queued for %s: it goes with the next sync (the ticker, every minute) — zmina node ls%s\n%s",
 				to, tail, hint)
+			a.sayWaits(me, to)
 
 			return nil
 		},
@@ -694,8 +731,17 @@ func (a *app) tellCommand() *cobra.Command {
 	c.Flags().StringVar(&reportTask, "task", "", "related source task; include its latest result/checkpoint reference")
 	c.Flags().StringVar(&file, "file", "", "typed report body file, preserving formatting")
 	c.Flags().BoolVar(&status, "status", false, "allow this status revision to explicitly supersede the preceding status")
+	c.Flags().BoolVar(&onPurpose, "queue", false, "queue the line even though the crew is not running: it waits until someone starts it")
 	return c
 
+}
+
+// sayWaits follows a line queued on purpose for a crew that is not running: what the sender reads last is that nobody
+// has it yet.
+func (a *app) sayWaits(me *mesh.Node, to mesh.Address) {
+	if h, _, ok := crewStanding(me, to); ok && !h.Running() {
+		fmt.Fprintf(a.out, "%s is not running (%s): the line waits until someone starts it\n", to, h.Why())
+	}
 }
 
 func queued(me *mesh.Node, id string) bool {
@@ -813,7 +859,7 @@ func (a *app) noteRemote(c uiCrew, from mesh.Address, id, tellID, body string, s
 	text, long := remoteText(body, id)
 
 	// Not a node: nobody to send a receipt to.
-	me, _ := mesh.Open(meshDir())
+	me, _ := openNode()
 
 	err := a.forCrew(c.Path).withState(func(s *shift.Shift) error {
 		if long {
@@ -966,7 +1012,7 @@ const (
 // meshTick is the ticker's part: a sync round at most every syncEvery, by whichever crew's ticker gets there first.
 // It prints what moved and a peer's failure when it is new.
 func (a *app) meshTick() {
-	me, err := mesh.Open(meshDir())
+	me, err := openNode()
 	if errors.Is(err, mesh.ErrNoNode) {
 		return
 	}

@@ -31,7 +31,7 @@ func (a *app) uiTerminals(mux *http.ServeMux) {
 	})
 	mux.HandleFunc("GET /api/terminal/nodes", func(w http.ResponseWriter, r *http.Request) {
 		nodes := []terminalNode{{Name: "", Local: true}}
-		if n, err := mesh.Open(meshDir()); err == nil {
+		if n, err := openNode(); err == nil {
 			nodes[0].Name = n.Name
 			if peers, err := n.Peers(); err == nil {
 				for _, p := range peers {

@@ -72,7 +72,7 @@ func newUIPeerCache() *uiPeerCache {
 
 // meshPeers is this node's name and its address book; why says when the peers cannot be read from here.
 func meshPeers() (string, []mesh.Peer, string) {
-	n, err := mesh.Open(meshDir())
+	n, err := openNode()
 	if err != nil {
 		return "", nil, ""
 	}
@@ -86,7 +86,7 @@ func meshPeers() (string, []mesh.Peer, string) {
 }
 
 func meshFetch(ctx context.Context, node, kind string) ([]byte, error) {
-	n, err := mesh.Open(meshDir())
+	n, err := openNode()
 	if err != nil {
 		return nil, err
 	}

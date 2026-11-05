@@ -109,11 +109,22 @@ func (a *app) taskLsCommand() *cobra.Command {
 	)
 
 	c := &cobra.Command{
-		Use:   "ls",
-		Short: "Active tasks (open, waiting); --all also the closed ones (done, dropped, parked)",
-		Args:  cobra.NoArgs,
+		Use:   "ls [<node>/<crew>]",
+		Short: "Active tasks (open, waiting); --all also the closed ones (done, dropped, parked); <node>/<crew>: another crew's",
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			done, args, err := a.remote(cmd, args, false)
+			if done || err != nil {
+				return err
+			}
+
+			if len(args) != 0 {
+				return fmt.Errorf("unknown argument %q: task ls takes only a <node>/<crew> address", args[0])
+			}
+
 			return a.readState(func(s *shift.Shift) error {
+				a.warnStanding(s)
+
 				tasks, problems, err := taskStore(s.Crew).Scan()
 				if err != nil {
 					return err
@@ -165,11 +176,22 @@ func (a *app) taskShowCommand() *cobra.Command {
 	var asJSON, full bool
 
 	c := &cobra.Command{
-		Use:   "show <id>",
-		Short: "One task: what was asked (clipped), its note, result and the last events (--full: all of it)",
-		Args:  cobra.ExactArgs(1),
+		Use:   "show [<node>/<crew>] <id>",
+		Short: "One task: what was asked (clipped), its note, result and the last events (--full: all of it); <node>/<crew>: another crew's",
+		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			done, args, err := a.remote(cmd, args, false)
+			if done || err != nil {
+				return err
+			}
+
+			if len(args) != 1 {
+				return fmt.Errorf("task show takes one task, or <node>/<crew> and one task; got %d arguments", len(args))
+			}
+
 			return a.readState(func(s *shift.Shift) error {
+				a.warnStanding(s)
+
 				t, err := taskStore(s.Crew).Get(args[0])
 				if err != nil {
 					return err

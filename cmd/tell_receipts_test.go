@@ -108,10 +108,12 @@ func TestTellReceiptsAcrossNodes(t *testing.T) {
 	_, _, err = zm(t, from, "node", "peer", "add", "box", "--cmd", script)
 	require.NoError(t, err)
 
+	beat(t, ops)
+
 	out, _, err := zm(t, from, "tell", "box/ops", "deploy steps for the first dev deploy")
 	require.NoError(t, err)
 
-	m := regexp.MustCompile(`^delivered to box/ops\nreceipts: queued for its dispatcher; zmina message show (\S+) \(queued, submitted, read as the far dispatcher takes it\)\n$`).FindStringSubmatch(out)
+	m := regexp.MustCompile(`^handed over to box/ops: it waits for that dispatcher\nreceipts: queued for its dispatcher; zmina message show (\S+) \(queued, submitted, read as the far dispatcher takes it\)\n$`).FindStringSubmatch(out)
 	require.NotNil(t, m, out)
 	id := m[1]
 

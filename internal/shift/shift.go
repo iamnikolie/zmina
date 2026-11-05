@@ -164,6 +164,10 @@ type Shift struct {
 	Warn func(error)
 
 	warned bool
+	// OtherCrews names the crews of this crew's name elsewhere, each with how it stands; nil when none are known.
+	OtherCrews func() []string
+	// lastStop is the stop Start just lifted: the boot it goes on to is still the boot of a crew that stood still.
+	lastStop time.Time
 }
 
 // Presence is where a role is.
@@ -451,6 +455,10 @@ func (s *Shift) bootText(r *crew.Role, tagged bool) string {
 	}
 	if r.Name != "" && r.Name == s.Crew.Dispatcher {
 		text = strings.TrimSpace(text + "\n\n" + RemoteRule)
+	}
+	// A retired crew tells every role; a crew that stood still tells whoever reads its ledger first.
+	if n := s.Standing(); n != "" && (s.Crew.IsRetired() || r.Name == s.Crew.Dispatcher) {
+		text = strings.TrimSpace(text + "\n\n[zmina] " + n)
 	}
 	if s.inbound(r) {
 		tag := ""
@@ -1311,8 +1319,14 @@ func (s *Shift) Stop() {
 	s.log("", "stop", "", "")
 }
 
-// Start lifts a stop and starts the dispatcher if it is down.
+// Start lifts a stop and starts the dispatcher if it is down. A retired crew stays stopped until the mark is off: a
+// second copy of a crew that went on elsewhere is what the mark is there to prevent.
 func (s *Shift) Start() error {
+	if s.Crew.IsRetired() {
+		return errors.New(s.Crew.RetiredLine() + "; to run this one again: zmina retire --off, then zmina start")
+	}
+
+	s.lastStop = s.State.Stopped
 	s.State.Stopped = time.Time{}
 	s.log("", "start", "", "")
 
