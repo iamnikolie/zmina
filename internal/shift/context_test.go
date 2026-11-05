@@ -263,3 +263,37 @@ func TestTrimUnseenIsLetGo(t *testing.T) {
 	f.s.Tick()
 	assert.Equal(t, 2, compactCount(f.tm.typed["dispatcher"]))
 }
+
+// A compaction seen once is remembered for this trim: a long first turn after it may push its boundary out of the
+// part of the transcript read, and its size is still the trim's base — over the limit, the conversation is left be.
+func TestTrimRemembersItsCompaction(t *testing.T) {
+	f := fixtureWith(t, trimCrew)
+	f.s.Tick()
+
+	*f.now = f.now.Add(10 * time.Minute)
+	f.rg.context["sid-dispatcher"] = 200_000
+	f.status("dispatcher", "idle", f.now.Add(-10*time.Minute))
+	f.s.Tick()
+	require.Equal(t, 1, compactCount(f.tm.typed["dispatcher"]))
+
+	*f.now = f.now.Add(time.Minute)
+	f.rg.compacted["sid-dispatcher"] = *f.now
+	f.rg.context["sid-dispatcher"] = 0
+	f.s.Tick()
+	assert.True(t, f.s.State.Role("dispatcher").TrimTook)
+
+	delete(f.rg.compacted, "sid-dispatcher") // out of the tail read
+	f.rg.context["sid-dispatcher"] = 180_000
+	*f.now = f.now.Add(time.Minute)
+	did := f.s.Tick()
+	assert.Contains(t, strings.Join(did, "\n"), "dispatcher: fills 180k right after a trim")
+	rs := f.s.State.Role("dispatcher")
+	assert.False(t, rs.TrimPending)
+	assert.Equal(t, 180_000, rs.TrimBase)
+
+	*f.now = f.now.Add(35 * time.Minute)
+	f.status("dispatcher", "idle", f.now.Add(-10*time.Minute))
+	f.s.Tick()
+	assert.Equal(t, 1, compactCount(f.tm.typed["dispatcher"]), "not trimmed again in this conversation")
+	assert.False(t, f.ev.has("dispatcher", "trim-unseen"))
+}

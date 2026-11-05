@@ -398,7 +398,7 @@ func TestOversizedQueuedLineGoesBounded(t *testing.T) {
 }
 
 // A slash command queued with --when-idle is the command alone: the session runs it, nothing acks it, so it is never
-// said again (a /compact said again every renotify compacted again). One tracked by an earlier zmina is let go.
+// said again (a /compact said again every renotify compacted again).
 func TestQueuedSlashCommandIsNotTracked(t *testing.T) {
 	f, _ := nativeFixture(t, crewYAML)
 	upNative(t, f, "designer")
@@ -409,14 +409,50 @@ func TestQueuedSlashCommandIsNotTracked(t *testing.T) {
 	assert.Empty(t, id)
 	assert.Equal(t, []string{"/compact"}, f.s.State.Role("designer").Inbox)
 	assert.Empty(t, f.s.State.Acks)
+}
 
-	old, err := f.s.QueueTracked("designer", "[dispatcher] look at T-1")
-	require.NoError(t, err)
-	a := f.s.State.Acks[old]
-	a.Text, a.First, a.Last = "/compact", f.now.Add(-time.Hour), f.now.Add(-time.Hour)
-	f.s.State.Role("designer").Inbox = nil
-	f.s.renotify(*f.now)
-	assert.Empty(t, f.s.State.Acks)
-	assert.Empty(t, f.s.State.Role("designer").Inbox, "not said again")
-	assert.True(t, f.ev.has("designer", "ack-dropped"))
+// A slash command an earlier zmina tracked is let go with its queued and failed copies, known by their ids: once typed
+// they go; never typed, it stays queued as the command alone.
+func TestLegacyTrackedSlashCommandIsLetGo(t *testing.T) {
+	legacy := func(f fix, first time.Time) (string, string) {
+		rs := f.s.State.Role("designer")
+		line, id := f.s.trackLine("designer", "/compact")
+		a := f.s.State.Acks[id]
+		a.First, a.Last, a.Renotes = first, first, 1
+		if !first.IsZero() {
+			line = "/compact" + f.s.lineSuffix(a) // the copy renotify queued
+			f.s.carryIDs("designer", line, []string{id})
+		}
+		rs.Inbox = append(rs.Inbox, line, "[dispatcher] next")
+		rs.Failed = append(rs.Failed, Failed{Line: line, IDs: []string{id}, At: *f.now})
+		return line, id
+	}
+
+	t.Run("typed", func(t *testing.T) {
+		f, _ := nativeFixture(t, crewYAML)
+		upNative(t, f, "designer")
+		legacy(f, f.now.Add(-time.Hour))
+
+		f.s.renotify(*f.now)
+		rs := f.s.State.Role("designer")
+		assert.Empty(t, f.s.State.Acks)
+		assert.Equal(t, []string{"[dispatcher] next"}, rs.Inbox, "typed once already: not again")
+		assert.Empty(t, rs.Failed)
+		assert.Empty(t, rs.QueuedIDs)
+	})
+
+	t.Run("never typed", func(t *testing.T) {
+		f, _ := nativeFixture(t, crewYAML)
+		upNative(t, f, "designer")
+		legacy(f, time.Time{})
+
+		f.s.renotify(*f.now)
+		rs := f.s.State.Role("designer")
+		assert.Empty(t, f.s.State.Acks)
+		assert.Equal(t, []string{"/compact", "[dispatcher] next"}, rs.Inbox, "the command alone, once")
+		require.Len(t, rs.Failed, 1)
+		assert.Equal(t, Failed{Line: "/compact", At: *f.now}, rs.Failed[0])
+		assert.Empty(t, rs.QueuedIDs)
+		assert.True(t, f.ev.has("designer", "ack-dropped"))
+	})
 }

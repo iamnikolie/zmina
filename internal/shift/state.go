@@ -129,6 +129,9 @@ type RoleState struct {
 	Trimmed     time.Time `json:"trimmed,omitzero"`
 	TrimPending bool      `json:"trim_pending,omitempty"`
 	TrimFrom    string    `json:"trim_from,omitempty"`
+	// TrimTook is set once this trim's compaction or new conversation showed: from then on its first size is
+	// awaited without seeing that compaction again (a long first turn may push it out of the part read).
+	TrimTook bool `json:"trim_took,omitempty"`
 	TrimSession string    `json:"trim_session,omitempty"`
 	TrimBase    int       `json:"trim_base,omitempty"`
 	// NoPrompt is since when the role's screen has shown no input line (a dialog, a login, a crash); BlockedNoted
