@@ -28,7 +28,8 @@ const W = {
   notSent: "Not sent: ", rec: "Recommended: ", more: (n) => n + " more", less: "show less", hands: "By hand:",
   waits: (r) => "waits on " + r, from: (r) => "from " + r, doneText: "done", waitOn: (n, who) => n + " waiting on " + who,
   setAside: (n) => n + " set aside by you",
-  doneToday: "done today: ", history: "history", historyH: "What happened",
+  doneToday: "done today: ", history: "history", historyH: "What happened", andHistory: "and history",
+  allN: (n) => "All " + n, olderWeek: "Older than a week", thisWeek: "This week", comesBack: "Comes back", doneTab: "Done today", historyTab: "History",
   shift: "shift", kb: "tasks", kbGo: "in progress", kbYou: "waiting on you", kbOthers: "waiting on others", kbLater: "parked", kbNone: "empty", stack: "stack", spread: "spread", moreN: (n) => "+" + n + " more", stackIdle: "stack idle", idleN: (n) => "+" + n + " idle",
   fullView: "open on the whole screen", close: "close", fvNow: "Now", fvAsked: "Asked", fvResult: "Result", fvNoResult: "No result recorded.", fvReported: "Worker report", fvLog: "Timeline", fvMove: "Your move",
   fvDetails: "Details", fvScreen: "Screen", fvHolder: "held by", fvWaits: "waits on", fvProject: "project", fvCrew: "crew",
@@ -1004,15 +1005,20 @@ function renderCockpit(hold, asks, others, parked) {
     [W.ask, asks.length, asks.length ? W.withRec(asks.filter((it) => it.rec).length) : W.noAsk, "ink"],
     [W.go, up.filter((r) => r.status === "busy").length, W.upOf(up.length, roles.length), "busy"],
     [W.others, others.length, others.length ? W.people(persons) : W.nobody, "dim"],
-    [W.later, parked.length, W.noDue, "dim"],
-    [W.roDone, crews.reduce((n, c) => n + (c.done_today || 0), 0), multi() ? crews.map((c) => crewLabel(c.key) + " " + (c.done_today || 0)).join(" · ") : "", "dim"],
+    [W.later, parked.length, parked.length ? W.oldest.trim() + " " + dur(Math.max(...parked.map((it) => nowMs() - T(it.created)))) : W.noDue, "dim", "", "", "parked"],
+    [W.roDone, crews.reduce((n, c) => n + (c.done_today || 0), 0), W.andHistory, "dim", "", "", "done"],
   ];
   // Spent today is a readout like the others: dark at nothing, its week and «API-equivalent» under it.
   const today = spent(crews, "today");
   const week = spent(crews, "week");
   cells.push([W.roSpent, today, week ? W.spentWeek(money(week)) : W.spentNone, "dim", money(today), W.spentTip]);
-  patch($("strip"), cells.map(([label, n, sub, cls, shown, tip]) => {
-    const ro = el("div", "ro " + cls + (n ? " lit" : " dark"));
+  patch($("strip"), cells.map(([label, n, sub, cls, shown, tip, opens]) => {
+    const ro = el(opens ? "button" : "div", "ro " + cls + (n ? " lit" : " dark") + (opens ? " opens" : ""));
+    if (opens) {
+      ro.type = "button";
+      ro.setAttribute("aria-expanded", side && side.kind === opens ? "true" : "false");
+      ro.addEventListener("click", (e) => (side && side.kind === opens ? closeTalk() : openList(opens, e.currentTarget)));
+    }
     ro.append(el("span", "ro-l", label), el("span", "ro-n", shown || String(n)), el("span", "ro-s", sub));
     if (tip) ro.title = tip;
     return ro;
@@ -1211,11 +1217,10 @@ function renderBoard(parked) {
   const busy = (w) => w.role_state === "up" && w.status === "busy";
   const cols = [
     ["go", W.kbGo, work.filter((w) => w.lane === "go").sort((a, b) => busy(b) - busy(a) || T(b.updated) - T(a.updated))],
-    ["you", W.kbYou, work.filter((w) => w.lane === "you").sort((a, b) => T(a.updated) - T(b.updated))],
     ["others", W.kbOthers, work.filter((w) => w.lane === "others")],
-    ["later", W.kbLater, parked.filter((it) => !gone(key(it.crew, it.id))).sort((a, b) => T(b.updated) - T(a.updated))],
   ];
-  $("kb-cols").style.gridTemplateColumns = cols.map(([, , ws]) => (ws.length ? "minmax(0, 1fr)" : "3rem")).join(" ");
+  // Two columns (D-07 r2, r3): what waits on you is first in your move, parked is a readout that opens its list.
+  $("kb-cols").style.gridTemplateColumns = cols.map(([lane, , ws]) => (!ws.length ? "3rem" : lane === "go" ? "minmax(0, 1.4fr)" : "minmax(0, 1fr)")).join(" ");
   patch($("kb-cols"), cols.map(([lane, label, ws]) => {
     const col = el("div", "kb-col" + (ws.length ? "" : " empty"));
     const h = el("div", "kb-ch");
@@ -1519,10 +1524,7 @@ function renderFull() {
   box.replaceChildren(sheet);
 }
 
-function openHistory() {
-  $("history").hidden = false;
-  render();
-}
+function openHistory() { openList("done", null, "history"); }
 
 // ---- L6 · the bottom line; the history drawer
 
@@ -1530,8 +1532,8 @@ function renderFoot() {
   const done = snap.crews.filter((c) => shows(c.key)).reduce((n, c) => n + (c.done_today || 0), 0);
   const line = el("span", "", W.doneToday);
   line.append(el("b", "", String(done)));
-  const h = button("r", W.history, () => { $("history").hidden = !$("history").hidden; render(); });
-  h.setAttribute("aria-expanded", $("history").hidden ? "false" : "true");
+  const h = button("r", W.history, () => (side && side.kind === "done" ? closeTalk() : openHistory()));
+  h.setAttribute("aria-expanded", side && side.kind === "done" ? "true" : "false");
   patch($("foot"), [line, h]);
 }
 
@@ -1601,10 +1603,15 @@ function feedLine(e, answered) {
 
 function renderFeed() {
   setText($("history-h"), W.historyH);
-  const evs = snap.log.filter((e) => shows(e.crew));
+  patch($("feed"), feedRows());
+}
+
+// feedRows is the history, a line per event, newest first; only shows those today's Done list keeps.
+function feedRows(only) {
+  const evs = snap.log.filter((e) => shows(e.crew) && (!only || only(e)));
   // An ask and its answer are one line: the answer.
   const answered = new Set(evs.filter((e) => e.event === "answered").map((e) => e.crew + "/" + ((e.detail || "").match(/^(A-\d+)/) || [])[1]));
-  patch($("feed"), evs.map((e) => feedLine(e, answered)).filter(Boolean).map((e) => {
+  return evs.map((e) => feedLine(e, answered)).filter(Boolean).map((e) => {
     const row = el("div", "e");
     const t = el("time", "", hhmm(e.ts));
     t.title = new Date(e.ts).toLocaleString();
@@ -1618,7 +1625,7 @@ function renderFeed() {
     if (by) s.append(el("i", "", " · " + who(e.crew, by)));
     row.append(t, s);
     return row;
-  }));
+  });
 }
 
 $("say").addEventListener("click", (e) => {
@@ -1657,7 +1664,7 @@ function talkTarget() {
 }
 
 function openTalk(crewKey, role, from) {
-  side = { crew: crewKey, role };
+  side = { kind: "talk", crew: crewKey, role };
   lastTalk = side;
   sideFrom = from || document.activeElement;
   const c = crewOf(crewKey);
@@ -1670,10 +1677,26 @@ function openTalk(crewKey, role, from) {
   $("side-full").href = "chat.html?" + q;
   $("side-term").href = "terminals.html?" + new URLSearchParams({ node, crew, role, view: "terminal" });
   $("history").hidden = true;
+  showSide(true);
+  $("talk-open").setAttribute("aria-expanded", "true");
+}
+
+// openList opens Parked or Done today in the panel; tab picks Done's History.
+function openList(kind, from, tab) {
+  side = { kind, f: "all", tab: tab || "done" };
+  sideFrom = from || document.activeElement;
+  $("talk-open").setAttribute("aria-expanded", "false");
+  showSide(false);
+}
+
+function showSide(talking) {
+  $("side-frame").hidden = !talking;
+  $("side-list").hidden = talking;
+  $("side-pick").parentElement.hidden = !talking;
+  $("side-term").hidden = $("side-full").hidden = !talking;
   placeSide();
   $("side").hidden = false;
-  renderSide();
-  $("talk-open").setAttribute("aria-expanded", "true");
+  render();
   $("side-close").focus();
 }
 
@@ -1690,10 +1713,12 @@ function closeTalk() {
 function renderSide() {
   if (!side || !snap) return;
   placeSide();
+  if (side.kind !== "talk") { renderList(); return; }
   const r = roleOf(side.crew, side.role);
   const busy = r && r.status === "busy";
   const need = r && (r.prompt || r.stuck);
   const lamp = $("side-lamp");
+  lamp.hidden = false;
   lamp.className = "lamp" + (busy ? " busy" : "");
   const g = glyph(r ? r.icon : "generic");
   if (g) patch(lamp, [g]);
@@ -1716,6 +1741,54 @@ function renderSide() {
     });
     pick.replaceChildren(...groups);
   }
+}
+
+// renderList is the panel's Parked (filter chips, older than a week first) or Done today (by crew) with its History tab.
+function renderList() {
+  const head = side.kind === "parked" ? W.later : W.doneTab;
+  $("side-lamp").hidden = true;
+  patch($("side-who"), [head]);
+  const out = [];
+  if (side.kind === "parked") {
+    const all = snap.later.filter((it) => shows(it.crew) && !gone(key(it.crew, it.id)));
+    const old = (it) => nowMs() - T(it.created) > 7 * 24 * HOUR;
+    // Comes back: an alarm (later add --until) will bring it back to the owner's todo.
+    const back = (it) => (snap.alarms || []).some((a) => a.crew === it.crew && a.later === it.id);
+    const fl = el("div", "fl");
+    for (const [f, label, n] of [["all", W.allN(all.length)], ["old", W.olderWeek + " " + all.filter(old).length], ["back", W.comesBack + " " + all.filter(back).length]]) {
+      const b = button("", label + (n || ""), () => { side.f = f; render(); });
+      b.setAttribute("aria-pressed", side.f === f ? "true" : "false");
+      fl.append(b);
+    }
+    out.push(fl);
+    const shown = all.filter((it) => (side.f === "old" ? old(it) : side.f === "back" ? back(it) : true)).sort((a, b) => T(a.created) - T(b.created));
+    for (const [label, items] of [[W.olderWeek, shown.filter(old)], [W.thisWeek, shown.filter((it) => !old(it))]]) {
+      if (!items.length) continue;
+      out.push(el("div", "gh", label));
+      const rows = el("div", "rows");
+      rows.append(...items.map(laterRow));
+      out.push(rows);
+    }
+  } else {
+    const fl = el("div", "fl");
+    for (const [t, label] of [["done", W.doneTab], ["history", W.historyTab]]) {
+      const b = button("", label, () => { side.tab = t; render(); });
+      b.setAttribute("aria-pressed", side.tab === t ? "true" : "false");
+      fl.append(b);
+    }
+    out.push(fl);
+    if (side.tab === "history") out.push(...feedRows());
+    else {
+      const today = new Date(nowMs()).toDateString();
+      const done = (e) => e.event === "task" && taskChange(e.detail || "").state === "done" && new Date(e.ts).toDateString() === today;
+      for (const c of snap.crews.filter((c) => shows(c.key))) {
+        const rows = feedRows((e) => e.crew === c.key && done(e));
+        if (!rows.length) continue;
+        out.push(el("div", "gh", crewLabel(c.key) || c.name), ...rows);
+      }
+    }
+  }
+  patch($("side-list"), out);
 }
 
 $("side-pick").addEventListener("change", (e) => {
