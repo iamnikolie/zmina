@@ -99,10 +99,11 @@ func Command(ctx context.Context, a Addr, args ...string) *exec.Cmd {
 }
 
 // OwnerCommand runs the peer's zmina at a with args for the owner at this terminal (zmina ls/peek/attach <node>/<crew>),
-// never asking for a password: ssh, the --ssh address or a command line that starts with ssh, runs with
+// never letting ssh ask for a password: ssh, the --ssh address or a command line whose first word is ssh, runs with
 // BatchMode=yes ahead of the line's own options (ssh takes an option's first value), and with tty a terminal is
 // requested (-t just before the host, after any -T or RequestTTY of the line). Any other command line runs as it is.
-func OwnerCommand(ctx context.Context, a Addr, tty bool, args ...string) *exec.Cmd {
+// An ssh line this cannot change safely (ownerLine) is refused.
+func OwnerCommand(ctx context.Context, a Addr, tty bool, args ...string) (*exec.Cmd, error) {
 	words := strings.Join(args, " ")
 	if a.SSH != "" {
 		argv := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=10"}
@@ -111,35 +112,46 @@ func OwnerCommand(ctx context.Context, a Addr, tty bool, args ...string) *exec.C
 		}
 
 		return exec.CommandContext(ctx, "ssh", append(argv, "--", a.SSH,
-			`PATH="$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:$PATH" zmina `+words)...)
+			`PATH="$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:$PATH" zmina `+words)...), nil
 	}
 
-	return exec.CommandContext(ctx, "sh", "-c", ownerLine(a.Cmd, tty)+" "+words)
+	line, err := ownerLine(a.Cmd, tty)
+	if err != nil {
+		return nil, err
+	}
+
+	return exec.CommandContext(ctx, "sh", "-c", line+" "+words), nil
 }
 
 // sshArgOpts are ssh's one-letter options that take an argument.
 const sshArgOpts = "BbcDEeFIiJLlmOoPpQRSWw"
 
-// ownerLine is a command line address made safe for the owner's terminal: one that starts with ssh gets
-// -o BatchMode=yes first and, with tty, -t before its host. Its words are split on blanks, as the owner wrote them.
-func ownerLine(line string, tty bool) string {
-	f := strings.Fields(line)
-	if len(f) == 0 || f[0] != "ssh" {
-		return line
+// shellSpecial is what makes a command line more than words split on blanks: quotes, escapes, expansions that may
+// split or join words, operators. A ~ stays one word.
+const shellSpecial = "'\"\\$`;&|<>(){}*?[]#!\n\r"
+
+// ownerLine is a command line address made safe for the owner's terminal: one whose first word is ssh gets
+// -o BatchMode=yes after it and, with tty, -t before its host, inserted into the line as written. Only a plain line
+// is changed — words split on blanks, nothing a shell would read otherwise (shellSpecial); an ssh line with quotes,
+// escapes or expansions is refused, since its words cannot be told without a shell. Other lines run as written.
+func ownerLine(line string, tty bool) (string, error) {
+	spans := regexp.MustCompile(`[^ \t]+`).FindAllStringIndex(line, -1)
+	if len(spans) == 0 || line[spans[0][0]:spans[0][1]] != "ssh" {
+		return line, nil
 	}
 
-	out := []string{"ssh", "-o", "BatchMode=yes"}
+	if strings.ContainsAny(line, shellSpecial) {
+		return "", fmt.Errorf("the command line %q has quotes, escapes or shell syntax, so zmina cannot add BatchMode "+
+			"and a terminal to its ssh safely: add the node with --ssh [user@]host instead, and put ssh options in "+
+			"~/.ssh/config", line)
+	}
 
-	host := len(f)
-	for i := 1; i < len(f); i++ {
-		w := f[i]
-		if w == "--" {
-			host = i
+	word := func(i int) string { return line[spans[i][0]:spans[i][1]] }
 
-			break
-		}
-
-		if len(w) < 2 || w[0] != '-' {
+	host := len(spans)
+	for i := 1; i < len(spans); i++ {
+		w := word(i)
+		if w == "--" || len(w) < 2 || w[0] != '-' {
 			host = i
 
 			break
@@ -157,12 +169,14 @@ func ownerLine(line string, tty bool) string {
 		}
 	}
 
-	out = append(out, f[1:min(host, len(f))]...)
-	if tty {
-		out = append(out, "-t")
+	out := line[:spans[0][1]] + " -o BatchMode=yes"
+	if !tty || host >= len(spans) {
+		return out + line[spans[0][1]:], nil
 	}
 
-	return strings.Join(append(out, f[min(host, len(f)):]...), " ")
+	at := spans[host][0]
+
+	return out + line[spans[0][1]:at] + "-t " + line[at:], nil
 }
 
 type cmdStream struct {

@@ -78,12 +78,12 @@ func (a *app) remote(cmd *cobra.Command, args []string, interactive bool) (bool,
 		return false, nil, err
 	}
 
-	if err := checkFarCrew(addr, ad); err != nil {
+	selector, err := farCrew(addr, ad)
+	if err != nil {
 		return false, nil, err
 	}
 
-	// Always named, the default crew too (--config default): the far zmina's $ZMINA_CREW never picks the crew.
-	words := []string{"--config", ad.Crew}
+	words := []string{}
 
 	words = append(words, cmd.Name())
 	words = append(words, rest...)
@@ -102,16 +102,21 @@ func (a *app) remote(cmd *cobra.Command, args []string, interactive bool) (bool,
 		}
 	}
 
+	words = append(selector, words...)
+
 	var c *exec.Cmd
 	if interactive {
 		if !term.IsTerminal(int(os.Stdin.Fd())) {
 			return false, nil, fmt.Errorf("no terminal here; run it in one: zmina %s %s", cmd.Name(), strings.Join(args, " "))
 		}
 
-		c = mesh.OwnerCommand(context.Background(), addr, true, words...)
+		if c, err = mesh.OwnerCommand(context.Background(), addr, true, words...); err != nil {
+			return false, nil, fmt.Errorf("%s: %w", ad.Node, err)
+		}
+
 		c.Stdin = os.Stdin
-	} else {
-		c = mesh.OwnerCommand(context.Background(), addr, false, words...)
+	} else if c, err = mesh.OwnerCommand(context.Background(), addr, false, words...); err != nil {
+		return false, nil, fmt.Errorf("%s: %w", ad.Node, err)
 	}
 
 	c.Stdout, c.Stderr = a.out, a.err
@@ -150,9 +155,10 @@ func peerAddr(me *mesh.Node, name string) (mesh.Addr, error) {
 
 	p := peers[i]
 	for _, ad := range p.Addrs {
-		if f := strings.Fields(ad.Cmd); slices.ContainsFunc(f, func(w string) bool { return w == "--crew" || strings.HasPrefix(w, "--crew=") }) {
-			return mesh.Addr{}, fmt.Errorf("node %q: its address picks a crew file itself (--crew in %q), so no crew of it can "+
-				"be named; give it a command line that ends in zmina (zmina node peer add %s --cmd …)", name, ad.Cmd, name)
+		if f := strings.Fields(ad.Cmd); slices.ContainsFunc(f, picksCrew) {
+			return mesh.Addr{}, fmt.Errorf("node %q: its address picks a crew itself (--crew or --config in %q), so no "+
+				"crew of it can be named; give it a command line that ends in zmina (zmina node peer add %s --cmd …)",
+				name, ad.Cmd, name)
 		}
 	}
 
@@ -169,13 +175,27 @@ func peerAddr(me *mesh.Node, name string) (mesh.Addr, error) {
 	return p.Addrs[0], nil
 }
 
-// checkFarCrew asks the far node for its crews (zmina node ls --json there) and refuses a crew it does not have. A
-// far zmina too old to list them is left to say so itself.
-func checkFarCrew(addr mesh.Addr, ad mesh.Address) error {
+// picksCrew is a word of a command line that selects a crew file.
+func picksCrew(w string) bool {
+	return w == "--crew" || w == "--config" || strings.HasPrefix(w, "--crew=") || strings.HasPrefix(w, "--config=")
+}
+
+// farPath is a crew file path the far node reports that may go to its command line as it is.
+var farPath = regexp.MustCompile(`^/[A-Za-z0-9._/-]+$`)
+
+// farCrew asks the far node for its crews (zmina node ls --json there) and returns the words that select the one the
+// address names: --crew <its file> when the far node says where its crews are (every zmina reads --crew alike, and
+// $ZMINA_CREW there cannot pick another crew), else --config <crew> for a named crew — what every zmina reads as
+// ~/.zmina/<crew>. A far zmina that names no files cannot be told its default crew apart from its $ZMINA_CREW or a
+// crew dir named default, so <node>/default is refused there, never guessed.
+func farCrew(addr mesh.Addr, ad mesh.Address) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), remoteLookup)
 	defer cancel()
 
-	c := mesh.OwnerCommand(ctx, addr, false, "node", "ls", "--json")
+	c, err := mesh.OwnerCommand(ctx, addr, false, "node", "ls", "--json")
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", ad.Node, err)
+	}
 
 	var errb bytes.Buffer
 	c.Stderr = &errb
@@ -183,22 +203,36 @@ func checkFarCrew(addr mesh.Addr, ad mesh.Address) error {
 	out, err := c.Output()
 	if err != nil {
 		if msg := strings.TrimSpace(errb.String()); msg != "" {
-			return fmt.Errorf("%s: %s", ad.Node, msg)
+			return nil, fmt.Errorf("%s: %s", ad.Node, msg)
 		}
 
-		return fmt.Errorf("%s: %w", ad.Node, err)
+		return nil, fmt.Errorf("%s: %w", ad.Node, err)
 	}
 
 	var v struct {
-		Crews []string `json:"crews"`
+		Crews     []string          `json:"crews"`
+		CrewFiles map[string]string `json:"crew_files"`
 	}
-	if json.Unmarshal(out, &v) != nil || v.Crews == nil {
-		return nil
-	}
-
-	if !slices.Contains(v.Crews, ad.Crew) {
-		return fmt.Errorf("no crew %q on node %s (crews: %s)", ad.Crew, ad.Node, strings.Join(v.Crews, ", "))
+	if err := json.Unmarshal(out, &v); err != nil {
+		return nil, fmt.Errorf("%s: its zmina node ls --json does not read: %w", ad.Node, err)
 	}
 
-	return nil
+	if v.Crews != nil && !slices.Contains(v.Crews, ad.Crew) {
+		return nil, fmt.Errorf("no crew %q on node %s (crews: %s)", ad.Crew, ad.Node, strings.Join(v.Crews, ", "))
+	}
+
+	if path, ok := v.CrewFiles[ad.Crew]; ok {
+		if !farPath.MatchString(path) {
+			return nil, fmt.Errorf("%s: crew %s lives at %q, a path zmina does not send to a command line", ad.Node, ad.Crew, path)
+		}
+
+		return []string{"--crew", path}, nil
+	}
+
+	if ad.Crew == "default" {
+		return nil, fmt.Errorf("%s: its zmina is older than this one and cannot be told its default crew apart from its "+
+			"$ZMINA_CREW: update zmina on %s, or name a crew of it (crews: %s)", ad.Node, ad.Node, strings.Join(v.Crews, ", "))
+	}
+
+	return []string{"--config", ad.Crew}, nil
 }

@@ -455,25 +455,48 @@ func TestReportCapabilityRequiresSignatureAndLegacyStillConnects(t *testing.T) {
 	}
 }
 
-// The owner's calls never ask for a password and, for attach, get a terminal on the far side: BatchMode=yes ahead of
-// a command line's own options, -t just before its host, after any -T.
+// The owner's calls never ask for a password and, for attach, get a terminal on the far side: BatchMode=yes after the
+// ssh of a plain command line, -t just before its host, the rest of the line as written.
 func TestOwnerCommand(t *testing.T) {
-	c := OwnerCommand(context.Background(), Addr{SSH: "box"}, true, "attach", "dev")
+	c, err := OwnerCommand(context.Background(), Addr{SSH: "box"}, true, "attach", "dev")
+	require.NoError(t, err)
 	assert.Equal(t, []string{"ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-t", "--", "box"}, c.Args[:8])
 	assert.True(t, strings.HasSuffix(c.Args[8], " zmina attach dev"))
-	assert.NotContains(t, OwnerCommand(context.Background(), Addr{SSH: "box"}, false, "ls").Args, "-t")
+	c, err = OwnerCommand(context.Background(), Addr{SSH: "box"}, false, "ls")
+	require.NoError(t, err)
+	assert.NotContains(t, c.Args, "-t")
 
 	for line, want := range map[string]string{
 		"ssh -o BatchMode=yes box sudo -n -iu ops zmina": "ssh -o BatchMode=yes -o BatchMode=yes -t box sudo -n -iu ops zmina",
-		"ssh -T box zmina":                     "ssh -o BatchMode=yes -T -t box zmina",
-		"ssh -o BatchMode=no -p 22 box zmina":  "ssh -o BatchMode=yes -o BatchMode=no -p 22 -t box zmina",
-		"ssh -qp 22 -oRequestTTY=no box zmina": "ssh -o BatchMode=yes -qp 22 -oRequestTTY=no -t box zmina",
-		"ssh -i key -- box zmina":              "ssh -o BatchMode=yes -i key -t -- box zmina",
-		"/opt/far-zmina":                       "/opt/far-zmina",
+		"ssh -T box zmina":                       "ssh -o BatchMode=yes -T -t box zmina",
+		"ssh -o BatchMode=no -p 22 box zmina":    "ssh -o BatchMode=yes -o BatchMode=no -p 22 -t box zmina",
+		"ssh -qp 22 -oRequestTTY=no box zmina":   "ssh -o BatchMode=yes -qp 22 -oRequestTTY=no -t box zmina",
+		"ssh -i key -- box zmina":                "ssh -o BatchMode=yes -i key -t -- box zmina",
+		"ssh -i ~/.ssh/k box zmina":              "ssh -o BatchMode=yes -i ~/.ssh/k -t box zmina",
+		"ssh  -T\t box   zmina":                 "ssh -o BatchMode=yes  -T\t -t box   zmina",
+		"/opt/far-zmina":                         "/opt/far-zmina",
+		"sudo -u 'ops x' zmina":                  "sudo -u 'ops x' zmina",
 	} {
-		assert.Equal(t, want, ownerLine(line, true), line)
+		got, err := ownerLine(line, true)
+		require.NoError(t, err, line)
+		assert.Equal(t, want, got, line)
 	}
-	assert.Equal(t, "ssh -o BatchMode=yes box zmina", ownerLine("ssh box zmina", false))
+
+	got, err := ownerLine("ssh box zmina", false)
+	require.NoError(t, err)
+	assert.Equal(t, "ssh -o BatchMode=yes box zmina", got)
+
+	for _, line := range []string{
+		"ssh -i '/tmp/key file' box zmina",
+		`ssh -i "/tmp/key  file" box zmina`,
+		`ssh -i /tmp/key\ file box zmina`,
+		"ssh -o 'ProxyCommand=ssh -W %h:%p gateway' box zmina",
+		"ssh -i $KEY box zmina",
+		"ssh box zmina; rm x",
+	} {
+		_, err := ownerLine(line, true)
+		require.ErrorContains(t, err, "add the node with --ssh", line)
+	}
 }
 
 // What ssh makes of the owner's line (ssh -G: no connection): batch mode and a terminal, whatever the line said.
@@ -483,8 +506,10 @@ func TestOwnerLineAsSSHReadsIt(t *testing.T) {
 	}
 
 	for _, line := range []string{"ssh -T box zmina", "ssh -o BatchMode=no -o RequestTTY=no box zmina", "ssh box zmina",
-		"ssh -t box zmina", "ssh -tt box zmina", "ssh -oRequestTTY=force -T box zmina"} {
-		f := strings.Fields(ownerLine(line, true))
+		"ssh -t box zmina", "ssh -tt box zmina", "ssh -oRequestTTY=force -T box zmina", "ssh  -T   box  zmina"} {
+		got, err := ownerLine(line, true)
+		require.NoError(t, err, line)
+		f := strings.Fields(got)
 		host := slices.Index(f, "box")
 		args := append([]string{"-G", "-F", "/dev/null"}, f[1:host+1]...)
 		out, err := exec.Command("ssh", args...).Output()

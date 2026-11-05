@@ -359,6 +359,9 @@ type nodeView struct {
 	Name  string   `json:"name"`
 	Owner bool     `json:"owner"`
 	Crews []string `json:"crews"`
+	// CrewFiles maps each crew to its file's absolute path, so another node can name a crew of this one with --crew,
+	// which every zmina reads the same way (the default crew too, whatever $ZMINA_CREW says here).
+	CrewFiles map[string]string `json:"crew_files,omitempty"`
 	// Dispatchers maps a crew to its dispatcher's session name: the name a SendMessage from it shows, so a
 	// dispatcher can tell which <node>/<crew> to answer with zmina tell.
 	Dispatchers map[string]string `json:"dispatchers,omitempty"`
@@ -379,7 +382,7 @@ func (a *app) nodeLs() *cobra.Command {
 				return err
 			}
 
-			v := nodeView{Name: me.Name, Owner: me.IsOwner(), Crews: crewKeys(), Dispatchers: crewDispatchers()}
+			v := nodeView{Name: me.Name, Owner: me.IsOwner(), Crews: crewKeys(), CrewFiles: crewFiles(), Dispatchers: crewDispatchers()}
 			if v.Peers, err = me.Peers(); err != nil {
 				return err
 			}
@@ -728,6 +731,19 @@ func crewKeys() []string {
 	var out []string
 	for _, c := range uiCrews("") {
 		out = append(out, c.Key)
+	}
+
+	return out
+}
+
+// crewFiles maps each crew of this node to its file; of two with one name (a crew dir named default) the one
+// localCrew takes.
+func crewFiles() map[string]string {
+	out := map[string]string{}
+	for _, c := range uiCrews("") {
+		if _, ok := out[c.Key]; !ok {
+			out[c.Key] = c.Path
+		}
 	}
 
 	return out

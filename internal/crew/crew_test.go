@@ -199,6 +199,7 @@ func TestNamedCrew(t *testing.T) {
 func TestConfigPath(t *testing.T) {
 	assert.Equal(t, ExpandHome("~/.zmina/ops/crew.yaml"), ConfigPath("ops"))
 	assert.Equal(t, ExpandHome("~/.zmina/ops/crew.yaml"), ConfigPath("../ops"), "a config is a subdirectory, never a path")
+	assert.Equal(t, ExpandHome("~/.zmina/default/crew.yaml"), ConfigPath("default"), "a config named default is its subdirectory too")
 }
 
 func TestSeatEditKeepsComments(t *testing.T) {
