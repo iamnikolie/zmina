@@ -1019,10 +1019,15 @@ func (s *Shift) Queue(name, text string) error {
 }
 
 // QueueTracked is Queue for a line that waits for its reader's ack (zmina send --when-idle): it carries its id and
-// how to ack it, and until acked it is said again and listed (Ack).
+// how to ack it, and until acked it is said again and listed (Ack). A slash command is queued as it is: the session
+// runs it, no reader acks it, and an id after it would be the command's argument.
 func (s *Shift) QueueTracked(name, text string) (string, error) {
 	if _, err := s.Role(name); err != nil {
 		return "", err
+	}
+
+	if slashCommand(text) {
+		return "", s.Queue(name, text)
 	}
 
 	if len(s.State.Role(name).Inbox) >= inboxMax {

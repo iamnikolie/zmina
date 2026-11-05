@@ -122,11 +122,13 @@ type RoleState struct {
 	// Expired is the expires value already reported; SkipNoted the tasks a skipped run was reported for.
 	Expired   string `json:"expired,omitempty"`
 	SkipNoted string `json:"skip_noted,omitempty"`
-	// Trimmed is when the ticker last typed /compact or /clear into the role (context_max). TrimSession and
-	// TrimBase are the conversation after it and the size it first showed: a conversation that starts over the
-	// limit is not trimmed again.
+	// Trimmed is when the ticker last typed /compact or /clear into the role (context_max), TrimFrom the
+	// conversation it was typed into. TrimSession and TrimBase are the conversation after it and the size it first
+	// showed once the trim took (a compaction after it, or another conversation): a conversation that starts over
+	// the limit is not trimmed again.
 	Trimmed     time.Time `json:"trimmed,omitzero"`
 	TrimPending bool      `json:"trim_pending,omitempty"`
+	TrimFrom    string    `json:"trim_from,omitempty"`
 	TrimSession string    `json:"trim_session,omitempty"`
 	TrimBase    int       `json:"trim_base,omitempty"`
 	// NoPrompt is since when the role's screen has shown no input line (a dialog, a login, a crash); BlockedNoted

@@ -182,6 +182,14 @@ func (s *Shift) renotify(now time.Time) {
 
 	for _, id := range slices.SortedFunc(maps.Keys(s.State.Acks), func(a, b string) int { return ackNum(a) - ackNum(b) }) {
 		a := s.State.Acks[id]
+		// A slash command tracked by an earlier zmina is never acked: said again it would run again.
+		if slashCommand(a.Text) {
+			delete(s.State.Acks, id)
+			s.log(a.Role, "ack-dropped", "", a.ID+" (a slash command, never acked): "+a.Text)
+
+			continue
+		}
+
 		if a.Last.IsZero() || now.Sub(a.Last) < every || a.Renotes >= renotesMax || !s.has(a.Role) || s.inFlight(a) {
 			continue
 		}

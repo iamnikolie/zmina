@@ -535,6 +535,9 @@ func (r *runner) handle(m message) error {
 		}
 		return r.o.Registry.Save(r.rec)
 	case "item/completed":
+		if p.Item.Type == "contextCompaction" {
+			r.rec.Turn.Compacted = time.Now()
+		}
 		if p.Item.Type == "contextCompaction" && r.turn == "" {
 			r.rec.Turn.Context = 0
 			r.rec.Turn.Ended = true

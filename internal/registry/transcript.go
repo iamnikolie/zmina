@@ -34,6 +34,9 @@ type Turn struct {
 	// At is when the newest line that closed a turn was written; zero when the last turn is not over or the time
 	// is not known. A start's boot turn is over once a turn ended at or after the start.
 	At time.Time `json:",omitzero"`
+	// Compacted is when the newest compaction read in the conversation was written (its compact boundary); zero when
+	// none is in the part read. A /compact typed at the prompt took once a compaction after it shows here.
+	Compacted time.Time `json:",omitzero"`
 }
 
 // line is the part of a transcript line zmina reads.
@@ -188,6 +191,14 @@ func lastTurn(path string) (Turn, error) {
 	}
 
 	t := readTurn(lines[:end])
+	for i := len(lines) - 1; i >= 0; i-- {
+		if lines[i].Type == "system" && lines[i].Subtype == "compact_boundary" {
+			t.Compacted = lines[i].Timestamp
+
+			break
+		}
+	}
+
 	if compacted {
 		t.Context, t.Error, t.ErrorID = 0, "", ""
 	}

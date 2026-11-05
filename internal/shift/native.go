@@ -179,7 +179,10 @@ func (s *Shift) followPosted(name string, now time.Time) bool {
 
 // postable reports whether a queued line can go to the inbox socket: a slash command is typed, since a posted one
 // arrives as plain text.
-func postable(line string) bool { return !strings.HasPrefix(strings.TrimSpace(line), "/") }
+func postable(line string) bool { return !slashCommand(line) }
+
+// slashCommand reports a line the session runs as a command (/compact, /clear) rather than reads.
+func slashCommand(line string) bool { return strings.HasPrefix(strings.TrimSpace(line), "/") }
 
 // unavailable reports a post that never started.
 func unavailable(err error) bool { return errors.Is(err, peer.ErrUnavailable) }

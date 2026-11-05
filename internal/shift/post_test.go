@@ -396,3 +396,27 @@ func TestOversizedQueuedLineGoesBounded(t *testing.T) {
 	assert.Contains(t, p.raw[0], "T-1 result ready", "the rest goes in the same post when it fits")
 	assert.False(t, f.s.State.Acks[id].First.IsZero(), "the same line: delivered under its id")
 }
+
+// A slash command queued with --when-idle is the command alone: the session runs it, nothing acks it, so it is never
+// said again (a /compact said again every renotify compacted again). One tracked by an earlier zmina is let go.
+func TestQueuedSlashCommandIsNotTracked(t *testing.T) {
+	f, _ := nativeFixture(t, crewYAML)
+	upNative(t, f, "designer")
+	f.status("designer", "busy", *f.now)
+
+	id, err := f.s.QueueTracked("designer", "/compact")
+	require.NoError(t, err)
+	assert.Empty(t, id)
+	assert.Equal(t, []string{"/compact"}, f.s.State.Role("designer").Inbox)
+	assert.Empty(t, f.s.State.Acks)
+
+	old, err := f.s.QueueTracked("designer", "[dispatcher] look at T-1")
+	require.NoError(t, err)
+	a := f.s.State.Acks[old]
+	a.Text, a.First, a.Last = "/compact", f.now.Add(-time.Hour), f.now.Add(-time.Hour)
+	f.s.State.Role("designer").Inbox = nil
+	f.s.renotify(*f.now)
+	assert.Empty(t, f.s.State.Acks)
+	assert.Empty(t, f.s.State.Role("designer").Inbox, "not said again")
+	assert.True(t, f.ev.has("designer", "ack-dropped"))
+}
