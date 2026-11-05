@@ -52,12 +52,27 @@ func (a *app) remote(cmd *cobra.Command, args []string, interactive bool) (bool,
 		return false, rest, err
 	}
 
-	// peek and attach name one role (ls none or several): said here, not by a far zmina's arity error.
-	if cmd.Name() != "ls" && len(rest) != 1 {
-		return false, nil, fmt.Errorf("%s takes a role after the address: zmina %s <node>/<crew> <role>", cmd.Name(), cmd.Name())
+	// The command as the far zmina is to read it: task ls, not ls.
+	path := strings.Fields(cmd.CommandPath())[1:]
+
+	// Said here, not by a far zmina's arity error.
+	switch name := strings.Join(path, " "); name {
+	case "ls":
+	case "task ls":
+		if len(rest) != 0 {
+			return false, nil, errors.New("task ls takes nothing after the address: zmina task ls <node>/<crew>")
+		}
+	case "task show":
+		if len(rest) != 1 {
+			return false, nil, errors.New("task show takes a task after the address: zmina task show <node>/<crew> <id>")
+		}
+	default:
+		if len(rest) != 1 {
+			return false, nil, fmt.Errorf("%s takes a role after the address: zmina %s <node>/<crew> <role>", name, name)
+		}
 	}
 
-	me, err := mesh.Open(meshDir())
+	me, err := openNode()
 	if err != nil {
 		return false, nil, fmt.Errorf("%s: this machine is no node (zmina node init): %w", ad, err)
 	}
@@ -85,7 +100,7 @@ func (a *app) remote(cmd *cobra.Command, args []string, interactive bool) (bool,
 
 	words := []string{}
 
-	words = append(words, cmd.Name())
+	words = append(words, path...)
 	words = append(words, rest...)
 	// The command's own flags as given (LocalFlags is a fresh set: it knows no flag was set); --crew and --config
 	// are this node's.

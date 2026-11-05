@@ -88,7 +88,7 @@ func (a *app) usageCommand() *cobra.Command {
 			}
 
 			node := ""
-			if me, err := mesh.Open(meshDir()); err == nil {
+			if me, err := openNode(); err == nil {
 				node = me.Name
 			}
 
@@ -290,7 +290,7 @@ func worktreeDirs(c *crew.Crew, tasks []task.Task) map[string]bool {
 // peersUsage asks every peer with an address for its crews' cells, all at once; a peer that does not answer is
 // missing, with why.
 func peersUsage(ctx context.Context, since string) ([]cost.Cell, []string) {
-	me, err := mesh.Open(meshDir())
+	me, err := openNode()
 	if err != nil {
 		return nil, nil
 	}

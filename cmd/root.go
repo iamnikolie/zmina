@@ -86,7 +86,7 @@ Run 'zmina skill' for the full agent reference.`,
 
 	root.AddCommand(a.roleCommands()...)
 	root.AddCommand(a.taskCommand(), a.todoCommand(), a.laterCommand(), a.remindCommand(), a.sleepCommand(), a.seatCommand(), a.logCommand(), a.noteCommand(), a.inboxCommand(), a.watchCommand(),
-		a.stopCommand(), a.startCommand(), a.queueCommand(), a.stateCommand(), a.tickerCommand(),
+		a.stopCommand(), a.startCommand(), a.retireCommand(), a.queueCommand(), a.stateCommand(), a.tickerCommand(),
 		a.launchdCommand(), a.doctorCommand(), a.usageCommand(), a.skillCommand(), a.versionCommand(), a.uiCommand(),
 		a.messageCommand(), a.contextCommand(), a.reportCommand(), a.nodeCommand(), a.tellCommand(), a.codexCommand(), a.terminalCommand(),
 		a.ackCommand(), a.pendingCommand(), a.turnEndCommand())
@@ -143,6 +143,11 @@ func (a *app) crewPath() string {
 func (a *app) loadCrew() (*crew.Crew, error) {
 	c, err := crew.Load(a.crewPath())
 	if err != nil {
+		var none *crew.NoFileError
+		if errors.As(err, &none) {
+			return nil, noCrewFile(none)
+		}
+
 		return nil, err
 	}
 
@@ -162,7 +167,7 @@ func (a *app) newShift() (*shift.Shift, error) {
 	}
 
 	node := ""
-	if n, err := mesh.Open(meshDir()); err == nil {
+	if n, err := openNode(); err == nil {
 		node = n.Name
 	}
 	return &shift.Shift{
@@ -187,6 +192,7 @@ func (a *app) newShift() (*shift.Shift, error) {
 		Path:              os.Getenv("PATH"),
 		By:                by(),
 		Warn:              func(err error) { fmt.Fprintln(a.err, "zmina: warning:", err) },
+		OtherCrews:        func() []string { return otherCrews(a.crewKey(), mesh.Address{}) },
 	}, nil
 }
 

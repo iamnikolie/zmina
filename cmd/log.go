@@ -26,6 +26,8 @@ func (a *app) logCommand() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.readState(func(s *shift.Shift) error {
+				a.warnStanding(s)
+
 				f := events.Filter{Role: role, Last: last}
 				if taskID != "" {
 					f.Task = task.Normalize(taskID)

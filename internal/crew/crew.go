@@ -185,6 +185,10 @@ type Crew struct {
 	Name string `yaml:"name"`
 	// Prefix starts every default session name (default zm-).
 	Prefix string `yaml:"prefix"`
+	// Retired marks a crew the owner says is no longer the live one (zmina retire): the date it was marked.
+	Retired string `yaml:"retired"`
+	// MovedTo is the crew it went on as, <node>/<crew>; set alone it marks the crew retired too.
+	MovedTo string `yaml:"moved_to"`
 	// Namespace is the CLAUDE_CONFIG_DIR every role runs with.
 	Namespace string `yaml:"namespace"`
 	// Dir is the default working directory.
@@ -283,6 +287,13 @@ func ConfigPath(name string) string {
 // Load reads, completes and checks a crew file. A role whose dir is missing loads with DirErr set.
 func Load(path string) (*Crew, error) { return load(path, false) }
 
+// NoFileError is a crew file that is not there.
+type NoFileError struct{ Path string }
+
+func (e *NoFileError) Error() string {
+	return fmt.Sprintf("crew: %s does not exist; run 'zmina init' to write a starter", e.Path)
+}
+
 // LoadStrict reads a crew file and also refuses a role whose dir is not a directory: for checking an edit before
 // it is written.
 func LoadStrict(path string) (*Crew, error) { return load(path, true) }
@@ -290,7 +301,7 @@ func LoadStrict(path string) (*Crew, error) { return load(path, true) }
 func load(path string, strict bool) (*Crew, error) {
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("crew: %s does not exist; run 'zmina init' to write a starter", path)
+		return nil, &NoFileError{Path: path}
 	}
 
 	if err != nil {
@@ -319,6 +330,7 @@ func load(path string, strict bool) (*Crew, error) {
 
 	c.Path = path
 	c.complete()
+	c.checkRetired()
 
 	if err := c.check(); err != nil {
 		return nil, fmt.Errorf("crew: %s: %w", path, err)

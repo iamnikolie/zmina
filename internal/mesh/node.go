@@ -20,6 +20,8 @@ type Node struct {
 	Key   ed25519.PrivateKey
 	Cert  Cert
 	Owner ed25519.PublicKey
+	// Health is how this node's crews stand, told in every hello; nil tells nothing.
+	Health func() []CrewHealth
 }
 
 // ErrNoNode is returned while this ~/.zmina has no node yet (`zmina node init`).
@@ -229,6 +231,10 @@ type Peer struct {
 	// TellReceipts: the peer authenticated tell_receipts in its last session with this node — it takes receipts
 	// for the plain lines it sent, and sends them for the lines it took.
 	TellReceipts bool `json:"tell_receipts,omitempty"`
+	// Crews is how the peer's crews stood in its last session with this node, CrewsAt when that was; none from an
+	// older zmina.
+	Crews   []CrewHealth `json:"crews,omitempty"`
+	CrewsAt time.Time    `json:"crews_at,omitzero"`
 }
 
 // Takes is the longest body the peer takes: what it told, else what an older zmina takes.

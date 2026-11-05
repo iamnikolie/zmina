@@ -29,8 +29,12 @@ type Deliver func(crew, from, id, body string, sent time.Time) error
 type wire struct {
 	// TellReceipts, in a hello, says the node sends and takes receipts for plain lines (tell_receipts); its
 	// signature, over the other side's nonce, is TellReceiptsSig (in the server's hello, in the client's auth).
-	TellReceipts    bool       `json:"tell_receipts,omitempty"`
-	TellReceiptsSig []byte     `json:"tell_receipts_sig,omitempty"`
+	TellReceipts    bool   `json:"tell_receipts,omitempty"`
+	TellReceiptsSig []byte `json:"tell_receipts_sig,omitempty"`
+	// Crews, in a hello, is how this node's crews stand (JSON of []CrewHealth, kept as sent because its signature is
+	// over those bytes); CrewsSig, over the other side's nonce, in the server's hello and the client's auth.
+	Crews           []byte     `json:"crews,omitempty"`
+	CrewsSig        []byte     `json:"crews_sig,omitempty"`
 	ReportsV2       bool       `json:"reports_v2,omitempty"`
 	PublicationsSig []byte     `json:"publications_sig,omitempty"`
 	ReportsV1       bool       `json:"reports_v1,omitempty"`
@@ -158,8 +162,11 @@ func (n *Node) ServeTerminals(ctx context.Context, rw io.ReadWriter, deliver Del
 		return fail(err)
 	}
 
-	err = c.send(wire{Op: "hello", V: protocolVersion, Cert: &n.Cert, Nonce: mine,
-		Sig: ed25519.Sign(n.Key, helloMessage("server", hi.Nonce)), Peers: told, BodyMax: BodyMax, ReportsV1: true, ReportsV2: true, PublicationsSig: ed25519.Sign(n.Key, publicationCapabilityMessage("server", hi.Nonce, BodyMax, true)), CapsSig: ed25519.Sign(n.Key, capabilityMessage("server", hi.Nonce, BodyMax, true)),
+	crews := n.crewData()
+
+	err = c.send(wire{Op: "hello", V: protocolVersion, Cert: &n.Cert, Nonce: mine, Crews: crews,
+		CrewsSig: ed25519.Sign(n.Key, crewsMessage("server", hi.Nonce, crews)),
+		Sig:      ed25519.Sign(n.Key, helloMessage("server", hi.Nonce)), Peers: told, BodyMax: BodyMax, ReportsV1: true, ReportsV2: true, PublicationsSig: ed25519.Sign(n.Key, publicationCapabilityMessage("server", hi.Nonce, BodyMax, true)), CapsSig: ed25519.Sign(n.Key, capabilityMessage("server", hi.Nonce, BodyMax, true)),
 		TellReceipts: true, TellReceiptsSig: ed25519.Sign(n.Key, tellReceiptCapabilityMessage("server", hi.Nonce, BodyMax))})
 	if err != nil {
 		return err
@@ -188,7 +195,11 @@ func (n *Node) ServeTerminals(ctx context.Context, rw io.ReadWriter, deliver Del
 	if hi.TellReceipts && !ed25519.Verify(hi.Cert.Key, tellReceiptCapabilityMessage("client", mine, hi.BodyMax), auth.TellReceiptsSig) {
 		return fail(errors.New("unauthenticated tell_receipts capability"))
 	}
-	c.peer = Peer{Name: caller, BodyMax: hi.BodyMax, ReportsV1: hi.ReportsV1, ReportsV2: hi.ReportsV2, TellReceipts: hi.TellReceipts}
+	if len(hi.Crews) > 0 && !ed25519.Verify(hi.Cert.Key, crewsMessage("client", mine, hi.Crews), auth.CrewsSig) {
+		return fail(errors.New("unauthenticated crew health"))
+	}
+	c.peer = Peer{Name: caller, BodyMax: hi.BodyMax, ReportsV1: hi.ReportsV1, ReportsV2: hi.ReportsV2, TellReceipts: hi.TellReceipts,
+		Crews: readCrewHealth(hi.Crews)}
 	if err := n.metPeer(*hi.Cert, hi.Peers, c.peer, now()); err != nil {
 		return fail(err)
 	}
@@ -340,7 +351,9 @@ func (n *Node) open(c *conn, want string, now func() time.Time) (string, error) 
 		return "", err
 	}
 
-	if err := c.send(wire{Op: "hello", V: protocolVersion, Cert: &n.Cert, Nonce: mine, Peers: told,
+	crews := n.crewData()
+
+	if err := c.send(wire{Op: "hello", V: protocolVersion, Cert: &n.Cert, Nonce: mine, Peers: told, Crews: crews,
 		BodyMax: BodyMax, ReportsV1: true, ReportsV2: true, TellReceipts: true}); err != nil {
 		return "", err
 	}
@@ -372,12 +385,16 @@ func (n *Node) open(c *conn, want string, now func() time.Time) (string, error) 
 	if hi.TellReceipts && !ed25519.Verify(hi.Cert.Key, tellReceiptCapabilityMessage("server", mine, hi.BodyMax), hi.TellReceiptsSig) {
 		return "", errors.New("unauthenticated tell_receipts capability")
 	}
+	if len(hi.Crews) > 0 && !ed25519.Verify(hi.Cert.Key, crewsMessage("server", mine, hi.Crews), hi.CrewsSig) {
+		return "", errors.New("unauthenticated crew health")
+	}
 	if want != "" && hi.Cert.Name != want {
 		return "", fmt.Errorf("this address reaches %s, not %s", hi.Cert.Name, want)
 	}
 
 	if err := c.send(wire{Op: "auth", Sig: ed25519.Sign(n.Key, helloMessage("client", hi.Nonce)), CapsSig: ed25519.Sign(n.Key, capabilityMessage("client", hi.Nonce, BodyMax, true)), PublicationsSig: ed25519.Sign(n.Key, publicationCapabilityMessage("client", hi.Nonce, BodyMax, true)),
-		TellReceiptsSig: ed25519.Sign(n.Key, tellReceiptCapabilityMessage("client", hi.Nonce, BodyMax))}); err != nil {
+		TellReceiptsSig: ed25519.Sign(n.Key, tellReceiptCapabilityMessage("client", hi.Nonce, BodyMax)),
+		CrewsSig:        ed25519.Sign(n.Key, crewsMessage("client", hi.Nonce, crews))}); err != nil {
 		return "", err
 	}
 
@@ -385,7 +402,8 @@ func (n *Node) open(c *conn, want string, now func() time.Time) (string, error) 
 		return "", err
 	}
 
-	c.peer = Peer{Name: hi.Cert.Name, BodyMax: hi.BodyMax, ReportsV1: hi.ReportsV1, ReportsV2: hi.ReportsV2, TellReceipts: hi.TellReceipts}
+	c.peer = Peer{Name: hi.Cert.Name, BodyMax: hi.BodyMax, ReportsV1: hi.ReportsV1, ReportsV2: hi.ReportsV2, TellReceipts: hi.TellReceipts,
+		Crews: readCrewHealth(hi.Crews)}
 	return hi.Cert.Name, n.metPeer(*hi.Cert, hi.Peers, c.peer, now())
 }
 
@@ -517,6 +535,7 @@ func (n *Node) metPeer(cert Cert, told []Peer, caps Peer, now time.Time) error {
 			p.ReportsV1 = caps.ReportsV1
 			p.ReportsV2 = caps.ReportsV1 && caps.ReportsV2
 			p.TellReceipts = caps.TellReceipts
+			p.Crews, p.CrewsAt = caps.Crews, now
 		})
 
 		for i, t := range told {

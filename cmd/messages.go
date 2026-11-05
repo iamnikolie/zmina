@@ -52,7 +52,7 @@ func (a *app) tellReport(cmd *cobra.Command, args []string, key, taskID, file st
 	if to.Crew == "" {
 		return fmt.Errorf("typed reports require an explicit node/crew destination")
 	}
-	me, err := mesh.Open(meshDir())
+	me, err := openNode()
 	if err != nil {
 		return err
 	}
@@ -195,6 +195,11 @@ func (a *app) tellReport(cmd *cobra.Command, args []string, key, taskID, file st
 	if err := a.pumpLocalReports(); err != nil {
 		return err
 	}
+	// A report is durable by design: it is kept for that crew, and the sender hears who is not there to read it. Asked
+	// last, so it reads what this report's own sessions learned.
+	if h, at, ok := crewStanding(me, to); ok && !h.Running() {
+		fmt.Fprintln(a.err, "zmina: warning:", notRunning(to, h, at))
+	}
 	fmt.Fprintf(a.out, "report %s queued; zmina message show %s reports observed stages, not assumed delivery\n", id, id)
 	return nil
 }
@@ -211,7 +216,7 @@ func (a *app) deliverReport(c uiCrew, from mesh.Address, envelopeID, body string
 	if w.Kind == "tell_receipt" {
 		return true, a.applyTellReceipt(c, from, *w.TellReceipt)
 	}
-	me, err := mesh.Open(meshDir())
+	me, err := openNode()
 	if err != nil {
 		return true, err
 	}
@@ -296,7 +301,7 @@ func (a *app) reconcileReports(s *shift.Shift) error {
 	if len(all) == 0 {
 		return nil
 	}
-	me, err := mesh.Open(meshDir())
+	me, err := openNode()
 	if err != nil {
 		return err
 	}
@@ -451,7 +456,7 @@ func (a *app) messageCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if me, err := mesh.Open(meshDir()); err == nil {
+			if me, err := openNode(); err == nil {
 				for _, v := range m.Revisions {
 					if err := refreshReportTransport(me, v); err != nil {
 						return err
@@ -522,7 +527,7 @@ func (a *app) messageCommand() *cobra.Command {
 				if v == nil {
 					return fmt.Errorf("unknown report revision")
 				}
-				me, err := mesh.Open(meshDir())
+				me, err := openNode()
 				if err != nil {
 					return err
 				}
@@ -591,7 +596,7 @@ func (a *app) messageCommand() *cobra.Command {
 
 // pumpLocalReports consumes self-addressed envelopes without taking another crew lock under a crew lock.
 func (a *app) pumpLocalReports() error {
-	me, err := mesh.Open(meshDir())
+	me, err := openNode()
 	if err != nil {
 		return err
 	}

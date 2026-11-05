@@ -40,6 +40,9 @@ func TestTellOnThisNode(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, "node laptop · holds the owner key")
 
+	beat(t, ops)
+	beat(t, def)
+
 	out, _, err = zm(t, def, "tell", "laptop/ops", "the  dump\nis ready")
 	require.NoError(t, err)
 	assert.Regexp(t, `^queued for laptop/ops's dispatcher\nreceipts: queued for its dispatcher; zmina message show in-[0-9a-f]{12} `, out)
@@ -177,6 +180,8 @@ func TestTellLong(t *testing.T) {
 
 	plan := strings.TrimSpace(strings.Repeat("deploy step ", 250)) + " THE END" // 3007 characters
 	require.Greater(t, len(plan), 3000)
+
+	beat(t, ops)
 
 	out, _, err := zm(t, def, "tell", "laptop/ops", plan)
 	require.NoError(t, err)

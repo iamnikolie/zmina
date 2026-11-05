@@ -95,6 +95,8 @@ func (a *app) lsCommand() *cobra.Command {
 				}
 
 				if asJSON {
+					a.warnStanding(s)
+
 					return a.printJSON(views)
 				}
 
@@ -155,6 +157,10 @@ func (a *app) lsCompact(s *shift.Shift, views []shift.View, all bool) error {
 
 	head := shiftLine(s) + fmt.Sprintf(" · %d up, %d down", len(views)-countDown(views), countDown(views))
 	fmt.Fprintln(a.out, head)
+
+	if n := s.Standing(); n != "" {
+		fmt.Fprintln(a.out, n)
+	}
 
 	w := tabwriter.NewWriter(a.out, 0, 0, 2, ' ', 0)
 
@@ -269,6 +275,10 @@ func shortSince(v shift.View) string {
 // lsWide is the whole table: session, keep and about too; with named roles also what each says it does.
 func (a *app) lsWide(s *shift.Shift, views []shift.View, now bool) error {
 	fmt.Fprintln(a.out, shiftLine(s))
+
+	if n := s.Standing(); n != "" {
+		fmt.Fprintln(a.out, n)
+	}
 
 	w := tabwriter.NewWriter(a.out, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "ROLE\tSESSION\tSTATE\tSTATUS\tFOR\tCONTEXT\tTASKS\tKEEP\tABOUT")
@@ -1146,6 +1156,10 @@ func shiftLine(s *shift.Shift) string {
 		line += "no beat for " + age(time.Since(last)) + " — zmina ticker status, tick.log"
 	default:
 		line += "beat " + time.Since(last).Round(time.Second).String() + " ago"
+	}
+
+	if s.Crew.IsRetired() {
+		return line + " · RETIRED"
 	}
 
 	if !s.State.Stopped.IsZero() {

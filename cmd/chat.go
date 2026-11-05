@@ -288,7 +288,7 @@ func (a *app) localChatAction(key, role, action string) (chat.Snapshot, error) {
 
 func (a *app) chatCall(ctx context.Context, node, op string, req mesh.TerminalRequest) (chat.Snapshot, error) {
 	if node != "" {
-		n, err := mesh.Open(meshDir())
+		n, err := openNode()
 		if err != nil {
 			return chat.Snapshot{}, err
 		}

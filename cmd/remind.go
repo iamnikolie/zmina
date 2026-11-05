@@ -459,7 +459,7 @@ func (a *app) tellAlarm(to, line string) (string, error) {
 		return "", err
 	}
 
-	me, err := mesh.Open(meshDir())
+	me, err := openNode()
 	if err != nil {
 		return "", err
 	}
