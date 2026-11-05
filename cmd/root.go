@@ -442,7 +442,13 @@ var hasTranscript = func(ns, id string) bool {
 		return true
 	}
 
-	files, _ := filepath.Glob(filepath.Join(ns, "projects", "*", id+".jsonl"))
+	// Each project dir by name, never a glob: a namespace path may hold [ ] * ? as plain characters.
+	dirs, _ := os.ReadDir(filepath.Join(ns, "projects"))
+	for _, d := range dirs {
+		if _, err := os.Stat(filepath.Join(ns, "projects", d.Name(), id+".jsonl")); err == nil {
+			return true
+		}
+	}
 
-	return len(files) > 0
+	return false
 }

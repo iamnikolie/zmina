@@ -60,3 +60,11 @@ func TestPlainUpThatResumesAndEndsAtOnce(t *testing.T) {
 	require.ErrorContains(t, err, "dev ended right after its start")
 	assert.NotContains(t, out, "dev up as")
 }
+
+// A namespace whose path reads as a glob is taken literally.
+func TestHasTranscriptInAGlobLikeNamespace(t *testing.T) {
+	ns := filepath.Join(t.TempDir(), "profile[dev]")
+	require.NoError(t, os.MkdirAll(filepath.Join(ns, "projects", "p"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(ns, "projects", "p", "abc-1.jsonl"), nil, 0o600))
+	assert.True(t, realHasTranscript(ns, "abc-1"))
+}
