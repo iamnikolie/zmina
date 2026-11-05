@@ -162,6 +162,9 @@ type RoleState struct {
 	HooksFlagged string `json:"hooks_flagged,omitempty"`
 	// QueuedBoot is the boot line a clear queued for the role: it goes alone, before anything else waiting for it.
 	QueuedBoot string `json:"queued_boot,omitempty"`
+	// QueuedIDs are the S-ids a queued line carries that its text is never searched for: a post given back to the
+	// queue (its conversation ended before it showed), a failed line retried.
+	QueuedIDs map[string][]string `json:"queued_ids,omitempty"`
 	// Dir is where the role was started when not its crew dir (zmina up --task: the task's worktree); Trusted
 	// that zmina answered Claude Code's "trust this folder" there.
 	Dir     string `json:"dir,omitempty"`
@@ -192,6 +195,8 @@ type Failed struct {
 	Line  string    `json:"line"`
 	Error string    `json:"error"`
 	At    time.Time `json:"at"`
+	// IDs are the S-ids the line carries, kept for its retry.
+	IDs []string `json:"ids,omitempty"`
 }
 
 // Role is the state of one role, made on first use.

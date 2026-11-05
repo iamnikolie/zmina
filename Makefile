@@ -1,4 +1,4 @@
-.PHONY: build install uninstall test vet fmt clean
+.PHONY: build install uninstall test vet fmt clean public-check
 
 BIN := zmina
 PREFIX ?= $(HOME)/.local
@@ -20,8 +20,13 @@ install: build
 uninstall:
 	rm -f $(PREFIX)/bin/$(BIN)
 
-test:
+test: public-check
 	go test ./...
+
+# Unpushed commits must not carry this machine's crew names, node and ssh host names, live task ids, IPs or
+# private paths into the public repository (tools/publiccheck).
+public-check:
+	go run ./tools/publiccheck
 
 vet:
 	go vet ./...

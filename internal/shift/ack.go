@@ -226,7 +226,7 @@ func (s *Shift) inFlight(a *Ack) bool {
 	}
 
 	rs := s.State.Role(a.Role)
-	if slices.ContainsFunc(rs.Inbox, a.tracks) {
+	if slices.ContainsFunc(rs.Inbox, func(l string) bool { return a.tracks(l) || slices.Contains(rs.QueuedIDs[l], a.ID) }) {
 		return true
 	}
 
@@ -291,8 +291,10 @@ func (s *Shift) AckLines(ids []string, all bool, role, caller string) ([]string,
 		s.log(a.Role, "acked", "", id+" "+a.Text)
 		s.dropQueued(a)
 
+		// A plain tell is read once its line is acked; a report only when the dispatcher says it consumed the
+		// report itself (zmina message read), never by acking the notice that points to it.
 		if a.Role == s.Crew.Dispatcher {
-			s.stageIDs([]string{id}, "read")
+			s.stageIDs([]string{id}, "read", TellPrefix)
 		}
 	}
 
@@ -321,6 +323,7 @@ func (s *Shift) dropQueued(a *Ack) {
 	for _, line := range slices.Clone(rs.Inbox) {
 		if a.tracks(line) {
 			rs.Inbox = slices.DeleteFunc(rs.Inbox, func(v string) bool { return v == line })
+			delete(rs.QueuedIDs, line)
 			s.log(a.Role, "acked-queued", "", line)
 		}
 	}
@@ -328,6 +331,42 @@ func (s *Shift) dropQueued(a *Ack) {
 
 // QueuedSignalID is queuedSignalID for the node's reports.
 func QueuedSignalID(sig string) string { return queuedSignalID(sig) }
+
+// carryIDs keeps the S-ids a line given back to a role's queue carries, for when it goes again.
+func (s *Shift) carryIDs(name, line string, ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+
+	rs := s.State.Role(name)
+	if rs.QueuedIDs == nil {
+		rs.QueuedIDs = map[string][]string{}
+	}
+
+	for _, id := range ids {
+		if !slices.Contains(rs.QueuedIDs[line], id) {
+			rs.QueuedIDs[line] = append(rs.QueuedIDs[line], id)
+		}
+	}
+}
+
+// lineIDs are the S-ids a role's queued line carries: its own tracked id, and those it was given back with.
+func (s *Shift) lineIDs(name, line string) []string {
+	ids := slices.Clone(s.State.Role(name).QueuedIDs[line])
+	if id := s.trackedID(name, line); id != "" && !slices.Contains(ids, id) {
+		ids = append(ids, id)
+	}
+
+	return ids
+}
+
+// takeIDs is lineIDs for a line that leaves the queue.
+func (s *Shift) takeIDs(name, line string) []string {
+	ids := s.lineIDs(name, line)
+	delete(s.State.Role(name).QueuedIDs, line)
+
+	return ids
+}
 
 // queuedSignalID is the id a dispatcher's signal waits under: the one at its head, "" for none.
 func queuedSignalID(sig string) string {
@@ -367,9 +406,14 @@ func (s *Shift) dropSignal(sig string) {
 	}
 }
 
-// stageIDs records a stage for the lines of other crews bound to these signal ids (MessageIDs).
-func (s *Shift) stageIDs(ids []string, stage string) {
+// stageIDs records a stage for the lines of other crews bound to these signal ids (MessageIDs), only those whose
+// marker starts with prefix when one is given.
+func (s *Shift) stageIDs(ids []string, stage string, prefix ...string) {
 	for marker, id := range s.State.MessageIDs {
+		if len(prefix) > 0 && !strings.HasPrefix(marker, prefix[0]) {
+			continue
+		}
+
 		if slices.Contains(ids, id) {
 			s.markerStage(marker, stage)
 		}

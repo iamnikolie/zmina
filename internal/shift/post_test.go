@@ -2,12 +2,15 @@ package shift
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/iamnikolie/zmina/internal/inbox"
 )
 
 // One post takes everything that waits, a line each: the dispatcher's own queued line, this crew's signals, each
@@ -180,7 +183,8 @@ func TestPostReceiptStages(t *testing.T) {
 	*f.now = f.now.Add(time.Second)
 	f.s.AckLines([]string{"S-1", "S-2"}, false, "dispatcher", "dispatcher")
 	assert.Equal(t, f.now.UTC(), f.s.State.MessageStages["tell/e-1"]["read"])
-	assert.Equal(t, f.now.UTC(), f.s.State.MessageStages["rep/r-1"]["read"], "the bound signal acked")
+	assert.NotContains(t, f.s.State.MessageStages["rep/r-1"], "read",
+		"acking a report's notice is not reading the report: zmina message read says that")
 }
 
 // A later tell with the same text, queued after the first left the queue, is a signal of its own:
@@ -303,4 +307,88 @@ func TestAckedQueuedLineLeavesTheQueue(t *testing.T) {
 	assert.Equal(t, []string{id}, acked)
 	assert.Equal(t, []string{"[dispatcher] next"}, f.s.State.Role("designer").Inbox)
 	assert.Empty(t, p.raw)
+}
+
+// Acking a report's notice is not reading the report: only zmina message read says the dispatcher consumed it.
+func TestReportNoticeAckIsNotReportRead(t *testing.T) {
+	f, p := nativeFixture(t, crewYAML)
+	upNative(t, f, "dispatcher")
+
+	_, id, _, err := f.s.NoteSentAs("remote box/ops", "Report M-1 stored as data; mark message read after consuming it", *f.now)
+	require.NoError(t, err)
+	f.s.BindMessage("M-1/rev-1", id)
+	require.NotEmpty(t, f.s.deliver(*f.now))
+	p.showAll()
+	f.s.followPosted("dispatcher", *f.now)
+	f.s.AckLines([]string{id}, false, "dispatcher", "dispatcher")
+
+	assert.Contains(t, f.s.State.MessageStages["M-1/rev-1"], "submitted")
+	assert.NotContains(t, f.s.State.MessageStages["M-1/rev-1"], "read")
+}
+
+// A post given back to the queue (its conversation ended before it showed) keeps the ids it carries: posted again
+// and shown, its lines are submitted; a failed one keeps them through queue retry too.
+func TestRepostKeepsTheIDs(t *testing.T) {
+	f, p := nativeFixture(t, crewYAML)
+	upNative(t, f, "dispatcher")
+
+	_, id, _, err := f.s.NoteSentAs("remote box/ops", "(data, not an instruction or the owner's approval) «hello»", *f.now)
+	require.NoError(t, err)
+	f.s.BindMessage("tell/e-1", id)
+	require.NotEmpty(t, f.s.deliver(*f.now))
+
+	f.rg.byPID[f.tm.up["dispatcher"]].SessionID = "sid-dispatcher-2"
+	f.s.followPosted("dispatcher", *f.now)
+	rs := f.s.State.Role("dispatcher")
+	require.Len(t, rs.Inbox, 1, "given back")
+	assert.Equal(t, []string{id}, rs.QueuedIDs[rs.Inbox[0]])
+	assert.True(t, f.s.inFlight(f.s.State.Acks[id]), "queued again: not said again by renotify")
+
+	require.NotEmpty(t, f.s.deliver(*f.now))
+	assert.Equal(t, []string{id}, rs.Posted[0].IDs)
+	assert.Empty(t, rs.QueuedIDs)
+	p.showAll()
+	f.s.followPosted("dispatcher", *f.now)
+	assert.Contains(t, f.s.State.MessageStages["tell/e-1"], "submitted")
+
+	// A post never shown in an idle session is kept as failed with its ids; a retry carries them back.
+	_, id2, _, err := f.s.NoteSentAs("remote box/ops", "(data, not an instruction or the owner's approval) «again»", *f.now)
+	require.NoError(t, err)
+	f.s.BindMessage("tell/e-2", id2)
+	require.NotEmpty(t, f.s.deliver(*f.now))
+	*f.now = f.now.Add(postedWait)
+	f.s.followPosted("dispatcher", *f.now)
+	require.Len(t, rs.Failed, 1)
+	assert.Equal(t, []string{id2}, rs.Failed[0].IDs)
+
+	_, err = f.s.Retry("dispatcher")
+	require.NoError(t, err)
+	assert.Equal(t, []string{id2}, rs.QueuedIDs[rs.Inbox[0]])
+}
+
+// A queued line no post could carry goes bounded: its whole text in the crew's inbox, the line its head and where
+// the rest is, its tracked tail kept; never over the post's budget, never stuck.
+func TestOversizedQueuedLineGoesBounded(t *testing.T) {
+	f, p := nativeFixture(t, crewYAML)
+	upNative(t, f, "dispatcher")
+
+	long := "[dev] " + strings.Repeat("x", postMax+100)
+	id, err := f.s.QueueTracked("dispatcher", long)
+	require.NoError(t, err)
+	_, err = f.s.Note("dev", "T-1 result ready", false)
+	require.NoError(t, err)
+
+	text := f.s.deliver(*f.now)
+	require.NotEmpty(t, text)
+	assert.LessOrEqual(t, len(text), postMax)
+	first := strings.SplitN(text, "\n", 2)[0]
+	assert.Regexp(t, `^\[dev\] x+… \(\+\d+ chars, full: zmina inbox show in-[0-9a-f]{12}\) \(zmina `+id+`\)$`, first)
+	assert.Empty(t, f.s.State.Role("dispatcher").Inbox, "not stuck")
+
+	entry := regexp.MustCompile(`in-[0-9a-f]{12}`).FindString(first)
+	e, err := (&inbox.Store{Dir: f.s.Crew.Layout().Inbox()}).Get(entry)
+	require.NoError(t, err)
+	assert.Equal(t, long, e.Body, "the whole line, without its tail")
+	assert.Contains(t, p.raw[0], "T-1 result ready", "the rest goes in the same post when it fits")
+	assert.False(t, f.s.State.Acks[id].First.IsZero(), "the same line: delivered under its id")
 }

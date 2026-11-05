@@ -205,6 +205,10 @@ The dispatcher gets one post for everything that waits for it, a line each: its 
 after a trim), this crew's signals on one line, every other crew's line on a line of its own, the notices last
 (`[zmina] released designer after 31m idle`); the tag opens the post once. A remote body holds no line break, so no
 part of it can start a line that reads as zmina's. A post carries at most 12 KB; what does not fit goes in the next.
+A queued line no post could carry (`zmina send --when-idle` takes any length) goes as its head and `… (+N chars,
+full: zmina inbox show <id>)`, its whole text stored in the crew's inbox and its `(zmina S-n)` tail kept. A post
+given back to the queue (its conversation ended before it showed) or kept as failed and retried keeps the S-ids it
+carries, so its lines' receipts still follow them.
 A boot line queued after a clear goes alone, first: the lines belong to a dispatcher that knows its job. With
 `delivery_mid_turn` (default true) the dispatcher's lines that wait for an ack — crew signals, other crews' lines —
 also go while it is in a turn: Claude Code queues a message that arrives mid-turn and puts it into the turn at its

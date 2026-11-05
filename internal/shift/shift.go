@@ -1196,6 +1196,7 @@ func (s *Shift) Retry(name string) (int, error) {
 
 	for _, f := range rs.Failed {
 		lines = append(lines, f.Line)
+		s.carryIDs(name, f.Line, f.IDs)
 	}
 
 	n := len(rs.Failed)
@@ -1218,7 +1219,7 @@ func (s *Shift) Drop(name string, all bool) (int, error) {
 
 	if all {
 		n += len(rs.Inbox)
-		rs.Inbox, rs.Attempts = nil, 0
+		rs.Inbox, rs.Attempts, rs.QueuedIDs = nil, 0, nil
 
 		if name == s.Crew.Dispatcher {
 			n += len(s.State.Signals) + len(s.State.Notes)

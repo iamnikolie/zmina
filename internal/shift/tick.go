@@ -6,10 +6,12 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/iamnikolie/zmina/internal/crew"
+	"github.com/iamnikolie/zmina/internal/inbox"
 	"github.com/iamnikolie/zmina/internal/registry"
 	"github.com/iamnikolie/zmina/internal/task"
 	"github.com/iamnikolie/zmina/internal/tmux"
@@ -763,7 +765,16 @@ func (s *Shift) postDispatcher(d string, sess *registry.Session, local, remote, 
 
 	nOwn := 0
 	for _, l := range own {
-		if !add(l) {
+		// A queued line that no post could carry goes as a bounded one: its whole text stored, the line its head
+		// and where the rest is, still the same line (its ids).
+		bounded, err := s.boundLine(d, l, postMax)
+		if err != nil {
+			s.log(d, "post-failed", "", "a queued line over "+strconv.Itoa(postMax)+" bytes could not be stored: "+err.Error())
+
+			break
+		}
+
+		if !add(bounded) {
 			break
 		}
 		nOwn++
@@ -848,6 +859,10 @@ func (s *Shift) postDispatcher(d string, sess *registry.Session, local, remote, 
 		s.submittedTask(d, l)
 	}
 
+	for _, l := range own[:nOwn] {
+		ids = append(ids, s.takeIDs(d, l)...)
+	}
+
 	rs.Inbox = rs.Inbox[nOwn:]
 	rs.Attempts = 0
 	rs.Posted[len(rs.Posted)-1].IDs = slices.Clone(ids)
@@ -872,6 +887,47 @@ func (s *Shift) postDispatcher(d string, sess *registry.Session, local, remote, 
 	s.log(d, "told", "", text)
 
 	return text
+}
+
+// boundLine is a queued line as a post can carry it, within limit bytes: whole when it fits, else its text stored
+// whole in the crew's inbox and the line its head and where the rest is (Pointer), with the tail zmina tracks it by
+// kept at its end.
+func (s *Shift) boundLine(name, line string, limit int) (string, error) {
+	if len(line) <= limit {
+		return line, nil
+	}
+
+	body, tail := line, ""
+	if loc := trackedTail.FindStringIndex(line); loc != nil && s.trackedID(name, line) != "" {
+		body, tail = strings.TrimRight(line[:loc[0]], " "), " "+line[loc[0]:]
+	}
+
+	store := s.Inbox
+	if store == nil {
+		store = &inbox.Store{Dir: s.Crew.Layout().Inbox(), Now: s.Now}
+	}
+
+	id, err := inbox.NewID()
+	if err == nil {
+		err = store.Put(inbox.Entry{ID: id, From: "queue " + name, Body: body})
+	}
+
+	if err != nil {
+		return "", err
+	}
+
+	room := []rune(body)
+	n := len(room)
+	for n > 1 {
+		out := Pointer(body, id, n) + tail
+		if len(out) <= limit {
+			return out, nil
+		}
+
+		n = n * 3 / 4
+	}
+
+	return Pointer(body, id, 1) + tail, nil
 }
 
 // midTurn reports whether the dispatcher's acked lines may go into the turn it is in: the crew allows it, it is a
@@ -1089,7 +1145,7 @@ func (s *Shift) deliverInbox(name string, now time.Time) string {
 			return ""
 		}
 
-		rs.Failed = append(rs.Failed, Failed{Line: head, Error: err.Error(), At: now})
+		rs.Failed = append(rs.Failed, Failed{Line: head, Error: err.Error(), At: now, IDs: s.takeIDs(name, head)})
 		rs.Inbox, rs.Attempts = rs.Inbox[1:], 0
 
 		return name + ": a queued line failed " + fmt.Sprint(typeTries) + " times, kept in zmina queue: " + head
@@ -1102,10 +1158,7 @@ func (s *Shift) deliverInbox(name string, now time.Time) string {
 
 	// A slash command may not change the status; only a line for the conversation is watched until it lands.
 	if !strings.HasPrefix(head, "/") {
-		rs.Sent = &Sent{Line: head, At: now}
-		if id := s.trackedID(name, head); id != "" {
-			rs.Sent.IDs = []string{id}
-		}
+		rs.Sent = &Sent{Line: head, At: now, IDs: s.takeIDs(name, head)}
 	}
 
 	return "typed into " + name + ": " + head
@@ -1127,19 +1180,18 @@ func (s *Shift) postInbox(name string, sess *registry.Session, now time.Time) st
 		}
 
 		s.deliveryFailure(name, head, err.Error())
-		rs.Failed = append(rs.Failed, Failed{Line: head, Error: err.Error(), At: now})
+		rs.Failed = append(rs.Failed, Failed{Line: head, Error: err.Error(), At: now, IDs: s.takeIDs(name, head)})
 		rs.Inbox, rs.Attempts = rs.Inbox[1:], 0
 
 		return name + ": a queued line could not be posted, kept in zmina queue: " + head
 	}
 
-	if id := s.trackedID(name, head); id != "" {
-		rs.Posted[len(rs.Posted)-1].IDs = []string{id}
-	}
+	ids := s.takeIDs(name, head)
+	rs.Posted[len(rs.Posted)-1].IDs = ids
 
 	rs.Inbox, rs.Attempts = rs.Inbox[1:], 0
 	s.submittedTask(name, head)
-	s.delivered(name, head, nil, now)
+	s.delivered(name, head, ids, now)
 
 	return "posted to " + name + ": " + head
 }
