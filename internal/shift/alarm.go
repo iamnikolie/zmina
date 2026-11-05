@@ -154,7 +154,7 @@ func (s *Shift) wake(a *alarm.Alarm, late string) (line, note string) {
 		return line, ""
 	}
 
-	o := UpOptions{}
+	o := UpOptions{Auto: true}
 
 	switch {
 	case a.Kind == alarm.Sleep && rs.LastSession != "":

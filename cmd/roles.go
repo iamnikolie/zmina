@@ -408,7 +408,7 @@ func (a *app) upCommand() *cobra.Command {
 					r, _ := s.Role(n)
 
 					// A resumed conversation can end at once (claude finds no such conversation): say so, never «up».
-					if opts.Resume != "" || r.Resume == crew.ResumeAlways {
+					if s.Resumed(n) != "" {
 						if why := settledDead(s, n); why != "" {
 							errs = append(errs, fmt.Errorf("%s ended right after its start: %s (zmina peek %s; zmina up %s --fresh)", n, why, n, n))
 

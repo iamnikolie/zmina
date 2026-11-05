@@ -74,6 +74,12 @@ roles:
 
 	t.Cleanup(func() { _ = exec.Command("tmux", "-L", "zmina-"+name, "kill-server").Run() })
 
+	// The fake claude keeps no transcripts: a resume test names any session it likes. TestUpResumeThatEndsAtOnce puts
+	// the real check back.
+	keep := hasTranscript
+	hasTranscript = func(string, string) bool { return true }
+	t.Cleanup(func() { hasTranscript = keep })
+
 	return path
 }
 

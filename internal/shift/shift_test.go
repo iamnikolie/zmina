@@ -1146,3 +1146,17 @@ func TestResumeOfAConversationNotInTheNamespace(t *testing.T) {
 	require.NoError(t, f.s.UpWith("designer", UpOptions{Resume: "last"}))
 	assert.Contains(t, strings.Join(f.tm.argv["designer"], " "), "--resume sid-designer")
 }
+
+// An alarm's wake chose the resume itself: a conversation that is gone starts the role fresh, it does not keep it down.
+func TestWakeOfAConversationNotInTheNamespaceStartsFresh(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	require.NoError(t, f.s.Up("designer"))
+	f.status("designer", "idle", *f.now)
+	require.NoError(t, f.s.Down("designer", DownOptions{}))
+	f.s.HasTranscript = func(string, string) bool { return false }
+
+	require.NoError(t, f.s.UpWith("designer", UpOptions{Resume: "sid-designer", Auto: true}))
+	assert.NotContains(t, f.tm.argv["designer"], "--resume")
+	assert.True(t, f.ev.has("designer", "resume-missing"))
+	assert.Empty(t, f.s.Resumed("designer"))
+}

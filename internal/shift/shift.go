@@ -164,6 +164,8 @@ type Shift struct {
 	Warn func(error)
 
 	warned bool
+	// resumed is the conversation each role of this run was last started on ("" fresh): what up checks it lives.
+	resumed map[string]string
 	// HasTranscript reports whether a Claude session's conversation is under a namespace; nil: never checked.
 	HasTranscript func(namespace, sessionID string) bool
 	// OtherCrews names the crews of this crew's name elsewhere, each with how it stands; nil when none are known.
@@ -581,7 +583,13 @@ type UpOptions struct {
 	Resume string
 	// Dir starts the role there instead of its crew dir: a task's worktree.
 	Dir string
+	// Auto marks a Resume zmina chose itself (an alarm's wake), not one the caller asked for: a conversation that is
+	// gone then starts fresh instead of refusing.
+	Auto bool
 }
+
+// Resumed is the conversation this run last started the role on, empty for a fresh start or none.
+func (s *Shift) Resumed(name string) string { return s.resumed[name] }
 
 // Up starts a role by hand: it also clears a hold and a broken mark.
 func (s *Shift) Up(name string) error { return s.UpWith(name, UpOptions{}) }
@@ -678,7 +686,7 @@ func (s *Shift) start(name string, o UpOptions) error {
 	// for, the resume is refused, naming where it looked; chosen by zmina (resume: always, a wake), it starts fresh.
 	if resume != "" && runtime == "claude" && s.HasTranscript != nil && !s.HasTranscript(s.Crew.Namespace, resume) {
 		where := filepath.Join(s.Crew.Namespace, "projects")
-		if o.Resume != "" {
+		if o.Resume != "" && !o.Auto {
 			return fmt.Errorf("%s: no conversation %s under %s (recorded under another CLAUDE_CONFIG_DIR, or deleted); "+
 				"zmina up %s --fresh starts a new one", name, resume, where, name)
 		}
@@ -688,6 +696,10 @@ func (s *Shift) start(name string, o UpOptions) error {
 
 	// Each start has its own tag; the boot line made with the command tells it to the role.
 	rs.Tag = ""
+	if s.resumed == nil {
+		s.resumed = map[string]string{}
+	}
+	s.resumed[name] = resume
 
 	if err := s.Tmux.Start(name, dir, s.Env(r), s.Command(r, resume)); err != nil {
 		return fmt.Errorf("%s: %w", name, err)

@@ -193,19 +193,7 @@ func (a *app) newShift() (*shift.Shift, error) {
 		By:                by(),
 		Warn:              func(err error) { fmt.Fprintln(a.err, "zmina: warning:", err) },
 		OtherCrews:        func() []string { return otherCrews(a.crewKey(), mesh.Address{}) },
-		HasTranscript: func(ns, id string) bool {
-			if filepath.Base(id) != id {
-				return false
-			}
-
-			// A namespace with no projects at all has nothing to judge by: claude says the rest.
-			if _, err := os.Stat(filepath.Join(ns, "projects")); err != nil {
-				return true
-			}
-
-			files, _ := filepath.Glob(filepath.Join(ns, "projects", "*", id+".jsonl"))
-			return len(files) > 0
-		},
+		HasTranscript:     hasTranscript,
 	}, nil
 }
 
@@ -440,4 +428,16 @@ func self() string {
 	}
 
 	return path
+}
+
+// hasTranscript reports whether a Claude conversation is under a namespace (<namespace>/projects/*/<id>.jsonl). A
+// namespace with no projects yet has none of them: a conversation recorded elsewhere is not there either.
+var hasTranscript = func(ns, id string) bool {
+	if filepath.Base(id) != id {
+		return false
+	}
+
+	files, _ := filepath.Glob(filepath.Join(ns, "projects", "*", id+".jsonl"))
+
+	return len(files) > 0
 }
