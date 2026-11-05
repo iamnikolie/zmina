@@ -1116,3 +1116,33 @@ func TestExplicitFreshBypassesResumePolicyAndSleep(t *testing.T) {
 	require.NoError(t, f.s.UpWith("designer", UpOptions{Resume: "last"}))
 	assert.Contains(t, strings.Join(f.tm.argv["designer"], " "), "--resume old-conversation")
 }
+
+// A conversation recorded under another CLAUDE_CONFIG_DIR is not there to resume: asked for, the start is refused and
+// says where it looked; chosen by zmina (resume: always), the role starts fresh, and the log says why.
+func TestResumeOfAConversationNotInTheNamespace(t *testing.T) {
+	f := fixtureWith(t, crewYAML+`  writer:
+    resume: always
+`)
+	for _, r := range []string{"designer", "writer"} {
+		require.NoError(t, f.s.Up(r))
+		f.status(r, "idle", *f.now)
+		require.NoError(t, f.s.Down(r, DownOptions{}))
+	}
+
+	var asked []string
+	f.s.HasTranscript = func(ns, id string) bool { asked = append(asked, ns+" "+id); return false }
+
+	err := f.s.UpWith("designer", UpOptions{Resume: "last"})
+	require.ErrorContains(t, err, "no conversation sid-designer under /ns/projects")
+	require.ErrorContains(t, err, "zmina up designer --fresh")
+	assert.False(t, f.s.has("designer"), "nothing started: no dead pane called up")
+
+	require.NoError(t, f.s.Up("writer"))
+	assert.NotContains(t, f.tm.argv["writer"], "--resume", "resume: always falls back to a fresh start")
+	assert.True(t, f.ev.has("writer", "resume-missing"))
+	assert.Contains(t, asked, "/ns sid-writer")
+
+	f.s.HasTranscript = func(string, string) bool { return true }
+	require.NoError(t, f.s.UpWith("designer", UpOptions{Resume: "last"}))
+	assert.Contains(t, strings.Join(f.tm.argv["designer"], " "), "--resume sid-designer")
+}

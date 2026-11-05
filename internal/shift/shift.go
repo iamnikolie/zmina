@@ -164,6 +164,8 @@ type Shift struct {
 	Warn func(error)
 
 	warned bool
+	// HasTranscript reports whether a Claude session's conversation is under a namespace; nil: never checked.
+	HasTranscript func(namespace, sessionID string) bool
 	// OtherCrews names the crews of this crew's name elsewhere, each with how it stands; nil when none are known.
 	OtherCrews func() []string
 	// lastStop is the stop Start just lifted, lastBeat the beat before this one: the boot either goes on to is still
@@ -669,6 +671,19 @@ func (s *Shift) start(name string, o UpOptions) error {
 		if lastRuntime == runtime {
 			resume = rs.LastSession
 		}
+	}
+
+	// A Claude conversation lives under the namespace it ran in: one recorded under another CLAUDE_CONFIG_DIR is not
+	// there, and claude would exit at once («No conversation found»), leaving a dead pane that zmina called up. Asked
+	// for, the resume is refused, naming where it looked; chosen by zmina (resume: always, a wake), it starts fresh.
+	if resume != "" && runtime == "claude" && s.HasTranscript != nil && !s.HasTranscript(s.Crew.Namespace, resume) {
+		where := filepath.Join(s.Crew.Namespace, "projects")
+		if o.Resume != "" {
+			return fmt.Errorf("%s: no conversation %s under %s (recorded under another CLAUDE_CONFIG_DIR, or deleted); "+
+				"zmina up %s --fresh starts a new one", name, resume, where, name)
+		}
+		s.log(name, "resume-missing", "", resume+" not under "+where+"; started fresh")
+		resume = ""
 	}
 
 	// Each start has its own tag; the boot line made with the command tells it to the role.

@@ -406,6 +406,16 @@ func (a *app) upCommand() *cobra.Command {
 					}
 
 					r, _ := s.Role(n)
+
+					// A resumed conversation can end at once (claude finds no such conversation): say so, never «up».
+					if opts.Resume != "" || r.Resume == crew.ResumeAlways {
+						if why := settledDead(s, n); why != "" {
+							errs = append(errs, fmt.Errorf("%s ended right after its start: %s (zmina peek %s; zmina up %s --fresh)", n, why, n, n))
+
+							continue
+						}
+					}
+
 					fmt.Fprintf(a.out, "%s up as %s · zmina attach %s\n", n, r.Session, n)
 
 					if t.ID != "" {
@@ -1198,4 +1208,30 @@ func tildeHome(p string) string {
 	}
 
 	return p
+}
+
+// upSettle is how long up waits before it says a resumed role is up: long enough for claude to refuse a conversation.
+var upSettle = 1500 * time.Millisecond
+
+// settledDead waits upSettle and reports the last screen line of a role whose process has ended, empty while it runs.
+func settledDead(s *shift.Shift, name string) string {
+	time.Sleep(upSettle)
+
+	for _, v := range s.Views() {
+		if v.Role != name || v.State != shift.PresenceDead {
+			continue
+		}
+
+		screen, _ := s.Tmux.Capture(name, 20)
+		lines := strings.Split(strings.TrimSpace(screen), "\n")
+		for i := len(lines) - 1; i >= 0; i-- {
+			if l := strings.TrimSpace(lines[i]); l != "" && !strings.HasPrefix(l, "Pane is dead") {
+				return l
+			}
+		}
+
+		return "its process exited"
+	}
+
+	return ""
 }
