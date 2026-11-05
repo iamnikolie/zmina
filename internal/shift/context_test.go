@@ -91,10 +91,10 @@ func TestTrimClearsAndBootsAgainUnlessATaskIsHeld(t *testing.T) {
 	did := f.s.Tick()
 	assert.Equal(t, []string{"/compact", "/clear"}, f.tm.typed["dev"])
 	assert.Contains(t, did, "dev: /clear, context 120k over 100k")
-	assert.Equal(t, []string{"read dev and boot"}, f.s.State.Role("dev").Inbox, "booted again on the next beat")
+	assert.Equal(t, []string{"read dev and boot\n\n" + AsksRule}, f.s.State.Role("dev").Inbox, "booted again on the next beat")
 
 	f.s.Tick()
-	assert.Equal(t, []string{"/compact", "/clear", "read dev and boot"}, f.tm.typed["dev"])
+	assert.Equal(t, []string{"/compact", "/clear", "read dev and boot\n\n" + AsksRule}, f.tm.typed["dev"])
 }
 
 func TestTrimNeverFeedsItself(t *testing.T) {
@@ -106,7 +106,7 @@ func TestTrimNeverFeedsItself(t *testing.T) {
 	f.status("dev", "idle", f.now.Add(-time.Hour))
 	f.s.Tick()
 	f.s.Tick()
-	require.Equal(t, []string{"/clear", "read dev and boot"}, f.tm.typed["dev"])
+	require.Equal(t, []string{"/clear", "read dev and boot\n\n" + AsksRule}, f.tm.typed["dev"])
 
 	// The boot alone fills more than context_max.
 	f.rg.context["sid-dev"] = 110_000

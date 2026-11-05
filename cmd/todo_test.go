@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"encoding/json"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -205,4 +207,20 @@ func TestTodoEditAndIgnore(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, "hand: A-1 · ignored")
 	assert.Contains(t, out, "hand: T-1 · ignored")
+}
+
+// A role that records the owner's answer from chat says so in the note the dispatcher gets.
+func TestTodoAnswerRecordedByARoleSaysSo(t *testing.T) {
+	file := testCrew(t, "  dev: {}\n")
+	out, _, err := zm(t, file, "todo", "add", "Ship it?", "--rec", "yes", "--reason", "green")
+	require.NoError(t, err)
+	id := strings.TrimSpace(out)
+
+	t.Setenv("ZMINA_ROLE", "dev")
+	_, _, err = zm(t, file, "todo", "yes", id)
+	require.NoError(t, err)
+
+	st, err := shift.Read(filepath.Dir(file))
+	require.NoError(t, err)
+	assert.Contains(t, strings.Join(bodies(st.Signals), "\n"), id+" · yes: yes — Ship it? (the owner's answer in chat, recorded by dev)")
 }
