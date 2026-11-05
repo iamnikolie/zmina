@@ -207,8 +207,10 @@ after a trim), this crew's signals on one line, every other crew's line on a lin
 part of it can start a line that reads as zmina's. A post carries at most 12 KB; what does not fit goes in the next.
 A queued line no post could carry (`zmina send --when-idle` takes any length) goes as its head and `… (+N chars,
 full: zmina inbox show <id>)`, its whole text stored in the crew's inbox and its `(zmina S-n)` tail kept. A post
-given back to the queue (its conversation ended before it showed) or kept as failed and retried keeps the S-ids it
-carries, so its lines' receipts still follow them.
+given back to the queue (its conversation ended before it showed), or kept as failed and retried, goes back item by
+item where each waited — its own line to its queue, each signal to the signals with its S-id at its head, the notices
+to the notes — so its receipts still follow those ids, and an item acked meanwhile stays out (one ack drops its own
+item, never the rest of the post). A typed line to the dispatcher that never landed goes back the same way.
 A boot line queued after a clear goes alone, first: the lines belong to a dispatcher that knows its job. With
 `delivery_mid_turn` (default true) the dispatcher's lines that wait for an ack — crew signals, other crews' lines —
 also go while it is in a turn: Claude Code queues a message that arrives mid-turn and puts it into the turn at its
@@ -258,7 +260,8 @@ another session cannot ask it for a write, and a role was seen to refuse an ack 
 own boot line, it acks. Until then a line
 is said again `renotify` after it was last delivered (`S-12 (still pending since Mon 2 Nov 11:55) …`, the same id;
 never while it is still queued or not yet seen; three times at most, then only listed; a line acked while it still
-waits in the queue is taken out of it, never posted), is listed in the dispatcher's
+waits in the queue is taken out of it, never posted: a queued line is known by the S-ids zmina keeps with it, never
+by its text), is listed in the dispatcher's
 recovery pack (`unacked`) and by `zmina pending`, and is given back when the role's session starts, resumes, or has
 its context compacted or cleared: a Claude role's settings from zmina carry a `SessionStart` hook (every source) that
 runs `zmina pending --role <role> --brief`, whose output Claude Code puts into the conversation — after a compaction

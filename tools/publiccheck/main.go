@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,6 +28,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 type rule struct {
@@ -137,16 +139,8 @@ func banned(home, base string) ([]rule, error) {
 	}
 
 	if f, err := os.Open(filepath.Join(home, ".ssh", "config")); err == nil {
-		sc := bufio.NewScanner(f)
-		for sc.Scan() {
-			fields := strings.Fields(sc.Text())
-			if len(fields) > 1 && strings.EqualFold(fields[0], "host") {
-				for _, h := range fields[1:] {
-					if !strings.ContainsAny(h, "*?!") {
-						add("ssh host", h)
-					}
-				}
-			}
+		for _, h := range sshHosts(f) {
+			add("ssh host", h)
 		}
 
 		_ = f.Close()
@@ -205,6 +199,83 @@ func banned(home, base string) ([]rule, error) {
 	}
 
 	return rules, nil
+}
+
+// sshHosts are the names the Host lines of an ssh config give, read as ssh reads them: the keyword is followed by
+// whitespace or "=", arguments may be quoted, an unquoted word that starts with # ends the line (a comment), and a
+// pattern (wildcards) or a negated one names no host.
+func sshHosts(r io.Reader) []string {
+	var hosts []string
+
+	sc := bufio.NewScanner(r)
+	for sc.Scan() {
+		words := sshWords(sc.Text())
+		if len(words) < 2 || !strings.EqualFold(words[0], "host") {
+			continue
+		}
+
+		for _, h := range words[1:] {
+			if h != "" && !strings.ContainsAny(h, "*?!") {
+				hosts = append(hosts, h)
+			}
+		}
+	}
+
+	return hosts
+}
+
+// sshWords splits an ssh config line into its keyword and arguments, quotes taken off, a comment left out.
+func sshWords(line string) []string {
+	line = strings.TrimSpace(line)
+	if line == "" || strings.HasPrefix(line, "#") {
+		return nil
+	}
+
+	// The keyword ends at whitespace or "=" ("Host=alex", "Host = alex").
+	end := strings.IndexFunc(line, func(r rune) bool { return r == '=' || unicode.IsSpace(r) })
+	if end < 0 {
+		return []string{line}
+	}
+
+	words := []string{line[:end]}
+	rest := strings.TrimLeftFunc(line[end:], unicode.IsSpace)
+	rest = strings.TrimLeftFunc(strings.TrimPrefix(rest, "="), unicode.IsSpace)
+
+	var (
+		word    strings.Builder
+		quoted  bool
+		started bool
+	)
+
+	flush := func() {
+		if started {
+			words = append(words, word.String())
+		}
+
+		word.Reset()
+		started = false
+	}
+
+	for _, r := range rest {
+		switch {
+		case r == '"':
+			quoted = !quoted
+			started = true
+		case quoted:
+			word.WriteRune(r)
+		case unicode.IsSpace(r):
+			flush()
+		case r == '#' && !started:
+			return words
+		default:
+			word.WriteRune(r)
+			started = true
+		}
+	}
+
+	flush()
+
+	return words
 }
 
 // neutral are the names fixtures and docs use on purpose.

@@ -107,39 +107,22 @@ func (s *Shift) acking(name string) bool {
 	return err == nil && s.inbound(r)
 }
 
-// trackLine gives a queued line its id when its role acks; it returns the line to queue.
-func (s *Shift) trackLine(role, line string) string {
+// trackLine gives a queued line its id when its role acks: it returns the line to queue and its id, "" for none.
+// The id is kept with the line (QueuedIDs) from here on; the line's text is never read for it.
+func (s *Shift) trackLine(role, line string) (string, string) {
 	if !s.acking(role) {
-		return line
+		return line, ""
 	}
 
 	a := s.State.Acks[s.newAck(role, line)]
+	line += s.lineSuffix(a)
+	s.carryIDs(role, line, []string{a.ID})
 
-	return line + s.lineSuffix(a)
+	return line, a.ID
 }
 
-// trackedID is the id of a role's tracked line, read from the suffix zmina gave it at its very end and checked
-// against the line's own record; "" for a line zmina does not track. What the text before the suffix quotes never
-// counts.
-func (s *Shift) trackedID(role, line string) string {
-	m := trackedTail.FindStringSubmatch(line)
-	if m == nil {
-		return ""
-	}
-
-	if a := s.State.Acks[m[1]]; a != nil && a.Role == role && a.tracks(line) {
-		return a.ID
-	}
-
-	return ""
-}
-
-// delivered marks a role's tracked line, or the signals of a delivered line by their ids, as delivered now.
-func (s *Shift) delivered(role, line string, ids []string, now time.Time) {
-	if id := s.trackedID(role, line); id != "" {
-		ids = append(ids, id)
-	}
-
+// delivered marks the tracked lines of these ids as delivered now.
+func (s *Shift) delivered(ids []string, now time.Time) {
 	for _, id := range ids {
 		if a := s.State.Acks[id]; a != nil {
 			if a.First.IsZero() {
@@ -210,14 +193,17 @@ func (s *Shift) renotify(now time.Time) {
 			s.State.Signals = append(s.State.Signals, a.ID+" (still pending since "+s.clock(a.First)+") "+a.Text)
 		} else {
 			rs := s.State.Role(a.Role)
-			rs.Inbox = append(rs.Inbox, a.Text+s.lineSuffix(a))
+			line := a.Text + s.lineSuffix(a)
+			rs.Inbox = append(rs.Inbox, line)
+			s.carryIDs(a.Role, line, []string{a.ID})
 		}
 
 		s.log(a.Role, "renoted", "", a.ID+" "+a.Text)
 	}
 }
 
-// inFlight reports whether a tracked line is queued, typed but not landed, or posted but not seen.
+// inFlight reports whether a tracked line is queued, typed but not landed, or posted but not seen: by the ids each
+// of those keeps, never by a line's text.
 func (s *Shift) inFlight(a *Ack) bool {
 	if a.Role == s.Crew.Dispatcher && slices.ContainsFunc(s.State.Signals, func(sig string) bool {
 		return queuedSignalID(sig) == a.ID
@@ -226,25 +212,15 @@ func (s *Shift) inFlight(a *Ack) bool {
 	}
 
 	rs := s.State.Role(a.Role)
-	if slices.ContainsFunc(rs.Inbox, func(l string) bool { return a.tracks(l) || slices.Contains(rs.QueuedIDs[l], a.ID) }) {
+	if slices.ContainsFunc(rs.Inbox, func(l string) bool { return slices.Contains(rs.QueuedIDs[l], a.ID) }) {
 		return true
 	}
 
-	// A line written before ids were kept with it (IDs empty) is searched for its id the old way.
-	legacy := regexp.MustCompile(`\b` + regexp.QuoteMeta(a.ID) + `\b`)
-	carries := func(line string, ids []string) bool {
-		if len(ids) > 0 {
-			return slices.Contains(ids, a.ID)
-		}
-
-		return a.tracks(line) || legacy.MatchString(line)
-	}
-
-	if rs.Sent != nil && carries(rs.Sent.Line, rs.Sent.IDs) {
+	if rs.Sent != nil && slices.Contains(rs.Sent.IDs, a.ID) {
 		return true
 	}
 
-	return slices.ContainsFunc(rs.Posted, func(p Posted) bool { return carries(p.Line, p.IDs) })
+	return slices.ContainsFunc(rs.Posted, func(p Posted) bool { return slices.Contains(p.IDs, a.ID) })
 }
 
 // AckLines acks lines by id, or with all every line of the role. An id that waits for no ack (acked already, said
@@ -301,10 +277,10 @@ func (s *Shift) AckLines(ids []string, all bool, role, caller string) ([]string,
 	return acked, warn
 }
 
-// dropQueued takes a line its reader acked out of where it still waits: the dispatcher's signals (one it read in
-// zmina queue ls, or one said again), a role's queue. A line the reader already has is not posted again. A queued
-// line is known by the id zmina gave it (a signal's leading id, a tracked line's own suffix), never by what its text
-// quotes.
+// dropQueued takes what its reader acked out of where it still waits: the dispatcher's signals (one it read in zmina
+// queue ls, or one said again), a role's queue. What the reader already has is not posted again. A queued item is
+// known by the ids zmina keeps with it (a signal's leading id, a queued line's QueuedIDs), never by what its text
+// quotes; a queued line that carries other ids too keeps waiting for them.
 func (s *Shift) dropQueued(a *Ack) {
 	if a.Role == s.Crew.Dispatcher {
 		for _, sig := range slices.Clone(s.State.Signals) {
@@ -320,13 +296,91 @@ func (s *Shift) dropQueued(a *Ack) {
 		return
 	}
 
-	for _, line := range slices.Clone(rs.Inbox) {
-		if a.tracks(line) {
+	for line, ids := range rs.QueuedIDs {
+		if !slices.Contains(ids, a.ID) {
+			continue
+		}
+
+		if ids = slices.DeleteFunc(slices.Clone(ids), func(id string) bool { return id == a.ID }); len(ids) > 0 {
+			rs.QueuedIDs[line] = ids
+
+			continue
+		}
+
+		delete(rs.QueuedIDs, line)
+
+		if slices.Contains(rs.Inbox, line) {
 			rs.Inbox = slices.DeleteFunc(rs.Inbox, func(v string) bool { return v == line })
-			delete(rs.QueuedIDs, line)
 			s.log(a.Role, "acked-queued", "", line)
 		}
 	}
+}
+
+// giveBack puts what never reached a role back where it waited, each item with its own ids: a line or post to the
+// dispatcher by its parts (its own queued lines back in its queue, signals back in the signals, notices back in the
+// notes), any other line whole. An item whose every id its reader acked meanwhile stays out: the reader has it. It
+// returns the lines for the head of the role's queue.
+func (s *Shift) giveBack(name, line string, ids []string, parts []Part) []string {
+	acked := func(ids []string) bool {
+		return len(ids) > 0 && !slices.ContainsFunc(ids, func(id string) bool { return s.State.Acks[id] != nil })
+	}
+
+	if len(parts) == 0 {
+		if acked(ids) {
+			s.log(name, "acked-queued", "", line)
+
+			return nil
+		}
+
+		s.carryIDs(name, line, ids)
+
+		return []string{line}
+	}
+
+	var lines, sigs, notes []string
+
+	for _, p := range parts {
+		switch {
+		case acked(p.IDs):
+			s.log(name, "acked-queued", "", p.Line+p.Signal)
+		case p.Line != "":
+			lines = append(lines, p.Line)
+			s.carryIDs(name, p.Line, p.IDs)
+		case p.Signal != "":
+			if slices.Contains(s.State.Signals, p.Signal) || slices.Contains(sigs, p.Signal) {
+				continue
+			}
+
+			sigs = append(sigs, p.Signal)
+
+			if p.Count > 1 {
+				if s.State.SignalCounts == nil {
+					s.State.SignalCounts = map[string]int{}
+				}
+
+				s.State.SignalCounts[p.Signal] = p.Count
+			}
+
+			if !p.Sent.IsZero() {
+				if s.State.SignalSent == nil {
+					s.State.SignalSent = map[string]time.Time{}
+				}
+
+				s.State.SignalSent[p.Signal] = p.Sent
+			}
+		default:
+			for _, n := range p.Notes {
+				if !slices.Contains(s.State.Notes, n) && !slices.Contains(notes, n) {
+					notes = append(notes, n)
+				}
+			}
+		}
+	}
+
+	s.State.Signals = append(sigs, s.State.Signals...)
+	s.State.Notes = append(notes, s.State.Notes...)
+
+	return lines
 }
 
 // QueuedSignalID is queuedSignalID for the node's reports.
@@ -350,20 +404,11 @@ func (s *Shift) carryIDs(name, line string, ids []string) {
 	}
 }
 
-// lineIDs are the S-ids a role's queued line carries: its own tracked id, and those it was given back with.
-func (s *Shift) lineIDs(name, line string) []string {
-	ids := slices.Clone(s.State.Role(name).QueuedIDs[line])
-	if id := s.trackedID(name, line); id != "" && !slices.Contains(ids, id) {
-		ids = append(ids, id)
-	}
-
-	return ids
-}
-
-// takeIDs is lineIDs for a line that leaves the queue.
+// takeIDs are the S-ids a role's queued line carries, for a line that leaves the queue.
 func (s *Shift) takeIDs(name, line string) []string {
-	ids := s.lineIDs(name, line)
-	delete(s.State.Role(name).QueuedIDs, line)
+	rs := s.State.Role(name)
+	ids := slices.Clone(rs.QueuedIDs[line])
+	delete(rs.QueuedIDs, line)
 
 	return ids
 }
@@ -377,8 +422,9 @@ func queuedSignalID(sig string) string {
 	return ""
 }
 
-// tracks reports whether a queued line is this tracked line: its text with the suffix zmina gave it, queued
-// (" (zmina S-14)") or said again (" (zmina S-14, still pending since …)").
+// tracks reports whether a line is this tracked line: its text with the suffix zmina gave it, queued
+// (" (zmina S-14)") or said again (" (zmina S-14, still pending since …)"). Only a state written before ids were
+// kept with the lines is read this way, once (adoptIDs).
 func (a *Ack) tracks(line string) bool {
 	if line == a.Text+" (zmina "+a.ID+")" {
 		return true
@@ -547,4 +593,56 @@ func (s *Shift) roleSettings(name string) string {
 	raw, _ := json.Marshal(settings)
 
 	return string(raw)
+}
+
+// adoptIDs gives the lines of a state written before ids were kept with them their ids, once: a queued tracked line
+// its own (the suffix zmina gave it, checked against its record), a typed, posted or failed line the ids of its
+// role's acks it names, as that zmina found them.
+func (st *State) adoptIDs() {
+	for name, rs := range st.Roles {
+		for _, line := range rs.Inbox {
+			m := trackedTail.FindStringSubmatch(line)
+			if m == nil || len(rs.QueuedIDs[line]) > 0 {
+				continue
+			}
+
+			if a := st.Acks[m[1]]; a != nil && a.Role == name && a.tracks(line) {
+				if rs.QueuedIDs == nil {
+					rs.QueuedIDs = map[string][]string{}
+				}
+
+				rs.QueuedIDs[line] = []string{a.ID}
+			}
+		}
+
+		named := func(line string) []string {
+			var ids []string
+
+			for id, a := range st.Acks {
+				if a.Role == name && regexp.MustCompile(`\b`+regexp.QuoteMeta(id)+`\b`).MatchString(line) {
+					ids = append(ids, id)
+				}
+			}
+
+			slices.SortFunc(ids, func(a, b string) int { return ackNum(a) - ackNum(b) })
+
+			return ids
+		}
+
+		if rs.Sent != nil && len(rs.Sent.IDs) == 0 {
+			rs.Sent.IDs = named(rs.Sent.Line)
+		}
+
+		for i := range rs.Posted {
+			if len(rs.Posted[i].IDs) == 0 {
+				rs.Posted[i].IDs = named(rs.Posted[i].Line)
+			}
+		}
+
+		for i := range rs.Failed {
+			if len(rs.Failed[i].IDs) == 0 {
+				rs.Failed[i].IDs = named(rs.Failed[i].Line)
+			}
+		}
+	}
 }

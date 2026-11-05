@@ -340,13 +340,15 @@ func TestRepostKeepsTheIDs(t *testing.T) {
 	f.rg.byPID[f.tm.up["dispatcher"]].SessionID = "sid-dispatcher-2"
 	f.s.followPosted("dispatcher", *f.now)
 	rs := f.s.State.Role("dispatcher")
-	require.Len(t, rs.Inbox, 1, "given back")
-	assert.Equal(t, []string{id}, rs.QueuedIDs[rs.Inbox[0]])
+	assert.Empty(t, rs.Inbox, "a post goes back by its parts, not as one line")
+	require.Len(t, f.s.State.Signals, 1, "given back")
+	assert.Equal(t, id, queuedSignalID(f.s.State.Signals[0]))
 	assert.True(t, f.s.inFlight(f.s.State.Acks[id]), "queued again: not said again by renotify")
 
-	require.NotEmpty(t, f.s.deliver(*f.now))
+	again := f.s.deliver(*f.now)
+	require.NotEmpty(t, again)
+	assert.Contains(t, again, "(zmina "+id+")", "the same id, not a new one")
 	assert.Equal(t, []string{id}, rs.Posted[0].IDs)
-	assert.Empty(t, rs.QueuedIDs)
 	p.showAll()
 	f.s.followPosted("dispatcher", *f.now)
 	assert.Contains(t, f.s.State.MessageStages["tell/e-1"], "submitted")
@@ -363,7 +365,9 @@ func TestRepostKeepsTheIDs(t *testing.T) {
 
 	_, err = f.s.Retry("dispatcher")
 	require.NoError(t, err)
-	assert.Equal(t, []string{id2}, rs.QueuedIDs[rs.Inbox[0]])
+	assert.Empty(t, rs.Inbox)
+	require.Len(t, f.s.State.Signals, 1)
+	assert.Equal(t, id2, queuedSignalID(f.s.State.Signals[0]))
 }
 
 // A queued line no post could carry goes bounded: its whole text in the crew's inbox, the line its head and where

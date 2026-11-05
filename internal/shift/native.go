@@ -155,7 +155,7 @@ func (s *Shift) followPosted(name string, now time.Time) bool {
 			back = append(back, p)
 			s.log(name, "requeued", "", "its conversation ended before it showed: "+p.Line)
 		case sess != nil && now.Sub(p.At) >= postedWait && s.quiet(name, sess):
-			rs.Failed = append(rs.Failed, Failed{Line: p.Line, Error: postedNever, At: now, IDs: p.IDs})
+			rs.Failed = append(rs.Failed, Failed{Line: p.Line, Error: postedNever, At: now, IDs: p.IDs, Parts: p.Parts})
 			s.log(name, "type-failed", "", postedNever+": "+p.Line)
 			s.deliveryFailure(name, p.Line, postedNever)
 		default:
@@ -168,8 +168,7 @@ func (s *Shift) followPosted(name string, now time.Time) bool {
 	if len(back) > 0 {
 		lines := make([]string, 0, len(back)+len(rs.Inbox))
 		for _, p := range back {
-			lines = append(lines, p.Line)
-			s.carryIDs(name, p.Line, p.IDs)
+			lines = append(lines, s.giveBack(name, p.Line, p.IDs, p.Parts)...)
 		}
 
 		rs.Inbox = append(lines, rs.Inbox...)

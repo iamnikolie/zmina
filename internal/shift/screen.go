@@ -287,7 +287,7 @@ func (s *Shift) landed(name string, now time.Time) bool {
 			s.clearInput(name, sent.Line)
 		}
 
-		rs.Failed = append(rs.Failed, Failed{Line: sent.Line, Error: reason, At: now, IDs: sent.IDs})
+		rs.Failed = append(rs.Failed, Failed{Line: sent.Line, Error: reason, At: now, IDs: sent.IDs, Parts: sent.Parts})
 		rs.Sent = nil
 		s.log(name, "type-failed", "", reason+": "+sent.Line)
 		s.deliveryFailure(name, sent.Line, reason)

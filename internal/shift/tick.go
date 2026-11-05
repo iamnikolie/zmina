@@ -736,6 +736,7 @@ func (s *Shift) postDispatcher(d string, sess *registry.Session, local, remote, 
 
 	var (
 		lines, ids, fresh []string
+		parts             []Part
 		size              int
 		took              = map[string]bool{}
 		full              bool
@@ -754,11 +755,19 @@ func (s *Shift) postDispatcher(d string, sess *registry.Session, local, remote, 
 		return true
 	}
 
+	// Each signal that goes is kept as a part, with its id at its head, for it to go back as it waited.
+	var sigParts []Part
 	part := func(sig string) (string, string) {
 		p, id := s.signalPart(sig)
 		if id != "" && !signalID.MatchString(sig) {
 			fresh = append(fresh, id)
 		}
+
+		kept := Part{Signal: p, Count: s.State.SignalCounts[sig], Sent: s.State.SignalSent[sig]}
+		if id != "" {
+			kept.IDs = []string{id}
+		}
+		sigParts = append(sigParts, kept)
 
 		return repeated(p, s.State.SignalCounts[sig]), id
 	}
@@ -782,7 +791,7 @@ func (s *Shift) postDispatcher(d string, sess *registry.Session, local, remote, 
 
 	// This crew's signals share a line, as many as fit: the line is measured whole, its separators, ids and
 	// wrapper included, against what the post has left.
-	var parts, partIDs []string
+	var localParts, partIDs []string
 	localLine := func(parts, ids []string) string { return "[zmina] " + strings.Join(parts, " · ") + ackTail(ids) }
 	for _, sig := range local {
 		p, id := part(sig)
@@ -791,18 +800,19 @@ func (s *Shift) postDispatcher(d string, sess *registry.Session, local, remote, 
 			withIDs = append(slices.Clone(partIDs), id)
 		}
 
-		if size+len(localLine(append(slices.Clone(parts), p), withIDs))+1 > postMax && (len(lines) > 0 || len(parts) > 0) {
+		if size+len(localLine(append(slices.Clone(localParts), p), withIDs))+1 > postMax && (len(lines) > 0 || len(localParts) > 0) {
+			sigParts = sigParts[:len(sigParts)-1]
 			full = true
 
 			break
 		}
 
-		parts, partIDs = append(parts, p), withIDs
+		localParts, partIDs = append(localParts, p), withIDs
 		took[sig] = true
 	}
 
-	if len(parts) > 0 {
-		line := localLine(parts, partIDs)
+	if len(localParts) > 0 {
+		line := localLine(localParts, partIDs)
 		lines = append(lines, line)
 		size += len(line) + 1
 		ids = append(ids, partIDs...)
@@ -816,6 +826,8 @@ func (s *Shift) postDispatcher(d string, sess *registry.Session, local, remote, 
 		}
 
 		if !add("[zmina] " + p + s.lateness(sig, now) + ackTail(tail)) {
+			sigParts = sigParts[:len(sigParts)-1]
+
 			break
 		}
 
@@ -855,18 +867,22 @@ func (s *Shift) postDispatcher(d string, sess *registry.Session, local, remote, 
 	}
 
 	for _, l := range own[:nOwn] {
-		s.delivered(d, l, nil, now)
+		lineIDs := s.takeIDs(d, l)
+		parts = append(parts, Part{Line: l, IDs: lineIDs})
+		ids = append(ids, lineIDs...)
 		s.submittedTask(d, l)
 	}
 
-	for _, l := range own[:nOwn] {
-		ids = append(ids, s.takeIDs(d, l)...)
+	parts = append(parts, sigParts...)
+	if took["\x00notes"] {
+		parts = append(parts, Part{Notes: slices.Clone(notes)})
 	}
 
 	rs.Inbox = rs.Inbox[nOwn:]
 	rs.Attempts = 0
 	rs.Posted[len(rs.Posted)-1].IDs = slices.Clone(ids)
-	s.delivered(d, "", ids, now)
+	rs.Posted[len(rs.Posted)-1].Parts = parts
+	s.delivered(ids, now)
 
 	for sig := range took {
 		if sig == "\x00notes" {
@@ -897,8 +913,9 @@ func (s *Shift) boundLine(name, line string, limit int) (string, error) {
 		return line, nil
 	}
 
+	// The tail a tracked line ends with stays at its end, for its reader: what it is known by is its ids.
 	body, tail := line, ""
-	if loc := trackedTail.FindStringIndex(line); loc != nil && s.trackedID(name, line) != "" {
+	if loc := trackedTail.FindStringIndex(line); loc != nil && len(s.State.Role(name).QueuedIDs[line]) > 0 {
 		body, tail = strings.TrimRight(line[:loc[0]], " "), " "+line[loc[0]:]
 	}
 
@@ -975,17 +992,24 @@ func (s *Shift) typeDispatcher(d string, local, remote, notes []string, now time
 		return ""
 	}
 
-	// Each signal goes with its id, and the line ends with how to ack them (watch notes have their own ack).
-	var ids, fresh []string
+	// Each signal goes with its id, and the line ends with how to ack them (watch notes have their own ack). What
+	// the line is made of is kept (kept), for it to go back as it waited if it never lands.
+	var (
+		ids, fresh []string
+		kept       []Part
+	)
 
 	part := func(sig string) string {
 		p, id := s.signalPart(sig)
+		k := Part{Signal: p, Count: s.State.SignalCounts[sig], Sent: s.State.SignalSent[sig]}
 		if id != "" {
 			ids = append(ids, id)
+			k.IDs = []string{id}
 			if !signalID.MatchString(sig) {
 				fresh = append(fresh, id)
 			}
 		}
+		kept = append(kept, k)
 
 		return repeated(p, s.State.SignalCounts[sig])
 	}
@@ -998,6 +1022,10 @@ func (s *Shift) typeDispatcher(d string, local, remote, notes []string, now time
 			parts = append(parts, part(sig))
 		}
 		parts = append(parts, notes...)
+
+		if len(notes) > 0 {
+			kept = append(kept, Part{Notes: slices.Clone(notes)})
+		}
 	}
 
 	line := "[zmina] " + strings.Join(parts, " · ") + ackTail(ids)
@@ -1010,8 +1038,8 @@ func (s *Shift) typeDispatcher(d string, local, remote, notes []string, now time
 		return ""
 	}
 
-	s.State.Role(d).Sent = &Sent{Line: line, At: now, IDs: ids}
-	s.delivered(d, "", ids, now)
+	s.State.Role(d).Sent = &Sent{Line: line, At: now, IDs: ids, Parts: kept}
+	s.delivered(ids, now)
 	s.stageIDs(ids, "submitted")
 
 	if alone {
@@ -1153,12 +1181,13 @@ func (s *Shift) deliverInbox(name string, now time.Time) string {
 
 	rs.Inbox, rs.Attempts = rs.Inbox[1:], 0
 	s.log(name, "typed", "", head)
-	s.delivered(name, head, nil, now)
+	ids := s.takeIDs(name, head)
+	s.delivered(ids, now)
 	s.submittedTask(name, head)
 
 	// A slash command may not change the status; only a line for the conversation is watched until it lands.
 	if !strings.HasPrefix(head, "/") {
-		rs.Sent = &Sent{Line: head, At: now, IDs: s.takeIDs(name, head)}
+		rs.Sent = &Sent{Line: head, At: now, IDs: ids}
 	}
 
 	return "typed into " + name + ": " + head
@@ -1191,7 +1220,7 @@ func (s *Shift) postInbox(name string, sess *registry.Session, now time.Time) st
 
 	rs.Inbox, rs.Attempts = rs.Inbox[1:], 0
 	s.submittedTask(name, head)
-	s.delivered(name, head, ids, now)
+	s.delivered(ids, now)
 
 	return "posted to " + name + ": " + head
 }

@@ -1018,9 +1018,9 @@ func (s *Shift) QueueTracked(name, text string) (string, error) {
 		return "", fmt.Errorf("%s: %d lines already wait; let it read them first", name, inboxMax)
 	}
 
-	line := s.trackLine(name, text)
+	line, id := s.trackLine(name, text)
 
-	return s.trackedID(name, line), s.Queue(name, line)
+	return id, s.Queue(name, line)
 }
 
 // Note queues a task signal for the dispatcher as "<from>: <text>"; the ticker types it with the health notes, as one
@@ -1195,8 +1195,7 @@ func (s *Shift) Retry(name string) (int, error) {
 	lines := make([]string, 0, len(rs.Failed)+len(rs.Inbox))
 
 	for _, f := range rs.Failed {
-		lines = append(lines, f.Line)
-		s.carryIDs(name, f.Line, f.IDs)
+		lines = append(lines, s.giveBack(name, f.Line, f.IDs, f.Parts)...)
 	}
 
 	n := len(rs.Failed)

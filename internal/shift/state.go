@@ -44,7 +44,10 @@ type State struct {
 	MessageStages map[string]map[string]time.Time `json:"message_stages,omitempty"`
 	RemoteBatches int                             `json:"remote_batches,omitempty"`
 	// Acks are the delivered lines that wait for their reader's ack; AckSeq numbers them (S-<n>).
-	Acks           map[string]*Ack        `json:"acks,omitempty"`
+	Acks map[string]*Ack `json:"acks,omitempty"`
+	// IDsKept is set once every queued and delivered line keeps its ids with it (QueuedIDs, Sent/Posted/Failed
+	// IDs); a state written before is read for them once (adoptIDs).
+	IDsKept        bool                   `json:"ids_kept,omitempty"`
 	AckSeq         int                    `json:"ack_seq,omitempty"`
 	RecordNotified map[string]bool        `json:"record_notified,omitempty"`
 	NoticeMeta     map[string]NoticeMeta  `json:"notice_meta,omitempty"`
@@ -162,8 +165,9 @@ type RoleState struct {
 	HooksFlagged string `json:"hooks_flagged,omitempty"`
 	// QueuedBoot is the boot line a clear queued for the role: it goes alone, before anything else waiting for it.
 	QueuedBoot string `json:"queued_boot,omitempty"`
-	// QueuedIDs are the S-ids a queued line carries that its text is never searched for: a post given back to the
-	// queue (its conversation ended before it showed), a failed line retried.
+	// QueuedIDs are the S-ids each queued line carries, by the line: a tracked line's own id from the moment it is
+	// queued, those of a line given back (its conversation ended before it showed, a failed line retried). A queued
+	// line is known by them alone; its text is never searched for an id.
 	QueuedIDs map[string][]string `json:"queued_ids,omitempty"`
 	// Dir is where the role was started when not its crew dir (zmina up --task: the task's worktree); Trusted
 	// that zmina answered Claude Code's "trust this folder" there.
@@ -178,6 +182,8 @@ type Sent struct {
 	Tries int       `json:"tries,omitempty"`
 	// IDs are the S-ids the line carries (the dispatcher's signals).
 	IDs []string `json:"ids,omitempty"`
+	// Parts are what a line to the dispatcher was made of, given back each on its own when it never lands.
+	Parts []Part `json:"parts,omitempty"`
 }
 
 // Posted is a line posted to a role's inbox socket: the message's id, and the session it went to.
@@ -188,6 +194,19 @@ type Posted struct {
 	At      time.Time `json:"at"`
 	// IDs are the S-ids the post carries, as zmina put them in it; a line's text is never searched for them.
 	IDs []string `json:"ids,omitempty"`
+	// Parts are what a post to the dispatcher was made of, given back each on its own when it never shows.
+	Parts []Part `json:"parts,omitempty"`
+}
+
+// Part is one item of a line or post to the dispatcher, kept so that what never reached it goes back where it
+// waited, each item with its own ids: a queued line of its own, a signal (with its id at its head), the notices.
+type Part struct {
+	Line   string    `json:"line,omitempty"`
+	Signal string    `json:"signal,omitempty"`
+	Count  int       `json:"count,omitempty"`
+	Sent   time.Time `json:"sent,omitzero"`
+	Notes  []string  `json:"notes,omitempty"`
+	IDs    []string  `json:"ids,omitempty"`
 }
 
 // Failed is a queued line that could not be typed.
@@ -195,8 +214,9 @@ type Failed struct {
 	Line  string    `json:"line"`
 	Error string    `json:"error"`
 	At    time.Time `json:"at"`
-	// IDs are the S-ids the line carries, kept for its retry.
-	IDs []string `json:"ids,omitempty"`
+	// IDs are the S-ids the line carries, kept for its retry; Parts what a line to the dispatcher was made of.
+	IDs   []string `json:"ids,omitempty"`
+	Parts []Part   `json:"parts,omitempty"`
 }
 
 // Role is the state of one role, made on first use.
@@ -408,7 +428,7 @@ func (l *Locked) Release() {
 
 // NewState is an empty state.
 func NewState() *State {
-	s := &State{Version: stateVersion}
+	s := &State{Version: stateVersion, IDsKept: true}
 	s.init()
 
 	return s
@@ -427,6 +447,11 @@ func (s *State) init() {
 		if r == nil {
 			delete(s.Roles, name)
 		}
+	}
+
+	if !s.IDsKept {
+		s.adoptIDs()
+		s.IDsKept = true
 	}
 }
 
