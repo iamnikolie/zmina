@@ -111,7 +111,7 @@ func chatSnapshot(s *shift.Shift, role string) (chat.Snapshot, error) {
 	}
 	for _, receipt := range rs.ChatReceipts {
 		id := "web:" + receipt.ID
-		if seen[id] {
+		if seen[id] || !receipt.Dismissed.IsZero() {
 			continue
 		}
 		state := "sent"
@@ -277,13 +277,35 @@ func (a *app) localChatAction(key, role, action string) (chat.Snapshot, error) {
 			}
 			return s.PressKeys(role, []string{"C-c"})
 		default:
-			return errors.New("chat action: start or stop")
+			if id, ok := strings.CutPrefix(action, "dismiss:"); ok {
+				return dismissChat(s, role, id, snapshot)
+			}
+			return errors.New("chat action: start, stop or dismiss:<id>")
 		}
 	})
 	if err != nil {
 		return chat.Snapshot{}, err
 	}
 	return a.localChatRead(key, role)
+}
+
+// dismissChat sets aside an owner message whose delivery stayed unconfirmed (its conversation changed before it was
+// seen there): the owner has looked and need not see it under every newer reply. Only such a message: one still
+// queued, sent or failed has a delivery in play.
+func dismissChat(s *shift.Shift, role, id string, snapshot chat.Snapshot) error {
+	if !chat.ValidID(id) {
+		return errors.New("message request ID is invalid")
+	}
+	if !slices.ContainsFunc(snapshot.Pending, func(m chat.Message) bool { return m.ID == "web:"+id && m.State == "unconfirmed" }) {
+		return errors.New("only a message whose delivery is unconfirmed can be dismissed")
+	}
+	rs := s.State.Role(role)
+	for i := range rs.ChatReceipts {
+		if rs.ChatReceipts[i].ID == id {
+			rs.ChatReceipts[i].Dismissed = s.Now()
+		}
+	}
+	return nil
 }
 
 func (a *app) chatCall(ctx context.Context, node, op string, req mesh.TerminalRequest) (chat.Snapshot, error) {

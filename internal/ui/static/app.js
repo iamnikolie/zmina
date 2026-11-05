@@ -11,6 +11,76 @@ const el = (tag, cls, text) => {
   return e;
 };
 
+// ---- patching: a snapshot comes every time anything in any crew moves, every couple of seconds. Each section is
+// drawn anew and patched into the page, so what did not change stays the very element it was: its scroll, its focus
+// and an agent's reference to it hold. An element that carries handlers (a button, a field, a link, a row, an open
+// panel) is never patched in place — its handlers close over the snapshot it was drawn from — but swapped whole.
+
+const handles = (n) => n.nodeType === 1 && (["BUTTON", "A", "INPUT", "TEXTAREA", "SELECT"].includes(n.nodeName)
+  || n.classList.contains("row") || n.classList.contains("panel") || !!n.onclick || !!n.onkeydown);
+
+// patch makes parent's children the nodes given (strings are text), keeping each old child equal to its new one,
+// and those of the same data-k or place where only plain containers differ.
+function patch(parent, nodes) {
+  const want = nodes.filter((n) => n !== null && n !== undefined && n !== false)
+    .map((n) => (typeof n === "string" ? document.createTextNode(n) : n));
+  const old = [...parent.childNodes];
+  const byKey = new Map(old.filter((n) => n.dataset?.k).map((n) => [n.dataset.k, n]));
+  const used = new Set();
+  want.forEach((n, i) => {
+    let o = n.dataset?.k ? byKey.get(n.dataset.k) : old[i];
+    if (!o || used.has(o) || (o.dataset?.k || "") !== (n.dataset?.k || "")) o = null;
+    let keep = n;
+    if (o) {
+      used.add(o);
+      keep = morph(o, n);
+    }
+    if (parent.childNodes[i] !== keep) parent.insertBefore(keep, parent.childNodes[i] || null);
+  });
+  while (parent.childNodes.length > want.length) parent.lastChild.remove();
+}
+
+// morph turns old into nu and returns the node that stays: old itself when only plain containers differ.
+function morph(old, nu) {
+  // An open panel's indent is measured after it is drawn (indent): the new one starts where the old one stands.
+  const op = old.nodeType === 1 && old.querySelector(":scope > .panel");
+  const np = op && nu.querySelector(":scope > .panel");
+  if (np) np.style.setProperty("--in", op.style.getPropertyValue("--in"));
+  if (old.isEqualNode(nu)) return old;
+  if (old.nodeType !== 1 || old.nodeName !== nu.nodeName || handles(old) || handles(nu)) {
+    if (old.parentNode) old.replaceWith(nu);
+    return nu;
+  }
+  for (const a of [...old.attributes]) if (!nu.hasAttribute(a.name)) old.removeAttribute(a.name);
+  for (const a of [...nu.attributes]) if (old.getAttribute(a.name) !== a.value) old.setAttribute(a.name, a.value);
+  patch(old, [...nu.childNodes]);
+  return old;
+}
+
+// setText writes a text only when it changes.
+function setText(e, t) { if (e.textContent !== t) e.textContent = t; }
+
+// focusMark notes what has the focus, as something a redrawn page can find again: its row or section, its kind and
+// its name. refocus puts the focus back on that element when it was swapped for a new one.
+function focusMark() {
+  const a = document.activeElement;
+  if (!a || a === document.body || a.classList.contains("field")) return null;
+  const host = a.closest("[data-k]") || a.closest("[id]");
+  if (!host) return null;
+  return { el: a, host: host.dataset.k ? `[data-k="${CSS.escape(host.dataset.k)}"]` : "#" + CSS.escape(host.id),
+    sig: a.nodeName + "|" + a.className + "|" + (a.getAttribute("aria-label") || a.textContent.trim()) };
+}
+
+function refocus(m) {
+  if (!m || m.el.isConnected) return;
+  for (const h of document.querySelectorAll(m.host)) {
+    if (!h.offsetParent && h.id !== "full") continue;
+    const sig = (x) => x.nodeName + "|" + x.className + "|" + (x.getAttribute("aria-label") || x.textContent.trim());
+    const f = [h, ...h.querySelectorAll("button, a, [tabindex]")].find((x) => sig(x) === m.sig);
+    if (f) { f.focus({ preventScroll: true }); return; }
+  }
+}
+
 // ---- words: English only; task notes and todo text are shown as written
 
 // A language picked in this browser before the page went English-only is forgotten.
@@ -170,6 +240,7 @@ function render() {
   if (!snap) return;
   // A reply being typed keeps its focus and caret through a re-render.
   const typing = document.activeElement?.classList.contains("field") ? document.activeElement.selectionStart : -1;
+  const focused = focusMark();
   // The saved choice holds while it matches something: a peer's crews may come after the first snapshot.
   const saved = localStorage.getItem("zmina.crew") || "all";
   filter = validFilter(saved) ? saved : "all";
@@ -205,6 +276,7 @@ function render() {
   renderFull();
   applyHover();
   indent();
+  refocus(focused);
   if (typing >= 0) {
     // Both layouts draw the open row; the one on screen takes the caret.
     const f = full ? $("full").querySelector(".field")
@@ -217,8 +289,12 @@ function render() {
 }
 
 function renderSay(hold, asks, going, parked) {
-  const say = $("say");
-  say.replaceChildren();
+  // Drawn aside and patched in: the line is a live region, read out again only when it says something new.
+  const say = el("div");
+  try { sayParts(say, hold, asks, going, parked); } finally { patch($("say"), [...say.childNodes]); }
+}
+
+function sayParts(say, hold, asks, going, parked) {
   if (!snap.crews.length) {
     say.append(el("span", "x", W.noCrew));
     return;
@@ -242,7 +318,7 @@ function renderSay(hold, asks, going, parked) {
 
   $("clock").classList.toggle("dead", dead.length > 0);
   $("mark").classList.toggle("stopped", dead.length > 0);
-  $("clock").lastElementChild.textContent = hhmm(nowMs());
+  setText($("clock").lastElementChild, hhmm(nowMs()));
   document.title = ["zmina", ...dead, hold.length ? W.sayHold(hold.length) : "", asks.length ? W.sayAsk(asks.length) : ""]
     .filter(Boolean).join(" · ");
   favicon(dead.length || long ? "#ff7b72" : hold.length + asks.length ? "#f0b45a" : "");
@@ -316,13 +392,13 @@ function renderChips() {
     }
     items.push(g);
   }
-  nav.replaceChildren(...items);
+  patch(nav, [...items]);
   // The edge fades only when the chips scroll.
   nav.classList.toggle("over", nav.scrollWidth > nav.clientWidth + 1);
 }
 
 function heading(id, label, n, cls) {
-  $(id).replaceChildren(label + " ", el("b", cls || "", String(n)));
+  patch($(id), [label + " ", el("b", cls || "", String(n))]);
 }
 
 // fresh marks a row that came after the first render, so it enters from the top.
@@ -356,25 +432,22 @@ function toggleRow(k) {
   render();
 }
 
-// rowShell is the focusable row: its words, its age, an optional chip, the «›»; hov the in-place actions (≥ 860),
-// panel what opens under it.
+// rowShell is a row: its words, its age, an optional chip, the «›»; hov the in-place actions (≥ 860), panel what
+// opens under it. A click anywhere on it opens it; the «›» is the row's own button, named by its title, so the
+// keyboard and assistive tech reach it and the actions beside it — never inside a button, where they would be lost.
 function rowShell(k, cls, words, age, chip, hov, panel) {
   const row = fresh(el("div", "row" + (cls ? " " + cls : "")), k);
   row.dataset.k = k;
-  row.tabIndex = 0;
-  row.setAttribute("role", "button");
   const isOpen = openRow === k;
-  row.setAttribute("aria-expanded", isOpen ? "true" : "false");
   row.classList.toggle("open", isOpen);
   row.addEventListener("click", (e) => {
     if (e.target.closest("button, a, input, textarea")) return;
     toggleRow(k);
   });
-  row.addEventListener("keydown", (e) => {
-    if (e.target !== row) return;
-    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleRow(k); }
-  });
-  row.append(words, age || el("span"), chip || el("span"), el("span", "chev", "›"));
+  const toggle = button("chev", "›", () => toggleRow(k));
+  toggle.setAttribute("aria-expanded", isOpen ? "true" : "false");
+  toggle.setAttribute("aria-label", (words.querySelector(".tt") || words).textContent.trim().slice(0, 160));
+  row.append(words, age || el("span"), chip || el("span"), toggle);
   if (hov && hov.childNodes.length) {
     hov.className = "hov";
     row.append(hov);
@@ -634,7 +707,7 @@ function renderHold(hold) {
   });
   $("hold").classList.toggle("empty", !rows.length);
   if (!rows.length) rows.push(el("p", "none", W.noHold));
-  $("hold-rows").replaceChildren(...rows);
+  patch($("hold-rows"), [...rows]);
 }
 
 // ---- L2 · answer (b2): one chip with the recommendation; open: the field, «Later», «No»
@@ -666,26 +739,28 @@ function renderAsks(asks) {
   }
   $("ask").classList.toggle("empty", !live.length);
   if (!live.length) rows.push(el("p", "none", W.noAsk));
-  $("ask-rows").replaceChildren(...rows);
+  patch($("ask-rows"), [...rows]);
 
   // The checks: one line; a tap on one opens its row under the line.
   const hands = $("hands");
   hands.hidden = !checks.length;
   if (!checks.some((it) => key(it.crew, it.id) === openHand) || openRow !== openHand) openHand = "";
-  hands.replaceChildren(el("span", "hl", W.hands));
+  const kids = [el("span", "hl", W.hands)];
   checks.forEach((it, i) => {
     const k = key(it.crew, it.id);
-    if (i) hands.append(" · ");
+    if (i) kids.push(" · ");
     const link = el("span", "hk" + (openHand === k ? " on" : "") + stl(it.crew), it.title || it.text);
     link.tabIndex = 0;
     link.setAttribute("role", "button");
+    link.setAttribute("aria-expanded", openHand === k ? "true" : "false");
     const flip = () => { openHand = openHand === k ? "" : k; openRow = openHand; render(); };
     link.onclick = flip;
     link.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); flip(); } };
-    hands.append(tint(link, it.project));
+    kids.push(tint(link, it.project));
   });
   const opened = checks.find((it) => key(it.crew, it.id) === openHand);
-  if (opened) hands.append(askRow(opened));
+  if (opened) kids.push(askRow(opened));
+  patch(hands, kids);
 }
 
 // ---- L3 · going: open work, and work waiting on a role of the crew
@@ -731,7 +806,7 @@ function renderGo(going) {
   });
   $("go").classList.toggle("empty", !rows.length);
   if (!rows.length) rows.push(el("p", "none", W.noGo));
-  $("go-rows").replaceChildren(...rows);
+  patch($("go-rows"), [...rows]);
 }
 
 // ---- L4 · parked (b4): rows carry nothing; open: «Bring back», «Drop» (muted, no confirm, 5 s undo)
@@ -740,7 +815,7 @@ function renderLater(parked) {
   const live = parked.filter((it) => !gone(key(it.crew, it.id)));
   $("later").hidden = !parked.length;
   heading("later-h", W.later, parked.length);
-  $("later-rows").replaceChildren(...live.map(laterRow));
+  patch($("later-rows"), [...live.map(laterRow)]);
 }
 
 // laterRow is a parked item on the lean page; opened, its whole text shows in place, with «Bring back» and a muted
@@ -922,10 +997,10 @@ function alarmAct(a, action, when, text, word, k) {
 
 function renderAlarms() {
   const head = alarmHead();
-  $("alarms-h").replaceChildren(...head);
+  patch($("alarms-h"), [...head]);
   const rows = alarmRows("");
   if (!rows.length) rows.push(el("p", "none", W.alNone));
-  $("alarms-rows").replaceChildren(...rows);
+  patch($("alarms-rows"), [...rows]);
 }
 
 // ---- L5 · waiting on others: one line per person, open on click; a row opens like a going one, with «Take it back»
@@ -956,7 +1031,7 @@ function renderOthers(others) {
     sub.append(...ws.sort((a, b) => T(a.updated) - T(b.updated)).map(otherRow));
     out.push(sub);
   }
-  $("others-rows").replaceChildren(...out);
+  patch($("others-rows"), [...out]);
 }
 
 // otherRow is a task waiting on someone else; it opens to its note, whom it waits on, and «Take it back».
@@ -982,7 +1057,7 @@ function renderQuiet() {
   const q = $("quiet");
   q.hidden = !empty.length;
   if (!empty.length) return;
-  q.textContent = empty.map(([, words]) => words).join(" · ");
+  setText(q, empty.map(([, words]) => words).join(" · "));
   $(empty[0][0]).before(q);
 }
 
@@ -991,7 +1066,7 @@ function renderQuiet() {
 // lean page above is the page. Motion is only a working role's lamp and the heartbeat.
 
 function renderCockpit(hold, asks, others, parked) {
-  $("brand-s").textContent = W.shift;
+  setText($("brand-s"), W.shift);
   renderEv();
   const crews = snap.crews.filter((c) => shows(c.key));
   const roles = crews.flatMap((c) => c.roles);
@@ -1010,7 +1085,7 @@ function renderCockpit(hold, asks, others, parked) {
   const today = spent(crews, "today");
   const week = spent(crews, "week");
   cells.push([W.roSpent, today, week ? W.spentWeek(money(week)) : W.spentNone, "dim", money(today), W.spentTip]);
-  $("strip").replaceChildren(...cells.map(([label, n, sub, cls, shown, tip]) => {
+  patch($("strip"), cells.map(([label, n, sub, cls, shown, tip]) => {
     const ro = el("div", "ro " + cls + (n ? " lit" : " dark"));
     ro.append(el("span", "ro-l", label), el("span", "ro-n", shown || String(n)), el("span", "ro-s", sub));
     if (tip) ro.title = tip;
@@ -1018,16 +1093,16 @@ function renderCockpit(hold, asks, others, parked) {
   }));
 
   // Your move: holds first, then the questions and checks, one line each with the recommendation as the chip.
-  $("move-h").textContent = W.move;
+  setText($("move-h"), W.move);
   const live = (it) => !gone(key(it.crew, it.id));
   const holds = hold.filter(live).map((it) => moveRow(it, true));
   if (!holds.length) holds.push(el("p", "dnone", W.noHold));
-  $("move-rows").replaceChildren(...holds);
+  patch($("move-rows"), [...holds]);
   const qs = asks.filter(live);
-  $("move-ask-h").textContent = qs.length ? W.ask : "";
-  $("move-asks").replaceChildren(...qs.map((it) => moveRow(it, false)));
-  $("move-al-h").replaceChildren(...alarmHead());
-  $("move-alarms").replaceChildren(...alarmRows("mv al"));
+  setText($("move-ask-h"), qs.length ? W.ask : "");
+  patch($("move-asks"), [...qs.map((it) => moveRow(it, false))]);
+  patch($("move-al-h"), [...alarmHead()]);
+  patch($("move-alarms"), [...alarmRows("mv al")]);
 
   renderBand(crews);
   renderBoard(parked);
@@ -1061,8 +1136,7 @@ function renderEv() {
   const evs = snap.log.filter((e) => shows(e.crew));
   const answered = new Set(evs.filter((e) => e.event === "answered").map((e) => e.crew + "/" + ((e.detail || "").match(/^(A-\d+)/) || [])[1]));
   const e = evs.map((x) => feedLine(x, answered)).find(Boolean);
-  $("ev").replaceChildren();
-  if (e) $("ev").append(el("i"), [hhmm(e.ts), who(e.crew, e.role || e.by), e.text].filter(Boolean).join(" · "));
+  patch($("ev"), e ? [el("i"), [hhmm(e.ts), who(e.crew, e.role || e.by), e.text].filter(Boolean).join(" · ")] : []);
 }
 
 // moveRow is a row of your move: a hold carries its note and «ops · waits on dispatcher» under the title, a question its
@@ -1150,7 +1224,7 @@ function renderBand(crews) {
     pile.append(...stackOf([sessionCard(...idle[0])], idle.length - 1, () => { stacked.add("sessions"); keepStacked(); render(); }, W.idleN));
     band.append(pile);
   }
-  $("crew-col").replaceChildren(h, up.length ? band : el("p", "dnone", W.nobodyUp));
+  patch($("crew-col"), [h, up.length ? band : el("p", "dnone", W.nobodyUp)]);
 }
 
 // sessionCard is one session: the role's glyph as its lamp (D-04 i3), the role, its crew while every crew shows, the
@@ -1202,7 +1276,7 @@ function sessionCard(c, r) {
 // An empty column folds to a strip with its label and 0; each column scrolls on its own.
 
 function renderBoard(parked) {
-  $("kb-h").textContent = W.kb;
+  setText($("kb-h"), W.kb);
   const work = snap.work.filter((w) => shows(w.crew) && !gone(key(w.crew, w.id)) && !gone(otherKey(w)));
   const busy = (w) => w.role_state === "up" && w.status === "busy";
   const cols = [
@@ -1212,7 +1286,7 @@ function renderBoard(parked) {
     ["later", W.kbLater, parked.filter((it) => !gone(key(it.crew, it.id))).sort((a, b) => T(b.updated) - T(a.updated))],
   ];
   $("kb-cols").style.gridTemplateColumns = cols.map(([, , ws]) => (ws.length ? "minmax(0, 1fr)" : "3rem")).join(" ");
-  $("kb-cols").replaceChildren(...cols.map(([lane, label, ws]) => {
+  patch($("kb-cols"), cols.map(([lane, label, ws]) => {
     const col = el("div", "kb-col" + (ws.length ? "" : " empty"));
     const h = el("div", "kb-ch");
     h.append(el("span", "", label), el("b", lane === "you" && ws.length ? "n" : "", String(ws.length)));
@@ -1523,7 +1597,7 @@ function renderFoot() {
   line.append(el("b", "", String(done)));
   const h = button("r", W.history, () => { $("history").hidden = !$("history").hidden; render(); });
   h.setAttribute("aria-expanded", $("history").hidden ? "false" : "true");
-  $("foot").replaceChildren(line, h);
+  patch($("foot"), [line, h]);
 }
 
 function taskChange(detail) {
@@ -1591,11 +1665,11 @@ function feedLine(e, answered) {
 }
 
 function renderFeed() {
-  $("history-h").textContent = W.historyH;
+  setText($("history-h"), W.historyH);
   const evs = snap.log.filter((e) => shows(e.crew));
   // An ask and its answer are one line: the answer.
   const answered = new Set(evs.filter((e) => e.event === "answered").map((e) => e.crew + "/" + ((e.detail || "").match(/^(A-\d+)/) || [])[1]));
-  $("feed").replaceChildren(...evs.map((e) => feedLine(e, answered)).filter(Boolean).map((e) => {
+  patch($("feed"), evs.map((e) => feedLine(e, answered)).filter(Boolean).map((e) => {
     const row = el("div", "e");
     const t = el("time", "", hhmm(e.ts));
     t.title = new Date(e.ts).toLocaleString();
@@ -1621,7 +1695,7 @@ document.addEventListener("keydown", (e) => {
     openRow = "";
     openHand = "";
     render();
-    document.querySelector(`[data-k="${CSS.escape(k)}"]`)?.focus();
+    [...document.querySelectorAll(`[data-k="${CSS.escape(k)}"] > .chev`)].find((x) => x.offsetParent)?.focus();
   }
 });
 

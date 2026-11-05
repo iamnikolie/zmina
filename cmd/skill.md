@@ -526,7 +526,11 @@ uncached; uploaded HTML/SVG is never executed or embedded. Files are never execu
 
 `POST /api/chat/action` accepts the same destination plus `action`: `start` explicitly starts a down
 role with its configured settings; `stop` sends one Ctrl+C only when the observed role is actively
-working and has no draft/dialog. Chat does not answer native approval prompts: open **Terminal**.
+working and has no draft/dialog; `dismiss:<message ID>` sets aside an owner message whose delivery stayed unconfirmed
+(its conversation changed before it showed there; the page's Dismiss): it is no longer listed as pending, in any
+browser, and its receipt stays so a retry with that ID is still recognised. A message queued, sent or failed is
+refused. Messages not yet seen in the conversation stand where they were sent, by time; one not from today shows its
+date. Chat does not answer native approval prompts: open **Terminal**.
 Reading Chat does not resume a Codex thread or attach another native app writer. Chat is not a tmux
 attachment and does not pin an idle role against the configured release policy.
 
@@ -853,7 +857,8 @@ together. An opened board card puts every button on one small line under the fie
 keep only their icon, the word in the tooltip. Amber marks only what waits on
 you; a project is a dot before the title. While a reply is typed the page holds still and catches up after.
 
-Rows carry no buttons: a tap (Enter, Space) opens the row in place, one at a time, Esc closes it — the title
+Rows carry no buttons: a tap opens the row in place (its «›» is the row's own button, named by its title, for the
+keyboard and assistive tech; the actions it opens sit beside it, never inside it), one at a time, Esc closes it — the title
 wraps, then the latest note, one faint line (who waits, the link named by its source; ids in the row's tooltip),
 and one action line: the reply field where the row takes words, one primary (the recommendation, Done, Bring back,
 Take it back; Send once words are typed), the rest muted (Later, No, Hide, Discard); from 860 px hovering a row
@@ -866,7 +871,8 @@ Todo answers never type into a role. The separate Terminals page attaches direct
 Bound to 127.0.0.1 by default and only answers requests that name it (`Host`), so another web page cannot read or
 write through the browser. Writes need the page's own header. A non-loopback `--addr` is refused unless
 `--token <secret>` (or `$ZMINA_UI_TOKEN`) is set: the page then needs `?token=` once on a new device (it is kept in a 90-day HttpOnly, SameSite Strict cookie, renewed on authenticated page loads); on this machine `zmina ui` signs the browser in with a one-time login code, and the address it prints carries no token.
-Live over server-sent events; the files are inside the binary.
+Live over server-sent events; the files are inside the binary. Each update is patched in: what did not change stays
+the very element it was, so its focus, its scroll and an agent's reference to it hold.
 
 ## Later — the parked list
 
@@ -1067,7 +1073,10 @@ alone for the beat — never taken as ended; a role being put down is left alone
    `<namespace>/projects/*/<session id>.jsonl`), idle for 5 min, its input line on screen and empty
    (a half-typed line would swallow the command; a dialog has no input line), nothing typed into it
    this beat and nothing waiting for it (for the dispatcher: no signals or notes), gets `/compact` —
-   the conversation goes on, summarised. With `context_action: clear` it gets `/clear` once idle
+   the conversation goes on, summarised. A compaction also reaches a role whose turn is over while a background shell
+   or agent it started keeps its status off idle (a dispatcher with a watcher running would otherwise never be
+   compacted); a clear does not. Over its limit by more than a quarter, it waits 2 min idle instead of 5: a dispatcher
+   that gets a line every few minutes is seldom idle for five. With `context_action: clear` it gets `/clear` once idle
    `idle_minutes` and with no terminal attached, and then its boot line on the
    next beat, before any signal: a fresh conversation (`resume: always` then resumes that one). A
    role holding an active task is compacted, never cleared. At most once per 30 min per role;

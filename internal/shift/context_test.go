@@ -195,3 +195,38 @@ func compactCount(lines []string) int {
 	}
 	return n
 }
+
+// A dispatcher whose watcher keeps a background shell running is between turns all the same: compacted, never cleared.
+func TestTrimCompactsARoleWithABackgroundShell(t *testing.T) {
+	f := fixtureWith(t, trimCrew)
+	f.s.Tick()
+
+	*f.now = f.now.Add(3 * time.Minute)
+	f.rg.context["sid-dispatcher"] = 170_000
+	f.rg.context["sid-dev"] = 170_000
+	f.rg.ended = map[string]bool{"sid-dispatcher": true, "sid-dev": true}
+
+	f.status("dispatcher", "shell", f.now.Add(-10*time.Minute))
+	f.status("dev", "shell", f.now.Add(-time.Hour))
+	f.s.Tick()
+
+	assert.Equal(t, []string{"/compact"}, f.tm.typed["dispatcher"])
+	assert.Empty(t, f.tm.typed["dev"], "a clear waits for a plain idle")
+}
+
+// Far over its limit, a role is compacted after a shorter idle: a dispatcher that gets a line every few minutes is
+// seldom idle for five.
+func TestTrimFarOverWaitsLess(t *testing.T) {
+	f := fixtureWith(t, trimCrew)
+	f.s.Tick()
+
+	*f.now = f.now.Add(3 * time.Minute)
+	f.rg.context["sid-dispatcher"] = 170_000 // within a quarter over 150k
+	f.status("dispatcher", "idle", f.now.Add(-3*time.Minute))
+	f.s.Tick()
+	assert.Empty(t, f.tm.typed["dispatcher"])
+
+	f.rg.context["sid-dispatcher"] = 213_000
+	f.s.Tick()
+	assert.Equal(t, []string{"/compact"}, f.tm.typed["dispatcher"])
+}

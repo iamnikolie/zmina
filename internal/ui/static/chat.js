@@ -146,6 +146,10 @@
     const follow = firstPaint || atBottom(), oldScroll = conversation.scrollTop;
     const rows = [...(snapshot.messages || []), ...(snapshot.pending || [])], seen = new Set(rows.map(row => row.id));
     for (const entry of outbox) if (sameDestination(entry.dest) && !seen.has("web:" + entry.id)) rows.push({id: "web:" + entry.id, role: "user", text: entry.text, at: entry.at, state: entry.state, failure: entry.failure, outboxKey: entry.key, attachments:entry.files||[]});
+    // A message not yet seen in the conversation stands where it was sent, not under every newer reply; one with no
+    // time stays last. The sort is stable, so the conversation's own order holds.
+    const when = (row) => { const t = Date.parse(row.at); return Number.isNaN(t) ? Infinity : t; };
+    rows.sort((a, b) => when(a) - when(b));
     const keep = new Set();
     rows.forEach((row, index) => {
       keep.add(row.id);
@@ -154,7 +158,7 @@
       const presentation=JSON.stringify({role:row.role,event:row.event||null});
       article.className="chat-message "+(row.event?(row.event.kind==="session"?"event session":"event"):row.role==="user"?"user":"assistant");
       article.querySelector(".message-head span").textContent = row.event ? (row.event.kind==="session"?"Session message":"Background task") : row.role === "user" ? "You" : destination.role;
-      const time = article.querySelector("time"); const date = new Date(row.at); time.textContent = Number.isNaN(date.getTime()) ? "" : new Intl.DateTimeFormat(undefined, {hour: "2-digit", minute: "2-digit"}).format(date);
+      const time = article.querySelector("time"); const date = new Date(row.at); time.textContent = Number.isNaN(date.getTime()) ? "" : (date.toDateString() === new Date().toDateString() ? new Intl.DateTimeFormat(undefined, {hour: "2-digit", minute: "2-digit"}) : new Intl.DateTimeFormat("en-GB", {day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"})).format(date);
       if (article._text !== row.text || article._presentation!==presentation) { const body = article.querySelector(".message-body"); if (row.event) {
         const title = document.createElement("p"), summary = document.createElement("p");
         title.className = "event-status";
@@ -168,6 +172,12 @@
       if(article._files!==signature){fileRows.replaceChildren();for(const file of row.attachments||[]){const item=document.createElement(row.outboxKey?"span":"a");item.textContent=file.name+" · "+new Intl.NumberFormat().format(file.size)+" bytes";if(!row.outboxKey){item.href="/api/chat/file?"+new URLSearchParams({...destination,id:file.id});item.download=file.name;}fileRows.append(item);}article._files=signature;}
       const state = article.querySelector(".message-state"); state.textContent = ({local: "Saved on this device · waiting to send", queued: "Queued · delivered when the role is idle", sent: "Sent to the role · awaiting agent confirmation", accepted: "Accepted by agent", unconfirmed: "Delivery unconfirmed · the conversation changed", expired: "Delivery unconfirmed · check Terminal before sending again", failed: "Delivery failed", sending: "Saving…", uncertain: "Delivery unconfirmed · retry with the same message ID"})[row.state] || ""; if (row.failure) state.textContent += " · " + row.failure;
       if (row.outboxKey && row.state === "failed") { const retry = document.createElement("button"); retry.type = "button"; retry.textContent = "Retry delivery"; retry.addEventListener("click", () => retryEntry(row.outboxKey).catch(e => error(e.message))); state.append(" ", retry); }
+      if (!row.outboxKey && row.state === "unconfirmed") {
+        // Set aside for every browser: the role's own record keeps it, unshown.
+        const dismiss = document.createElement("button"); dismiss.type = "button"; dismiss.className = "quiet"; dismiss.textContent = "Dismiss";
+        dismiss.addEventListener("click", () => action("dismiss:" + row.id.slice(4)));
+        state.append(" ", dismiss);
+      }
       if (row.outboxKey && ["failed", "expired"].includes(row.state)) {
         const remove = document.createElement("button"); remove.type = "button"; remove.textContent = "Remove saved message";
         remove.addEventListener("click", () => { if (confirm("Remove this message from this device’s delivery queue? It may already have reached the role.")) store.remove(row.outboxKey).then(refreshOutbox).then(drainOutbox).catch(e => error(e.message)); });

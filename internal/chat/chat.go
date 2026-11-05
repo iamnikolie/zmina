@@ -50,6 +50,9 @@ type Receipt struct {
 	Text        string       `json:"text"`
 	Line        string       `json:"line"`
 	At          time.Time    `json:"at"`
+	// Dismissed is when the owner set aside a message whose delivery stayed unconfirmed: it is no longer shown as
+	// pending. The receipt stays, so a retry with the same ID is still recognised.
+	Dismissed time.Time `json:"dismissed,omitzero"`
 }
 
 var idPattern = regexp.MustCompile(`^[a-f0-9-]{16,64}$`)

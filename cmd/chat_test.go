@@ -180,3 +180,45 @@ func TestChatSnapshotSeparatesSessionInputFromBrowserOwner(t *testing.T) {
 	require.Nil(t, snapshot.Messages[1].Event)
 	require.Equal(t, "literal owner message", snapshot.Messages[1].Text)
 }
+
+// A message whose conversation changed before it showed there can be set aside; one still in play cannot.
+func TestChatDismissesOnlyAnUnconfirmedMessage(t *testing.T) {
+	uiHome(t)
+	a := &app{out: io.Discard, err: io.Discard}
+	old, live := "aaaaaaaa-1234-1234-1234-123456789abc", "bbbbbbbb-1234-1234-1234-123456789abc"
+	_, err := a.localChatSend("default", "dev", old, "from an earlier conversation")
+	require.NoError(t, err)
+	_, err = a.localChatSend("default", "dev", live, "still queued")
+	require.NoError(t, err)
+
+	c, err := a.crewApp("default")
+	require.NoError(t, err)
+	require.NoError(t, c.withState(func(s *shift.Shift) error {
+		rs := s.State.Role("dev")
+		rs.Inbox = rs.Inbox[1:] // the first went, into a conversation since replaced
+		rs.ChatReceipts[0].Session = "earlier"
+		rs.LastSession, rs.LastRuntime = "session", "claude"
+		return nil
+	}))
+
+	before, err := a.localChatRead("default", "dev")
+	require.NoError(t, err)
+	require.Len(t, before.Pending, 2)
+	require.Equal(t, "unconfirmed", before.Pending[0].State)
+
+	_, err = a.localChatAction("default", "dev", "dismiss:"+live)
+	require.ErrorContains(t, err, "only a message whose delivery is unconfirmed")
+	_, err = a.localChatAction("default", "dev", "dismiss:../x")
+	require.ErrorContains(t, err, "invalid")
+
+	after, err := a.localChatAction("default", "dev", "dismiss:"+old)
+	require.NoError(t, err)
+	require.Len(t, after.Pending, 1)
+	require.Equal(t, "web:"+live, after.Pending[0].ID)
+
+	// The receipt stays: the same ID sent again is recognised, not taken as new.
+	require.NoError(t, c.readState(func(s *shift.Shift) error {
+		require.Len(t, s.State.Role("dev").ChatReceipts, 2)
+		return nil
+	}))
+}

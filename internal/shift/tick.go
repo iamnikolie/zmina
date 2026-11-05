@@ -33,8 +33,13 @@ const (
 	// trimIdle is how long a role sits idle before its conversation is compacted, so a reply being read or written
 	// is not cut into (a clear, which loses the conversation, waits idle_minutes); trimPause the least time between
 	// two trims of one role, so its next turn shows the new size.
-	trimIdle  = 5 * time.Minute
-	trimPause = 30 * time.Minute
+	trimIdle = 5 * time.Minute
+	// trimIdleOver is the shorter wait of a role far past its context_max (trimFar): a dispatcher that gets a line
+	// every few minutes is seldom idle for trimIdle, and its conversation only grows meanwhile.
+	trimIdleOver = 2 * time.Minute
+	trimPause    = 30 * time.Minute
+	// trimFar: a role over its context_max by more than a quarter of it compacts after trimIdleOver.
+	trimFar = 4
 )
 
 // Tick is one beat of the clock: it rings the alarms that are due (Rang: the caller runs their notify commands and
@@ -214,7 +219,16 @@ func (s *Shift) trim(name string, r *crew.Role, now time.Time, tasks []string) s
 	limit := r.ContextLimit()
 	rs := s.State.Role(name)
 
-	if limit == 0 || !s.ready(name, now) {
+	do := r.ContextDo()
+	if do == crew.ContextClear && len(tasks) > 0 {
+		do = crew.ContextCompact
+	}
+
+	// A compaction also goes to a role whose turn is over while a background shell or agent it started keeps its
+	// status off idle: such a role (a dispatcher with a watcher running) would otherwise never be compacted. A clear
+	// waits for a plain idle: it must not end the conversation a background process reports back to.
+	between := s.ready(name, now) || do == crew.ContextCompact && s.atPrompt(name, now)
+	if limit == 0 || !between {
 		return ""
 	}
 
@@ -259,24 +273,21 @@ func (s *Shift) trim(name string, r *crew.Role, now time.Time, tasks []string) s
 		return ""
 	}
 
-	do := r.ContextDo()
-	if do == crew.ContextClear && len(tasks) > 0 {
-		do = crew.ContextCompact
+	turn, err := s.registryFor(name).Last(sess.SessionID)
+	used := turn.Context
+
+	if err != nil || used <= limit {
+		return ""
 	}
 
 	wait := trimIdle
 	if do == crew.ContextClear {
 		wait = max(wait, time.Duration(s.Crew.IdleMinutes)*time.Minute)
+	} else if used > limit+limit/trimFar {
+		wait = trimIdleOver
 	}
 
 	if now.Sub(sess.StatusSince()) < wait {
-		return ""
-	}
-
-	turn, err := s.registryFor(name).Last(sess.SessionID)
-	used := turn.Context
-
-	if err != nil || used <= limit {
 		return ""
 	}
 
