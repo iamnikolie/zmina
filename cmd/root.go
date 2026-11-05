@@ -459,7 +459,7 @@ var hasTranscript = func(ns, id string) bool {
 			}
 
 			fi, err := os.Stat(dir)
-			if err == nil && !fi.IsDir() || errors.Is(err, os.ErrNotExist) {
+			if err == nil && !fi.IsDir() || errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
 				continue
 			}
 

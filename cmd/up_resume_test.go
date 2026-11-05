@@ -110,6 +110,7 @@ func TestHasTranscriptSkipsFilesUnderProjects(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(projects, ".DS_Store"), nil, 0o600))
 	require.NoError(t, os.Symlink(filepath.Join(projects, ".DS_Store"), filepath.Join(projects, "to-file")))
 	require.NoError(t, os.Symlink(filepath.Join(ns, "nowhere"), filepath.Join(projects, "dangling")))
+	require.NoError(t, os.Symlink(filepath.Join(projects, ".DS_Store", "child"), filepath.Join(projects, "through-file")))
 	assert.False(t, realHasTranscript(ns, "missing"))
 
 	other := t.TempDir()
