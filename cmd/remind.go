@@ -467,7 +467,7 @@ func (a *app) tellAlarm(to, line string) (string, error) {
 	from := mesh.Address{Node: me.Name, Crew: a.crewKey()}
 
 	if addr.Node == me.Name {
-		if _, err := a.deliverHere(addr.Crew, from, line); err != nil {
+		if _, err := a.deliverHere(addr.Crew, from, "", line); err != nil {
 			return "", err
 		}
 

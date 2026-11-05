@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"github.com/iamnikolie/zmina/internal/inbox"
 	"github.com/iamnikolie/zmina/internal/mesh"
@@ -10,10 +11,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
 )
+
+// reportID is a report's id: a line sent has its envelope id.
+var reportID = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 func messages(s *shift.Shift) message.Store {
 	return message.Store{Dir: filepath.Join(s.Crew.StateDir(), "messages")}
@@ -203,6 +208,9 @@ func (a *app) deliverReport(c uiCrew, from mesh.Address, envelopeID, body string
 	if err != nil {
 		return true, fmt.Errorf("%w: %v", mesh.ErrRefused, err)
 	}
+	if w.Kind == "tell_receipt" {
+		return true, a.applyTellReceipt(c, from, *w.TellReceipt)
+	}
 	me, err := mesh.Open(meshDir())
 	if err != nil {
 		return true, err
@@ -273,8 +281,13 @@ func refreshReportTransport(me *mesh.Node, v *message.Revision) error {
 	return nil
 }
 
-// reconcileMessages performs only local record/outbox work while the crew lock is held.
+// reconcileMessages performs only local record/outbox work while the crew lock is held: report records, and the
+// receipts of plain lines this crew took.
 func (a *app) reconcileMessages(s *shift.Shift) error {
+	return errors.Join(a.reconcileReports(s), a.reconcileTells(s))
+}
+
+func (a *app) reconcileReports(s *shift.Shift) error {
 	store := messages(s)
 	all, err := store.All()
 	if err != nil {
@@ -419,11 +432,20 @@ func (a *app) reconcileMessages(s *shift.Shift) error {
 }
 
 func (a *app) messageCommand() *cobra.Command {
-	c := &cobra.Command{Use: "message", Short: "Inspect end-to-end typed report observations and explicit read/relay receipts"}
+	c := &cobra.Command{Use: "message", Short: "Inspect end-to-end typed report observations, explicit read/relay receipts, and the receipts of plain lines sent"}
 	var revision string
 	var asJSON bool
 	show := &cobra.Command{Use: "show <id>", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		return a.readState(func(s *shift.Shift) error {
+			if t, err := tells(s).LoadOut(args[0]); err == nil {
+				if asJSON {
+					return a.printJSON(t)
+				}
+
+				return a.showTell(t)
+			} else if os.IsNotExist(err) && !reportID.MatchString(args[0]) {
+				return fmt.Errorf("no line sent or report %s in this crew (zmina message ls)", args[0])
+			}
 			m, err := messages(s).Load(args[0])
 			if err != nil {
 				return err
@@ -477,7 +499,7 @@ func (a *app) messageCommand() *cobra.Command {
 				v := m.Revisions[m.Latest]
 				fmt.Fprintf(a.out, "%s · %s · %s → %s\n", m.ID, v.Stage, v.Report.From, v.Report.To)
 			}
-			return nil
+			return a.listTells(s)
 		})
 	}}
 	c.AddCommand(show, ls)

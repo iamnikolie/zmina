@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -41,7 +42,7 @@ func TestTellOnThisNode(t *testing.T) {
 
 	out, _, err = zm(t, def, "tell", "laptop/ops", "the  dump\nis ready")
 	require.NoError(t, err)
-	assert.Equal(t, "queued for laptop/ops's dispatcher\n", out)
+	assert.Regexp(t, `^queued for laptop/ops's dispatcher\nreceipts: queued for its dispatcher; zmina message show in-[0-9a-f]{12} `, out)
 
 	st, err := shift.Read(filepath.Dir(ops))
 	require.NoError(t, err)
@@ -179,9 +180,10 @@ func TestTellLong(t *testing.T) {
 
 	out, _, err := zm(t, def, "tell", "laptop/ops", plan)
 	require.NoError(t, err)
-	assert.Regexp(t, `^queued for laptop/ops's dispatcher \(long: stored as (in-[0-9a-f]{12})\)\n$`, out)
+	m := regexp.MustCompile(`^queued for laptop/ops's dispatcher \(long: stored as (in-[0-9a-f]{12})\)\nreceipts: `).FindStringSubmatch(out)
+	require.NotNil(t, m, out)
 
-	id := strings.TrimSuffix(out[strings.Index(out, "in-"):], ")\n")
+	id := m[1]
 	out, _, err = zm(t, ops, "inbox", "show", id)
 	require.NoError(t, err)
 	assert.Contains(t, out, "| "+plan+"\n", "the whole text arrives")
