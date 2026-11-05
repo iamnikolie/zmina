@@ -35,10 +35,14 @@ var (
 type State struct {
 	// AcceptanceNotified commits alert deduplication with its dispatcher queue entry. Keys include the
 	// submitted session/time; legacy task/packet keys remain readable until a fresh submission.
-	AcceptanceNotified map[string]time.Time            `json:"acceptance_notified,omitempty"`
-	MessageLines       map[string]string               `json:"message_lines,omitempty"`
-	MessageStages      map[string]map[string]time.Time `json:"message_stages,omitempty"`
-	RemoteBatches      int                             `json:"remote_batches,omitempty"`
+	AcceptanceNotified map[string]time.Time `json:"acceptance_notified,omitempty"`
+	MessageLines       map[string]string    `json:"message_lines,omitempty"`
+	// MessageIDs binds a line of another crew (its marker) to the S-id of the signal it was queued as: its
+	// receipts follow that signal, never a later line with the same text. Lines that coalesced into one queued
+	// signal share its id.
+	MessageIDs    map[string]string               `json:"message_ids,omitempty"`
+	MessageStages map[string]map[string]time.Time `json:"message_stages,omitempty"`
+	RemoteBatches int                             `json:"remote_batches,omitempty"`
 	// Acks are the delivered lines that wait for their reader's ack; AckSeq numbers them (S-<n>).
 	Acks           map[string]*Ack        `json:"acks,omitempty"`
 	AckSeq         int                    `json:"ack_seq,omitempty"`
@@ -169,6 +173,8 @@ type Sent struct {
 	Line  string    `json:"line"`
 	At    time.Time `json:"at"`
 	Tries int       `json:"tries,omitempty"`
+	// IDs are the S-ids the line carries (the dispatcher's signals).
+	IDs []string `json:"ids,omitempty"`
 }
 
 // Posted is a line posted to a role's inbox socket: the message's id, and the session it went to.
@@ -177,6 +183,8 @@ type Posted struct {
 	MsgID   string    `json:"msg_id"`
 	Session string    `json:"session"`
 	At      time.Time `json:"at"`
+	// IDs are the S-ids the post carries, as zmina put them in it; a line's text is never searched for them.
+	IDs []string `json:"ids,omitempty"`
 }
 
 // Failed is a queued line that could not be typed.

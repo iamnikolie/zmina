@@ -1020,12 +1020,7 @@ func (s *Shift) QueueTracked(name, text string) (string, error) {
 
 	line := s.trackLine(name, text)
 
-	id := ""
-	if m := lineID.FindStringSubmatch(line); m != nil && line != text {
-		id = m[1]
-	}
-
-	return id, s.Queue(name, line)
+	return s.trackedID(name, line), s.Queue(name, line)
 }
 
 // Note queues a task signal for the dispatcher as "<from>: <text>"; the ticker types it with the health notes, as one
@@ -1045,17 +1040,18 @@ func (s *Shift) Note(from, text string, ifUp bool) (bool, error) {
 // NoteSent is Note for a line from another crew, with when its writer sent it: the line typed into the dispatcher
 // says when it was sent and, past remoteLateAfter, when it is delivered and how late (Lateness).
 func (s *Shift) NoteSent(from, text string, sent time.Time) (bool, error) {
-	_, queued, err := s.NoteSentAs(from, text, sent)
+	_, _, queued, err := s.NoteSentAs(from, text, sent)
 
 	return queued, err
 }
 
-// NoteSentAs is NoteSent that also returns the note as it was queued, without its id: what a receipt matches the
-// line by.
-func (s *Shift) NoteSentAs(from, text string, sent time.Time) (string, bool, error) {
+// NoteSentAs is NoteSent that also returns the note as it was queued, without its id, and the id of the signal it
+// waits in: a line that coalesced into a signal still queued shares that signal's id. Receipts follow the id
+// (BindMessage).
+func (s *Shift) NoteSentAs(from, text string, sent time.Time) (string, string, bool, error) {
 	note, queued, err := s.note(from, text, false)
 	if err != nil || note == "" || sent.IsZero() {
-		return signalBody(note), queued, err
+		return signalBody(note), queuedSignalID(note), queued, err
 	}
 
 	if _, ok := s.State.SignalSent[note]; !ok {
@@ -1066,7 +1062,7 @@ func (s *Shift) NoteSentAs(from, text string, sent time.Time) (string, bool, err
 		s.State.SignalSent[note] = sent
 	}
 
-	return signalBody(note), queued, nil
+	return signalBody(note), queuedSignalID(note), queued, nil
 }
 
 // note queues a note and returns it as queued (or as it already waits).

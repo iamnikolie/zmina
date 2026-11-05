@@ -806,7 +806,7 @@ func (a *app) noteRemote(c uiCrew, from mesh.Address, id, tellID, body string, s
 			}
 		}
 
-		note, _, err := s.NoteSentAs(remoteSource(from), text, sent)
+		note, sigID, _, err := s.NoteSentAs(remoteSource(from), text, sent)
 		if err != nil {
 			return err
 		}
@@ -814,7 +814,7 @@ func (a *app) noteRemote(c uiCrew, from mesh.Address, id, tellID, body string, s
 		// The line is queued: a receipt record that fails to write must not fail its delivery (it would come again).
 		if me != nil {
 			here := mesh.Address{Node: me.Name, Crew: c.Key}
-			if err := recordTellIn(s, from, here, tellID, note, sent); err != nil && s.Warn != nil {
+			if err := recordTellIn(s, from, here, tellID, note, sigID, sent); err != nil && s.Warn != nil {
 				s.Warn(fmt.Errorf("receipt record for %s: %w", tellID, err))
 			}
 		}

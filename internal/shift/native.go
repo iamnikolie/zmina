@@ -149,7 +149,7 @@ func (s *Shift) followPosted(name string, now time.Time) bool {
 			s.log(name, "seen", "", p.Line)
 
 			if name == s.Crew.Dispatcher {
-				s.markSubmitted(p.Line)
+				s.stageIDs(p.IDs, "submitted")
 			}
 		case sess != nil && sess.SessionID != p.Session:
 			back = append(back, p)

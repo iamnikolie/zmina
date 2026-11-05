@@ -62,8 +62,10 @@ func recordTellOut(from, to mesh.Address, id, body string, now time.Time) (bool,
 
 // recordTellIn marks a plain line just queued for the dispatcher (note is the signal as queued): its stage in
 // state, and the record that addresses its receipts back to origin.
-func recordTellIn(s *shift.Shift, origin, recipient mesh.Address, id, note string, sent time.Time) error {
+func recordTellIn(s *shift.Shift, origin, recipient mesh.Address, id, note, sigID string, sent time.Time) error {
 	marker := message.TellMarker(id)
+	// Its receipts follow the signal it was queued as, never a later line with the same text.
+	s.BindMessage(marker, sigID)
 
 	if s.State.MessageLines == nil {
 		s.State.MessageLines = map[string]string{}
@@ -93,10 +95,7 @@ func recordTellIn(s *shift.Shift, origin, recipient mesh.Address, id, note strin
 }
 
 // forgetTell drops a plain line's marker from state.
-func forgetTell(s *shift.Shift, marker string) {
-	delete(s.State.MessageStages, marker)
-	delete(s.State.MessageLines, marker)
-}
+func forgetTell(s *shift.Shift, marker string) { s.ForgetMessage(marker) }
 
 // tellReceipts reports whether origin takes receipts: a registered crew of this node, or a crew of a node that
 // authenticated tell_receipts in its last session with this one.

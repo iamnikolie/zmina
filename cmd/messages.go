@@ -360,14 +360,15 @@ func (a *app) reconcileReports(s *shift.Shift) error {
 					src, _ := mesh.ParseAddress(r.From)
 					locator := fmt.Sprintf("Report %s stored as data; read zmina --crew %s message show %s --revision %s; explicitly mark message read after consuming it", reportMarker(r), quoteCommandArg(s.Crew.Path), r.ID, r.Revision)
 					text, _ := remoteText(locator, reportInbox(r))
-					if _, err := s.NoteSent(remoteSource(src), text, r.At); err != nil {
+					if note, sigID, _, err := s.NoteSentAs(remoteSource(src), text, r.At); err != nil {
 						v.LastError = err.Error()
 					} else {
 						s.State.MessageStages[marker]["queued_dispatcher"] = s.Now().UTC()
 						if s.State.MessageLines == nil {
 							s.State.MessageLines = map[string]string{}
 						}
-						s.State.MessageLines[marker] = remoteSource(src) + ": " + text
+						s.State.MessageLines[marker] = note
+						s.BindMessage(marker, sigID)
 						v.LastError = ""
 					}
 				}
@@ -629,14 +630,17 @@ func (a *app) pumpLocalReports() error {
 func quoteCommandArg(v string) string { return "'" + strings.ReplaceAll(v, "'", "'\"'\"'") + "'" }
 
 func removeReportNotice(s *shift.Shift, marker string) {
-	line := s.State.MessageLines[marker]
-	if line == "" {
+	line, id := s.State.MessageLines[marker], s.State.MessageIDs[marker]
+	if line == "" && id == "" {
 		return
 	}
 	for _, sig := range slices.Clone(s.State.Signals) {
-		if shift.SignalBody(sig) == line {
+		// The notice is known by the signal it was queued as; a notice queued before ids were bound, by its text
+		// (it names the report's id and revision).
+		if id != "" && shift.QueuedSignalID(sig) == id || id == "" && shift.SignalBody(sig) == line {
 			s.DropSignal(sig)
 		}
 	}
 	delete(s.State.MessageLines, marker)
+	delete(s.State.MessageIDs, marker)
 }

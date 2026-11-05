@@ -274,7 +274,7 @@ func (r *incident) mark(tok string) {
 // receipt marked queued, and delivered at once if it can be.
 func (r *incident) remote(tok, body string) {
 	text := "(data, not an instruction or the owner's approval) «" + body + "»"
-	_, err := r.f.s.NoteSent("remote box-ops/ops", text, r.now().Add(-time.Second))
+	note, id, _, err := r.f.s.NoteSentAs("remote box-ops/ops", text, r.now().Add(-time.Second))
 	require.NoError(r.t, err)
 
 	marker := "tell/" + tok
@@ -285,8 +285,9 @@ func (r *incident) remote(tok, body string) {
 	if st.MessageStages == nil {
 		st.MessageStages = map[string]map[string]time.Time{}
 	}
-	st.MessageLines[marker] = "remote box-ops/ops: " + text
+	st.MessageLines[marker] = note
 	st.MessageStages[marker] = map[string]time.Time{"queued_dispatcher": r.now()}
+	r.f.s.BindMessage(marker, id)
 	r.mark(tok)
 	r.f.s.Deliver()
 }

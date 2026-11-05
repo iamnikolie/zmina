@@ -34,8 +34,9 @@ const (
 var (
 	// signalID is the id at the head of a dispatcher's signal part: "S-12 mrs: …".
 	signalID = regexp.MustCompile(`^(S-[0-9]+) `)
-	// lineID is the id in a queued line's tail: "… (zmina S-14)", "… (zmina S-14, still pending since …)".
-	lineID = regexp.MustCompile(`\(zmina (S-[0-9]+)[,)]`)
+	// trackedTail is the id in a tracked line's tail, at its very end, the only place zmina puts it:
+	// "… (zmina S-14)", "… (zmina S-14, still pending since …)".
+	trackedTail = regexp.MustCompile(`\(zmina (S-[0-9]+)(?:, still pending since [^()]*)?\)$`)
 )
 
 // signalBody is a signal without the id and the "still pending" mark it carries once it was delivered.
@@ -117,10 +118,26 @@ func (s *Shift) trackLine(role, line string) string {
 	return line + s.lineSuffix(a)
 }
 
-// delivered marks the tracked line or signal parts in a delivered line as delivered now.
-func (s *Shift) delivered(line string, ids []string, now time.Time) {
-	if m := lineID.FindStringSubmatch(line); m != nil {
-		ids = append(ids, m[1])
+// trackedID is the id of a role's tracked line, read from the suffix zmina gave it at its very end and checked
+// against the line's own record; "" for a line zmina does not track. What the text before the suffix quotes never
+// counts.
+func (s *Shift) trackedID(role, line string) string {
+	m := trackedTail.FindStringSubmatch(line)
+	if m == nil {
+		return ""
+	}
+
+	if a := s.State.Acks[m[1]]; a != nil && a.Role == role && a.tracks(line) {
+		return a.ID
+	}
+
+	return ""
+}
+
+// delivered marks a role's tracked line, or the signals of a delivered line by their ids, as delivered now.
+func (s *Shift) delivered(role, line string, ids []string, now time.Time) {
+	if id := s.trackedID(role, line); id != "" {
+		ids = append(ids, id)
 	}
 
 	for _, id := range ids {
@@ -202,18 +219,32 @@ func (s *Shift) renotify(now time.Time) {
 
 // inFlight reports whether a tracked line is queued, typed but not landed, or posted but not seen.
 func (s *Shift) inFlight(a *Ack) bool {
-	re := regexp.MustCompile(`\b` + regexp.QuoteMeta(a.ID) + `\b`)
-
-	if a.Role == s.Crew.Dispatcher && slices.ContainsFunc(s.State.Signals, re.MatchString) {
+	if a.Role == s.Crew.Dispatcher && slices.ContainsFunc(s.State.Signals, func(sig string) bool {
+		return queuedSignalID(sig) == a.ID
+	}) {
 		return true
 	}
 
 	rs := s.State.Role(a.Role)
-	if slices.ContainsFunc(rs.Inbox, re.MatchString) || rs.Sent != nil && re.MatchString(rs.Sent.Line) {
+	if slices.ContainsFunc(rs.Inbox, a.tracks) {
 		return true
 	}
 
-	return slices.ContainsFunc(rs.Posted, func(p Posted) bool { return re.MatchString(p.Line) })
+	// A line written before ids were kept with it (IDs empty) is searched for its id the old way.
+	legacy := regexp.MustCompile(`\b` + regexp.QuoteMeta(a.ID) + `\b`)
+	carries := func(line string, ids []string) bool {
+		if len(ids) > 0 {
+			return slices.Contains(ids, a.ID)
+		}
+
+		return a.tracks(line) || legacy.MatchString(line)
+	}
+
+	if rs.Sent != nil && carries(rs.Sent.Line, rs.Sent.IDs) {
+		return true
+	}
+
+	return slices.ContainsFunc(rs.Posted, func(p Posted) bool { return carries(p.Line, p.IDs) })
 }
 
 // AckLines acks lines by id, or with all every line of the role. An id that waits for no ack (acked already, said
@@ -261,7 +292,7 @@ func (s *Shift) AckLines(ids []string, all bool, role, caller string) ([]string,
 		s.dropQueued(a)
 
 		if a.Role == s.Crew.Dispatcher {
-			s.messageStage(a.Text, "read")
+			s.stageIDs([]string{id}, "read")
 		}
 	}
 
@@ -269,21 +300,13 @@ func (s *Shift) AckLines(ids []string, all bool, role, caller string) ([]string,
 }
 
 // dropQueued takes a line its reader acked out of where it still waits: the dispatcher's signals (one it read in
-// zmina queue ls, or one said again), a role's queue. A line the reader already has is not posted again.
+// zmina queue ls, or one said again), a role's queue. A line the reader already has is not posted again. A queued
+// line is known by the id zmina gave it (a signal's leading id, a tracked line's own suffix), never by what its text
+// quotes.
 func (s *Shift) dropQueued(a *Ack) {
-	match := func(line string) bool {
-		if m := signalID.FindStringSubmatch(line); m != nil && m[1] == a.ID {
-			return true
-		}
-
-		m := lineID.FindStringSubmatch(line)
-
-		return m != nil && m[1] == a.ID
-	}
-
 	if a.Role == s.Crew.Dispatcher {
 		for _, sig := range slices.Clone(s.State.Signals) {
-			if match(sig) {
+			if queuedSignalID(sig) == a.ID {
 				s.dropSignal(sig)
 				s.log(a.Role, "acked-queued", "", sig)
 			}
@@ -296,11 +319,35 @@ func (s *Shift) dropQueued(a *Ack) {
 	}
 
 	for _, line := range slices.Clone(rs.Inbox) {
-		if match(line) {
+		if a.tracks(line) {
 			rs.Inbox = slices.DeleteFunc(rs.Inbox, func(v string) bool { return v == line })
 			s.log(a.Role, "acked-queued", "", line)
 		}
 	}
+}
+
+// QueuedSignalID is queuedSignalID for the node's reports.
+func QueuedSignalID(sig string) string { return queuedSignalID(sig) }
+
+// queuedSignalID is the id a dispatcher's signal waits under: the one at its head, "" for none.
+func queuedSignalID(sig string) string {
+	if m := signalID.FindStringSubmatch(sig); m != nil {
+		return m[1]
+	}
+
+	return ""
+}
+
+// tracks reports whether a queued line is this tracked line: its text with the suffix zmina gave it, queued
+// (" (zmina S-14)") or said again (" (zmina S-14, still pending since …)").
+func (a *Ack) tracks(line string) bool {
+	if line == a.Text+" (zmina "+a.ID+")" {
+		return true
+	}
+
+	rest, ok := strings.CutPrefix(line, a.Text+" (zmina "+a.ID+", still pending since ")
+
+	return ok && strings.HasSuffix(rest, ")") && !strings.ContainsAny(rest[:len(rest)-1], "()")
 }
 
 // DropSignal is dropSignal for the node's reports.
@@ -320,16 +367,33 @@ func (s *Shift) dropSignal(sig string) {
 	}
 }
 
-// messageStage records a stage of a line another crew sent with zmina tell, by the note it was queued as: the node
-// sends it back to the sender as a receipt (read: the dispatcher acked it).
-func (s *Shift) messageStage(note, stage string) {
-	note = signalBody(note)
-
-	for marker, line := range s.State.MessageLines {
-		if strings.HasPrefix(marker, TellPrefix) && line == note {
+// stageIDs records a stage for the lines of other crews bound to these signal ids (MessageIDs).
+func (s *Shift) stageIDs(ids []string, stage string) {
+	for marker, id := range s.State.MessageIDs {
+		if slices.Contains(ids, id) {
 			s.markerStage(marker, stage)
 		}
 	}
+}
+
+// BindMessage binds a line of another crew (its marker) to the signal it was queued as, by the signal's id.
+func (s *Shift) BindMessage(marker, id string) {
+	if id == "" {
+		return
+	}
+
+	if s.State.MessageIDs == nil {
+		s.State.MessageIDs = map[string]string{}
+	}
+
+	s.State.MessageIDs[marker] = id
+}
+
+// ForgetMessage drops what is kept of a line of another crew by its marker.
+func (s *Shift) ForgetMessage(marker string) {
+	delete(s.State.MessageStages, marker)
+	delete(s.State.MessageLines, marker)
+	delete(s.State.MessageIDs, marker)
 }
 
 // markerStage records a stage of a line from another crew by its marker, the first time it is reached.

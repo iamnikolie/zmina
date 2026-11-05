@@ -769,27 +769,31 @@ func (s *Shift) postDispatcher(d string, sess *registry.Session, local, remote, 
 		nOwn++
 	}
 
-	// This crew's signals share a line, as many as fit.
+	// This crew's signals share a line, as many as fit: the line is measured whole, its separators, ids and
+	// wrapper included, against what the post has left.
 	var parts, partIDs []string
+	localLine := func(parts, ids []string) string { return "[zmina] " + strings.Join(parts, " · ") + ackTail(ids) }
 	for _, sig := range local {
 		p, id := part(sig)
-		if len(lines) > 0 && size+len(p)+64 > postMax {
+		withIDs := partIDs
+		if id != "" {
+			withIDs = append(slices.Clone(partIDs), id)
+		}
+
+		if size+len(localLine(append(slices.Clone(parts), p), withIDs))+1 > postMax && (len(lines) > 0 || len(parts) > 0) {
 			full = true
 
 			break
 		}
 
-		parts = append(parts, p)
+		parts, partIDs = append(parts, p), withIDs
 		took[sig] = true
-		size += len(p) + 3
-
-		if id != "" {
-			partIDs = append(partIDs, id)
-		}
 	}
 
 	if len(parts) > 0 {
-		lines = append(lines, "[zmina] "+strings.Join(parts, " · ")+ackTail(partIDs))
+		line := localLine(parts, partIDs)
+		lines = append(lines, line)
+		size += len(line) + 1
 		ids = append(ids, partIDs...)
 	}
 
@@ -840,13 +844,14 @@ func (s *Shift) postDispatcher(d string, sess *registry.Session, local, remote, 
 	}
 
 	for _, l := range own[:nOwn] {
-		s.delivered(l, nil, now)
+		s.delivered(d, l, nil, now)
 		s.submittedTask(d, l)
 	}
 
 	rs.Inbox = rs.Inbox[nOwn:]
 	rs.Attempts = 0
-	s.delivered(text, ids, now)
+	rs.Posted[len(rs.Posted)-1].IDs = slices.Clone(ids)
+	s.delivered(d, "", ids, now)
 
 	for sig := range took {
 		if sig == "\x00notes" {
@@ -949,9 +954,9 @@ func (s *Shift) typeDispatcher(d string, local, remote, notes []string, now time
 		return ""
 	}
 
-	s.State.Role(d).Sent = &Sent{Line: line, At: now}
-	s.delivered(line, ids, now)
-	s.markSubmitted(line)
+	s.State.Role(d).Sent = &Sent{Line: line, At: now, IDs: ids}
+	s.delivered(d, "", ids, now)
+	s.stageIDs(ids, "submitted")
 
 	if alone {
 		delete(s.State.SignalSent, remote[0])
@@ -974,15 +979,6 @@ func (s *Shift) typeDispatcher(d string, local, remote, notes []string, now time
 	s.log(d, "told", "", line)
 
 	return line
-}
-
-// markSubmitted records the lines of other crews a delivered line carries as submitted (their receipts).
-func (s *Shift) markSubmitted(line string) {
-	for marker, note := range s.State.MessageLines {
-		if note != "" && strings.Contains(line, note) {
-			s.markerStage(marker, "submitted")
-		}
-	}
 }
 
 const (
@@ -1101,12 +1097,15 @@ func (s *Shift) deliverInbox(name string, now time.Time) string {
 
 	rs.Inbox, rs.Attempts = rs.Inbox[1:], 0
 	s.log(name, "typed", "", head)
-	s.delivered(head, nil, now)
+	s.delivered(name, head, nil, now)
 	s.submittedTask(name, head)
 
 	// A slash command may not change the status; only a line for the conversation is watched until it lands.
 	if !strings.HasPrefix(head, "/") {
 		rs.Sent = &Sent{Line: head, At: now}
+		if id := s.trackedID(name, head); id != "" {
+			rs.Sent.IDs = []string{id}
+		}
 	}
 
 	return "typed into " + name + ": " + head
@@ -1134,9 +1133,13 @@ func (s *Shift) postInbox(name string, sess *registry.Session, now time.Time) st
 		return name + ": a queued line could not be posted, kept in zmina queue: " + head
 	}
 
+	if id := s.trackedID(name, head); id != "" {
+		rs.Posted[len(rs.Posted)-1].IDs = []string{id}
+	}
+
 	rs.Inbox, rs.Attempts = rs.Inbox[1:], 0
 	s.submittedTask(name, head)
-	s.delivered(head, nil, now)
+	s.delivered(name, head, nil, now)
 
 	return "posted to " + name + ": " + head
 }
