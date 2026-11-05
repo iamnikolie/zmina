@@ -321,6 +321,8 @@ func TestHooksOfAnEarlierStartAreAsked(t *testing.T) {
 	require.NoError(t, err)
 	note := f.s.hooksNote("dispatcher", r)
 	assert.Contains(t, note, "dispatcher: runs without zmina's turn-end hook")
+	assert.Contains(t, note, "zmina restart dispatcher --continue (from its own session too",
+		"the safe restart, on its conversation, also when the role runs it itself")
 	assert.Empty(t, f.s.hooksNote("dispatcher", r), "once per session")
 	assert.Equal(t, 1, asked)
 	assert.Equal(t, hooksNone, f.s.State.Role("dispatcher").Hooks, "kept for the session")

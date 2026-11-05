@@ -135,12 +135,14 @@ type Shift struct {
 	// ProcArgs reads a process's command line (ps), to tell which hooks a role an earlier zmina started runs; nil
 	// leaves such a role unasked.
 	ProcArgs func(pid int) (string, error)
-	State    *State
-	Tasks    Tasks
-	Later    Later
-	Alarms   Alarms
-	Asks     Asks
-	Events   Events
+	// Parent reads a process's parent (ps), to tell a command a role runs from its own session (Inside); nil: never.
+	Parent func(pid int) (int, error)
+	State  *State
+	Tasks  Tasks
+	Later  Later
+	Alarms Alarms
+	Asks   Asks
+	Events Events
 	// Inbox keeps the whole text of a note too long to type; nil cuts it instead.
 	Inbox *inbox.Store
 	Now   func() time.Time

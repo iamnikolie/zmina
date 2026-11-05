@@ -43,6 +43,8 @@ type app struct {
 	uiLogins *uiLogins
 	// spawn starts a detached zmina with these arguments (nil: spawnDetached; tests set a fake).
 	spawn func(args []string) error
+	// parent reads a process's parent pid (nil: procParent; tests set a fake).
+	parent func(pid int) (int, error)
 }
 
 // NewRoot builds the whole command tree writing to out and errw.
@@ -173,6 +175,7 @@ func (a *app) newShift() (*shift.Shift, error) {
 		CodexInbox:        codex.Inbox{},
 		Self:              self(),
 		ProcArgs:          procArgs,
+		Parent:            a.parentOf(),
 		State:             shift.NewState(),
 		Tasks:             taskStore(c),
 		Later:             laterStore(c),
@@ -386,6 +389,25 @@ func procArgs(pid int) (string, error) {
 	out, err := exec.Command("ps", "-o", "args=", "-p", strconv.Itoa(pid)).Output()
 
 	return strings.TrimSpace(string(out)), err
+}
+
+// procParent reads a process's parent pid.
+func procParent(pid int) (int, error) {
+	out, err := exec.Command("ps", "-o", "ppid=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return 0, err
+	}
+
+	return strconv.Atoi(strings.TrimSpace(string(out)))
+}
+
+// parentOf is how this run reads a process's parent: the app's fake in tests, else ps.
+func (a *app) parentOf() func(pid int) (int, error) {
+	if a.parent != nil {
+		return a.parent
+	}
+
+	return procParent
 }
 
 func self() string {

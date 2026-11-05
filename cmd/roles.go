@@ -4,9 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -531,16 +534,37 @@ func (a *app) downRoles(names func(s *shift.Shift) ([]string, error), o shift.Do
 
 func (a *app) restartCommand() *cobra.Command {
 	var clear, fresh, continueLast bool
+	var afterTurn int
 
 	c := &cobra.Command{
 		Use:   "restart <role>",
-		Short: "End and start a role using its configured resume policy (--fresh or --continue override it)",
+		Short: "End and start a role using its configured resume policy (--fresh or --continue override it); from its own session, once that turn ends, on the same conversation",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
-			var opts shift.UpOptions
+			if afterTurn != 0 {
+				return a.ownRestart(name, afterTurn, fresh, continueLast, clear)
+			}
+
+			var (
+				opts shift.UpOptions
+				pane int
+			)
+
 			err := a.withState(func(s *shift.Shift) error {
 				var err error
+				if p, inside := s.Inside(name, os.Getpid()); inside {
+					// Checked now, so a restart that cannot go on fails here, to the role that asked.
+					if _, err = s.OwnRestartOptions(name, fresh, continueLast); err != nil {
+						return err
+					}
+
+					pane = p
+					s.Log(name, "restart-pending", "", "asked from its own session: once this turn ends")
+
+					return nil
+				}
+
 				opts, err = s.RestartOptions(name, fresh, continueLast)
 				return err
 			})
@@ -548,26 +572,11 @@ func (a *app) restartCommand() *cobra.Command {
 				return err
 			}
 
-			err = a.downRoles(func(s *shift.Shift) ([]string, error) {
-				if _, err := s.Role(name); err != nil {
-					return nil, err
-				}
-
-				return []string{name}, nil
-			}, shift.DownOptions{Force: true, Clear: clear}, true)
-			if err != nil {
-				return err
+			if pane != 0 {
+				return a.handOwnRestart(name, pane, fresh, continueLast, clear)
 			}
 
-			return a.withState(func(s *shift.Shift) error {
-				if err := s.UpWith(name, opts); err != nil {
-					return err
-				}
-
-				fmt.Fprintln(a.out, name, "restarted")
-
-				return nil
-			})
+			return a.restart(name, opts, clear)
 		},
 	}
 
@@ -576,8 +585,150 @@ func (a *app) restartCommand() *cobra.Command {
 	c.Flags().BoolVar(&fresh, "fresh", false, "start a new conversation, ignoring resume policy")
 	c.Flags().BoolVar(&continueLast, "continue", false, "resume the last known conversation (fail if unknown)")
 	c.MarkFlagsMutuallyExclusive("fresh", "continue")
+	// The detached half of a restart a role ran from its own session: the pid in its pane when it asked.
+	c.Flags().IntVar(&afterTurn, "after-turn", 0, "")
+	_ = c.Flags().MarkHidden("after-turn")
 
 	return c
+}
+
+// restart ends a role and starts it again with opts.
+func (a *app) restart(name string, opts shift.UpOptions, clear bool) error {
+	err := a.downRoles(func(s *shift.Shift) ([]string, error) {
+		if _, err := s.Role(name); err != nil {
+			return nil, err
+		}
+
+		return []string{name}, nil
+	}, shift.DownOptions{Force: true, Clear: clear}, true)
+	if err != nil {
+		return err
+	}
+
+	return a.withState(func(s *shift.Shift) error {
+		if err := s.UpWith(name, opts); err != nil {
+			return err
+		}
+
+		fmt.Fprintln(a.out, name, "restarted")
+
+		return nil
+	})
+}
+
+// ownRestartWait is the longest the detached half of a restart a role ran from its own session waits for that turn
+// to end; ownRestartPoll is how often it looks.
+var (
+	ownRestartWait = 30 * time.Minute
+	ownRestartPoll = time.Second
+)
+
+// handOwnRestart hands a restart a role ran from its own session to a detached zmina: run here, the role's /exit
+// would end this very process with its tools, between the down and the up.
+func (a *app) handOwnRestart(name string, pane int, fresh, continueLast, clear bool) error {
+	args := []string{"--crew", a.crewPath(), "restart", name, "--after-turn", strconv.Itoa(pane)}
+	for _, f := range []struct {
+		flag string
+		on   bool
+	}{{"--fresh", fresh}, {"--continue", continueLast}, {"--clear", clear}} {
+		if f.on {
+			args = append(args, f.flag)
+		}
+	}
+
+	spawn := a.spawn
+	if spawn == nil {
+		spawn = spawnDetached
+	}
+
+	if err := spawn(args); err != nil {
+		return fmt.Errorf("%s: restart from its own session: %w", name, err)
+	}
+
+	how := "on this conversation"
+	if fresh {
+		how = "on a fresh conversation"
+	}
+
+	fmt.Fprintf(a.out, "%s restarts once this turn ends, %s (run from its own session: a process of its own does it; zmina log --role %s)\n",
+		name, how, name)
+
+	return nil
+}
+
+// errOwnRestartGone: the role a restart was asked for from its own session was put down or restarted meanwhile.
+var errOwnRestartGone = errors.New("its session ended before this turn did")
+
+// ownRestart is the detached half of a restart a role ran from its own session: it waits for that turn to end, then
+// restarts the role on its conversation. A failure is told to the dispatcher, as no one waits for this process.
+func (a *app) ownRestart(name string, pane int, fresh, continueLast, clear bool) error {
+	// The role's session going down must not take this one with it.
+	signal.Ignore(syscall.SIGHUP)
+
+	err := a.awaitOwnTurn(name, pane)
+	if err == nil {
+		var opts shift.UpOptions
+		err = a.withState(func(s *shift.Shift) error {
+			var err error
+			opts, err = s.OwnRestartOptions(name, fresh, continueLast)
+			return err
+		})
+
+		if err == nil {
+			err = a.restart(name, opts, clear)
+		}
+	}
+
+	if err == nil {
+		return nil
+	}
+
+	_ = a.withState(func(s *shift.Shift) error {
+		if errors.Is(err, errOwnRestartGone) {
+			s.Log(name, "restart-skipped", "", err.Error())
+
+			return nil
+		}
+
+		s.Log(name, "restart-failed", "", err.Error())
+		s.AddNotes([]string{name + ": the restart it asked for from its own session failed: " + oneLine(err.Error()) +
+			"; restart it from another session (zmina restart " + name + " --continue)"})
+
+		return nil
+	})
+
+	if errors.Is(err, errOwnRestartGone) {
+		return nil
+	}
+
+	return err
+}
+
+// awaitOwnTurn waits up to ownRestartWait for the turn of the role's session that asked for the restart to end.
+func (a *app) awaitOwnTurn(name string, pane int) error {
+	s, err := a.newShift()
+	if err != nil {
+		return err
+	}
+
+	for deadline := time.Now().Add(ownRestartWait); ; time.Sleep(ownRestartPoll) {
+		if st, err := shift.Read(s.Crew.StateDir()); err == nil {
+			s.State = st
+
+			over, gone := s.OwnTurnOver(name, pane)
+			if gone {
+				return errOwnRestartGone
+			}
+
+			if over {
+				return nil
+			}
+		}
+
+		if time.Now().After(deadline) {
+			return fmt.Errorf("its turn did not end within %s", ownRestartWait)
+		}
+	}
 }
 
 func (a *app) sendCommand() *cobra.Command {
