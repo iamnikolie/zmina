@@ -484,3 +484,10 @@ func TestDelivery(t *testing.T) {
 	_, err = Load(write(t, "namespace: /ns\nroles:\n  dispatcher:\n    delivery: pigeon\n"))
 	require.Error(t, err)
 }
+
+// A session name with '/' is refused naming the form to use: '/' is zmina's <node>/<crew>.
+func TestSessionNameWithASlash(t *testing.T) {
+	dir := t.TempDir()
+	_, err := Load(write(t, "dir: "+dir+"\nprefix: box/acme-\nroles:\n  dispatcher:\n"))
+	require.ErrorContains(t, err, `no '/' (it reads as a <node>/<crew> address); use "box-acme-dispatcher"`)
+}

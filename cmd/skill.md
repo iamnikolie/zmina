@@ -47,7 +47,7 @@ notify: [push-cli, send, --title, zmina] # a reminder for you also goes through 
 timezone: Europe/Warsaw                  # the clock reminder times are read on (default: this machine's)
 day_start: "09:00"                       # when morning, tomorrow, thu or a date rings (default 09:00)
 # name: ops                              # a second crew: tmux -L zmina-ops, its own ticker
-# prefix: ops-                           # default session names (default zm-)
+# prefix: ops-                           # default session names (default zm-); no '/': it reads as <node>/<crew>
 # retired: "2026-11-05"                  # zmina retire writes these two: this crew is no longer the live one
 # moved_to: box-ops/ops                  # ... and went on as this crew; alone it marks the crew retired too
 # projects:                              # the ui page's colour per task project (default: one of five, by name)
