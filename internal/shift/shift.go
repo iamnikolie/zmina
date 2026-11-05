@@ -689,11 +689,28 @@ func (s *Shift) start(name string, o UpOptions) error {
 	// A Claude conversation resumed under a name it was not started under keeps its stored title (Remote Control shows
 	// the old one): /rename gives it the new one, typed once the role is booted. A start whose name is not known yet
 	// renames too, once: the name is recorded from now on.
-	if resume != "" && runtime == "claude" && rs.Title != r.Session {
-		rs.Inbox = append([]string{"/rename " + r.Session}, rs.Inbox...)
-		s.log(name, "rename", "", strings.TrimSpace(rs.Title+" → "+r.Session))
+	// A rename an earlier start queued and never typed belongs to that start's conversation: it goes.
+	if rs.QueuedRename != "" {
+		if slices.Contains(rs.Inbox, rs.QueuedRename) && rs.RenameOf != "" {
+			if rs.RenameFrom == "" {
+				delete(rs.Titles, rs.RenameOf)
+			} else {
+				rs.Titles[rs.RenameOf] = rs.RenameFrom
+			}
+		}
+		rs.Inbox = slices.DeleteFunc(rs.Inbox, func(l string) bool { return l == rs.QueuedRename })
+		rs.QueuedRename, rs.RenameOf, rs.RenameFrom = "", "", ""
+	}
+	if resume != "" && runtime == "claude" && rs.Titles[resume] != r.Session {
+		rs.RenameOf, rs.RenameFrom = resume, rs.Titles[resume]
+		rs.QueuedRename = "/rename " + r.Session
+		rs.Inbox = append([]string{rs.QueuedRename}, rs.Inbox...)
+		s.log(name, "rename", "", strings.TrimSpace(rs.Titles[resume]+" → "+r.Session))
 	}
 	rs.Title = r.Session
+	if resume != "" {
+		rs.noteTitle(resume, r.Session)
+	}
 
 	detail := ""
 	if resume != "" {
@@ -967,6 +984,9 @@ func (s *Shift) remember(name string, p tmux.Pane) {
 			}
 		}
 		s.State.Role(name).LastSession = sess.SessionID
+		if t := s.State.Role(name).Title; t != "" {
+			s.State.Role(name).noteTitle(sess.SessionID, t)
+		}
 		r, _ := s.Role(name)
 		s.State.Role(name).LastRuntime = r.Runtime
 		_, s.State.Role(name).LastHome = s.runtimeScope(r)

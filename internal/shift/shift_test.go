@@ -1137,3 +1137,34 @@ func TestResumeUnderANewNameRenames(t *testing.T) {
 	assert.True(t, f.ev.has("designer", "rename"))
 	assert.Equal(t, "ops-designer", f.s.State.Role("designer").Title)
 }
+
+// The title is a conversation's, not the role's: another conversation resumed under the same name is renamed if it
+// ran under another; a rename queued for one start never reaches the next.
+func TestRenameBelongsToAConversationAndAStart(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	require.NoError(t, f.s.Up("designer"))
+	f.status("designer", "idle", *f.now)
+	require.NoError(t, f.s.Down("designer", DownOptions{}))
+	rs := f.s.State.Role("designer")
+	rs.Titles["old-sid"] = "ops-designer"
+
+	require.NoError(t, f.s.UpWith("designer", UpOptions{Resume: "old-sid"}))
+	assert.Equal(t, "/rename zm-designer", rs.Inbox[0], "the same role name, another conversation: renamed")
+
+	// Down before the rename was typed, then a fresh start: the old start's rename is gone.
+	require.NoError(t, f.s.Down("designer", DownOptions{}))
+	require.NoError(t, f.s.UpWith("designer", UpOptions{Fresh: true}))
+	assert.NotContains(t, rs.Inbox, "/rename zm-designer")
+	assert.Empty(t, rs.QueuedRename)
+
+	// The rename was never typed: resumed again, the conversation is renamed again.
+	require.NoError(t, f.s.Down("designer", DownOptions{}))
+	require.NoError(t, f.s.UpWith("designer", UpOptions{Resume: "old-sid"}))
+	assert.Equal(t, "/rename zm-designer", rs.Inbox[0])
+
+	// Typed this time: the next resume under the same name leaves it.
+	rs.Inbox = rs.Inbox[1:]
+	require.NoError(t, f.s.Down("designer", DownOptions{}))
+	require.NoError(t, f.s.UpWith("designer", UpOptions{Resume: "old-sid"}))
+	assert.NotContains(t, rs.Inbox, "/rename zm-designer", "renamed: it runs under this name now")
+}

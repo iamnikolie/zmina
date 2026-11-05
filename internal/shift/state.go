@@ -111,9 +111,16 @@ type RoleState struct {
 	LastDir     string `json:"last_dir,omitempty"`
 	// LastSession is the role's last conversation id, for --resume.
 	LastSession string `json:"last_session,omitempty"`
-	// Title is the session name the role's conversation was last started under (claude --name): a conversation
-	// resumed under another name keeps its stored title until it is renamed.
-	Title string `json:"title,omitempty"`
+	// Title is the session name the role's current start runs under (claude --name). Titles is the name each of its
+	// conversations last had, by session id: a conversation resumed under another name keeps its stored title until it
+	// is renamed. QueuedRename is the /rename this start queued, taken out again at the next start.
+	Title        string            `json:"title,omitempty"`
+	Titles       map[string]string `json:"titles,omitempty"`
+	QueuedRename string            `json:"queued_rename,omitempty"`
+	// RenameOf and RenameFrom are the conversation that rename is for and the title it had: a rename never typed
+	// leaves the conversation under its old title.
+	RenameOf   string `json:"rename_of,omitempty"`
+	RenameFrom string `json:"rename_from,omitempty"`
 	// Inbox holds lines typed into the role the next time it is idle; Attempts counts failed tries of the first.
 	Inbox    []string `json:"inbox,omitempty"`
 	Attempts int      `json:"attempts,omitempty"`
@@ -590,4 +597,21 @@ func decodeV1(raw []byte) (*State, error) {
 	st.init()
 
 	return st, nil
+}
+
+// titlesMax is how many conversations' titles a role keeps.
+const titlesMax = 20
+
+// noteTitle records the name a conversation runs under; past titlesMax one older entry gives way.
+func (r *RoleState) noteTitle(session, title string) {
+	if r.Titles == nil {
+		r.Titles = map[string]string{}
+	}
+	if _, ok := r.Titles[session]; !ok && len(r.Titles) >= titlesMax {
+		for k := range r.Titles {
+			delete(r.Titles, k)
+			break
+		}
+	}
+	r.Titles[session] = title
 }
