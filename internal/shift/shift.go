@@ -217,6 +217,8 @@ type View struct {
 	Problem string `json:"problem,omitempty"`
 	// Prompt is true while an up role's screen shows a dialog or a question instead of its input line.
 	Prompt bool `json:"prompt,omitempty"`
+	// Dialog is the question on its screen and its numbered choices, when Prompt and the screen reads as one.
+	Dialog *Dialog `json:"dialog,omitempty"`
 	// Now is what the role last said it is doing: its screen's last status line (NowLine), NowAt since when it
 	// says so (when the ticker first read it; the time of this read when the line is newer than the last beat).
 	Now   string    `json:"now,omitempty"`
@@ -369,6 +371,9 @@ func (s *Shift) Views() []View {
 			}
 
 			if text, err := s.Tmux.Capture(name, nowLines); err == nil {
+				if v.Prompt && !s.isCodex(name) {
+					v.Dialog = ParseDialog(text)
+				}
 				if line := NowLine(text); line != "" {
 					v.Now = line
 					v.NowAt = rs.NowAt

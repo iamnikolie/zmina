@@ -638,3 +638,7 @@ body.fv-on { overflow: hidden; }
   /* Fable 11 · on a phone the chip has its own line under the title. */
   .row > .chip { grid-area: auto; grid-column: 1 / -1; justify-self: start; max-width: 100%; margin-top: 4px; }
 }
+
+/* A session's question answered from the cockpit: one button per choice, the whole label readable. */
+.choices { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
+.choices .choice { justify-content: flex-start; text-align: left; white-space: normal; height: auto; min-height: 36px; padding: 6px 12px; }

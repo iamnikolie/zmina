@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -280,6 +281,9 @@ func (a *app) localChatAction(key, role, action string) (chat.Snapshot, error) {
 			if id, ok := strings.CutPrefix(action, "dismiss:"); ok {
 				return dismissChat(s, role, id, snapshot)
 			}
+			if pick, ok := strings.CutPrefix(action, "choose:"); ok {
+				return chooseDialog(s, role, pick)
+			}
 			return errors.New("chat action: start, stop or dismiss:<id>")
 		}
 	})
@@ -287,6 +291,33 @@ func (a *app) localChatAction(key, role, action string) (chat.Snapshot, error) {
 		return chat.Snapshot{}, err
 	}
 	return a.localChatRead(key, role)
+}
+
+// chooseDialog answers the question on a role's screen with one of its numbered choices, "<n>:<label>": the label
+// must still be that choice's, so a question that changed since the owner read it is never answered blind. It moves
+// the dialog's cursor there and takes it, as the owner would with the arrows and Enter.
+func chooseDialog(s *shift.Shift, role, pick string) error {
+	ns, label, ok := strings.Cut(pick, ":")
+	n, err := strconv.Atoi(ns)
+	if !ok || err != nil || n < 1 || n > 9 {
+		return errors.New("choose:<n>:<label>")
+	}
+	screen, err := s.Tmux.Capture(role, 80)
+	if err != nil {
+		return err
+	}
+	if _, ok, err := s.Tmux.Prompt(role); err != nil || ok {
+		return errors.New("no question on its screen now")
+	}
+	d := shift.ParseDialog(screen)
+	if d == nil {
+		return errors.New("no question on its screen now")
+	}
+	i := slices.IndexFunc(d.Options, func(o shift.DialogOption) bool { return o.N == n })
+	if i < 0 || d.Options[i].Label != label {
+		return errors.New("the question on its screen changed: look again")
+	}
+	return s.PressKeys(role, d.ChooseKeys(n))
 }
 
 // dismissChat sets aside an owner message whose delivery stayed unconfirmed (its conversation changed before it was

@@ -527,7 +527,9 @@ uncached; uploaded HTML/SVG is never executed or embedded. Files are never execu
 
 `POST /api/chat/action` accepts the same destination plus `action`: `start` explicitly starts a down
 role with its configured settings; `stop` sends one Ctrl+C only when the observed role is actively
-working and has no draft/dialog; `dismiss:<message ID>` sets aside an owner message whose delivery stayed unconfirmed
+working and has no draft/dialog; `choose:<n>:<label>` answers the question on its screen (a Claude Code dialog with
+numbered choices) with choice n — only while the screen shows one and choice n still reads `<label>`, else refused —
+by moving the dialog's cursor there and pressing Enter; `dismiss:<message ID>` sets aside an owner message whose delivery stayed unconfirmed
 (its conversation changed before it showed there; the page's Dismiss): it is no longer listed as pending, in any
 browser, and its receipt stays so a retry with that ID is still recognised. A message queued, sent or failed is
 refused. Messages not yet seen in the conversation stand where they were sent, by time; one not from today shows its
@@ -804,6 +806,10 @@ A machine without peers is a mesh of one. It opens the page in the browser.
   ▾» and opens a menu of its crews (spare and silent words, then its stopped line); a crew chosen shows as «/ acme ✕».
   The newest event in the header is one clause cut at a word to 80 characters, whole in its tooltip; a click opens
   History. A filter with nothing in your move says so and links back to All with what waits elsewhere.
+- **A question on a session's screen** (a dialog with numbered choices) stands first in your move: the row says the
+  question, and opened offers each choice as a button (`chat/action choose`, on the node the session runs on); choices
+  that ask for words (Type something, Chat about this) are left to Talk and its Terminal. `zmina ls --json` carries
+  it as `dialog: {question, options, cursor}`.
 - **Talk**: every session card, and the holder line of an opened task, has «Talk»: the role's conversation (Chat) opens
   in a panel beside the cockpit, which stays in view and keeps updating behind it; on a phone the panel is the whole
   screen. Any role of any node: a peer's over the mesh as Chat reads it. «Open page» opens it as its own page; Esc

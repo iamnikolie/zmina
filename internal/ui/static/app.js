@@ -52,7 +52,7 @@ const W = {
   alAsWords: (w) => "set as «" + w + "»", alDue: "due now", backTag: "back",
   seen: (a) => "seen " + a, staleN: (a) => "stale" + (a ? " " + a : ""), stale: "stale", offline: "offline", stoppedList: "stopped:",
   silent: (a) => "ticker stopped" + (a ? " " + a : ""),
-  spare: "spare", retiredW: "retired", notUpN: (n) => "+" + n + " not up", fixTicker: (c) => "zmina" + (c === "default" ? "" : " --config " + c.split("/").pop()) + " ticker status",
+  spare: "spare", retiredW: "retired", choicesN: (n) => n + " choices", chose: (r, l) => r + ": " + l, notUpN: (n) => "+" + n + " not up", fixTicker: (c) => "zmina" + (c === "default" ? "" : " --config " + c.split("/").pop()) + " ticker status",
   fixDown: (r) => "start it, or hand its task on: zmina up " + r, onScreenN: (n) => n + " on screen", crewsN: (n) => n + " crews", nothingOn: (w) => "Nothing waits on you on " + w + ".",
   elsewhere: (h, q) => "Elsewhere: " + h + " hold · " + q + " answer → All", downHolds: (r, ts) => r + ": down, holds " + ts,
   answerOn: (n) => "answer on " + n, detailsOn: (n) => "details on " + n,
@@ -1220,21 +1220,41 @@ function moveRow(it, holds) {
   return row;
 }
 
-// screenRow is a session with a question on its screen: amber like a hold; opened, its last line and Talk (the panel
-// has its Terminal).
+// screenRow is a session with a question on its screen: amber like a hold. When the screen reads as a question with
+// numbered choices, the row says the question and, opened, offers each choice as a button: zmina moves the dialog's
+// cursor there and takes it (chat/action choose), on this node or a peer's, and refuses if the question changed.
 function screenRow(c, r) {
+  const d = r.dialog;
   const words = el("div", "words");
-  words.append(el("span", "tt", r.role + " · " + W.onScreen));
+  words.append(el("span", "tt", r.role + " · " + (d && d.question ? d.question : W.onScreen)));
   const meta = el("span", "mvm");
   const cl = crewTag(c.key, true);
   if (cl) meta.append(cl);
-  if (r.now) meta.append(el("span", "", plain(r.now)));
+  meta.append(el("span", "", d ? W.choicesN(d.options.length) : plain(r.now || "")));
   words.append(meta);
   const p = el("div");
-  if (r.now) p.append(el("p", "pn", r.now));
-  p.append(button("btn", W.talkTo(r.role), () => openTalk(c.key, r.role)));
-  const row = rowShell("screen:" + c.key + "/" + r.role, "mv hold screen", words, el("span", "age", ago(r.since)), null, null, p);
-  return row;
+  if (d) {
+    if (d.question) p.append(el("p", "pn", d.question));
+    const ch = el("div", "choices");
+    for (const o of d.options) ch.append(button("btn choice", o.n + ". " + o.label, () => chooseDialog(c, r, o)));
+    p.append(ch);
+  } else if (r.now) p.append(el("p", "pn", r.now));
+  p.append(button("q", W.talkTo(r.role), () => openTalk(c.key, r.role)));
+  return rowShell("screen:" + c.key + "/" + r.role, "mv hold screen", words, el("span", "age", ago(r.since)), null, null, p);
+}
+
+// chooseDialog answers a session's question with one of its choices, on the node the session runs on.
+async function chooseDialog(c, r, o) {
+  const node = c.remote ? nodeOf(c.key) : "";
+  const crew = node ? c.key.slice(node.length + 1) : c.key;
+  openRow = "";
+  try {
+    await postTo("api/chat/action", { node, crew, role: r.role, action: "choose:" + o.n + ":" + o.label });
+    toast(W.chose(r.role, o.label));
+  } catch (e) {
+    toast(W.notSent + e.message);
+  }
+  render();
 }
 
 // glyphs holds the role glyphs (assets/roles/*.svg, our own embedded files), read once at start.
