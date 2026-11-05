@@ -437,6 +437,11 @@ var hasTranscript = func(ns, id string) bool {
 		return false
 	}
 
+	// A projects dir that cannot be read is no proof either way: claude is left to say.
+	if _, err := os.Stat(filepath.Join(ns, "projects")); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+
 	files, _ := filepath.Glob(filepath.Join(ns, "projects", "*", id+".jsonl"))
 
 	return len(files) > 0

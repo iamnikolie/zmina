@@ -104,6 +104,8 @@ func (s *Shift) TaskStart(name string, t task.Task, fresh, requireContinue bool)
 	if best != nil {
 		opts.Fresh = false
 		opts.Resume = best.Session
+		// Chosen by zmina unless asked for (--continue): a conversation gone from the namespace then starts fresh.
+		opts.Auto = !requireContinue
 		return opts, "continue " + best.Session, nil
 	}
 	if requireContinue {
@@ -178,6 +180,6 @@ func (s *Shift) RestartOptions(name string, fresh, requireContinue bool) (UpOpti
 	if !info.IsDir() {
 		return UpOptions{}, fmt.Errorf("%s: continuation directory is not a directory", name)
 	}
-	opts = UpOptions{Resume: rs.LastSession, Dir: dir, Continuation: &task.Conversation{Runtime: runtime, Home: home, Session: rs.LastSession, Cwd: scopePath(dir)}}
+	opts = UpOptions{Resume: rs.LastSession, Auto: !requireContinue, Dir: dir, Continuation: &task.Conversation{Runtime: runtime, Home: home, Session: rs.LastSession, Cwd: scopePath(dir)}}
 	return opts, nil
 }
