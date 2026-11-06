@@ -2468,6 +2468,12 @@ function sheetItem(s) {
 function renderSheet() {
   const sh = $("psheet");
   const it = phone.matches && sheet && tab === "later" ? sheetItem(sheet) : null;
+  // aria-modal: while the sheet is open the page behind it is inert, so Tab stays in the sheet.
+  for (const n of [$("phead"), document.querySelector("main.page"), $("tabbar")]) {
+    if (!n) continue;
+    if (it) n.setAttribute("inert", "");
+    else n.removeAttribute("inert");
+  }
   if (!it) {
     if (sheet && phone.matches) sheet = null;
     sh.hidden = $("pshade").hidden = true;

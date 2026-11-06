@@ -820,7 +820,8 @@ body.fv-on { overflow: hidden; }
   .toasts { bottom: calc(var(--bar) + 12px); }
 
   /* k1 · Talk: the D-08 panel full screen inside the tab, above the bar; the bar is the way out */
-  .side-panel { bottom: var(--bar); padding-top: env(safe-area-inset-top); animation: none; }
+  /* above the sticky head (z 7), for a conversation and for the Done today / History lists alike */
+  .side-panel { z-index: 8; bottom: var(--bar); padding-top: env(safe-area-inset-top); animation: none; }
   body.keyboard .side-panel { bottom: 0; }
   /* No overflow: hidden on the Talk tab's page: opened on it, the home-screen app then took the window as the screen
      less the clock (894 of 956) and the bar stood above the bottom. A keyboard's scroll is undone by pinPanel. */
