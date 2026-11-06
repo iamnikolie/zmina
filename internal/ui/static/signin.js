@@ -79,7 +79,9 @@
     say("status", "Checking…");
     try {
       const r = await post("/api/signin/verify", { code });
-      if (r.ok) { keep(null); say("status", "Signed in."); location.replace(location.pathname + location.search + location.hash); return; }
+      // A reload, not a navigation to the same address: with a #tab in it that would only scroll, and the cockpit
+      // would never load.
+      if (r.ok) { keep(null); say("status", "Signed in. Opening…"); location.reload(); return; }
       invalid(true);
       say("status", "Wrong or expired code. Check it, or send a new one.", true);
       field.value = "";
