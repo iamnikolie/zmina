@@ -245,3 +245,5 @@ html.chat-document { height: 100%; overflow: hidden; }
 .q-rrow { display: grid; grid-template-columns: 76px 1fr auto; gap: 12px; align-items: baseline; width: 100%; min-height: 44px; padding: 10px 16px; border: 0; border-bottom: 1px solid var(--line); background: none; color: var(--ink); text-align: left; font: inherit; cursor: pointer; }
 .q-rh { font: 13px var(--sans); color: var(--muted); } .q-ra { font: 500 15px/1.4 var(--sans); } .q-rc { font: 15px var(--sans); color: var(--faint); }
 .q-foot:empty { display: none; }
+/* An owner's session message keeps its own line breaks. */
+.chat-message.event.session .message-body > p { white-space: pre-wrap; overflow-wrap: anywhere; }

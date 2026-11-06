@@ -351,11 +351,12 @@
         const title = document.createElement("p"), summary = document.createElement("p");
         title.className = "event-status";
         title.textContent = eventWord[row.event.status] || "Update";
-        summary.textContent = row.event.summary;
+        // The owner's own message from a session is shown whole, line breaks kept: it is his, not a log line to fold.
+        summary.textContent = row.event.kind === "session" && row.event.detail ? row.event.detail : row.event.summary;
         body.replaceChildren(title, summary);
         if (row.event.result) { const result = document.createElement("p"); result.className = "event-result"; result.textContent = row.event.result; body.append(result); }
         // D-11 amendment b: an owner's session message offers its full text only when the line shown was clipped.
-        if (row.event.detail && (row.event.kind !== "session" || row.event.detail.trim() !== (row.event.summary || "").trim())) { const details = document.createElement("details"), label = document.createElement("summary"), text = document.createElement("pre"); label.textContent = row.event.kind==="session"?"Full message":"Technical details"; text.textContent = row.event.detail; details.append(label, text); body.append(details); }
+        if (row.event.detail && row.event.kind !== "session") { const details = document.createElement("details"), label = document.createElement("summary"), text = document.createElement("pre"); label.textContent = row.event.kind==="session"?"Full message":"Technical details"; text.textContent = row.event.detail; details.append(label, text); body.append(details); }
       } else if (row.role === "assistant") window.zminaChatContent.render(row.text, body); else body.textContent = row.text; article._text = row.text; article._presentation=presentation; }
       const fileRows=article.querySelector(".message-files"), signature=fileSignature(row.attachments)+Boolean(row.outboxKey);
       if(article._files!==signature){fileRows.replaceChildren();for(const file of row.attachments||[]){const item=document.createElement(row.outboxKey?"span":"a");item.textContent=file.name+" · "+new Intl.NumberFormat().format(file.size)+" bytes";if(!row.outboxKey){item.href="/api/chat/file?"+new URLSearchParams({...destination,id:file.id});item.download=file.name;}fileRows.append(item);}article._files=signature;}
