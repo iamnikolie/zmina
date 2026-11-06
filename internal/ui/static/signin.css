@@ -17,19 +17,29 @@ body { margin: 0; min-height: 100dvh; display: grid; place-items: center; backgr
   padding: env(safe-area-inset-top) 16px env(safe-area-inset-bottom); }
 .box { width: 100%; max-width: 22rem; display: flex; flex-direction: column; gap: 12px; }
 .mark { width: 28px; height: 28px; fill: none; stroke: var(--ink); stroke-width: 2; stroke-linecap: round; margin-bottom: 8px; }
+/* D-10 f · the page's one moving element: the mark draws its stroke once */
+.mark .z { stroke-dasharray: 60; animation: draw 900ms cubic-bezier(.2, .7, .2, 1) both; }
+@keyframes draw { from { stroke-dashoffset: 60; } to { stroke-dashoffset: 0; } }
 .mark circle { fill: var(--ink); stroke: none; }
 h1 { margin: 0; font: 600 22px/1.2 var(--sans); letter-spacing: -.01em; }
 .lead { margin: 0 0 8px; color: var(--muted); }
 form { display: flex; flex-direction: column; gap: 10px; margin: 0; }
 label { font: 500 13px var(--sans); color: var(--muted); }
-input { height: 48px; padding: 0 14px; border: 1px solid var(--line2); border-radius: 12px; background: var(--panel); color: var(--ink);
-  font: 500 22px/1 var(--mono); letter-spacing: .3em; }
+/* D-10 c · one field, the digits centred */
+input { height: 56px; padding: 0 14px; border: 1px solid var(--line2); border-radius: 12px; background: var(--panel); color: var(--ink);
+  font: 500 28px/1 var(--mono); font-variant-numeric: tabular-nums; letter-spacing: .4em; text-align: center; }
+input[aria-invalid="true"] { border-color: var(--late); }
 input:focus-visible { outline: 2px solid var(--busy); outline-offset: 2px; }
 button { font: inherit; cursor: pointer; }
 .primary { height: 48px; border: 0; border-radius: 12px; background: var(--ink); color: var(--bg); font-weight: 600; }
 .primary:disabled { opacity: .5; cursor: default; }
-.link { align-self: flex-start; min-height: 44px; padding: 0; border: 0; background: none; color: var(--muted); text-decoration: underline; text-underline-offset: 3px; }
+.link { align-self: flex-start; min-height: 44px; padding: 0; border: 0; background: none; font-size: 15px; color: var(--muted); text-decoration: underline; text-underline-offset: 3px; }
+/* D-10 e · while it waits it is plain text, not a link yet */
+.link:disabled { font-size: 14px; color: var(--faint); text-decoration: none; cursor: default; }
 button:focus-visible { outline: 2px solid var(--busy); outline-offset: 2px; }
 .status { min-height: 1.5em; margin: 0; font-size: 14px; color: var(--muted); }
+.status:empty { min-height: 0; }
 .status.bad { color: var(--late); }
-@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+/* D-10 a · on the phone the stack sits in the top third, clear of the keyboard */
+@media (max-width: 860px) { body { place-items: start center; padding-top: calc(env(safe-area-inset-top) + 72px); } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }

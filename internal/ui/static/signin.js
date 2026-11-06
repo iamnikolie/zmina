@@ -1,68 +1,97 @@
-// The sign-in page: ask for a one-time code (sent to the owner's Telegram by zmina ui's --code-command), then enter
-// it. A right code sets the same device cookie as the ?token= link, and the page it stood for opens.
+// The sign-in page (D-10): ask for a one-time code (sent to the owner's Telegram by zmina ui's --code-command), then
+// enter it. A right code sets the same device cookie as the ?token= link, and the page it stood for opens. The step
+// survives a reload while the code lives: iOS may reload a home-screen app left for Telegram.
 "use strict";
 (() => {
   const $ = (id) => document.getElementById(id);
-  const say = (text, bad) => { $("status").textContent = text; $("status").classList.toggle("bad", !!bad); };
+  const KEY = "zmina.signin", TTL = 5 * 60e3, GAP = 60;
+  const keep = (v) => { try { v ? localStorage.setItem(KEY, JSON.stringify(v)) : localStorage.removeItem(KEY); } catch (_) { /* this visit only */ } };
+  const kept = () => { try { return JSON.parse(localStorage.getItem(KEY) || "null"); } catch (_) { return null; } };
   const post = (path, body) => fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Zmina": "1" }, body: JSON.stringify(body || {}), cache: "no-store" });
-  let waitTimer = 0;
+  const field = $("code");
+  let timer = 0;
 
-  // wait keeps «Send code» off for the seconds the server asked.
-  function wait(button, s) {
-    clearInterval(waitTimer);
-    const label = button.textContent;
-    let left = s;
-    button.disabled = true;
+  function say(id, text, bad) { $(id).textContent = text; $(id).classList.toggle("bad", !!bad); }
+  function invalid(on) { field.setAttribute("aria-invalid", on ? "true" : "false"); }
+
+  // countdown keeps «Send a new code» plain text, «New code in N s», for the seconds left.
+  function countdown(s) {
+    clearInterval(timer);
+    const b = $("again");
+    let left = Math.max(0, Math.ceil(s));
     const tick = () => {
-      if (left <= 0) { clearInterval(waitTimer); button.disabled = false; button.textContent = label; return; }
-      button.textContent = label + " · " + left + " s";
+      if (left <= 0) { clearInterval(timer); b.disabled = false; b.textContent = "Send a new code"; return; }
+      b.disabled = true;
+      b.textContent = "New code in " + left + " s";
       left--;
     };
     tick();
-    waitTimer = setInterval(tick, 1000);
+    timer = setInterval(tick, 1000);
   }
 
-  async function ask(button) {
+  // step2 is the code step: what happened, the field, the countdown to a new code.
+  function step2(wait) {
+    $("ask").hidden = true;
+    $("enter").hidden = false;
+    $("head").textContent = "Code sent to Telegram";
+    $("lead").textContent = "Enter the 6 digits. The code works once, for 5 minutes.";
+    field.value = "";
+    invalid(false);
+    field.focus();
+    countdown(wait);
+  }
+
+  async function ask(status) {
+    const button = status === "ask-status" ? $("send") : $("again");
     button.disabled = true;
-    say("Sending…");
+    say(status, "Sending…");
     try {
       const r = await post("/api/signin/code");
       const data = await r.json().catch(() => ({}));
-      if (r.status === 429) { say("A code was sent a moment ago. Use it, or wait for a new one.", true); button.disabled = false; wait(button, data.wait || 60); return; }
-      if (!r.ok) { say("The code could not be sent. Try again in a minute.", true); button.disabled = false; return; }
-      $("ask").hidden = true;
-      $("enter").hidden = false;
-      $("lead").textContent = "Enter the 6-digit code from Telegram. It works once, for 5 minutes.";
-      say("");
-      $("code").value = "";
-      $("code").focus();
-      wait($("again"), 60);
+      if (r.status === 429) {
+        say(status, "A code was sent a moment ago. Use it, or wait for a new one.", true);
+        if (status === "ask-status") button.disabled = false; else countdown(data.wait || GAP);
+        return;
+      }
+      if (!r.ok) { say(status, "The code could not be sent. Try again in a minute.", true); button.disabled = false; return; }
+      keep({ sentAt: Date.now() });
+      say("ask-status", "");
+      say("status", "");
+      step2(GAP);
     } catch (_) {
-      say("No connection. Try again.", true);
+      say(status, "No connection. Try again.", true);
       button.disabled = false;
     }
   }
 
-  $("ask").addEventListener("submit", (e) => { e.preventDefault(); ask($("send")); });
-  $("again").addEventListener("click", () => ask($("again")));
-  $("code").addEventListener("input", () => {
-    $("code").value = $("code").value.replace(/\D/g, "").slice(0, 6);
-    if ($("code").value.length === 6) $("enter").requestSubmit();
+  $("ask").addEventListener("submit", (e) => { e.preventDefault(); ask("ask-status"); });
+  $("again").addEventListener("click", () => ask("status"));
+  field.addEventListener("input", () => {
+    field.value = field.value.replace(/\D/g, "").slice(0, 6);
+    if (field.getAttribute("aria-invalid") === "true") { invalid(false); say("status", ""); }
+    if (field.value.length === 6) $("enter").requestSubmit();
   });
   $("enter").addEventListener("submit", async (e) => {
     e.preventDefault();
-    const code = $("code").value;
-    if (!/^\d{6}$/.test(code)) { say("The code is 6 digits.", true); return; }
+    const code = field.value;
+    if (!/^\d{6}$/.test(code)) { invalid(true); say("status", "The code is 6 digits.", true); return; }
     $("go").disabled = true;
-    say("Checking…");
+    say("status", "Checking…");
     try {
       const r = await post("/api/signin/verify", { code });
-      if (r.ok) { say("Signed in."); location.replace(location.pathname + location.search + location.hash); return; }
-      say("Wrong or expired code. Check it, or send a new one.", true);
-      $("code").select();
+      if (r.ok) { keep(null); say("status", "Signed in."); location.replace(location.pathname + location.search + location.hash); return; }
+      invalid(true);
+      say("status", "Wrong or expired code. Check it, or send a new one.", true);
+      field.value = "";
+      field.focus();
     } catch (_) {
-      say("No connection. Try again.", true);
+      say("status", "No connection. Try again.", true);
     }
     $("go").disabled = false;
   });
+
+  // A code asked for less than five minutes ago: open on its step, with what is left of the wait.
+  const was = kept();
+  if (was && Date.now() - was.sentAt < TTL) step2(GAP - (Date.now() - was.sentAt) / 1000);
+  else keep(null);
 })();
