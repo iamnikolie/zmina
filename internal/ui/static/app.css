@@ -748,9 +748,7 @@ body.fv-on { overflow: hidden; }
   .pcrews .lk span:last-child { font: 14px var(--sans); color: var(--muted); }
 
   /* t1–t3 · the bar */
-  /* --app-h is the screen's height in the home-screen app (set by app.js): iOS may open it with a window short by the
-     clock's strip, and a bar fixed to that window's bottom then stands above the screen's. */
-  .tabbar { position: fixed; left: 0; right: 0; top: calc(var(--app-h, 100dvh) - var(--bar)); bottom: auto; z-index: 8; display: grid; grid-template-columns: repeat(4, 1fr); height: var(--bar);
+  .tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 8; display: grid; grid-template-columns: repeat(4, 1fr); height: var(--bar);
     padding-bottom: env(safe-area-inset-bottom); box-sizing: border-box; background: var(--panel); border-top: 1px solid var(--line); }
   body.keyboard .tabbar { display: none; }
   .tabbar button { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; min-height: 44px;
@@ -767,8 +765,8 @@ body.fv-on { overflow: hidden; }
   .toasts { bottom: calc(var(--bar) + 12px); }
 
   /* k1 · Talk: the D-08 panel full screen inside the tab, above the bar; the bar is the way out */
-  .side-panel { bottom: auto; height: calc(var(--app-h, 100dvh) - var(--bar)); padding-top: env(safe-area-inset-top); animation: none; }
-  body.keyboard .side-panel { height: var(--app-h, 100dvh); }
+  .side-panel { bottom: var(--bar); padding-top: env(safe-area-inset-top); animation: none; }
+  body.keyboard .side-panel { bottom: 0; }
   /* No overflow: hidden on the Talk tab's page: opened on it, the home-screen app then took the window as the screen
      less the clock (894 of 956) and the bar stood above the bottom. A keyboard's scroll is undone by pinPanel. */
   /* D-11 h1 · the head floats over the conversation: no bar, a fade from the panel tone; centred name (the picker)
