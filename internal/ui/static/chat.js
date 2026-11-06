@@ -259,8 +259,10 @@
         const on = a.other === null && a.choices.includes(i + 1);
         const row = btn("q-opt" + (on ? " on" : ""), "", () => {
           if (it.multi_select) { a.other = null; a.choices = on ? a.choices.filter(c => c !== i + 1) : [...a.choices, i + 1].sort((x, y) => x - y); renderQuestion(); return; }
-          a.other = null; a.choices = [i + 1]; renderQuestion();
-          setTimeout(() => { if (ask && ask.id === q.id) after(); }, matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 200);
+          if (ask.moving) return; // a second tap within the 200 ms must not skip the next part
+          const step = ask.step;
+          ask.moving = true; a.other = null; a.choices = [i + 1]; renderQuestion();
+          setTimeout(() => { if (!ask || ask.id !== q.id) return; ask.moving = false; if (ask.step === step) after(); }, matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 200);
         });
         row.setAttribute("role", it.multi_select ? "checkbox" : "radio");
         row.setAttribute("aria-checked", on ? "true" : "false");
@@ -295,7 +297,10 @@
       }
     }
     out.push(foot);
+    // A redraw keeps the focus on the same row (or the first row of a new part when the card had it).
+    const had = box.contains(document.activeElement), at = [...box.querySelectorAll(".q-opts > button, .q-rrow")].indexOf(document.activeElement);
     box.replaceChildren(...out);
+    if (had) (box.querySelectorAll(".q-opts > button, .q-rrow")[Math.max(at, 0)] || box.querySelector("button"))?.focus();
   }
   // D-13 q9: keys while the card is open and the focus is in it — digits choose, Esc goes back.
   document.addEventListener("keydown", (e) => {
@@ -303,6 +308,11 @@
     if (box.hidden || !box.contains(document.activeElement) || document.activeElement.tagName === "TEXTAREA") return;
     if (/^[1-9]$/.test(e.key)) { const rows = box.querySelectorAll(".q-opts > button.q-opt"); rows[+e.key - 1]?.click(); e.preventDefault(); }
     else if (e.key === "Escape") { box.querySelector(".q-back")?.click(); e.preventDefault(); }
+    else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      const rows = [...box.querySelectorAll(".q-opts > button, .q-rrow")], i = rows.indexOf(document.activeElement);
+      rows[Math.min(rows.length - 1, Math.max(0, i + (e.key === "ArrowDown" ? 1 : -1)))]?.focus();
+      e.preventDefault();
+    }
   }, true);
   const eventWord = {completed: "Completed", failed: "Failed", stopped: "Stopped", running: "Running", received: "Received"};
   const kindOf = (row) => row.event ? "event" : row.role === "user" ? "user" : "assistant";
