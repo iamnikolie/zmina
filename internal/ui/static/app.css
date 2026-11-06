@@ -775,7 +775,8 @@ body.fv-on { overflow: hidden; }
     padding: 0; background: linear-gradient(var(--panel) 56px, transparent 80px); pointer-events: none; }
   body[data-tab="talk"] .panel-h > * { pointer-events: auto; }
   body[data-tab="talk"] .panel-h .lamp { display: none; }
-  body[data-tab="talk"] .panel-h .pick { position: absolute; left: 50%; top: 2px; transform: translateX(-50%); }
+  /* above node/crew and the tools: its open menu must take the taps it covers */
+  body[data-tab="talk"] .panel-h .pick { position: absolute; left: 50%; top: 2px; z-index: 2; transform: translateX(-50%); }
   body[data-tab="talk"] .panel-h .pick > button { height: 40px; margin: 0; padding: 0 12px; gap: 5px; font: 600 17px/1.2 var(--sans); }
   body[data-tab="talk"] .panel-h .pick > button:hover, body[data-tab="talk"] .panel-h .pick > button[aria-expanded="true"] { background: none; }
   body[data-tab="talk"] .pickmenu { left: 50%; transform: translateX(-50%); width: min(20rem, calc(100vw - 24px)); }
