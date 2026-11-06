@@ -13,6 +13,13 @@
       if (e.key === "Escape" && !e.defaultPrevented) window.parent.postMessage("zmina:close", location.origin);
     });
   }
+  // Embedded, the conversation wears the cockpit's own tokens (they change with its width and scheme), so the panel's
+  // head and the conversation are one surface.
+  if (params.get("embed") === "1" && window.parent !== window) {
+    const names = ["--bg", "--panel", "--panel2", "--line", "--line2", "--ink", "--ink2", "--muted", "--faint", "--off", "--busy", "--late", "--ok"];
+    const wear = () => { try { const from = window.parent.getComputedStyle(window.parent.document.documentElement); for (const n of names) { const v = from.getPropertyValue(n).trim(); if (v) document.documentElement.style.setProperty(n, v); } } catch (_) { /* not the cockpit */ } };
+    wear(); try { window.parent.addEventListener("resize", wear); window.parent.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", wear); } catch (_) { /* not the cockpit */ }
+  }
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   let targets = [], destination = null, snapshot = null, generation = 0, pollTimer = null, readRequest = null;
   let loadingTargets = false, posting = false, draftID = "", cleared = null, recognition = null, listening = false, firstPaint = true;
@@ -26,7 +33,7 @@
     selectedFiles.forEach(file=>{
       const row=document.createElement("div"), name=document.createElement("span"), remove=document.createElement("button");
       row.className="draft-file";name.textContent=file.name+" · "+new Intl.NumberFormat(undefined,{style:"unit",unit:"byte",unitDisplay:"short"}).format(file.size);
-      remove.type="button";remove.textContent="Remove";remove.setAttribute("aria-label","Remove "+file.name);
+      remove.type="button";remove.className="ib";remove.title="Remove";remove.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';remove.setAttribute("aria-label","Remove "+file.name);
       remove.addEventListener("click",async()=>{try{const version=generation,dest={...destination},next=selectedFiles.filter(item=>item.id!==file.id);await store.saveFiles(dest,next);if(version!==generation)return;selectedFiles=next;filesRevision++;cleared=null;draftID="";renderSelected();controls();}catch(e){error("Could not save the file selection. "+e.message);}});
       row.append(name,remove);draftFiles.append(row);
     });
@@ -139,8 +146,13 @@
     mic.disabled = !destination || loadingTargets || posting;
     input.readOnly = listening;
     $("clear-message").disabled = posting || (!input.value && !selectedFiles.length && !cleared);
+    // D-08 k3: the ✕ sits in the field only while there is a draft (or a clear to undo).
+    $("clear-message").hidden = !input.value && !selectedFiles.length && !cleared;
+    $("clear-message").classList.toggle("undo", Boolean(cleared));
     $("clear-message").setAttribute("aria-label", cleared ? "Undo clear" : "Clear draft");
     $("clear-message").title = cleared ? "Undo clear" : "Clear draft";
+    input.parentElement.classList.toggle("has-draft", !$("clear-message").hidden);
+    fitField();
     mic.setAttribute("aria-pressed", String(listening)); mic.setAttribute("aria-label", listening ? "Stop dictation" : "Dictate");
     mic.title = listening ? "Stop dictation" : "Dictate";
     $("start-role").hidden = !snapshot || snapshot.state === "up";
@@ -148,6 +160,18 @@
     $("stop-turn").hidden = !snapshot?.active;
     $("stop-turn").disabled = posting || !live;
   }
+  // fitField grows the field with its text, one line at rest (D-08 k2); its CSS max-height caps it.
+  function setLabel(el, text) { if (el.textContent !== text) el.textContent = text; }
+  function fitField() { input.style.height = "auto"; input.style.height = input.scrollHeight + "px"; }
+  const clock = new Intl.DateTimeFormat(undefined, {hour: "2-digit", minute: "2-digit"}), dated = new Intl.DateTimeFormat("en-GB", {day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"});
+  const dayName = new Intl.DateTimeFormat("en-GB", {weekday: "short", day: "numeric", month: "short"});
+  const dayOf = (at) => { const d = new Date(at); return Number.isNaN(d.getTime()) ? "" : d.toDateString(); };
+  function dayLabel(at) {
+    const d = new Date(at), today = new Date(), yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+    return d.toDateString() === today.toDateString() ? "Today" : d.toDateString() === yesterday.toDateString() ? "Yesterday" : dayName.format(d);
+  }
+  const eventWord = {completed: "Completed", failed: "Failed", stopped: "Stopped", running: "Running", received: "Received"};
+  const kindOf = (row) => row.event ? "event" : row.role === "user" ? "user" : "assistant";
   function render() {
     if (!destination) return;
     snapshot ||= {state: "unknown", messages: [], pending: []};
@@ -162,15 +186,19 @@
     rows.forEach((row, index) => {
       keep.add(row.id);
       let article = articles.get(row.id);
-      if (!article) { article = document.createElement("article"); article.className = "chat-message " + (row.event ? (row.event.kind==="session"?"event session":"event") : row.role === "user" ? "user" : "assistant"); const head = document.createElement("div"); head.className = "message-head"; const who = document.createElement("span"), time = document.createElement("time"); head.append(who, time); const body = document.createElement("div"); body.className = "message-body"; const state = document.createElement("div"); state.className = "message-state"; const files=document.createElement("div");files.className="message-files";article.append(head, body, files, state); articles.set(row.id, article); }
+      if (!article) { article = document.createElement("article"); article.className = "chat-message " + (row.event ? (row.event.kind==="session"?"event session":"event") : row.role === "user" ? "user" : "assistant"); const head = document.createElement("div"); head.className = "message-head"; const who = document.createElement("span"), time = document.createElement("time"); head.append(who, time); const body = document.createElement("div"); body.className = "message-body"; const state = document.createElement("div"); state.className = "message-state"; const files=document.createElement("div");files.className="message-files";const meta=document.createElement("div");meta.className="message-meta";const metaTime=document.createElement("time");const copy=document.createElement("button");copy.type="button";copy.className="ib copy";copy.setAttribute("aria-label","Copy");copy.title="Copy";copy.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>';copy.addEventListener("click",()=>{navigator.clipboard?.writeText(article._text||"").then(()=>{copy.title="Copied";setTimeout(()=>{copy.title="Copy";},1500);},()=>error("Could not copy this message."));});meta.append(metaTime,copy);article.append(head, body, files, state, meta); articles.set(row.id, article); }
       const presentation=JSON.stringify({role:row.role,event:row.event||null});
       article.className="chat-message "+(row.event?(row.event.kind==="session"?"event session":"event"):row.role==="user"?"user":"assistant");
-      article.querySelector(".message-head span").textContent = row.event ? (row.event.kind==="session"?"Session message":"Background task") : row.role === "user" ? "You" : destination.role;
-      const time = article.querySelector("time"); const date = new Date(row.at); time.textContent = Number.isNaN(date.getTime()) ? "" : (date.toDateString() === new Date().toDateString() ? new Intl.DateTimeFormat(undefined, {hour: "2-digit", minute: "2-digit"}) : new Intl.DateTimeFormat("en-GB", {day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"})).format(date);
+      // D-08 c5: a card's label says what it is and how it stands on one line.
+      article.querySelector(".message-head span").textContent = row.event ? (row.event.kind==="session"?"Session message":"Background task") + (eventWord[row.event.status] ? " · " + eventWord[row.event.status] : "") : row.role === "user" ? "You" : destination.role;
+      const date = new Date(row.at), shown = Number.isNaN(date.getTime()) ? "" : (date.toDateString() === new Date().toDateString() ? clock : dated).format(date);
+      for (const time of article.querySelectorAll("time")) time.textContent = shown;
+      // D-08 c3: every message keeps its full time in its title; the meta row shows it under a run's last one.
+      article.title = Number.isNaN(date.getTime()) ? "" : date.toLocaleString();
       if (article._text !== row.text || article._presentation!==presentation) { const body = article.querySelector(".message-body"); if (row.event) {
         const title = document.createElement("p"), summary = document.createElement("p");
         title.className = "event-status";
-        title.textContent = ({completed: "Completed", failed: "Failed", stopped: "Stopped", running: "Running", received:"Received"})[row.event.status] || "Update";
+        title.textContent = eventWord[row.event.status] || "Update";
         summary.textContent = row.event.summary;
         body.replaceChildren(title, summary);
         if (row.event.result) { const result = document.createElement("p"); result.className = "event-result"; result.textContent = row.event.result; body.append(result); }
@@ -178,7 +206,7 @@
       } else if (row.role === "assistant") window.zminaChatContent.render(row.text, body); else body.textContent = row.text; article._text = row.text; article._presentation=presentation; }
       const fileRows=article.querySelector(".message-files"), signature=fileSignature(row.attachments)+Boolean(row.outboxKey);
       if(article._files!==signature){fileRows.replaceChildren();for(const file of row.attachments||[]){const item=document.createElement(row.outboxKey?"span":"a");item.textContent=file.name+" · "+new Intl.NumberFormat().format(file.size)+" bytes";if(!row.outboxKey){item.href="/api/chat/file?"+new URLSearchParams({...destination,id:file.id});item.download=file.name;}fileRows.append(item);}article._files=signature;}
-      const state = article.querySelector(".message-state"); state.textContent = ({local: "Saved on this device · waiting to send", queued: "Queued · delivered when the role is idle", sent: "Sent to the role · awaiting agent confirmation", accepted: "Accepted by agent", unconfirmed: "Delivery unconfirmed · the conversation changed", expired: "Delivery unconfirmed · check Terminal before sending again", failed: "Delivery failed", sending: "Saving…", uncertain: "Delivery unconfirmed · retry with the same message ID"})[row.state] || ""; if (row.failure) state.textContent += " · " + row.failure;
+      const state = article.querySelector(".message-state"); state.textContent = ({local: "Saved on this device · waiting to send", queued: "Queued · delivered when the role is idle", sent: "Sent to the role · awaiting agent confirmation", accepted: "", unconfirmed: "Delivery unconfirmed · the conversation changed", expired: "Delivery unconfirmed · check Terminal before sending again", failed: "Delivery failed", sending: "Saving…", uncertain: "Delivery unconfirmed · retry with the same message ID"})[row.state] || ""; if (row.failure) state.textContent += " · " + row.failure;
       if (row.outboxKey && row.state === "failed") { const retry = document.createElement("button"); retry.type = "button"; retry.textContent = "Retry delivery"; retry.addEventListener("click", () => retryEntry(row.outboxKey).catch(e => error(e.message))); state.append(" ", retry); }
       if (!row.outboxKey && row.state === "unconfirmed") {
         // Set aside for every browser: the role's own record keeps it, unshown.
@@ -192,13 +220,38 @@
         state.append(" ", remove);
       }
       state.hidden = !state.textContent; state.classList.toggle("failed", ["failed", "uncertain"].includes(row.state));
-      if (messages.children[index] !== article) messages.insertBefore(article, messages.children[index] || null);
     });
-    for (const [id, article] of articles) if (!keep.has(id)) { article.remove(); articles.delete(id); }
+    for (const [id, article] of articles) if (!keep.has(id)) { article._day?.remove(); article.remove(); articles.delete(id); }
+    // D-08 c3/c5: consecutive messages of one speaker are a run; a day line where the day changes; the meta row
+    // under a run's last message, always shown under the newest one.
+    // A day line stands before its message, outside it (a card keeps its own frame); each is put in place only when
+    // it is not there already, so nothing on screen moves.
+    let cursor = messages.firstElementChild;
+    const place = (el) => { if (cursor === el) cursor = cursor.nextElementSibling; else messages.insertBefore(el, cursor); };
+    rows.forEach((row, i) => {
+      const article = articles.get(row.id), prev = rows[i - 1], next = rows[i + 1], kind = kindOf(row), day = dayOf(row.at);
+      const newDay = Boolean(day) && (prev ? dayOf(prev.at) !== day : day !== new Date().toDateString());
+      const start = !prev || kindOf(prev) !== kind || newDay || kind === "event";
+      const end = !next || kindOf(next) !== kind || (Boolean(day) && dayOf(next.at) !== day) || kind === "event";
+      if (newDay) {
+        if (!article._day) { article._day = document.createElement("p"); article._day.className = "day-line"; }
+        setLabel(article._day, dayLabel(row.at)); place(article._day);
+      } else if (article._day) { article._day.remove(); article._day = null; }
+      place(article);
+      article.classList.toggle("run-start", start); article.classList.toggle("run-end", end); article.classList.toggle("newest", end && !next);
+    });
+    // D-08 c6: working shows where the next reply will land.
+    const working = $("chat-working"), busy = live && Boolean(snapshot.active);
+    working.hidden = !busy;
+    if (busy) { const since = Date.parse(snapshot.since || ""), min = Number.isNaN(since) ? 0 : Math.max(1, Math.floor((Date.now() - since) / 60000)); working.lastElementChild.textContent = "Working" + (min ? " · " + min + " min" : ""); }
     $("empty-chat").hidden = rows.length > 0;
     $("empty-chat").textContent = snapshot.session ? "No saved messages yet. Send a message to this role." : "No conversation yet. Start the role, then send a message.";
     $("runtime-info").textContent = [snapshot.runtime, snapshot.profile, snapshot.context ? new Intl.NumberFormat().format(snapshot.context) + " context tokens" : ""].filter(Boolean).join(" · ");
     $("agent-state").textContent = !live ? "Connecting… Showing saved conversation" : snapshot.state !== "up" ? "Role stopped · queued messages wait until it starts" : snapshot.needs_input ? "Needs input · open Terminal to respond" : snapshot.active ? "Working…" : snapshot.status === "unknown" || !snapshot.session ? "Status unavailable · open Terminal" : "Idle";
+    // D-08 c6: the state line speaks only when something is off; working and idle are said elsewhere (the working
+    // line, the panel's head) and stay for screen readers.
+    const quiet = live && snapshot.state === "up" && !snapshot.needs_input && !(snapshot.status === "unknown" || !snapshot.session);
+    $("agent-state").classList.toggle("term-sr", quiet); $("agent-state").parentElement.classList.toggle("quiet", quiet);
     if (follow) conversation.scrollTop = conversation.scrollHeight; else conversation.scrollTop = oldScroll;
     firstPaint = false; $("chat-latest").hidden = atBottom(); controls();
   }
@@ -220,10 +273,9 @@
     const query = new URLSearchParams(destination); history.replaceState(null, "", location.pathname + "?" + query);
     $("terminal-link").href = "terminals.html?" + new URLSearchParams({...destination, view: "terminal"});
     $("session-title").textContent = `${destination.crew} / ${destination.role}`; settings.open = false;
-    // Where the words go, always in sight: another node's role is reached over the mesh, signed with the owner's key.
-    const to = $("compose-to"); to.hidden = false;
-    to.textContent = "to " + (destination.node ? destination.node + "/" : "") + destination.crew + " · " + destination.role + (destination.node ? " · over the mesh, signed" : "");
-    input.placeholder = "Message " + destination.role + "…";
+    // D-08 h2: where the words go is said once, in the head (the cockpit panel's, or this page's session title).
+    $("session-title").title = destination.node ? destination.node + "/" + destination.crew + " · over the mesh, signed" : "";
+    input.placeholder = "Reply to " + destination.role + "…"; $("chat-working").hidden = true;
     $("agent-state").textContent = "Loading conversation…"; $("empty-chat").hidden = false; $("empty-chat").textContent = "Loading messages…";
     restoreDraft();
     const version = generation, selected = {...destination};

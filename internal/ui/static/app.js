@@ -1904,8 +1904,12 @@ function renderSide() {
   const g = glyph(r ? r.icon : "generic");
   if (g) patch(lamp, [g]);
   const st = !r || r.state !== "up" ? W.fvDown : (r.prompt ? W.onScreen : busy ? W.working : W.free) + (zero(r.since) ? "" : " · " + ago(r.since));
-  patch($("side-who"), [side.role + " ", el("span", "k", shownLabel(side.crew, true) || crewLabel(side.crew)), " ",
-    el("span", "st" + (need ? " need" : busy ? " busy" : ""), st)]);
+  // D-08 h1–h2: the role name is the picker; node/crew is the whole destination, its tooltip says how it is reached.
+  setText($("side-role"), side.role);
+  const c = crewOf(side.crew), where = remote(side.crew) || !snap.self ? side.crew : snap.self + "/" + side.crew;
+  const k = el("span", "k", where);
+  k.title = c && c.remote ? where + " · over the mesh, signed" : where + " · local";
+  patch($("side-who"), [k, el("span", "st" + (need ? " need" : busy ? " busy" : ""), st)]);
   if (!$("side-menu").hidden) renderPick();
   setText($("talk-open").lastElementChild, W.talk + " · " + side.role + " " + (shownLabel(side.crew, true) || crewLabel(side.crew)));
 }
@@ -1941,6 +1945,7 @@ function renderPick() {
 function renderList() {
   const head = side.kind === "parked" ? W.later : W.doneTab;
   $("side-lamp").hidden = true;
+  setText($("side-role"), "");
   patch($("side-who"), [head]);
   const out = [];
   if (side.kind === "parked") {

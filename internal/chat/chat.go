@@ -36,9 +36,11 @@ type Snapshot struct {
 	Status               string      `json:"status,omitempty"`
 	NeedsInput           bool        `json:"needs_input,omitempty"`
 	Active               bool        `json:"active"`
-	Context              int         `json:"context,omitempty"`
-	Messages             []Message   `json:"messages"`
-	Pending              []Message   `json:"pending"`
+	// Since is when the role's status last changed: how long it has been working.
+	Since    time.Time `json:"since,omitzero"`
+	Context  int       `json:"context,omitempty"`
+	Messages []Message `json:"messages"`
+	Pending  []Message `json:"pending"`
 }
 
 // Receipt persists browser request identity in the same transaction as the role's queue entry.

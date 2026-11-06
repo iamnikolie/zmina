@@ -9,6 +9,10 @@
   --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", system-ui, sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, monospace;
   --ease: cubic-bezier(.2, .7, .2, 1);
+  /* D-08 t1–t2 · the role's voice in the talk panel (a system serif with Cyrillic and lining figures, no web font)
+     and the owner's bubble (the page's darkest tone set into the panel) */
+  --serif: Charter, "Iowan Old Style", "Palatino", ui-serif, Georgia, serif;
+  --well: var(--bg);
 }
 @media (prefers-color-scheme: light) {
   :root {
@@ -229,18 +233,24 @@ section { padding: 18px 0 6px; }
   animation: side-in 160ms var(--ease) both; }
 @keyframes side-in { from { opacity: 0; transform: translateX(12px); } }
 .side-panel[hidden] { display: none; }
-.panel-h { display: flex; align-items: center; gap: .75rem; padding: .8rem 1rem .8rem 1.25rem; border-bottom: 1px solid var(--line); min-height: 3.2rem; box-sizing: border-box; }
-.panel-h .who { display: flex; align-items: baseline; gap: .6rem; min-width: 0; flex: 1; margin: 0; font: 600 1.05rem var(--sans); color: var(--ink); white-space: nowrap; overflow: hidden; }
-.panel-h .who .k { font: .8rem var(--mono); color: var(--faint); }
-.panel-h .who .st { font: 400 .8rem var(--sans); color: var(--muted); }
+/* D-08 h1 · the head: 52 px, no rule; the role name is the picker, the tools are icons */
+.panel-h { display: flex; align-items: center; gap: 8px; height: 52px; flex: none; padding: 0 12px 0 20px; box-sizing: border-box; }
+.panel-h .who { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex: 1; margin: 0; font: 600 15px var(--sans); color: var(--ink); white-space: nowrap; overflow: hidden; }
+.panel-h .who .k { font: 12px var(--mono); color: var(--faint); cursor: help; }
+.panel-h .who .st { font: 400 13px var(--sans); color: var(--muted); }
 .panel-h .who .st.busy { color: var(--busy); }
 .panel-h .who .st.need { color: var(--need); }
-.panel-h .lamp { width: 1.15rem; height: 1.15rem; color: var(--muted); flex: none; }
+.panel-h .lamp { width: 16px; height: 16px; color: var(--muted); flex: none; }
 .panel-h .lamp.busy { color: var(--busy); }
 .panel-h .lamp svg { width: 100%; height: 100%; }
 .panel-h .pick { position: relative; }
-.panel-h .pick > button { height: 1.9rem; padding: 0 .6rem; background: none; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; font: .8rem var(--sans); }
-.pickmenu { position: absolute; right: 0; top: 2.3rem; z-index: 9; width: 20rem; max-height: 60vh; overflow: auto; display: flex; flex-direction: column; gap: 1px;
+.panel-h .pick { flex: none; min-width: 0; }
+.panel-h .pick > button { display: inline-flex; align-items: center; gap: 6px; height: 32px; max-width: 16rem; padding: 0 8px; margin-left: -4px; border: 0; border-radius: 8px;
+  background: none; color: var(--ink); font: 600 15px var(--sans); }
+.panel-h .pick > button:hover, .panel-h .pick > button[aria-expanded="true"] { background: var(--panel2); }
+.panel-h .pick > button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel-h .pick > button svg { width: 12px; height: 12px; flex: none; color: var(--muted); fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.pickmenu { position: absolute; left: 0; top: 38px; z-index: 9; width: 20rem; max-height: 60vh; overflow: auto; display: flex; flex-direction: column; gap: 1px;
   padding: 6px; background: var(--panel); border: 1px solid var(--line2); border-radius: 9px; box-shadow: 0 12px 32px rgba(0, 0, 0, .4); }
 .pickmenu[hidden] { display: none; }
 .pickmenu input { height: 2rem; margin-bottom: 4px; padding: 0 .6rem; background: var(--bg); color: var(--ink); border: 1px solid var(--line2); border-radius: 6px; font: .85rem var(--sans); }
@@ -251,8 +261,11 @@ section { padding: 18px 0 6px; }
 .pickmenu .ps { font-size: .75rem; color: var(--faint); white-space: nowrap; }
 .pickmenu .ps.busy { color: var(--busy); } .pickmenu .ps.need { color: var(--need); }
 .pickmenu .pmore { padding: 4px 8px; border: 0; background: none; color: var(--faint); font: .75rem var(--sans); text-align: left; cursor: pointer; }
-.panel-h .tools2 { display: flex; gap: .15rem; align-items: center; }
-.panel-h .tools2 a, .panel-h .tools2 button { display: inline-flex; align-items: center; height: 1.9rem; padding: 0 .55rem; border: 0; border-radius: 6px; background: none; color: var(--muted); font: 500 .8rem var(--sans); text-decoration: none; }
+.panel-h .tools2 { display: flex; gap: 2px; align-items: center; flex: none; }
+.panel-h .tools2 a, .panel-h .tools2 button { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 8px; background: none; color: var(--muted); text-decoration: none; }
+.panel-h .tools2 svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.panel-h .tools2 [hidden] { display: none; }
+@media (pointer: coarse) { .panel-h .tools2 a, .panel-h .tools2 button, .panel-h .pick > button { min-width: 44px; height: 44px; } }
 .panel-h .tools2 a:hover, .panel-h .tools2 button:hover { background: var(--panel2); color: var(--ink); }
 .panel-h .back { display: none; }
 .side-panel iframe { flex: 1; width: 100%; border: 0; background: var(--panel); }
@@ -274,6 +287,8 @@ section { padding: 18px 0 6px; }
 button.role.card { display: block; width: 100%; text-align: left; font: inherit; color: inherit; cursor: pointer; }
 @media (max-width: 1399px) {
   .side-panel { top: 0; left: 0; border-left: 0; }
+  .panel-h { padding: 0 8px 0 4px; }
+  .panel-h .who .st { display: none; }
   .panel-h .back { display: inline-flex; border: 0; background: none; color: var(--ink2); font-size: 1.4rem; padding: 0 .3rem; }
   .panel-h .tools2 a#side-full { display: none; }
 }

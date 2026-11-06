@@ -80,16 +80,16 @@
 
 <div class="toasts" id="toasts" aria-live="polite"></div>
 <div class="full" id="full" hidden></div>
-<section class="side-panel" id="side" aria-labelledby="side-who" hidden>
+<section class="side-panel" id="side" aria-labelledby="side-role side-who" hidden>
   <div class="panel-h">
     <button type="button" class="back" id="side-back" aria-label="Back">‹</button>
     <span class="lamp" id="side-lamp" aria-hidden="true"></span>
-    <h2 class="who" id="side-who"></h2>
-    <span class="pick"><button type="button" id="side-pick" aria-haspopup="listbox" aria-expanded="false">Other role ▾</button>
+    <span class="pick"><button type="button" id="side-pick" aria-haspopup="listbox" aria-expanded="false" aria-label="Other role"><span id="side-role"></span><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5l3 3 3-3"/></svg></button>
       <span class="pickmenu" id="side-menu" hidden><input id="side-filter" type="search" placeholder="Find a role…" aria-label="Find a role"><span id="side-roles" role="listbox"></span></span></span>
-    <div class="tools2"><a id="side-term" target="_blank" rel="noreferrer">Terminal</a><a id="side-full" target="_blank" rel="noreferrer">Full screen</a><button type="button" id="side-close" aria-label="Close">✕</button></div>
+    <h2 class="who" id="side-who"></h2>
+    <div class="tools2"><a id="side-term" target="_blank" rel="noreferrer" aria-label="Terminal" title="Terminal"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M7 9l3 3-3 3M12.5 15H17"/></svg></a><a id="side-full" target="_blank" rel="noreferrer" aria-label="Full screen" title="Full screen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></svg></a><button type="button" id="side-close" aria-label="Close" title="Close · Esc"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
   </div>
-  <iframe id="side-frame" title="Conversation"></iframe>
+  <iframe id="side-frame" title="Conversation" allow="clipboard-write"></iframe>
   <div class="side-list" id="side-list" hidden></div>
 </section>
 <aside class="drawer" id="history" aria-labelledby="history-h" hidden>

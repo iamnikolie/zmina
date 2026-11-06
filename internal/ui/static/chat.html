@@ -30,20 +30,26 @@
 </details>
 <nav class="chat-nav" aria-label="Role view"><a id="terminal-link" href="terminals.html?view=terminal">Terminal</a></nav>
 </header>
-<div class="chat-state"><span id="agent-state" role="status" aria-live="polite">Choose a role</span><button id="start-role" type="button" hidden>Start role</button><button id="stop-turn" type="button" hidden aria-label="Stop current turn">Stop</button></div>
 <p id="chat-error" class="chat-error" role="status" hidden></p>
-<main id="conversation" aria-label="Conversation"><div id="messages"></div><p id="empty-chat">Choose a role to open its conversation.</p></main>
-<button id="chat-latest" type="button" hidden>Latest ↓</button>
+<main id="conversation" aria-label="Conversation"><div id="messages"></div><p id="chat-working" class="chat-working" hidden><i aria-hidden="true"></i><span></span></p><p id="empty-chat">Choose a role to open its conversation.</p></main>
+<div class="chat-state"><span id="agent-state" role="status" aria-live="polite">Choose a role</span><button id="start-role" type="button" hidden>Start role</button><button id="stop-turn" type="button" hidden aria-label="Stop current turn">Stop</button></div>
 <form id="composer" class="chat-composer">
-<p id="compose-to" class="compose-to" hidden></p>
+<button id="chat-latest" type="button" aria-label="Latest" title="Latest" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"/></svg></button>
+<div class="composer-box">
 <div id="draft-files" class="chat-attachments" aria-live="polite"></div>
 <input id="file-input" type="file" multiple hidden>
-<button id="attach-file" class="term-icon" type="button" aria-label="Attach file" title="Attach file" disabled>+</button>
-<button id="dictate" class="term-icon" type="button" disabled aria-label="Dictate" aria-pressed="false" title="Dictate"><svg class="mic-symbol" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"/></svg><svg class="stop-symbol" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></button>
+<div class="composer-field">
 <label class="term-sr" for="message">Message to this role</label>
-<textarea id="message" name="message" rows="2" maxlength="4096" placeholder="Message this role…"></textarea>
-<button id="clear-message" class="term-icon" type="button" disabled aria-label="Clear draft" title="Clear draft"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14 3 7 7-10 10H5l-4-4L14 3Z"/><path d="m8 9 7 7M10 20h12"/></svg></button>
-<button id="send-message" type="submit" disabled>Send</button>
+<textarea id="message" name="message" rows="1" maxlength="4096" placeholder="Message this role…"></textarea>
+<button id="clear-message" class="ib clear" type="button" disabled hidden aria-label="Clear draft" title="Clear draft"><svg class="clear-symbol" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg><svg class="undo-symbol" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button>
+</div>
+<div class="composer-row">
+<button id="attach-file" class="ib plus" type="button" aria-label="Attach file" title="Attach file" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+<span class="sp"></span>
+<button id="dictate" class="ib" type="button" disabled aria-label="Dictate" aria-pressed="false" title="Dictate"><svg class="mic-symbol" viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1M12 18v3"/></svg><svg class="stop-symbol" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></button>
+<button id="send-message" class="send" type="submit" disabled aria-label="Send" title="Send"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
+</div>
+</div>
 <p id="composer-status" role="status" aria-live="polite" hidden></p>
 </form>
 </body>

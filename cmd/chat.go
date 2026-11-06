@@ -42,6 +42,7 @@ func chatSnapshot(s *shift.Shift, role string) (chat.Snapshot, error) {
 			out.Status = v.Status
 			out.NeedsInput = v.Prompt
 			out.Context = v.Context
+			out.Since = v.Since
 			break
 		}
 	}
