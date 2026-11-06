@@ -27,7 +27,8 @@
     messages.addEventListener("click", (e) => {
       const a = e.target.closest?.(".chat-message.assistant");
       if (!a || !document.body.classList.contains("phone") || e.target.closest("a, button, summary, pre") || String(getSelection()).trim()) return;
-      a.classList.toggle("meta-on");
+      a._metaOn = !a._metaOn;
+      a.classList.toggle("meta-on", a._metaOn);
     });
   }
   // Embedded, the conversation wears the cockpit's own tokens (they change with its width and scheme), so the panel's
@@ -226,6 +227,8 @@
       if (!article) { article = document.createElement("article"); article.className = "chat-message " + (row.event ? (row.event.kind==="session"?"event session":"event") : row.role === "user" ? "user" : "assistant"); const head = document.createElement("div"); head.className = "message-head"; const who = document.createElement("span"), time = document.createElement("time"); head.append(who, time); const body = document.createElement("div"); body.className = "message-body"; const state = document.createElement("div"); state.className = "message-state"; const files=document.createElement("div");files.className="message-files";const meta=document.createElement("div");meta.className="message-meta";const metaTime=document.createElement("time");const copy=document.createElement("button");copy.type="button";copy.className="ib copy";copy.setAttribute("aria-label","Copy");copy.title="Copy";copy.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>';copy.addEventListener("click",()=>{navigator.clipboard?.writeText(article._text||"").then(()=>{copy.title="Copied";setTimeout(()=>{copy.title="Copy";},1500);},()=>error("Could not copy this message."));});meta.append(metaTime,copy);article.append(head, body, files, state, meta); articles.set(row.id, article); }
       const presentation=JSON.stringify({role:row.role,event:row.event||null});
       article.className="chat-message "+(row.event?(row.event.kind==="session"?"event session":"event"):row.role==="user"?"user":"assistant");
+      // A reply unfolded by a tap stays unfolded through the next render (D-11 m1).
+      if (article._metaOn) article.classList.add("meta-on");
       // D-08 c5: a card's label says what it is and how it stands on one line.
       article.querySelector(".message-head span").textContent = row.event ? (row.event.kind==="session"?"Session message":"Background task") + (eventWord[row.event.status] ? " · " + eventWord[row.event.status] : "") : row.role === "user" ? "You" : destination.role;
       const date = new Date(row.at), shown = Number.isNaN(date.getTime()) ? "" : (date.toDateString() === new Date().toDateString() ? clock : dated).format(date);
