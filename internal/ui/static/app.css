@@ -767,8 +767,8 @@ body.fv-on { overflow: hidden; }
   /* k1 · Talk: the D-08 panel full screen inside the tab, above the bar; the bar is the way out */
   .side-panel { bottom: var(--bar); padding-top: env(safe-area-inset-top); animation: none; }
   body.keyboard .side-panel { bottom: 0; }
-  /* The Talk tab is the panel alone: the page under it does not scroll, so iOS has nothing to leave scrolled */
-  html:has(body[data-tab="talk"]), body[data-tab="talk"] { overflow: hidden; }
+  /* No overflow: hidden on the Talk tab's page: opened on it, the home-screen app then took the window as the screen
+     less the clock (894 of 956) and the bar stood above the bottom. A keyboard's scroll is undone by pinPanel. */
   /* D-11 h1 · the head floats over the conversation: no bar, a fade from the panel tone; centred name (the picker)
      with node/crew under it; Terminal a round button at the right; the lamp goes (working is said in the thread) */
   body[data-tab="talk"] .panel-h { position: absolute; top: env(safe-area-inset-top); left: 0; right: 0; z-index: 3; display: block; height: 80px;
