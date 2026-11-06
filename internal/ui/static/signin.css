@@ -29,6 +29,7 @@ label { font: 500 13px var(--sans); color: var(--muted); }
 input { height: 56px; padding: 0 14px; border: 1px solid var(--line2); border-radius: 12px; background: var(--panel); color: var(--ink);
   font: 500 28px/1 var(--mono); font-variant-numeric: tabular-nums; letter-spacing: .4em; text-align: center; }
 input[aria-invalid="true"] { border-color: var(--late); }
+input[aria-invalid="true"]:focus-visible { outline-color: var(--late); }
 input:focus-visible { outline: 2px solid var(--busy); outline-offset: 2px; }
 button { font: inherit; cursor: pointer; }
 .primary { height: 48px; border: 0; border-radius: 12px; background: var(--ink); color: var(--bg); font-weight: 600; }
