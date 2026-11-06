@@ -2,6 +2,7 @@ package shift
 
 import (
 	"errors"
+	"github.com/iamnikolie/zmina/internal/alarm"
 	"os"
 	"path/filepath"
 	"slices"
@@ -1115,4 +1116,61 @@ func TestExplicitFreshBypassesResumePolicyAndSleep(t *testing.T) {
 	require.NoError(t, f.s.Down("designer", DownOptions{}))
 	require.NoError(t, f.s.UpWith("designer", UpOptions{Resume: "last"}))
 	assert.Contains(t, strings.Join(f.tm.argv["designer"], " "), "--resume old-conversation")
+}
+
+// A conversation recorded under another CLAUDE_CONFIG_DIR is not there to resume: asked for, the start is refused and
+// says where it looked; chosen by zmina (resume: always), the role starts fresh, and the log says why.
+func TestResumeOfAConversationNotInTheNamespace(t *testing.T) {
+	f := fixtureWith(t, crewYAML+`  writer:
+    resume: always
+`)
+	for _, r := range []string{"designer", "writer"} {
+		require.NoError(t, f.s.Up(r))
+		f.status(r, "idle", *f.now)
+		require.NoError(t, f.s.Down(r, DownOptions{}))
+	}
+
+	var asked []string
+	f.s.HasTranscript = func(ns, id string) bool { asked = append(asked, ns+" "+id); return false }
+
+	err := f.s.UpWith("designer", UpOptions{Resume: "last"})
+	require.ErrorContains(t, err, "no conversation sid-designer under /ns/projects")
+	require.ErrorContains(t, err, "zmina up designer --fresh")
+	assert.False(t, f.s.has("designer"), "nothing started: no dead pane called up")
+
+	require.NoError(t, f.s.Up("writer"))
+	assert.NotContains(t, f.tm.argv["writer"], "--resume", "resume: always falls back to a fresh start")
+	assert.True(t, f.ev.has("writer", "resume-missing"))
+	assert.Contains(t, asked, "/ns sid-writer")
+
+	f.s.HasTranscript = func(string, string) bool { return true }
+	require.NoError(t, f.s.UpWith("designer", UpOptions{Resume: "last"}))
+	assert.Contains(t, strings.Join(f.tm.argv["designer"], " "), "--resume sid-designer")
+}
+
+// An alarm's wake chose the resume itself: a conversation that is gone starts the role fresh, it does not keep it down.
+func TestWakeOfAConversationNotInTheNamespaceStartsFresh(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	require.NoError(t, f.s.Up("designer"))
+	f.status("designer", "idle", *f.now)
+	require.NoError(t, f.s.Down("designer", DownOptions{}))
+	f.s.HasTranscript = func(string, string) bool { return false }
+
+	require.NoError(t, f.s.UpWith("designer", UpOptions{Resume: "sid-designer", Auto: true}))
+	assert.NotContains(t, f.tm.argv["designer"], "--resume")
+	assert.True(t, f.ev.has("designer", "resume-missing"))
+	assert.Empty(t, f.s.Resumed("designer"))
+}
+
+// A wake whose conversation is gone says it started fresh, not that it resumed.
+func TestWakeReportsWhatTheStartDid(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	require.NoError(t, f.s.Up("designer"))
+	f.status("designer", "idle", *f.now)
+	require.NoError(t, f.s.Down("designer", DownOptions{}))
+	f.s.HasTranscript = func(string, string) bool { return false }
+
+	line, _ := f.s.wake(&alarm.Alarm{ID: "R-1", Kind: alarm.Sleep, Role: "designer", Text: "wake"}, "")
+	assert.Contains(t, line, "started fresh (sid-designer is gone)")
+	assert.NotContains(t, line, "resumed")
 }

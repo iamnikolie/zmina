@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -193,6 +195,7 @@ func (a *app) newShift() (*shift.Shift, error) {
 		By:                by(),
 		Warn:              func(err error) { fmt.Fprintln(a.err, "zmina: warning:", err) },
 		OtherCrews:        func() []string { return otherCrews(a.crewKey(), mesh.Address{}) },
+		HasTranscript:     hasTranscript,
 	}, nil
 }
 
@@ -427,4 +430,55 @@ func self() string {
 	}
 
 	return path
+}
+
+// hasTranscript reports whether a Claude conversation is under a namespace (<namespace>/projects/*/<id>.jsonl). A
+// namespace with no projects yet has none of them: a conversation recorded elsewhere is not there either.
+var hasTranscript = func(ns, id string) bool {
+	if filepath.Base(id) != id {
+		return false
+	}
+
+	// Each project dir by name, never a glob: a namespace path may hold [ ] * ? as plain characters. A listing or a
+	// lookup that fails for any reason but absence is no proof either way: claude is left to say.
+	dirs, err := os.ReadDir(filepath.Join(ns, "projects"))
+	if err != nil {
+		return !errors.Is(err, os.ErrNotExist)
+	}
+
+	unsure := false
+
+	for _, d := range dirs {
+		dir := filepath.Join(ns, "projects", d.Name())
+
+		// Only a project directory can hold a conversation: a file there (.DS_Store), or a link to one, is skipped. A
+		// link that cannot be followed is unknown.
+		if !d.IsDir() {
+			if d.Type()&fs.ModeSymlink == 0 {
+				continue
+			}
+
+			fi, err := os.Stat(dir)
+			if err == nil && !fi.IsDir() || errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+				continue
+			}
+
+			if err != nil {
+				unsure = true
+
+				continue
+			}
+		}
+
+		_, err := os.Stat(filepath.Join(dir, id+".jsonl"))
+		if err == nil {
+			return true
+		}
+
+		if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
+			unsure = true
+		}
+	}
+
+	return unsure
 }

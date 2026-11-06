@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -341,7 +342,9 @@ func (a *app) upCommand() *cobra.Command {
 		Short: "Start roles (--all: every role that is down; --as N: copy N of one role; --resume: its last " +
 			"conversation; --task T-n: in the task's worktree, handed the task)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return a.withState(func(s *shift.Shift) error {
+			var started []upStart
+
+			upErr := a.withState(func(s *shift.Shift) error {
 				names, err := pick(s, args, all, func(v shift.View) bool { return v.State == shift.PresenceDown })
 				if err != nil {
 					return err
@@ -406,18 +409,50 @@ func (a *app) upCommand() *cobra.Command {
 					}
 
 					r, _ := s.Role(n)
-					fmt.Fprintf(a.out, "%s up as %s · zmina attach %s\n", n, r.Session, n)
+
+					// Said once the lock is let go and a resumed start has had its moment: see below.
+					st := upStart{name: n, resumed: s.Resumed(n) != "", lines: fmt.Sprintf("%s up as %s · zmina attach %s\n", n, r.Session, n)}
 
 					if t.ID != "" {
-						fmt.Fprintf(a.out, "%s conversation: %s\n", n, mode)
+						st.lines += fmt.Sprintf("%s conversation: %s\n", n, mode)
 						if err := a.handTask(s, n, t); err != nil {
 							errs = append(errs, err)
 						}
 					}
+
+					started = append(started, st)
 				}
 
 				return errors.Join(errs...)
 			})
+
+			// A resumed conversation can end at once (claude finds no such conversation): said so, never «up». The
+			// wait is outside the state lock, so nothing else waits on it.
+			if slices.ContainsFunc(started, func(st upStart) bool { return st.resumed }) {
+				time.Sleep(upSettle)
+			}
+
+			var dead []error
+
+			if rerr := a.readState(func(s *shift.Shift) error {
+				for _, st := range started {
+					if why := ""; st.resumed {
+						if why = deadWhy(s, st.name); why != "" {
+							dead = append(dead, fmt.Errorf("%s ended right after its start: %s (zmina peek %s; zmina up %s --fresh)", st.name, why, st.name, st.name))
+
+							continue
+						}
+					}
+
+					fmt.Fprint(a.out, st.lines)
+				}
+
+				return nil
+			}); rerr != nil {
+				dead = append(dead, rerr)
+			}
+
+			return errors.Join(append([]error{upErr}, dead...)...)
 		},
 	}
 
@@ -1198,4 +1233,34 @@ func tildeHome(p string) string {
 	}
 
 	return p
+}
+
+// upSettle is how long up waits before it says a resumed role is up: long enough for claude to refuse a conversation.
+var upSettle = 1500 * time.Millisecond
+
+// upStart is a role up started: what to say of it, once a resumed start is seen to live.
+type upStart struct {
+	name, lines string
+	resumed     bool
+}
+
+// deadWhy is the last screen line of a role whose process has ended, empty while it runs.
+func deadWhy(s *shift.Shift, name string) string {
+	for _, v := range s.Views() {
+		if v.Role != name || v.State != shift.PresenceDead {
+			continue
+		}
+
+		screen, _ := s.Tmux.Capture(name, 20)
+		lines := strings.Split(strings.TrimSpace(screen), "\n")
+		for i := len(lines) - 1; i >= 0; i-- {
+			if l := strings.TrimSpace(lines[i]); l != "" && !strings.HasPrefix(l, "Pane is dead") {
+				return l
+			}
+		}
+
+		return "its process exited"
+	}
+
+	return ""
 }
