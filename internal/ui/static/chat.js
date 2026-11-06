@@ -14,7 +14,15 @@
     });
     // D-11: on the phone the Talk tab reads like the Claude iOS app; the cockpit's width says which it is (this frame
     // may be narrow on the desktop too).
-    const phone = () => { try { document.body.classList.toggle("phone", window.parent.matchMedia("(max-width: 860px)").matches); } catch (_) { /* a frame of another page */ } };
+    // D-14 a: on the phone the working line leaves the conversation for the state line, beside Stop.
+    const phone = () => {
+      let on = false;
+      try { on = window.parent.matchMedia("(max-width: 860px)").matches; } catch (_) { /* a frame of another page */ }
+      document.body.classList.toggle("phone", on);
+      const w = $("chat-working");
+      if (on && w.parentElement !== $("stop-turn").parentElement) $("start-role").before(w);
+      else if (!on && w.parentElement !== $("conversation")) $("empty-chat").before(w);
+    };
     phone();
     try { window.parent.addEventListener("resize", phone); } catch (_) { /* as above */ }
     // A field here with the keyboard up: the cockpit's tab bar steps aside (D-09 k2). The parent cannot see a focus

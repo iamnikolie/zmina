@@ -222,7 +222,13 @@ html.chat-document { height: 100%; overflow: hidden; }
   background: var(--line2); color: var(--ink2); }
 .chat-page.phone .composer-row .ib::after, .chat-page.phone .composer-row .send::after { content: ""; position: absolute; inset: -4px; }
 .chat-page.phone .composer-row svg { width: 18px; height: 18px; }
-.chat-page.phone .chat-state { margin: 4px auto; font-size: 12px; }
+/* D-14 a · while a turn runs, «Working · N min» and Stop share one line 8 px above the composer: the state left, Stop a
+   text button at the right (44 px hit); a state line with nothing to show takes no room. */
+.chat-page.phone .chat-state { flex-wrap: nowrap; justify-content: flex-start; width: 100%; max-width: 46rem; box-sizing: border-box; margin: 4px auto 8px; padding: 0 4px 0 16px;
+  font-size: 12px; text-align: left; }
+.chat-page.phone .chat-state.quiet:not(:has(> .chat-working:not([hidden]), > button:not([hidden]))) { margin: 0; }
+.chat-page.phone .chat-state .chat-working { margin: 0; }
+.chat-page.phone #stop-turn { margin-left: auto; height: 44px; padding: 0 12px; font: 500 14px var(--sans); color: var(--ink2); text-decoration: none; }
 .chat-page.phone .composer-row .send:disabled { background: var(--line2); color: var(--faint); }
 .chat-page.phone .composer-row .send:not(:disabled) { background: var(--ink); color: var(--bg); }
 .chat-page.phone .composer-row .send svg { stroke-width: 2.2; }
