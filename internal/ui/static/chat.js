@@ -18,7 +18,8 @@
     const phone = () => {
       let on = false;
       try { on = window.parent.matchMedia("(max-width: 860px)").matches; } catch (_) { /* a frame of another page */ }
-      document.body.classList.toggle("phone", on);
+      // The phone's field has its own font and padding: a switch sizes it again.
+      if (document.body.classList.contains("phone") !== on) { document.body.classList.toggle("phone", on); fitField(); }
       const w = $("chat-working");
       if (on && w.parentElement !== $("stop-turn").parentElement) $("start-role").before(w);
       else if (!on && w.parentElement !== $("conversation")) $("empty-chat").before(w);
