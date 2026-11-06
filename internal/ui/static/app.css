@@ -267,6 +267,8 @@ section { padding: 18px 0 6px; }
 .panel-h .tools2 svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .panel-h .tools2 [hidden] { display: none; }
 @media (pointer: coarse) { .panel-h .tools2 a, .panel-h .tools2 button, .panel-h .pick > button { min-width: 44px; height: 44px; } }
+/* iOS zooms the page into any focused field under 16px; touch keeps every field at 16px or more. */
+@media (pointer: coarse) { input, textarea, select { font-size: max(16px, 1em) !important; } .pickmenu input { height: 44px; } }
 .panel-h .tools2 a:hover, .panel-h .tools2 button:hover { background: var(--panel2); color: var(--ink); }
 .panel-h .back { display: none; }
 .side-panel iframe { flex: 1; width: 100%; border: 0; background: var(--panel); }
