@@ -677,6 +677,13 @@ func (c *Crew) check() error {
 		}
 
 		if !sessionRe.MatchString(r.Session) {
+			if strings.Contains(r.Session, "/") {
+				// '/' already means <node>/<crew> across zmina: a session named so would read as an address.
+				return fmt.Errorf("role %s: session %q: no '/' (it reads as a <node>/<crew> address); use %q, the "+
+					"cockpit and zmina ls show node and crew beside every session", name, r.Session,
+					strings.ReplaceAll(r.Session, "/", "-"))
+			}
+
 			return fmt.Errorf("role %s: session %q: letters, digits, '.', '_' and '-' only", name, r.Session)
 		}
 
