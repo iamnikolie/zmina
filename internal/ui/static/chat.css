@@ -217,6 +217,11 @@ html.chat-document { height: 100%; overflow: hidden; }
 .chat-page.phone .composer-row .send { grid-column: 4; grid-row: 2; }
 .chat-page.phone #message { box-sizing: border-box; min-height: 36px; margin: 0; padding: 7px 4px; font: 16px/1.4 var(--sans); }
 .chat-page.phone .composer-field.has-draft #message { padding-right: 32px; }
+/* D-14 b · no scrollbar between the field and Dictate: none drawn on the phone, and the field scrolls only once it is
+   at its 15rem cap */
+.chat-page.phone #message { overflow-y: hidden; scrollbar-width: none; }
+.chat-page.phone #message.capped { overflow-y: auto; }
+.chat-page.phone #message::-webkit-scrollbar { display: none; }
 .chat-page.phone .composer-field .clear { top: 4px; }
 .chat-page.phone .composer-row .ib, .chat-page.phone .composer-row .send { position: relative; width: 36px; height: 36px; margin: 0; border: 0; border-radius: 50%;
   background: var(--line2); color: var(--ink2); }

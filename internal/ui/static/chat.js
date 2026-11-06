@@ -188,7 +188,8 @@
   }
   // fitField grows the field with its text, one line at rest (D-08 k2); its CSS max-height caps it.
   function setLabel(el, text) { if (el.textContent !== text) el.textContent = text; }
-  function fitField() { input.style.height = "auto"; input.style.height = input.scrollHeight + "px"; }
+  // capped: the field reached its max-height and scrolls from there (D-14 b: on the phone it scrolls only then).
+  function fitField() { input.style.height = "auto"; input.style.height = input.scrollHeight + "px"; input.classList.toggle("capped", input.scrollHeight > input.clientHeight + 1); }
   const clock = new Intl.DateTimeFormat(undefined, {hour: "2-digit", minute: "2-digit"}), dated = new Intl.DateTimeFormat("en-GB", {day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"});
   const dayName = new Intl.DateTimeFormat("en-GB", {weekday: "short", day: "numeric", month: "short"});
   const dayOf = (at) => { const d = new Date(at); return Number.isNaN(d.getTime()) ? "" : d.toDateString(); };
