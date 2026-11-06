@@ -35,6 +35,9 @@ const (
 	// two trims of one role, so its next turn shows the new size.
 	trimIdle  = 5 * time.Minute
 	trimPause = 30 * time.Minute
+	// unstartedFor is how long an open task may sit on a down role, never accepted, before the dispatcher hears of
+	// it: task new records a task for a down role without starting it.
+	unstartedFor = 5 * time.Minute
 )
 
 // Tick is one beat of the clock: it rings the alarms that are due (Rang: the caller runs their notify commands and
@@ -154,6 +157,10 @@ func (s *Shift) Tick() []string {
 		}
 
 		if note := s.expired(name, r, now, up); note != "" {
+			notes = append(notes, note)
+		}
+
+		if note := s.unstarted(name, now, up || stopped, held[name]); note != "" {
 			notes = append(notes, note)
 		}
 
@@ -578,6 +585,44 @@ func (s *Shift) expired(name string, r *crew.Role, now time.Time, up bool) strin
 	rs.Expired = r.Expires
 	note := fmt.Sprintf("%s: seat expired %s; zmina seat rm %s removes it", name, r.Expires, name)
 	s.log(name, "expired", "", note)
+
+	return note
+}
+
+// unstarted tells the dispatcher, once per task, of open tasks that sit on a down role it never accepted, with the
+// command that starts the role on the task; quiet while the role is up or the shift stopped. A role asleep is left to its alarm; a task accepted before the role
+// went down is the red «down, holds» line instead.
+func (s *Shift) unstarted(name string, now time.Time, quiet bool, held []string) string {
+	rs := s.State.Role(name)
+	rs.Unstarted = slices.DeleteFunc(rs.Unstarted, func(id string) bool { return !slices.Contains(held, id) })
+
+	if quiet || s.Tasks == nil || name == s.Crew.Dispatcher || !s.Asleep(name).IsZero() {
+		return ""
+	}
+
+	var ids []string
+
+	for _, id := range held {
+		t, err := s.Tasks.Get(id)
+		if err != nil || t.State != task.Open || now.Sub(t.Created) < unstartedFor || slices.Contains(rs.Unstarted, id) {
+			continue
+		}
+
+		if t.Delivery != nil && !t.Delivery.AcceptedAt.IsZero() {
+			continue
+		}
+
+		ids = append(ids, id)
+	}
+
+	if len(ids) == 0 {
+		return ""
+	}
+
+	rs.Unstarted = append(rs.Unstarted, ids...)
+	note := fmt.Sprintf("%s is down and has not taken %s; zmina up %s --task %s starts it on it", name,
+		strings.Join(ids, ", "), name, ids[0])
+	s.log(name, "unstarted", ids[0], note)
 
 	return note
 }

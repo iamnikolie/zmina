@@ -122,6 +122,8 @@ type RoleState struct {
 	// Expired is the expires value already reported; SkipNoted the tasks a skipped run was reported for.
 	Expired   string `json:"expired,omitempty"`
 	SkipNoted string `json:"skip_noted,omitempty"`
+	// Unstarted are the open tasks the dispatcher was told sit on this role while it is down, never accepted.
+	Unstarted []string `json:"unstarted,omitempty"`
 	// Trimmed is when the ticker last typed /compact or /clear into the role (context_max). TrimSession and
 	// TrimBase are the conversation after it and the size it first showed: a conversation that starts over the
 	// limit is not trimmed again.
