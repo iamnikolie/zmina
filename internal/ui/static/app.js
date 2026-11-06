@@ -2027,7 +2027,13 @@ $("side-close").addEventListener("click", closeTalk);
 globalThis.addEventListener?.("message", (e) => {
   if (e.origin !== location.origin || e.source !== $("side-frame").contentWindow) return;
   if (e.data === "zmina:close" && side) closeTalk();
-  if (e.data === "zmina:typing" || e.data === "zmina:typed") { frameTyping = e.data === "zmina:typing"; kbCheck(); }
+  if (e.data === "zmina:typing" || e.data === "zmina:typed") {
+    frameTyping = e.data === "zmina:typing";
+    kbCheck();
+    // iOS scrolls the page to the field and, in the home-screen app, leaves it there when the keyboard goes: the
+    // bar would float above a dead strip. The Talk tab has nothing to scroll, so it goes back to the top.
+    if (!frameTyping && tab === "talk") setTimeout(() => scrollTo(0, 0), 50);
+  }
 });
 $("side-back").addEventListener("click", closeTalk);
 $("talk-open").addEventListener("click", (e) => {

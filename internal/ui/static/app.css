@@ -765,6 +765,8 @@ body.fv-on { overflow: hidden; }
   /* k1 · Talk: the D-08 panel full screen inside the tab, above the bar; the bar is the way out */
   .side-panel { bottom: var(--bar); padding-top: env(safe-area-inset-top); animation: none; }
   body.kb .side-panel { bottom: 0; }
+  /* The Talk tab is the panel alone: the page under it does not scroll, so iOS has nothing to leave scrolled */
+  html:has(body[data-tab="talk"]), body[data-tab="talk"] { overflow: hidden; }
   body[data-tab="talk"] .panel-h { padding: 0 8px 0 16px; gap: 6px; }
   body[data-tab="talk"] .panel-h .back, body[data-tab="talk"] #side-close, body[data-tab="talk"] #side-full { display: none; }
   body[data-tab="talk"] .panel-h .pick > button { height: 44px; font-size: 17px; }
