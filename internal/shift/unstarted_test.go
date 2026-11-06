@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/iamnikolie/zmina/internal/alarm"
 	"github.com/iamnikolie/zmina/internal/task"
 )
 
@@ -51,6 +52,11 @@ func TestUnstartedNoticeIsCheckedBeforeDelivery(t *testing.T) {
 		"role started":  func(f fix) { require.NoError(t, f.s.Up("designer")) },
 		"task accepted": func(f fix) { f.tk.list[0].Delivery = &task.Delivery{AcceptedAt: *f.now} },
 		"task done":     func(f fix) { f.tk.list[0].State = task.Done },
+		"role asleep": func(f fix) {
+			f.s.Alarms = &alarm.Store{Dir: f.s.Crew.Layout().Alarms()}
+			_, _, err := f.s.Sleep("designer", f.now.Add(time.Hour), "+1h", "", DownOptions{})
+			require.NoError(t, err)
+		},
 	}
 
 	for name, resolve := range cases {

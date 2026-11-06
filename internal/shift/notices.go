@@ -97,12 +97,13 @@ func (s *Shift) noticeCurrent(n NoticeMeta) bool {
 			(n.QueuedAt.IsZero() || n.QueuedAt.Equal(t.Delivery.QueuedAt))
 	}
 	if n.Kind == "unstarted" {
-		// Still down, still not taken: a role started, or a task accepted, closed or handed on, takes it back.
+		// Still down, still not taken: a role started or put to sleep, or a task accepted, closed or handed on, takes
+		// it back.
 		if s.Tasks == nil {
 			return false
 		}
 		t, err := s.Tasks.Get(n.Task)
-		if err != nil || t.Role != n.Role || !unaccepted(t) {
+		if err != nil || t.Role != n.Role || !unaccepted(t) || !s.Asleep(n.Role).IsZero() {
 			return false
 		}
 		p, err := s.probe(n.Role)
