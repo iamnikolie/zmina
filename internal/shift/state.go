@@ -131,6 +131,8 @@ type RoleState struct {
 	// Expired is the expires value already reported; SkipNoted the tasks a skipped run was reported for.
 	Expired   string `json:"expired,omitempty"`
 	SkipNoted string `json:"skip_noted,omitempty"`
+	// Unstarted are the open tasks the dispatcher was told sit on this role while it is down, never accepted.
+	Unstarted []string `json:"unstarted,omitempty"`
 	// Trimmed is when the ticker last typed /compact or /clear into the role (context_max), TrimFrom the
 	// conversation it was typed into. TrimSession and TrimBase are the conversation after it and the size it first
 	// showed once the trim took (a compaction after it, or another conversation): a conversation that starts over
@@ -140,9 +142,9 @@ type RoleState struct {
 	TrimFrom    string    `json:"trim_from,omitempty"`
 	// TrimTook is set once this trim's compaction or new conversation showed: from then on its first size is
 	// awaited without seeing that compaction again (a long first turn may push it out of the part read).
-	TrimTook bool `json:"trim_took,omitempty"`
-	TrimSession string    `json:"trim_session,omitempty"`
-	TrimBase    int       `json:"trim_base,omitempty"`
+	TrimTook    bool   `json:"trim_took,omitempty"`
+	TrimSession string `json:"trim_session,omitempty"`
+	TrimBase    int    `json:"trim_base,omitempty"`
 	// NoPrompt is since when the role's screen has shown no input line (a dialog, a login, a crash); BlockedNoted
 	// that the dispatcher heard of this stretch. ErrorNoted is the API error last reported, LimitNoted the usage
 	// limit line last reported from the screen.

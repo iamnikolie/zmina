@@ -45,7 +45,7 @@ func TestNativeContextReductionQueuesRecoveryOnce(t *testing.T) {
 	f := fixtureWith(t, crewYAML)
 	require.NoError(t, f.s.Up("dispatcher"))
 	f.status("dispatcher", "idle", *f.now)
-	f.tk.list = []task.Task{{ID: "T-1", Role: "designer", State: task.Open}}
+	f.tk.list = []task.Task{{ID: "T-1", Role: "designer", State: task.Open, Delivery: &task.Delivery{AcceptedAt: *f.now}}}
 	f.rg.context["sid-dispatcher"] = 200000
 	f.s.observeRecovery("dispatcher")
 	f.rg.context["sid-dispatcher"] = 20000
@@ -63,7 +63,7 @@ func TestRecoveryIgnoresUnknownAndTransientContext(t *testing.T) {
 			f := fixtureWith(t, crewYAML)
 			require.NoError(t, f.s.Up("dispatcher"))
 			f.status("dispatcher", "idle", *f.now)
-			f.tk.list = []task.Task{{ID: "T-1", Role: "designer", State: task.Open}}
+			f.tk.list = []task.Task{{ID: "T-1", Role: "designer", State: task.Open, Delivery: &task.Delivery{AcceptedAt: *f.now}}}
 			for _, context := range readings {
 				f.rg.context["sid-dispatcher"] = context
 				f.s.observeRecovery("dispatcher")
@@ -79,7 +79,7 @@ func TestRecoveryIgnoresUnknownAndTransientContext(t *testing.T) {
 // A trim zmina made queues its own recovery line; the drop in context it causes is not a native compaction too.
 func TestManagedTrimQueuesRecoveryOnce(t *testing.T) {
 	f := fixtureWith(t, trimCrew)
-	f.tk.list = []task.Task{{ID: "T-1", Role: "designer", State: task.Open}}
+	f.tk.list = []task.Task{{ID: "T-1", Role: "designer", State: task.Open, Delivery: &task.Delivery{AcceptedAt: *f.now}}}
 	f.s.Tick()
 
 	recoveries := func() int {
