@@ -2456,11 +2456,11 @@ function closeSheet() {
 }
 
 // backToRow gives the focus back to the row that opened the sheet, as the list has it now; the first row of the list
-// once that one is gone (dealt with in the sheet, or by the snapshot).
+// once that one is gone (dealt with in the sheet, or by the snapshot); the way back once the list is empty.
 function backToRow() {
   const k = sheetFrom?.dataset.k;
   const t = (sheetFrom?.isConnected && sheetFrom) || (k && document.querySelector(`#plater [data-k="${CSS.escape(k)}"]`))
-    || document.querySelector("#plater .li, #plater .ln");
+    || document.querySelector("#plater .li, #plater .ln") || (!$("pback").hidden && $("pback"));
   t?.focus();
 }
 
