@@ -11,6 +11,7 @@
     --ink: #15181b; --ink2: #2f353b; --muted: #59616a; --faint: #6b737b; --late: #c2332b; --busy: #0b7d72; }
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { margin: 0; min-height: 100dvh; display: grid; place-items: center; background: var(--bg); color: var(--ink);
   font: 15px/1.5 var(--sans); -webkit-font-smoothing: antialiased;
   padding: env(safe-area-inset-top) 16px env(safe-area-inset-bottom); }
