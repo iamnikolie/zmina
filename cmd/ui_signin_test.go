@@ -215,3 +215,33 @@ func TestSigninPageWithoutACodeCommandIsTheOldHint(t *testing.T) {
 	h.ServeHTTP(w, r)
 	assert.Equal(t, http.StatusUnauthorized, w.Code, "no codes without a code command")
 }
+
+// A notifier that leaves a child behind is ended with its whole group at the deadline.
+func TestCommandNotifierEndsItsGroupOnTheDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err := commandNotifier("sleep 30 & sleep 30")(ctx, "x")
+	require.Error(t, err)
+	assert.Less(t, time.Since(start), time.Second, "the deadline holds with a child still running")
+}
+
+// A slow send holds up no check: the code is settled under the lock, the send runs outside it.
+func TestSigninSendRunsOutsideTheLock(t *testing.T) {
+	f := newSigninFix()
+	sending, release := make(chan struct{}), make(chan struct{})
+	f.s.send = func(context.Context, string) error { close(sending); <-release; return nil }
+
+	go func() { _, _ = f.s.request(context.Background()) }()
+	<-sending
+
+	done := make(chan bool)
+	go func() { done <- f.s.check("000000") }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("a check waited for the send")
+	}
+	close(release)
+}

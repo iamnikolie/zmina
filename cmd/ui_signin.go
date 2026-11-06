@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/iamnikolie/zmina/internal/ui"
@@ -51,19 +52,50 @@ func newUISignin(command string, log func(string)) *uiSignin {
 }
 
 // commandNotifier runs the owner's command through the shell with the message on its stdin (never in its argv,
-// where other users could read it); what it prints is dropped.
+// where other users could read it); what it prints goes to /dev/null, so no pipe of ours can keep it waiting. It
+// runs in a process group of its own: past the deadline the whole group is killed, not only the shell.
 func commandNotifier(command string) func(ctx context.Context, text string) error {
 	return func(ctx context.Context, text string) error {
 		cmd := exec.CommandContext(ctx, "/bin/sh", "-c", command)
 		cmd.Stdin = strings.NewReader(text)
-		cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+		cmd.WaitDelay = 2 * time.Second
 
 		return cmd.Run()
 	}
 }
 
-// request makes a new code and sends it; wait is how long until the next one may be asked for when refused.
+// request makes a new code and sends it; wait is how long until the next one may be asked for when refused. The
+// limits and the code are settled under the lock, the send runs outside it: a slow notifier holds up no check.
 func (s *uiSignin) request(ctx context.Context) (time.Duration, error) {
+	code, wait, err := s.reserve()
+	if err != nil {
+		return wait, err
+	}
+
+	sctx, cancel := context.WithTimeout(ctx, signinSendFor)
+	defer cancel()
+
+	text := "zmina sign-in code: " + code + "\nIt works once, for 5 minutes. If you did not ask for it, ignore it."
+	if err := s.send(sctx, text); err != nil {
+		s.mu.Lock()
+		if s.code == code {
+			s.code = ""
+		}
+		s.mu.Unlock()
+		s.log("sign-in: the code command failed: " + err.Error())
+
+		return 0, err
+	}
+
+	s.log("sign-in: code sent")
+
+	return 0, nil
+}
+
+// reserve checks the limits and makes the live code, counting the send before it is made.
+func (s *uiSignin) reserve() (string, time.Duration, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -81,38 +113,25 @@ func (s *uiSignin) request(ctx context.Context) (time.Duration, error) {
 	if n := len(s.sent); n > 0 && now.Sub(s.sent[n-1]) < signinGap {
 		s.log("sign-in: code refused, asked again within a minute")
 
-		return signinGap - now.Sub(s.sent[n-1]), errSigninWait
+		return "", signinGap - now.Sub(s.sent[n-1]), errSigninWait
 	}
 
 	if len(s.sent) >= signinPerHour {
 		s.log("sign-in: code refused, " + fmt.Sprint(signinPerHour) + " codes this hour")
 
-		return time.Hour - now.Sub(s.sent[0]), errSigninWait
+		return "", time.Hour - now.Sub(s.sent[0]), errSigninWait
 	}
 
 	n, err := rand.Int(rand.Reader, big.NewInt(1_000_000))
 	if err != nil {
-		return 0, err
+		return "", 0, err
 	}
 
 	// The send counts against the limits even when it fails: a broken notifier is not a way to ask without end.
 	s.sent = append(s.sent, now)
 	s.code, s.expires, s.tries = fmt.Sprintf("%06d", n.Int64()), now.Add(signinTTL), 0
 
-	sctx, cancel := context.WithTimeout(ctx, signinSendFor)
-	defer cancel()
-
-	text := "zmina sign-in code: " + s.code + "\nIt works once, for 5 minutes. If you did not ask for it, ignore it."
-	if err := s.send(sctx, text); err != nil {
-		s.code = ""
-		s.log("sign-in: the code command failed: " + err.Error())
-
-		return 0, err
-	}
-
-	s.log("sign-in: code sent")
-
-	return 0, nil
+	return s.code, 0, nil
 }
 
 // check takes a code: true once, for the live code, within its time and its tries.

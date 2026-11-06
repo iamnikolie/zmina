@@ -49,8 +49,10 @@
       const r = await post("/api/signin/code");
       const data = await r.json().catch(() => ({}));
       if (r.status === 429) {
-        say(status, "A code was sent a moment ago. Use it, or wait for a new one.", true);
-        if (status === "ask-status") button.disabled = false; else countdown(data.wait || GAP);
+        // A code went out a moment ago (this page reloaded, or another one asked): its field is the way on.
+        if (status === "ask-status") { button.disabled = false; step2(data.wait || GAP); }
+        else countdown(data.wait || GAP);
+        say("status", "A code was sent a moment ago. Use it, or wait for a new one.", true);
         return;
       }
       if (!r.ok) { say(status, "The code could not be sent. Try again in a minute.", true); button.disabled = false; return; }
@@ -62,6 +64,16 @@
       say(status, "No connection. Try again.", true);
       button.disabled = false;
     }
+  }
+
+  // open loads the page this one stood for. An old ?token= in its address would win over the new cookie and bring
+  // this page back, so it goes; with the same address a reload, since a navigation to it with a #tab in it would
+  // only scroll.
+  function open() {
+    const u = new URL(location.href);
+    if (!u.searchParams.has("token")) { location.reload(); return; }
+    u.searchParams.delete("token");
+    location.replace(u.pathname + u.search + u.hash);
   }
 
   $("ask").addEventListener("submit", (e) => { e.preventDefault(); ask("ask-status"); });
@@ -79,9 +91,7 @@
     say("status", "Checking…");
     try {
       const r = await post("/api/signin/verify", { code });
-      // A reload, not a navigation to the same address: with a #tab in it that would only scroll, and the cockpit
-      // would never load.
-      if (r.ok) { keep(null); say("status", "Signed in. Opening…"); location.reload(); return; }
+      if (r.ok) { keep(null); say("status", "Signed in. Opening…"); open(); return; }
       invalid(true);
       say("status", "Wrong or expired code. Check it, or send a new one.", true);
       field.value = "";
