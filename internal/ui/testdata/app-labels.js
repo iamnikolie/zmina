@@ -12,7 +12,7 @@ class FakeElement {
     this.tagName = tag;
     this.children = [];
     this.dataset = {};
-    this.style = {};
+    this.style = { setProperty() {}, removeProperty() {} };
     this.attrs = {};
     this.className = "";
     this.text = "";
@@ -89,6 +89,9 @@ const ctx = vm.createContext({
   scrollTo() {},
   scrollY: 0,
   innerHeight: 844,
+  innerWidth: 390,
+  navigator: {},
+  screen: { width: 390, height: 844 },
   console,
   Date,
   JSON,

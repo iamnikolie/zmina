@@ -2120,6 +2120,17 @@ function kbCheck() {
 }
 globalThis.visualViewport?.addEventListener("resize", kbCheck);
 
+// appHeight gives the phone layout the screen's height in the home-screen app. Opened there, iOS may report a window
+// short by the clock's strip (894 of 956 measured) until another tab is drawn, and the bar sat above the bottom.
+function appHeight() {
+  const standalone = navigator.standalone || matchMedia("(display-mode: standalone)").matches;
+  const full = standalone ? (innerWidth > innerHeight ? screen.width : screen.height) : 0;
+  document.documentElement.style.setProperty("--app-h", Math.max(innerHeight, full) + "px");
+}
+appHeight();
+globalThis.addEventListener?.("resize", appHeight);
+globalThis.addEventListener?.("orientationchange", () => setTimeout(appHeight, 300));
+
 // pinPanel holds the Talk tab's panel to what is on screen while the keyboard is up: iOS pans the page under it to the
 // field, and a panel fixed to the page went up with it — its head under the clock, the conversation jumping.
 function pinPanel() {
