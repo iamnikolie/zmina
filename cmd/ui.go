@@ -300,7 +300,13 @@ func (a *app) uiHandler(bound string, loopback bool, token string, allowHosts ..
 	mux := http.NewServeMux()
 
 	static, _ := fs.Sub(ui.Files, "static")
-	mux.Handle("GET /", http.FileServerFS(static))
+	// The page's files carry no date (they are embedded): without no-cache a browser may keep an old app.css next
+	// to a new chat.js — the home-screen app did. They are small and local; each load asks again.
+	files := http.FileServerFS(static)
+	mux.Handle("GET /", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		files.ServeHTTP(w, r)
+	}))
 	mux.HandleFunc("GET /api/ping", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "zmina") })
 	peers := a.cockpitPeers
 	if peers == nil {
