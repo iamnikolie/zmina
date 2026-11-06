@@ -12,6 +12,11 @@
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && !e.defaultPrevented) window.parent.postMessage("zmina:close", location.origin);
     });
+    // A field here with the keyboard up: the cockpit's tab bar steps aside (D-09 k2). The parent cannot see a focus
+    // inside this frame on iOS, so it is told.
+    const typing = (on) => window.parent.postMessage(on ? "zmina:typing" : "zmina:typed", location.origin);
+    document.addEventListener("focusin", (e) => { if (e.target.matches?.("textarea, input:not([type=file])")) typing(true); });
+    document.addEventListener("focusout", (e) => { if (e.target.matches?.("textarea, input:not([type=file])")) typing(false); });
   }
   // Embedded, the conversation wears the cockpit's own tokens (they change with its width and scheme), so the panel's
   // head and the conversation are one surface.

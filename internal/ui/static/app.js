@@ -2025,7 +2025,9 @@ $("side-filter").addEventListener("input", renderPick);
 $("side-close").addEventListener("click", closeTalk);
 // The conversation is a frame of this page: its Esc arrives as a message, accepted only from that frame and this origin.
 globalThis.addEventListener?.("message", (e) => {
-  if (e.origin === location.origin && e.source === $("side-frame").contentWindow && e.data === "zmina:close" && side) closeTalk();
+  if (e.origin !== location.origin || e.source !== $("side-frame").contentWindow) return;
+  if (e.data === "zmina:close" && side) closeTalk();
+  if (e.data === "zmina:typing" || e.data === "zmina:typed") { frameTyping = e.data === "zmina:typing"; kbCheck(); }
 });
 $("side-back").addEventListener("click", closeTalk);
 $("talk-open").addEventListener("click", (e) => {
@@ -2080,6 +2082,8 @@ function setTab(t, push = true) {
     if (!side || side.kind !== "talk") { const x = phoneTalk(); if (x) openTalk(x.crew, x.role, null); }
   } else if (side) {
     side = null;
+    frameTyping = false;
+    document.body.classList.remove("kb");
     $("side").hidden = true;
     $("talk-open").setAttribute("aria-expanded", "false");
   }
@@ -2095,11 +2099,14 @@ $("scope").addEventListener("click", () => setTab("crews"));
 phone.addEventListener?.("change", () => render());
 
 // k2: while a field has the keyboard up the bar steps aside; it never rides up on the keyboard.
+// A field in the conversation says so itself (zmina:typing): iOS does not show the parent a focus inside the frame,
+// and in the home-screen app the visual viewport does not shrink either.
+let frameTyping = false;
 function kbCheck() {
   const vv = globalThis.visualViewport;
   const a = document.activeElement;
-  const typing = a === $("side-frame") || /^(INPUT|TEXTAREA)$/.test(a?.tagName || "");
-  document.body.classList.toggle("kb", !!vv && typing && vv.height < innerHeight - 120);
+  const field = /^(INPUT|TEXTAREA)$/.test(a?.tagName || "");
+  document.body.classList.toggle("kb", frameTyping || (!!vv && (field || a === $("side-frame")) && vv.height < innerHeight - 120));
 }
 globalThis.visualViewport?.addEventListener("resize", kbCheck);
 document.addEventListener("focusin", () => setTimeout(kbCheck, 0));
