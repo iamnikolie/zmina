@@ -22,6 +22,13 @@
     const typing = (on) => window.parent.postMessage(on ? "zmina:typing" : "zmina:typed", location.origin);
     document.addEventListener("focusin", (e) => { if (e.target.matches?.("textarea, input:not([type=file])")) typing(true); });
     document.addEventListener("focusout", (e) => { if (e.target.matches?.("textarea, input:not([type=file])")) typing(false); });
+    // D-11 m1: on the phone an older reply's Copy is folded away; a tap on the reply (not on a link, a button or a
+    // selection) unfolds it, a second tap folds it again.
+    messages.addEventListener("click", (e) => {
+      const a = e.target.closest?.(".chat-message.assistant");
+      if (!a || !document.body.classList.contains("phone") || e.target.closest("a, button, summary, pre") || String(getSelection()).trim()) return;
+      a.classList.toggle("meta-on");
+    });
   }
   // Embedded, the conversation wears the cockpit's own tokens (they change with its width and scheme), so the panel's
   // head and the conversation are one surface.

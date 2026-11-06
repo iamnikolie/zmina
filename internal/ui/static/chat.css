@@ -188,7 +188,8 @@ html.chat-document { height: 100%; overflow: hidden; }
 .chat-page.phone .message-meta { height: 44px; margin: -6px 0 0 -10px; }
 .chat-page.phone .message-meta time, .chat-page.phone .chat-message.user > .message-meta { display: none; }
 /* D-11 amendment c: an older reply keeps no empty row; its Copy shows when it is tapped */
-.chat-page.phone .chat-message.assistant:not(.newest):not(:focus-within) > .message-meta { display: none; }
+/* Folded, not removed: its Copy stays in the tab order (a focus unfolds it) and a tap on the reply unfolds it too. */
+.chat-page.phone .chat-message.assistant:not(.newest):not(:focus-within):not(.meta-on) > .message-meta { height: 0; margin: 0; overflow: hidden; opacity: 0; }
 .chat-page.phone .message-meta .ib { width: 44px; height: 44px; color: var(--muted); }
 .chat-page.phone .message-meta .ib svg { width: 19px; height: 19px; }
 /* k1 · the composer: r 24; plus, dictate and send as 40 px circles; send is ink once there is text, no brand colour */
