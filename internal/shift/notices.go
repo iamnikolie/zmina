@@ -42,6 +42,9 @@ func (s *Shift) noticeMeta(text string) NoticeMeta {
 		n.Kind = "busy"
 	} else if strings.HasPrefix(body, "no input line on its screen for ") {
 		n.Kind, n.Role = "blocked", name
+	} else if id, _, ok := strings.Cut(strings.TrimPrefix(body, unstartedWord), ";"); ok && strings.HasPrefix(body, unstartedWord) {
+		n.Kind, n.Role, n.Task = "unstarted", name, id
+		return n
 	} else {
 		return n
 	}
@@ -92,6 +95,18 @@ func (s *Shift) noticeCurrent(n NoticeMeta) bool {
 		return err == nil && s.acceptanceDue(t) && t.Delivery.ID == n.Handoff &&
 			t.Delivery.Session == n.Session && t.Delivery.SentAt.UnixMilli() == n.Since &&
 			(n.QueuedAt.IsZero() || n.QueuedAt.Equal(t.Delivery.QueuedAt))
+	}
+	if n.Kind == "unstarted" {
+		// Still down, still not taken: a role started, or a task accepted, closed or handed on, takes it back.
+		if s.Tasks == nil {
+			return false
+		}
+		t, err := s.Tasks.Get(n.Task)
+		if err != nil || t.Role != n.Role || !unaccepted(t) {
+			return false
+		}
+		p, err := s.probe(n.Role)
+		return err != nil || p.State != tmux.Up
 	}
 	if n.Kind == "delivery" {
 		rs := s.State.Role(n.Role)

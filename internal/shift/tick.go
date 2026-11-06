@@ -160,9 +160,7 @@ func (s *Shift) Tick() []string {
 			notes = append(notes, note)
 		}
 
-		if note := s.unstarted(name, now, up || stopped, held[name]); note != "" {
-			notes = append(notes, note)
-		}
+		notes = append(notes, s.unstarted(name, now, up || stopped, held[name])...)
 
 		if up {
 			notes = append(notes, s.watchScreen(name, now)...)
@@ -589,42 +587,42 @@ func (s *Shift) expired(name string, r *crew.Role, now time.Time, up bool) strin
 	return note
 }
 
-// unstarted tells the dispatcher, once per task, of open tasks that sit on a down role it never accepted, with the
-// command that starts the role on the task; quiet while the role is up or the shift stopped. A role asleep is left to its alarm; a task accepted before the role
-// went down is the red «down, holds» line instead.
-func (s *Shift) unstarted(name string, now time.Time, quiet bool, held []string) string {
+// unstarted tells the dispatcher, once per task, of each open task that sits on a down role it never accepted, with
+// the command that starts the role on the task; quiet while the role is up or the shift stopped. A role asleep is
+// left to its alarm; a task accepted before the role went down is the red «down, holds» line instead. Each note is
+// its own notice, checked again before it is delivered (noticeCurrent).
+func (s *Shift) unstarted(name string, now time.Time, quiet bool, held []string) []string {
 	rs := s.State.Role(name)
 	rs.Unstarted = slices.DeleteFunc(rs.Unstarted, func(id string) bool { return !slices.Contains(held, id) })
 
 	if quiet || s.Tasks == nil || name == s.Crew.Dispatcher || !s.Asleep(name).IsZero() {
-		return ""
+		return nil
 	}
 
-	var ids []string
+	var notes []string
 
 	for _, id := range held {
 		t, err := s.Tasks.Get(id)
-		if err != nil || t.State != task.Open || now.Sub(t.Created) < unstartedFor || slices.Contains(rs.Unstarted, id) {
+		if err != nil || !unaccepted(t) || now.Sub(t.Created) < unstartedFor || slices.Contains(rs.Unstarted, id) {
 			continue
 		}
 
-		if t.Delivery != nil && !t.Delivery.AcceptedAt.IsZero() {
-			continue
-		}
-
-		ids = append(ids, id)
+		rs.Unstarted = append(rs.Unstarted, id)
+		note := fmt.Sprintf("%s: %s%s; zmina --crew %s up %s --task %s starts it on it", name, unstartedWord, id,
+			shellWord(s.Crew.Path), shellWord(name), id)
+		s.log(name, "unstarted", id, note)
+		notes = append(notes, note)
 	}
 
-	if len(ids) == 0 {
-		return ""
-	}
+	return notes
+}
 
-	rs.Unstarted = append(rs.Unstarted, ids...)
-	note := fmt.Sprintf("%s is down and has not taken %s; zmina up %s --task %s starts it on it", name,
-		strings.Join(ids, ", "), name, ids[0])
-	s.log(name, "unstarted", ids[0], note)
+// unstartedWord opens the dispatcher's note about a task left on a down role, so the notice can be read back.
+const unstartedWord = "down, has not taken "
 
-	return note
+// unaccepted is an open task its role never accepted.
+func unaccepted(t task.Task) bool {
+	return t.State == task.Open && (t.Delivery == nil || t.Delivery.AcceptedAt.IsZero())
 }
 
 // session is the registry entry of a role up under zmina, nil when it is not up or has not written one.

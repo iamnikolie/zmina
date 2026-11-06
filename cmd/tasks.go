@@ -83,7 +83,8 @@ func (a *app) taskNewCommand() *cobra.Command {
 
 				// Recorded for a role that is not up: nothing starts it, so say how.
 				if pane.State != tmux.Up {
-					fmt.Fprintf(a.err, "zmina: %s is down: zmina up %s --task %s starts it on the task\n", t.Role, t.Role, t.ID)
+					fmt.Fprintf(a.err, "zmina: %s is down: zmina --crew %s up %s --task %s starts it on the task\n", t.Role,
+						quoteCommandArg(s.Crew.Path), quoteCommandArg(t.Role), t.ID)
 				}
 
 				return nil
