@@ -206,3 +206,42 @@ html.chat-document { height: 100%; overflow: hidden; }
 /* With the keyboard up the composer sits on it: the home indicator's inset is under the keyboard, not under the box. */
 .chat-page.phone.typing .chat-composer { padding-bottom: 8px; }
 .chat-page.phone.typing #composer-status:empty { display: none; }
+
+/* D-13 · a role's question takes the composer's place in the dock */
+.chat-question button { min-width: 0; min-height: 0; margin: 0; border: 0; border-radius: 0; box-shadow: none; }
+.chat-question { box-sizing: border-box; max-width: 46rem; margin: 0 auto; padding: 14px 12px 10px; max-height: min(70vh, 560px); display: flex; flex-direction: column;
+  background: var(--panel2); border: 1px solid var(--line2); border-radius: 20px; font: 15px/1.45 var(--sans); }
+@media (prefers-color-scheme: light) { .chat-question { background: var(--panel); } }
+.chat-question[hidden] { display: none; }
+.q-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 4px; }
+.q-hdr { font: 600 12px/1.3 var(--sans); color: var(--muted); }
+.q-prog { display: flex; gap: 4px; }
+.chat-question .q-seg { position: relative; width: 18px; height: 3px; padding: 0; border: 0; border-radius: 2px; background: var(--line2); cursor: pointer; }
+.q-seg::after { content: ""; position: absolute; inset: -20px -2px; }
+.chat-question .q-seg.done { background: var(--muted); } .chat-question .q-seg.now { background: var(--ink); }
+.q-text { margin: 6px 4px 12px; font: 600 16px/1.4 var(--sans); color: var(--ink); }
+.q-opts, .q-review { overflow-y: auto; margin: 0 -12px; border-top: 1px solid var(--line); }
+.chat-question .q-opt { display: grid; grid-template-columns: 20px 1fr; gap: 12px; align-items: start; width: 100%; min-height: 48px; padding: 12px 16px; border: 0; border-bottom: 1px solid var(--line);
+  background: none; color: var(--ink); text-align: left; font: inherit; cursor: pointer; }
+.chat-question .q-opt.on { background: color-mix(in srgb, var(--ink) 6%, transparent); }
+.q-ctl { width: 18px; height: 18px; margin-top: 1px; box-sizing: border-box; border: 1.5px solid var(--muted); border-radius: 50%; position: relative; }
+.q-opt.on > .q-ctl, .q-other.on .q-ctl { border-color: var(--ink); }
+.q-opt.on > .q-ctl::after, .q-other.on .q-ctl::after { content: ""; position: absolute; inset: 3px; border-radius: 50%; background: var(--ink); }
+.q-opt[role="checkbox"] > .q-ctl { border-radius: 5px; }
+.q-opt[role="checkbox"].on > .q-ctl { background: var(--ink); }
+.q-opt[role="checkbox"].on > .q-ctl::after { inset: 3px 5px 5px; border: solid var(--bg); border-width: 0 2px 2px 0; border-radius: 0; background: none; transform: rotate(45deg); }
+.q-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.q-label { font: 500 15px/1.35 var(--sans); }
+.q-tag { display: inline-flex; align-items: center; height: 18px; margin-left: 8px; padding: 0 7px; border-radius: 9px; background: var(--line); font: 600 11px var(--sans); color: var(--ink2); vertical-align: 1px; }
+.q-desc { font: 13.5px/1.45 var(--sans); color: var(--muted); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.q-opt.on .q-desc { display: block; }
+.chat-question .q-other { display: block; padding: 12px 16px; cursor: default; }
+.chat-question .q-otherpick { display: grid; grid-template-columns: 20px 1fr; gap: 12px; align-items: center; width: 100%; padding: 0; border: 0; background: none; color: var(--ink); text-align: left; font: inherit; cursor: pointer; }
+.q-otherfield { display: block; box-sizing: border-box; width: calc(100% - 32px); margin: 8px 0 0 32px; padding: 4px 0; border: 0; border-bottom: 1px solid var(--line2); background: none; color: var(--ink); font: 16px/1.5 var(--sans); resize: none; outline: none; }
+.q-foot { display: flex; align-items: center; gap: 8px; padding-top: 10px; }
+.chat-question .q-primary { margin-left: auto; height: 40px; padding: 0 18px; border: 0; border-radius: 20px; background: var(--ink); color: var(--bg); font: 600 15px var(--sans); cursor: pointer; }
+.q-primary:disabled { background: var(--line2); color: var(--faint); cursor: default; }
+.q-back { min-height: 44px; padding: 0 8px; border: 0; background: none; color: var(--ink2); font: 500 15px var(--sans); cursor: pointer; }
+.q-rrow { display: grid; grid-template-columns: 76px 1fr auto; gap: 12px; align-items: baseline; width: 100%; min-height: 44px; padding: 10px 16px; border: 0; border-bottom: 1px solid var(--line); background: none; color: var(--ink); text-align: left; font: inherit; cursor: pointer; }
+.q-rh { font: 13px var(--sans); color: var(--muted); } .q-ra { font: 500 15px/1.4 var(--sans); } .q-rc { font: 15px var(--sans); color: var(--faint); }
+.q-foot:empty { display: none; }

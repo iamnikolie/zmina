@@ -208,6 +208,102 @@
     });
     state.hidden = !state.textContent; state.classList.toggle("failed", ["failed", "uncertain"].includes(row.state));
   }
+  // D-13: the question on the role's screen takes the composer's place in the dock — one item at a time,
+  // drawn progress, flat rows (radio or box), the recommendation a neutral tag, Other as a field in its row, a review
+  // to check and send. The answer goes as POST /api/chat/action answer:<json>, which presses the dialog's own keys.
+  let ask = null;
+  // A lone question with ticks is left to Terminal: its key path in the dialog is not known.
+  const answerable = (q) => (q && !(q.items.length === 1 && q.items[0].multi_select) ? q : null);
+  const REC = /\s*\(Recommended\)\s*$/;
+  function renderQuestion() {
+    const box = $("chat-question"), q = live && answerable(snapshot?.question), composerBox = document.querySelector(".composer-box");
+    if (!q) { box.hidden = true; box.replaceChildren(); ask = null; if (composerBox) composerBox.hidden = false; return; }
+    if (composerBox) composerBox.hidden = true;
+    if (!ask || ask.id !== q.id) ask = {id: q.id, step: 0, items: q.items.map(() => ({choices: [], other: null})), sig: ""};
+    const sig = JSON.stringify([ask.step, ask.items, posting]);
+    box.hidden = false;
+    if (ask.sig === sig && box.childElementCount) return;
+    ask.sig = sig;
+    const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text) e.textContent = text; return e; };
+    const btn = (cls, text, fn) => { const b = el("button", cls, text); b.type = "button"; b.addEventListener("click", fn); return b; };
+    const n = q.items.length, review = ask.step >= n, go = (s) => { ask.step = s; renderQuestion(); };
+    const answered = (a) => (a.other !== null ? a.other.trim() !== "" : a.choices.length > 0);
+    const words = (it, a) => (a.other !== null ? a.other.trim() : a.choices.map(c => it.options[c - 1].label.replace(REC, "")).join(", "));
+    const send = () => action("answer:" + JSON.stringify({id: q.id, items: ask.items.map(a => ({choices: a.other !== null ? [] : a.choices, other: a.other || ""}))}));
+    const after = () => (n === 1 ? send() : go(ask.step + 1));
+    const top = el("div", "q-top");
+    top.append(el("span", "q-hdr", review ? "Check and send" : (q.items[ask.step].header || "Question") + (q.items[ask.step].multi_select ? " · choose any" : "")));
+    if (n > 1) {
+      const bar = el("span", "q-prog");
+      q.items.forEach((_, i) => {
+        const seg = btn("q-seg" + (i === ask.step ? " now" : answered(ask.items[i]) ? " done" : ""), "", () => answered(ask.items[i]) && go(i));
+        seg.setAttribute("aria-label", "Item " + (i + 1) + " of " + n);
+        bar.append(seg);
+      });
+      top.append(bar);
+    }
+    const out = [top];
+    const foot = el("div", "q-foot");
+    if (review) {
+      const list = el("div", "q-review");
+      q.items.forEach((it, i) => { const r = btn("q-rrow", "", () => go(i)); r.append(el("span", "q-rh", it.header || "Question " + (i + 1)), el("span", "q-ra", words(it, ask.items[i])), el("span", "q-rc", "›")); list.append(r); });
+      out.push(list);
+      foot.append(btn("q-back", "Back", () => go(n - 1)), btn("q-primary", "Send answers", send));
+      foot.lastChild.disabled = posting;
+    } else {
+      const it = q.items[ask.step], a = ask.items[ask.step];
+      out.push(el("p", "q-text", it.question));
+      const list = el("div", "q-opts");
+      list.setAttribute("role", it.multi_select ? "group" : "radiogroup");
+      it.options.forEach((o, i) => {
+        const on = a.other === null && a.choices.includes(i + 1);
+        const row = btn("q-opt" + (on ? " on" : ""), "", () => {
+          if (it.multi_select) { a.other = null; a.choices = on ? a.choices.filter(c => c !== i + 1) : [...a.choices, i + 1].sort((x, y) => x - y); renderQuestion(); return; }
+          a.other = null; a.choices = [i + 1]; renderQuestion();
+          setTimeout(() => { if (ask && ask.id === q.id) after(); }, matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 200);
+        });
+        row.setAttribute("role", it.multi_select ? "checkbox" : "radio");
+        row.setAttribute("aria-checked", on ? "true" : "false");
+        row.disabled = posting;
+        const t = el("span", "q-body"), l = el("span", "q-label", o.label.replace(REC, ""));
+        if (REC.test(o.label)) l.append(el("span", "q-tag", "Recommended"));
+        t.append(l);
+        if (o.description) t.append(el("span", "q-desc", o.description));
+        row.append(el("span", "q-ctl"), t);
+        list.append(row);
+      });
+      // Words of one's own: the dialog takes them on a one-choice item (its «Type something»).
+      if (!it.multi_select) {
+        const on = a.other !== null, row = el("div", "q-opt q-other" + (on ? " on" : ""));
+        const pick = btn("q-otherpick", "", () => { a.other = a.other ?? ""; a.choices = []; renderQuestion(); box.querySelector(".q-otherfield")?.focus(); });
+        pick.setAttribute("role", "radio"); pick.setAttribute("aria-checked", on ? "true" : "false");
+        pick.append(el("span", "q-ctl"), el("span", "q-label", "Other…"));
+        row.append(pick);
+        if (on) {
+          const f = el("textarea", "q-otherfield"); f.rows = 1; f.value = a.other; f.setAttribute("aria-label", "Your own answer");
+          f.addEventListener("input", () => { a.other = f.value; ask.sig = JSON.stringify([ask.step, ask.items, posting]); foot.querySelector(".q-primary").disabled = !f.value.trim(); f.style.height = "auto"; f.style.height = Math.min(f.scrollHeight, 120) + "px"; });
+          f.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && f.value.trim()) { e.preventDefault(); after(); } });
+          row.append(f);
+        }
+        list.append(row);
+      }
+      out.push(list);
+      if (ask.step > 0) foot.append(btn("q-back", "Back", () => go(ask.step - 1)));
+      if (it.multi_select || a.other !== null) {
+        const label = it.multi_select ? "Continue · " + a.choices.length : n === 1 ? "Send" : ask.step === n - 1 ? "Review" : "Next";
+        const p = btn("q-primary", label, after); p.disabled = posting || !answered(a); foot.append(p);
+      }
+    }
+    out.push(foot);
+    box.replaceChildren(...out);
+  }
+  // D-13 q9: keys while the card is open and the focus is in it — digits choose, Esc goes back.
+  document.addEventListener("keydown", (e) => {
+    const box = $("chat-question");
+    if (box.hidden || !box.contains(document.activeElement) || document.activeElement.tagName === "TEXTAREA") return;
+    if (/^[1-9]$/.test(e.key)) { const rows = box.querySelectorAll(".q-opts > button.q-opt"); rows[+e.key - 1]?.click(); e.preventDefault(); }
+    else if (e.key === "Escape") { box.querySelector(".q-back")?.click(); e.preventDefault(); }
+  }, true);
   const eventWord = {completed: "Completed", failed: "Failed", stopped: "Stopped", running: "Running", received: "Received"};
   const kindOf = (row) => row.event ? "event" : row.role === "user" ? "user" : "assistant";
   function render() {
@@ -281,6 +377,7 @@
       if (k) group.push(row); else fillDelivery(article.querySelector(".message-state"), [row]);
     });
     flush();
+    renderQuestion();
     // D-08 c6: working shows where the next reply will land.
     const working = $("chat-working"), busy = live && Boolean(snapshot.active);
     working.hidden = !busy;
@@ -288,7 +385,7 @@
     $("empty-chat").hidden = rows.length > 0;
     $("empty-chat").textContent = snapshot.session ? "No saved messages yet. Send a message to this role." : "No conversation yet. Start the role, then send a message.";
     $("runtime-info").textContent = [snapshot.runtime, snapshot.profile, snapshot.context ? new Intl.NumberFormat().format(snapshot.context) + " context tokens" : ""].filter(Boolean).join(" · ");
-    $("agent-state").textContent = !live ? "Connecting… Showing saved conversation" : snapshot.state !== "up" ? "Role stopped · queued messages wait until it starts" : snapshot.needs_input ? "Needs input · open Terminal to respond" : snapshot.active ? "Working…" : snapshot.status === "unknown" || !snapshot.session ? "Status unavailable · open Terminal" : "Idle";
+    $("agent-state").textContent = !live ? "Connecting… Showing saved conversation" : snapshot.state !== "up" ? "Role stopped · queued messages wait until it starts" : answerable(snapshot.question) ? "Asks you · answer below" : snapshot.needs_input ? "Needs input · open Terminal to respond" : snapshot.active ? "Working…" : snapshot.status === "unknown" || !snapshot.session ? "Status unavailable · open Terminal" : "Idle";
     // D-08 c6: the state line speaks only when something is off; working and idle are said elsewhere (the working
     // line, the panel's head) and stay for screen readers.
     const quiet = live && snapshot.state === "up" && !snapshot.needs_input && !(snapshot.status === "unknown" || !snapshot.session);

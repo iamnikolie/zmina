@@ -35,6 +35,8 @@ type Snapshot struct {
 	State                string      `json:"state"`
 	Status               string      `json:"status,omitempty"`
 	NeedsInput           bool        `json:"needs_input,omitempty"`
+	// Question is the question on the role's screen, when it is one Chat can show and answer (AskUserQuestion).
+	Question *Question `json:"question,omitempty"`
 	Active               bool        `json:"active"`
 	// Since is when the role's status last changed: how long it has been working.
 	Since    time.Time `json:"since,omitzero"`
