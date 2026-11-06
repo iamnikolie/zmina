@@ -101,6 +101,7 @@ func TestManagedTrimQueuesRecoveryOnce(t *testing.T) {
 	require.Equal(t, 1, recoveries())
 
 	f.rg.context["sid-dispatcher"] = 0 // compacted: unknown until the next turn
+	f.rg.compacted["sid-dispatcher"] = *f.now
 	*f.now = f.now.Add(time.Minute)
 	f.s.Tick()
 	for range 5 {

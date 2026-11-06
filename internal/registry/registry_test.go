@@ -481,3 +481,42 @@ func TestLastTurnEndedAt(t *testing.T) {
 		assert.True(t, want.Equal(got.At), "%s: %v", lines, got.At)
 	}
 }
+
+// The size after a /compact is the first turn after its boundary, never a turn before it nor the boundary's own
+// pre-compaction count; the boundary's time tells a trim that it took.
+func TestLastAfterACompactionAtThePrompt(t *testing.T) {
+	ns := t.TempDir()
+	dir := filepath.Join(ns, "projects", "-work")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+
+	at := time.Date(2026, 11, 5, 20, 5, 12, 0, time.UTC)
+	before := `{"type":"assistant","timestamp":"2026-11-05T20:03:40Z","message":{"id":"m1","stop_reason":"end_turn","usage":{"input_tokens":2,"cache_creation_input_tokens":1200,"cache_read_input_tokens":477000,"output_tokens":79}}}`
+	closing := `{"type":"system","subtype":"turn_duration","timestamp":"2026-11-05T20:03:41Z"}`
+	typed := `{"type":"user","timestamp":"2026-11-05T20:04:02Z","message":{"role":"user","content":"/compact"}}`
+	boundary := `{"type":"system","subtype":"compact_boundary","timestamp":"2026-11-05T20:05:12Z","content":"Conversation compacted","compactMetadata":{"trigger":"manual","preTokens":477050,"postTokens":16956}}`
+	summary := `{"type":"user","isCompactSummary":true,"timestamp":"2026-11-05T20:05:12Z","message":{"role":"user","content":"This session is being continued"}}`
+	caveat := `{"type":"user","isMeta":true,"message":{"role":"user","content":"<local-command-caveat>The command below was run directly in Claude Code</local-command-caveat>"}}`
+	command := `{"type":"user","message":{"role":"user","content":"<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args></command-args>"}}`
+	stdout := `{"type":"user","message":{"role":"user","content":"<local-command-stdout>\u001b[2mCompacted (ctrl+o to see full summary)\u001b[22m</local-command-stdout>"}}`
+	prompt := `{"type":"user","timestamp":"2026-11-05T20:09:00Z","message":{"role":"user","content":"next"}}`
+	after := `{"type":"assistant","timestamp":"2026-11-05T20:09:30Z","message":{"id":"m2","stop_reason":"end_turn","usage":{"input_tokens":3,"cache_creation_input_tokens":26600,"cache_read_input_tokens":16956,"output_tokens":41}}}`
+
+	last := func(lines ...string) Turn {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "s1.jsonl"), []byte(strings.Join(lines, "\n")+"\n"), 0o600))
+		got, err := (&Registry{Namespace: ns}).Last("s1")
+		require.NoError(t, err)
+		return got
+	}
+
+	got := last(before, closing, typed)
+	assert.Equal(t, 478_281, got.Context, "typed, not compacted yet: the turn before it")
+	assert.True(t, got.Compacted.IsZero())
+
+	got = last(before, closing, typed, boundary, summary, caveat, command, stdout)
+	assert.Equal(t, 0, got.Context, "compacted: unknown until the next turn")
+	assert.Equal(t, at, got.Compacted.UTC())
+
+	got = last(before, closing, typed, boundary, summary, caveat, command, stdout, prompt, after)
+	assert.Equal(t, 43_600, got.Context, "the first turn after the boundary")
+	assert.Equal(t, at, got.Compacted.UTC())
+}

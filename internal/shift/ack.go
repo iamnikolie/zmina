@@ -175,6 +175,8 @@ func ackTail(ids []string) string {
 // its role is up and the line is not queued or in flight: a signal goes back to the dispatcher's signals, a line to
 // its role's queue. After renotesMax times it is only listed.
 func (s *Shift) renotify(now time.Time) {
+	s.dropSlashAcks()
+
 	every := s.Crew.RenotifyD()
 	if every <= 0 {
 		return
@@ -199,6 +201,58 @@ func (s *Shift) renotify(now time.Time) {
 		}
 
 		s.log(a.Role, "renoted", "", a.ID+" "+a.Text)
+	}
+}
+
+// dropSlashAcks lets go of the slash commands an earlier zmina tracked: nothing acks a command, and said again it
+// runs again with its id for an argument. Its queued and failed copies are known by the id they carry: once the
+// command was typed they go, one never typed stays as the command alone, untracked.
+func (s *Shift) dropSlashAcks() {
+	for _, id := range slices.SortedFunc(maps.Keys(s.State.Acks), func(a, b string) int { return ackNum(a) - ackNum(b) }) {
+		a := s.State.Acks[id]
+		if !slashCommand(a.Text) {
+			continue
+		}
+
+		delete(s.State.Acks, id)
+		s.log(a.Role, "ack-dropped", "", a.ID+" (a slash command, never acked): "+a.Text)
+
+		rs := s.State.Roles[a.Role]
+		if rs == nil {
+			continue
+		}
+
+		typed := !a.First.IsZero()
+		inbox := rs.Inbox[:0:0]
+
+		for _, line := range rs.Inbox {
+			if !slices.Contains(rs.QueuedIDs[line], a.ID) {
+				inbox = append(inbox, line)
+
+				continue
+			}
+
+			if typed {
+				s.log(a.Role, "dropped-queued", "", line)
+			} else {
+				inbox = append(inbox, a.Text)
+			}
+		}
+
+		for line, ids := range rs.QueuedIDs {
+			if slices.Contains(ids, a.ID) {
+				delete(rs.QueuedIDs, line)
+			}
+		}
+
+		rs.Inbox = inbox
+		rs.Failed = slices.DeleteFunc(rs.Failed, func(f Failed) bool { return typed && slices.Contains(f.IDs, a.ID) })
+
+		for i := range rs.Failed {
+			if f := &rs.Failed[i]; slices.Contains(f.IDs, a.ID) {
+				f.Line, f.IDs = a.Text, nil
+			}
+		}
 	}
 }
 

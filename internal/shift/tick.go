@@ -225,13 +225,31 @@ func (s *Shift) trim(name string, r *crew.Role, now time.Time, tasks []string) s
 
 	if rs.TrimPending {
 		turn, err := s.registryFor(name).Last(sess.SessionID)
-		used := turn.Context
-
-		if err != nil || used == 0 {
+		if err != nil {
 			return ""
 		}
 
-		rs.TrimPending, rs.TrimSession, rs.TrimBase = false, sess.SessionID, used
+		// The size the conversation shows counts only once the trim took: a compaction written after it, or the
+		// conversation a /clear started. Until then the last turn is the one before the trim, over the limit.
+		if (rs.TrimFrom != "" && sess.SessionID != rs.TrimFrom) || (!turn.Compacted.IsZero() && !turn.Compacted.Before(rs.Trimmed)) {
+			rs.TrimTook = true
+		}
+
+		if !rs.TrimTook {
+			if now.Sub(rs.Trimmed) >= trimPause {
+				rs.TrimPending = false
+				s.log(name, "trim-unseen", "", "no compaction or new conversation seen "+trimPause.String()+" after the trim")
+			}
+
+			return ""
+		}
+
+		used := turn.Context
+		if used == 0 {
+			return ""
+		}
+
+		rs.TrimPending, rs.TrimTook, rs.TrimSession, rs.TrimBase = false, false, sess.SessionID, used
 		// The trim queued its own recovery line: the drop it caused is the new baseline, not a native compaction
 		// for observeRecovery to post a second line for.
 		if rs.RecoverySession == sess.SessionID {
@@ -299,7 +317,7 @@ func (s *Shift) trim(name string, r *crew.Role, now time.Time, tasks []string) s
 		}
 	}
 	// A failed try waits the pause too, so a role tmux refuses does not fill the log every beat.
-	rs.Trimmed, rs.TrimPending = now, true
+	rs.Trimmed, rs.TrimPending, rs.TrimTook, rs.TrimFrom = now, true, false, sess.SessionID
 	detail := fmt.Sprintf("context %s over %s", Tokens(used), Tokens(limit))
 
 	if err := s.Tmux.Type(name, "/"+do); err != nil {
