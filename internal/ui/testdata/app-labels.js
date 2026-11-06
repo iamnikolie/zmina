@@ -1,6 +1,7 @@
 // Renders rows of the real static/app.js against a minimal fake DOM, under Node (no browser, no network):
-//   node internal/ui/testdata/app-labels.js internal/ui/static/app.js
-// Prints one JSON object: each case's rows as their visible text. app_labels_test.go reads it.
+//   node internal/ui/testdata/app-labels.js internal/ui/static/app.js [phone]
+// Prints one JSON object: each case's rows as their visible text (with «phone»: the phone tabs' cases).
+// app_labels_test.go reads it.
 "use strict";
 
 const fs = require("fs");
@@ -68,7 +69,10 @@ const document = {
   hidden: false,
 };
 const store = {};
+const phone = process.argv[3] === "phone";
+const listeners = {};
 const ctx = vm.createContext({
+  addEventListener: (name, fn) => { (listeners[name] = listeners[name] || []).push(fn); },
   document,
   window: {},
   localStorage: { getItem: (k) => store[k] ?? null, setItem: (k, v) => { store[k] = String(v); }, removeItem: (k) => { delete store[k]; } },
@@ -77,7 +81,13 @@ const ctx = vm.createContext({
   clearTimeout: () => {},
   fetch: () => new Promise(() => {}),
   EventSource: class { addEventListener() {} },
-  matchMedia: () => ({ matches: false, addEventListener() {} }),
+  matchMedia: () => ({ matches: phone, addEventListener() {} }),
+  location: { hash: "", search: "", origin: "http://127.0.0.1" },
+  history: { pushState() {}, replaceState() {} },
+  requestAnimationFrame: () => 0,
+  scrollTo() {},
+  scrollY: 0,
+  innerHeight: 844,
   console,
   Date,
   JSON,
@@ -85,7 +95,41 @@ const ctx = vm.createContext({
   Promise,
 });
 
+// patch.js stands in as plain replacement: these cases read what is drawn, not how it is patched.
+if (phone) Object.assign(ctx, { patch: (el, kids) => el.replaceChildren(...kids), setText: (el, t) => { el.textContent = t; }, focusMark: () => null, refocus() {} });
 vm.runInContext(fs.readFileSync(process.argv[2], "utf8"), ctx, { filename: "app.js" });
+
+if (phone) {
+  // D-09: whom Talk opens after the scope changes, Alarms with no alarm, Back to the entry the page opened on.
+  ctx.fire = (name) => (listeners[name] || []).forEach((fn) => fn({}));
+  ctx.byId = byId;
+  const out = vm.runInContext(`
+    const role = (r) => ({ role: r, state: "up", status: "idle" });
+    snap = {
+      self: "node-a", nodes: [{ name: "node-a", self: true }, { name: "node-b" }], tints: {}, alarms: [],
+      crews: [{ key: "default", name: "default", node: "node-a", dispatcher: "dispatcher", roles: [role("dispatcher"), role("dev")] },
+        { key: "node-b/ops", name: "ops", node: "node-b", remote: true, dispatcher: "dispatcher", roles: [role("dispatcher")] }],
+    };
+    const res = {};
+    filter = "all";
+    lastTalk = { kind: "talk", crew: "default", role: "dev", scope: "all" };
+    res.sameScope = phoneTalk();
+    filter = "node-b/ops";
+    res.otherScope = phoneTalk();
+    renderAlarms();
+    res.alarms = byId.alarms.className;
+    const s = snap;
+    snap = null; // the tab switches below draw nothing
+    goTab("going");
+    location.hash = "";
+    fire("popstate");
+    res.back = { tab, body: document.body.dataset.tab };
+    snap = s;
+    JSON.stringify(res);
+  `, ctx);
+  process.stdout.write(out + "\n");
+  process.exit(0);
+}
 
 // Two nodes, each with its default crew, each asking the same question as A-1.
 const ask = (crew) => ({ crew, id: "A-1", kind: "decision", title: "Approve release", text: "Approve release", rec: "yes", reason: "Ready", created: new Date().toISOString() });

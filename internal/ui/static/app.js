@@ -1020,7 +1020,7 @@ function renderAlarms() {
   const head = alarmHead();
   patch($("alarms-h"), [...head]);
   const rows = alarmRows("");
-  $("alarms").classList.toggle("empty", !rows.length);
+  $("alarms").classList.toggle("noal", !rows.length);
   if (!rows.length) rows.push(el("p", "none", W.alNone));
   patch($("alarms-rows"), [...rows]);
 }
@@ -1828,7 +1828,11 @@ function placeSide() {
 // talkTarget is where the header's Talk goes: the last conversation, else the dispatcher of the crew the switch shows
 // (All: this node's default crew).
 function talkTarget() {
-  if (lastTalk) return lastTalk;
+  return lastTalk || scopeDispatcher();
+}
+
+// scopeDispatcher is the dispatcher of the crew the switch shows (All: this node's default crew).
+function scopeDispatcher() {
   const f = crewOf(filter);
   const node = filter.startsWith("node:") ? filter.slice(5) : "";
   const c = f || snap.crews.find((x) => x.key === "default" && !x.remote && !node)
@@ -1839,7 +1843,7 @@ function talkTarget() {
 }
 
 function openTalk(crewKey, role, from) {
-  side = { kind: "talk", crew: crewKey, role };
+  side = { kind: "talk", crew: crewKey, role, scope: filter };
   lastTalk = side;
   sideFrom = from || document.activeElement;
   sideMark = markOf(sideFrom);
@@ -2050,6 +2054,7 @@ const phone = matchMedia("(max-width: 860px)");
 const TABS = ["move", "going", "talk", "crews"];
 const tabSaved = () => { try { return localStorage.getItem("zmina.tab"); } catch (_) { return null; } };
 let tab = [location.hash.slice(1), tabSaved()].find((t) => TABS.includes(t)) || "move";
+const tab0 = tab; // the tab of the history entry the page opened on, which may have no hash
 let tabFrom = "move"; // where Crews and a closed Talk return to
 const tabScroll = {};
 const badges = {};
@@ -2072,7 +2077,7 @@ function goTab(t, push = true) {
 function setTab(t, push = true) {
   goTab(t, push);
   if (t === "talk") {
-    if (!side || side.kind !== "talk") { const x = talkTarget(); if (x) openTalk(x.crew, x.role, null); }
+    if (!side || side.kind !== "talk") { const x = phoneTalk(); if (x) openTalk(x.crew, x.role, null); }
   } else if (side) {
     side = null;
     $("side").hidden = true;
@@ -2083,8 +2088,8 @@ function setTab(t, push = true) {
 
 for (const b of document.querySelectorAll("#tabbar [data-tab]")) b.addEventListener("click", () => setTab(b.dataset.tab));
 globalThis.addEventListener?.("popstate", () => {
-  const h = location.hash.slice(1);
-  if (TABS.includes(h) && h !== tab) setTab(h, false);
+  const h = TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : tab0;
+  if (h !== tab) setTab(h, false);
 });
 $("scope").addEventListener("click", () => setTab("crews"));
 phone.addEventListener?.("change", () => render());
@@ -2100,6 +2105,12 @@ globalThis.visualViewport?.addEventListener("resize", kbCheck);
 document.addEventListener("focusin", () => setTimeout(kbCheck, 0));
 document.addEventListener("focusout", () => setTimeout(kbCheck, 0));
 globalThis.addEventListener?.("blur", () => setTimeout(kbCheck, 0));
+
+// phoneTalk is whom the Talk tab opens (k1): the last conversation while the scope is the one it was opened under, else the scoped
+// crew's dispatcher — a crew picked in Crews never talks to the one before.
+function phoneTalk() {
+  return lastTalk && lastTalk.scope === filter ? lastTalk : scopeDispatcher();
+}
 
 // scopeLabel is the crew the Move and Going tabs show: «All», a node, or node/crew.
 function scopeLabel() {
@@ -2145,7 +2156,7 @@ function renderPhone(hold, asks, going, parked) {
   renderCrews(parked);
   renderTabs(hold, asks, red);
   // Opened on #talk (or kept there): the conversation comes with the first snapshot.
-  if (tab === "talk" && !side) setTimeout(() => { const x = !side && tab === "talk" && talkTarget(); if (x) openTalk(x.crew, x.role, null); }, 0);
+  if (tab === "talk" && !side) setTimeout(() => { const x = !side && tab === "talk" && phoneTalk(); if (x) openTalk(x.crew, x.role, null); }, 0);
 }
 
 // c1 · Crews: what the other tabs show. «All crews», then a group per node, a row per crew with its lamp and state;
@@ -2232,7 +2243,7 @@ function renderTabs(hold, asks, red) {
   const n = hold.length + asks.length + red.length;
   set("move", n > 0, String(n), red.length > 0);
   set("going", false);
-  const t = side && side.kind === "talk" ? side : talkTarget();
+  const t = side && side.kind === "talk" ? side : phoneTalk();
   const r = t && roleOf(t.crew, t.role);
   set("talk", !!(r && (r.prompt || r.stuck)));
   set("crews", redList(true).length > 0);

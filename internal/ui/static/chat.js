@@ -181,7 +181,8 @@
     const add = (label, run) => { const b = document.createElement("button"); b.type = "button"; b.textContent = label; if (many) b.setAttribute("aria-label", label + " · all " + group.length + " messages"); b.addEventListener("click", () => run().catch(e => error(e.message))); state.append(" ", b); };
     if (row.outboxKey && row.state === "failed") add("Retry delivery", async () => { for (const r of group) await retryEntry(r.outboxKey); });
     // Set aside for every browser: the role's own record keeps it, unshown.
-    if (!row.outboxKey && row.state === "unconfirmed") add("Dismiss", async () => { for (const r of group) await action("dismiss:" + r.id.slice(4)); });
+    // The group belongs to the conversation it was drawn for: another one opened meanwhile stops it.
+    if (!row.outboxKey && row.state === "unconfirmed") add("Dismiss", async () => { const version = generation; for (const r of group) { if (version !== generation) return; await action("dismiss:" + r.id.slice(4), version); } });
     if (row.outboxKey && ["failed", "expired"].includes(row.state)) add(many ? "Remove saved messages" : "Remove saved message", async () => {
       if (!confirm(many ? "Remove these " + group.length + " messages from this device’s delivery queue? They may already have reached the role." : "Remove this message from this device’s delivery queue? It may already have reached the role.")) return;
       for (const r of group) await store.remove(r.outboxKey);
@@ -241,7 +242,11 @@
       if (newDay) {
         if (!article._day) { article._day = document.createElement("p"); article._day.className = "day-line"; }
         setLabel(article._day, dayLabel(row.at)); place(article._day);
-      } else if (article._day) { article._day.remove(); article._day = null; }
+      } else if (article._day) {
+        // The cursor may stand on the line being dropped (an earlier message joined its day): step past it first.
+        if (cursor === article._day) cursor = cursor.nextElementSibling;
+        article._day.remove(); article._day = null;
+      }
       place(article);
       article.classList.toggle("run-start", start); article.classList.toggle("run-end", end); article.classList.toggle("newest", end && !next);
     });
@@ -318,7 +323,7 @@
     finally { posting = false; controls(); }
 
   });
-  async function action(name) { if (!destination || posting) return; const version = generation; posting = true; controls(); try { const data = await post("/api/chat/action", {...destination, action: name}); if (version === generation) { applySnapshot(data); error(""); } } catch (e) { if (version === generation) error(e.message); } finally { posting = false; controls(); } }
+  async function action(name, bound) { if (!destination || posting || (bound !== undefined && bound !== generation)) return; const version = generation; posting = true; controls(); try { const data = await post("/api/chat/action", {...destination, action: name}); if (version === generation) { applySnapshot(data); error(""); } } catch (e) { if (version === generation) error(e.message); } finally { posting = false; controls(); } }
   $("start-role").addEventListener("click", () => action("start")); $("stop-turn").addEventListener("click", () => action("stop"));
   input.addEventListener("input", () => { draftID = ""; cleared = null; saveDraft(); controls(); });
   input.addEventListener("keydown", event => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); $("composer").requestSubmit(); } });

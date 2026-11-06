@@ -721,6 +721,8 @@ body.fv-on { overflow: hidden; }
   .row.red .tt { color: var(--late); }
   .row:not(.open) .words .gr { display: none; }
   .row:not(.open) > .age .wait { display: none; }
+  /* Alarms without alarms keeps its heading and «Set»: the phone has no other way to the first one */
+  #alarms.noal .none { display: none; }
 
   /* c1 · Crews */
   .pcrews .grp { display: block; margin: 14px 0 4px; padding: 0; min-height: 0; border: 0; font: 12px var(--mono); color: var(--faint); }
