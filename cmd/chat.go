@@ -356,6 +356,9 @@ type answerStep struct {
 	// no check of the dialog's text; the input line is checked before every step).
 	Expect  string
 	Options []string
+	// Want is the options a several-choice part must end ticked: the keys are worked out on the live dialog, so an
+	// option already ticked is not ticked off.
+	Want []int
 }
 
 // answerSteps turns an answer into what Claude Code's question dialog takes: a single-choice item is its option's
@@ -393,15 +396,14 @@ func answerSteps(q *chat.Question, a questionAnswer) ([]answerStep, error) {
 			if len(q.Items) == 1 {
 				return nil, errors.New("a single question with ticks: answer it in Terminal")
 			}
-			keys := []string{}
-			seen := map[int]bool{}
+			want := []int{}
 			for _, c := range ans.Choices {
-				if !seen[c] {
-					seen[c] = true
-					keys = append(keys, digit(c))
+				if !slices.Contains(want, c) {
+					want = append(want, c)
 				}
 			}
-			steps = append(steps, answerStep{Keys: append(keys, "Tab")})
+			slices.Sort(want)
+			steps = append(steps, answerStep{Want: want, Keys: []string{"Tab"}})
 			steps[first].Expect, steps[first].Options = item.Question, labels(item)
 			continue
 		}
@@ -416,7 +418,7 @@ func answerSteps(q *chat.Question, a questionAnswer) ([]answerStep, error) {
 		steps[first].Expect, steps[first].Options = item.Question, labels(item)
 	}
 	if len(q.Items) > 1 {
-		steps = append(steps, answerStep{Keys: []string{"1"}, Expect: "Review your answers"})
+		steps = append(steps, answerStep{Keys: []string{"1"}, Expect: "Review your answers", Options: []string{"Submit answers", "Cancel"}})
 	}
 	return steps, nil
 }
@@ -428,6 +430,64 @@ func labels(item chat.QuestionItem) []string {
 		out = append(out, o.Label)
 	}
 	return out
+}
+
+// dialogOption is a numbered row of the active question dialog: its number, label and, for ticks, whether ticked.
+type dialogOption struct {
+	N       int
+	Label   string
+	Ticked  bool
+	Current bool
+}
+
+var dialogRow = regexp.MustCompile(`^\s*(❯\s*)?(\d+)\.\s+(?:\[([ ✔])\]\s+)?(.*?)\s*$`)
+
+// activeDialog reads the question dialog at the bottom of the screen: the last place the question starts, its whole
+// text from there, and the numbered rows under it in order. ok is false when that question is not the active one.
+func activeDialog(screen, question string) ([]dialogOption, bool) {
+	flat := func(t string) string { return strings.Join(strings.Fields(t), " ") }
+	q := flat(question)
+	head := []rune(q)
+	if len(head) > 20 {
+		head = head[:20]
+	}
+	lines := strings.Split(screen, "\n")
+	at := -1
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.Contains(flat(lines[i]), string(head)) {
+			at = i
+			break
+		}
+	}
+	if q == "" || at < 0 || !strings.Contains(flat(strings.Join(lines[at:], " ")), q) {
+		return nil, false
+	}
+	var out []dialogOption
+	for _, l := range lines[at:] {
+		m := dialogRow.FindStringSubmatch(l)
+		if m == nil {
+			continue
+		}
+		n, _ := strconv.Atoi(m[2])
+		if n != len(out)+1 {
+			continue // a number in the question's own text, not a row
+		}
+		out = append(out, dialogOption{N: n, Label: flat(m[4]), Ticked: m[3] == "✔", Current: m[1] != ""})
+	}
+	return out, len(out) > 0
+}
+
+// dialogMatches reports whether the active dialog's rows are the part's options, in order, by number.
+func dialogMatches(rows []dialogOption, labels []string) bool {
+	if len(rows) < len(labels) {
+		return false
+	}
+	for i, l := range labels {
+		if rows[i].Label != strings.Join(strings.Fields(l), " ") {
+			return false
+		}
+	}
+	return true
 }
 
 // onScreen reports whether the screen shows the whole question and every one of its options, line breaks and runs
@@ -490,8 +550,27 @@ func answerQuestion(s *shift.Shift, role, raw string, snapshot chat.Snapshot) er
 			if err != nil {
 				return err
 			}
-			if !onScreen(screen, step.Expect, step.Options...) {
-				return fmt.Errorf("stopped at step %d: the question on its screen is not the one answered; look at Terminal", i+1)
+			stop := fmt.Errorf("stopped at step %d: the question on its screen is not the one answered; look at Terminal", i+1)
+			if len(step.Options) == 0 {
+				if !onScreen(screen, step.Expect) {
+					return stop
+				}
+			} else {
+				// The active dialog, at the bottom: this part's whole question and its options by number, in order.
+				rows, ok := activeDialog(screen, step.Expect)
+				if !ok || !dialogMatches(rows, step.Options) {
+					return stop
+				}
+				if step.Want != nil {
+					// Ticks: press only the options whose tick differs from the one wanted.
+					keys := []string{}
+					for k, r := range rows[:len(step.Options)] {
+						if r.Ticked != slices.Contains(step.Want, k+1) {
+							keys = append(keys, strconv.Itoa(k+1))
+						}
+					}
+					step.Keys = append(keys, step.Keys...)
+				}
 			}
 		}
 		if step.Text != "" {

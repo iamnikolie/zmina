@@ -34,8 +34,8 @@ func TestAnswerStepsFollowTheDialog(t *testing.T) {
 	steps, err := answerSteps(q, answer(t, `{"id":"toolu_1","items":[{"choices":[2]},{"choices":[1,3]}]}`))
 	require.NoError(t, err)
 	o2, o3 := []string{"o", "o"}, []string{"o", "o", "o"}
-	assert.Equal(t, []answerStep{{Keys: []string{"2"}, Expect: "q", Options: o2}, {Keys: []string{"1", "3", "Tab"}, Expect: "q", Options: o3},
-		{Keys: []string{"1"}, Expect: "Review your answers"}}, steps, "each part is checked on the screen first")
+	assert.Equal(t, []answerStep{{Keys: []string{"2"}, Expect: "q", Options: o2}, {Want: []int{1, 3}, Keys: []string{"Tab"}, Expect: "q", Options: o3},
+		{Keys: []string{"1"}, Expect: "Review your answers", Options: []string{"Submit answers", "Cancel"}}}, steps, "each part is checked on the screen first")
 
 	steps, err = answerSteps(question(item(false, 2)), answer(t, `{"id":"toolu_1","items":[{"other":"my own words"}]}`))
 	require.NoError(t, err)
@@ -72,4 +72,28 @@ func TestOnScreenReadsThroughWrapping(t *testing.T) {
 	assert.False(t, onScreen(screen, "zmina на телефоне: с какого экрана открываться и какие вкладки оставить?"), "the whole question, not its start")
 	assert.True(t, onScreen(screen, "zmina на телефоне: с какого экрана открываться и какие вкладки?", "Agents"))
 	assert.False(t, onScreen(screen, "zmina на телефоне: с какого экрана открываться и какие вкладки?", "Agents", "Move"), "every option")
+}
+
+// The dialog read off a live session: the question, then numbered rows; ticks show as [✔].
+const liveDialog = `old text: Which tabs? 1. Talk 2. Later
+←  ☒ A  ☐ B  ✔ Submit  →
+Which tabs?
+❯ 1. [✔] Talk
+         the chat
+  2. [ ] Later
+  3. [ ] Type something
+     Submit
+  4. Chat about this`
+
+func TestActiveDialogReadsTheBottomQuestion(t *testing.T) {
+	rows, ok := activeDialog(liveDialog, "Which tabs?")
+	require.True(t, ok)
+	require.GreaterOrEqual(t, len(rows), 2)
+	assert.Equal(t, dialogOption{N: 1, Label: "Talk", Ticked: true, Current: true}, rows[0])
+	assert.False(t, rows[1].Ticked)
+	assert.True(t, dialogMatches(rows, []string{"Talk", "Later"}))
+	assert.False(t, dialogMatches(rows, []string{"Later", "Talk"}), "options in another order are another question")
+
+	_, ok = activeDialog(liveDialog, "Which screen?")
+	assert.False(t, ok)
 }
