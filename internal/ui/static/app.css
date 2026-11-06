@@ -233,6 +233,7 @@ section { padding: 18px 0 6px; }
   animation: side-in 160ms var(--ease) both; }
 @keyframes side-in { from { opacity: 0; transform: translateX(12px); } }
 .side-panel[hidden] { display: none; }
+.side-panel:focus { outline: none; }
 /* D-08 h1 · the head: 52 px, no rule; the role name is the picker, the tools are icons */
 .panel-h { display: flex; align-items: center; gap: 8px; height: 52px; flex: none; padding: 0 12px 0 20px; box-sizing: border-box; }
 .panel-h .who { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex: 1; margin: 0; font: 600 15px var(--sans); color: var(--ink); white-space: nowrap; overflow: hidden; }

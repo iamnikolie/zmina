@@ -12,7 +12,7 @@ html.chat-document { height: 100%; overflow: hidden; }
 .chat-state { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 4px 12px; padding: 4px 16px 8px; color: var(--muted); font-size: 13px; text-align: center; }
 .chat-state.quiet { padding: 0; }
 .chat-state #agent-state { min-width: 0; overflow-wrap: anywhere; }
-.chat-state button { min-height: 32px; padding: 4px 6px; background: none; border: 0; color: var(--ink); font-size: 13px; text-decoration: underline; text-decoration-color: var(--off); text-underline-offset: 3px; }
+.chat-state button { height: 32px; min-height: 0; padding: 0 6px; background: none; border: 0; color: var(--ink); font-size: 13px; text-decoration: underline; text-decoration-color: var(--off); text-underline-offset: 3px; }
 #runtime-info { color: var(--muted); font-size: 12px; }
 /* D-08 c1 · one centred column; the conversation fades in under the head. */
 #conversation { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; padding: 16px 32px 24px; scroll-padding-bottom: 16px;
@@ -28,7 +28,8 @@ html.chat-document { height: 100%; overflow: hidden; }
 /* c2 · the role speaks in serif, no name, no header, the full column */
 .chat-message.assistant { font: 16.5px/1.65 var(--serif); color: var(--ink2); }
 /* c4 · the owner: a quiet bubble on the right */
-.chat-message.user { align-self: flex-end; max-width: min(80%, 36rem); }
+.chat-message.user { align-self: flex-end; max-width: min(80%, 36rem); display: flex; flex-direction: column; align-items: flex-end; }
+.chat-message.user > .message-body { max-width: 100%; }
 .chat-message.user .message-body { padding: 10px 16px; border-radius: 18px; background: var(--well); color: var(--ink); font: 15px/1.55 var(--sans); }
 .chat-message.user .message-files { align-items: flex-end; }
 .message-head { display: flex; gap: 8px; align-items: center; margin-bottom: 2px; color: var(--muted); font-size: 12px; }
@@ -52,7 +53,7 @@ html.chat-document { height: 100%; overflow: hidden; }
 .chat-working i { width: 8px; height: 8px; border-radius: 50%; background: var(--busy); animation: chat-breathe 1.6s ease-in-out infinite alternate; }
 @keyframes chat-breathe { from { opacity: .35; } to { opacity: 1; } }
 /* icon buttons (head, meta, composer): 32 px, r 8, 18 px stroke icons */
-.chat-page .ib { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 32px; height: 32px; min-width: 0; padding: 0; border: 0; border-radius: 8px;
+.chat-page .ib { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 32px; height: 32px; min-width: 0; min-height: 0; padding: 0; border: 0; border-radius: 8px;
   background: none; color: var(--muted); }
 .chat-page .ib:hover:not(:disabled) { background: var(--panel2); color: var(--ink); }
 .chat-page .ib svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
@@ -94,7 +95,7 @@ html.chat-document { height: 100%; overflow: hidden; }
 .composer-row { display: flex; align-items: center; gap: 4px; }
 .composer-row .sp { flex: 1; }
 .composer-row .plus { border: 1px solid var(--line2); }
-.chat-page .send { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 32px; height: 32px; min-width: 0; padding: 0; border: 0; border-radius: 10px;
+.chat-page .send { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 32px; height: 32px; min-width: 0; min-height: 0; padding: 0; border: 0; border-radius: 10px;
   background: var(--ink); color: var(--bg); }
 .chat-page .send svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .chat-page .send:disabled { background: var(--line2); color: var(--faint); cursor: default; }
@@ -138,7 +139,7 @@ html.chat-document { height: 100%; overflow: hidden; }
 .message-body .task-check { font: 14px var(--mono); white-space: nowrap; }
 .message-body a { overflow-wrap: anywhere; }
 .table-scroll:focus-visible, .message-code pre:focus-visible { outline: 2px solid var(--busy); outline-offset: -2px; }
-.message-state button { min-height: 28px; margin-left: 6px; padding: 0; border: 0; background: none; color: var(--ink); font-size: inherit; text-decoration: underline; text-decoration-color: var(--off); text-underline-offset: 3px; }
+.message-state button { height: 28px; min-height: 0; margin-left: 6px; padding: 0; border: 0; background: none; color: var(--ink); font-size: inherit; text-decoration: underline; text-decoration-color: var(--off); text-underline-offset: 3px; }
 @media (pointer: coarse) { .message-state button { min-height: 44px; } }
 /* k2 · attachments as chips above the field */
 .chat-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; min-width: 0; }
@@ -158,7 +159,7 @@ html.chat-document { height: 100%; overflow: hidden; }
 .chat-page.embed .term-head { display: none; }
 .chat-page.embed { background: var(--panel); }
 /* k5 · touch: 44 px targets; phone: 16 px gutters */
-@media (pointer: coarse) { .chat-page .ib, .chat-page .send { width: 44px; height: 44px; } .message-meta .ib { width: 44px; height: 44px; } }
+@media (pointer: coarse) { .chat-page .ib, .chat-page .send, .message-meta .ib { width: 44px; height: 44px; } .chat-state button { height: 44px; } }
 @media (max-width: 600px) {
   #conversation { padding: 8px 16px 24px; }
   .chat-composer { padding: 0 max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); }

@@ -170,6 +170,25 @@
     const d = new Date(at), today = new Date(), yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
     return d.toDateString() === today.toDateString() ? "Today" : d.toDateString() === yesterday.toDateString() ? "Yesterday" : dayName.format(d);
   }
+  const deliveryText = {local: "Saved on this device · waiting to send", queued: "Queued · delivered when the role is idle", sent: "Sent to the role · awaiting agent confirmation", accepted: "", unconfirmed: "Delivery unconfirmed · the conversation changed", expired: "Delivery unconfirmed · check Terminal before sending again", failed: "Delivery failed", sending: "Saving…", uncertain: "Delivery unconfirmed · retry with the same message ID"};
+  const deliveryKey = (row) => [row.state, row.failure || "", Boolean(row.outboxKey)].join("|");
+  // fillDelivery writes the delivery state of a group of owner messages (one, or a run in the same state) under its
+  // last one; its buttons act on every message of the group, one after another.
+  function fillDelivery(state, group) {
+    const row = group[group.length - 1], many = group.length > 1;
+    state.replaceChildren(deliveryText[row.state] || "");
+    if (row.failure) state.append(" · " + row.failure);
+    const add = (label, run) => { const b = document.createElement("button"); b.type = "button"; b.textContent = label; if (many) b.setAttribute("aria-label", label + " · all " + group.length + " messages"); b.addEventListener("click", () => run().catch(e => error(e.message))); state.append(" ", b); };
+    if (row.outboxKey && row.state === "failed") add("Retry delivery", async () => { for (const r of group) await retryEntry(r.outboxKey); });
+    // Set aside for every browser: the role's own record keeps it, unshown.
+    if (!row.outboxKey && row.state === "unconfirmed") add("Dismiss", async () => { for (const r of group) await action("dismiss:" + r.id.slice(4)); });
+    if (row.outboxKey && ["failed", "expired"].includes(row.state)) add(many ? "Remove saved messages" : "Remove saved message", async () => {
+      if (!confirm(many ? "Remove these " + group.length + " messages from this device’s delivery queue? They may already have reached the role." : "Remove this message from this device’s delivery queue? It may already have reached the role.")) return;
+      for (const r of group) await store.remove(r.outboxKey);
+      await refreshOutbox(); await drainOutbox();
+    });
+    state.hidden = !state.textContent; state.classList.toggle("failed", ["failed", "uncertain"].includes(row.state));
+  }
   const eventWord = {completed: "Completed", failed: "Failed", stopped: "Stopped", running: "Running", received: "Received"};
   const kindOf = (row) => row.event ? "event" : row.role === "user" ? "user" : "assistant";
   function render() {
@@ -206,20 +225,6 @@
       } else if (row.role === "assistant") window.zminaChatContent.render(row.text, body); else body.textContent = row.text; article._text = row.text; article._presentation=presentation; }
       const fileRows=article.querySelector(".message-files"), signature=fileSignature(row.attachments)+Boolean(row.outboxKey);
       if(article._files!==signature){fileRows.replaceChildren();for(const file of row.attachments||[]){const item=document.createElement(row.outboxKey?"span":"a");item.textContent=file.name+" · "+new Intl.NumberFormat().format(file.size)+" bytes";if(!row.outboxKey){item.href="/api/chat/file?"+new URLSearchParams({...destination,id:file.id});item.download=file.name;}fileRows.append(item);}article._files=signature;}
-      const state = article.querySelector(".message-state"); state.textContent = ({local: "Saved on this device · waiting to send", queued: "Queued · delivered when the role is idle", sent: "Sent to the role · awaiting agent confirmation", accepted: "", unconfirmed: "Delivery unconfirmed · the conversation changed", expired: "Delivery unconfirmed · check Terminal before sending again", failed: "Delivery failed", sending: "Saving…", uncertain: "Delivery unconfirmed · retry with the same message ID"})[row.state] || ""; if (row.failure) state.textContent += " · " + row.failure;
-      if (row.outboxKey && row.state === "failed") { const retry = document.createElement("button"); retry.type = "button"; retry.textContent = "Retry delivery"; retry.addEventListener("click", () => retryEntry(row.outboxKey).catch(e => error(e.message))); state.append(" ", retry); }
-      if (!row.outboxKey && row.state === "unconfirmed") {
-        // Set aside for every browser: the role's own record keeps it, unshown.
-        const dismiss = document.createElement("button"); dismiss.type = "button"; dismiss.className = "quiet"; dismiss.textContent = "Dismiss";
-        dismiss.addEventListener("click", () => action("dismiss:" + row.id.slice(4)));
-        state.append(" ", dismiss);
-      }
-      if (row.outboxKey && ["failed", "expired"].includes(row.state)) {
-        const remove = document.createElement("button"); remove.type = "button"; remove.textContent = "Remove saved message";
-        remove.addEventListener("click", () => { if (confirm("Remove this message from this device’s delivery queue? It may already have reached the role.")) store.remove(row.outboxKey).then(refreshOutbox).then(drainOutbox).catch(e => error(e.message)); });
-        state.append(" ", remove);
-      }
-      state.hidden = !state.textContent; state.classList.toggle("failed", ["failed", "uncertain"].includes(row.state));
     });
     for (const [id, article] of articles) if (!keep.has(id)) { article._day?.remove(); article.remove(); articles.delete(id); }
     // D-08 c3/c5: consecutive messages of one speaker are a run; a day line where the day changes; the meta row
@@ -240,6 +245,16 @@
       place(article);
       article.classList.toggle("run-start", start); article.classList.toggle("run-end", end); article.classList.toggle("newest", end && !next);
     });
+    // D-08 amendment b: one delivery state per run — consecutive owner messages in the same state show it once,
+    // under the last of them, and its Dismiss / Retry / Remove acts on all of them.
+    let group = [];
+    const flush = () => { group.forEach((r, j) => { const st = articles.get(r.id).querySelector(".message-state"); if (j < group.length - 1) { st.replaceChildren(); st.hidden = true; } else fillDelivery(st, group); }); group = []; };
+    rows.forEach((row) => {
+      const article = articles.get(row.id), k = row.role === "user" && !row.event && deliveryText[row.state] ? deliveryKey(row) : "";
+      if (group.length && (!k || article.classList.contains("run-start") || k !== deliveryKey(group[0]))) flush();
+      if (k) group.push(row); else fillDelivery(article.querySelector(".message-state"), [row]);
+    });
+    flush();
     // D-08 c6: working shows where the next reply will land.
     const working = $("chat-working"), busy = live && Boolean(snapshot.active);
     working.hidden = !busy;

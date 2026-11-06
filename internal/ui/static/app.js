@@ -1863,7 +1863,8 @@ function showSide(talking) {
   placeSide();
   $("side").hidden = false;
   render();
-  $("side-close").focus();
+  // D-08 amendment c: the panel takes the focus, not its Close (a ring on ✕ at every open reads as a fault).
+  $("side").focus();
 }
 
 function closeTalk() {
