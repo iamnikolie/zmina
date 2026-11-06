@@ -47,6 +47,11 @@ type TerminalServices struct {
 	// Status is what the node's crews show on the cockpit, as JSON: kind "" their state, tasks, asks and alarms;
 	// "cost" their spend. Read-only.
 	Status func(kind string) ([]byte, error)
+	// TodoAct is the cockpit's answer to an item of one of the node's crews (crew, action, id, text): what the
+	// owner does on the item's own node, there, as the page there would. It returns the line that says what was done.
+	TodoAct func(crew, action, id, text string) (string, error)
+	// AlarmAct sets, moves or takes off an alarm of one of the node's crews (crew, action, id, when, text, role).
+	AlarmAct func(crew, action, id, when, text, role string) (string, error)
 }
 
 // TerminalRequest is signed against a fresh server challenge, so a certified peer cannot turn a
@@ -65,6 +70,11 @@ type TerminalRequest struct {
 	Files  []string     `json:"files,omitempty"`
 	Upload *chat.Upload `json:"upload,omitempty"`
 	FileID string       `json:"file_id,omitempty"`
+	// When is an alarm's time, as the owner wrote it (alarm/act).
+	When string `json:"when,omitempty"`
+	// To is the node the owner meant the request for, inside what the owner signs: a write (todo/act, alarm/act) is
+	// done only by the node it names, so a peer that got it cannot pass it on to another node's session.
+	To string `json:"to,omitempty"`
 }
 
 func terminalMessage(op string, challenge []byte, req TerminalRequest) []byte {
@@ -111,6 +121,25 @@ func (n *Node) serveTerminal(ctx context.Context, c *conn, w wire, s *TerminalSe
 			return fail(err)
 		}
 		return c.send(wire{Op: "crew/status-result", Data: data})
+	}
+	if w.Op == "todo/act" || w.Op == "alarm/act" {
+		if req.To != n.Name {
+			return fail(fmt.Errorf("this request is for node %q, not %s", req.To, n.Name))
+		}
+		var line string
+		var err error
+		switch {
+		case w.Op == "todo/act" && s.TodoAct != nil:
+			line, err = s.TodoAct(req.Crew, req.Action, req.ID, req.Text)
+		case w.Op == "alarm/act" && s.AlarmAct != nil:
+			line, err = s.AlarmAct(req.Crew, req.Action, req.ID, req.When, req.Text, req.Role)
+		default:
+			err = errors.New("answering from another node's cockpit is unavailable; update zmina on this node")
+		}
+		if err != nil {
+			return fail(err)
+		}
+		return c.send(wire{Op: "act/result", Text: line})
 	}
 	if strings.HasPrefix(w.Op, "chat/") {
 		var snapshot chat.Snapshot
@@ -483,6 +512,25 @@ func (n *Node) Chat(ctx context.Context, t Transport, node, op string, request T
 		return chat.Snapshot{}, errors.New("peer returned no chat snapshot")
 	}
 	return *w.Chat, nil
+}
+
+// Act is an owner-signed write to one of a peer's crews from this node's cockpit: todo/act or alarm/act. It returns
+// what the peer says was done.
+func (n *Node) Act(ctx context.Context, t Transport, node, op string, request TerminalRequest) (string, error) {
+	rw, c, err := n.terminalConnect(ctx, t, node)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = rw.Close() }()
+	request.To = node
+	if err = n.terminalRequest(c, op, request); err != nil {
+		return "", err
+	}
+	w, err := c.expect("act/result")
+	if err != nil {
+		return "", err
+	}
+	return w.Text, nil
 }
 
 // HoldsOwnerKey is true on the owner's node: the one that may read and open other nodes' crews.

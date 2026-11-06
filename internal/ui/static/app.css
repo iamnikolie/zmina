@@ -9,6 +9,10 @@
   --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", system-ui, sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, monospace;
   --ease: cubic-bezier(.2, .7, .2, 1);
+  /* D-08 t1–t2 · the role's voice in the talk panel (a system serif with Cyrillic and lining figures, no web font)
+     and the owner's bubble (the page's darkest tone set into the panel) */
+  --serif: Charter, "Iowan Old Style", "Palatino", ui-serif, Georgia, serif;
+  --well: var(--bg);
 }
 @media (prefers-color-scheme: light) {
   :root {
@@ -98,14 +102,17 @@ section { padding: 18px 0 6px; }
 .rows { display: flex; flex-direction: column; }
 .row {
   position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto auto 12px; align-items: center; gap: 0 12px;
-  min-height: 44px; padding: 4px 4px 4px 14px; border-top: 1px solid var(--line); cursor: pointer; outline: none;
+  min-height: 44px; padding: 4px 4px 4px 14px; border-top: 1px solid var(--line); outline: none;
   transition: background 160ms var(--ease), opacity 160ms var(--ease);
 }
 .rows > .row:last-child, .rows > .morerow:last-child { border-bottom: 1px solid var(--line); }
 .row::before { content: ""; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px; border-radius: 2px; background: var(--t, transparent); }
 .row:hover, .row:focus-within, .row.open { background: color-mix(in srgb, var(--panel) 70%, transparent); }
-.row:focus-visible { box-shadow: inset 0 0 0 2px var(--busy); border-radius: 4px; }
+.row:has(> .chev:focus-visible) { box-shadow: inset 0 0 0 2px var(--busy); border-radius: 4px; }
 .chev { font: 15px var(--sans); color: var(--faint); opacity: .7; text-align: center; transition: transform 160ms var(--ease); }
+.row > .chev { padding: 0; border: 0; background: none; cursor: pointer; outline: none; }
+/* The pointer is on what opens the row, not on the row: the open panel's field and buttons are its own. */
+.row > :not(.panel) { cursor: pointer; }
 .row.open > .chev { transform: rotate(90deg); }
 /* b2: the recommendation as one quiet chip, 32 px tall, 44 px to tap */
 .chip { position: relative; height: 32px; max-width: 220px; padding: 0 13px; border: 1px solid var(--line2); border-radius: 16px; background: none; color: var(--ink); font: 500 13px var(--sans); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -214,6 +221,80 @@ section { padding: 18px 0 6px; }
 @keyframes slide { from { transform: translateX(24px); opacity: 0; } }
 .drawer-h { display: flex; align-items: center; justify-content: space-between; padding: 14px 20px; border-bottom: 1px solid var(--line); }
 .drawer-h h2 { margin: 0; font: 600 15px var(--sans); }
+/* D-07 h2 · Talk: the header's way into the side panel, where «Chat» was. */
+.talk { display: inline-flex; align-items: center; gap: .45rem; height: 1.9rem; padding: 0 .75rem; border: 1px solid var(--line2);
+  border-radius: 7px; background: none; color: var(--ink2); font: 500 .86rem var(--sans); white-space: nowrap; }
+.talk:hover, .talk[aria-expanded="true"] { background: var(--panel2); color: var(--ink); }
+.talk svg { width: 1rem; height: 1rem; }
+/* D-07 p1 · the side panel: a layer over the right zone (sessions and the board); your move, the readouts and the header
+   stay in view. Placed over .dcol.mid by script (--side-top, --side-left); below 1400 px it is the whole screen (p7). */
+.side-panel { position: fixed; top: var(--side-top, 0); left: var(--side-left, 0); right: 0; bottom: 0; z-index: 6;
+  display: flex; flex-direction: column; background: var(--panel); border-left: 1px solid var(--line2);
+  animation: side-in 160ms var(--ease) both; }
+@keyframes side-in { from { opacity: 0; transform: translateX(12px); } }
+.side-panel[hidden] { display: none; }
+.side-panel:focus { outline: none; }
+/* D-08 h1 · the head: 52 px, no rule; the role name is the picker, the tools are icons */
+.panel-h { display: flex; align-items: center; gap: 8px; height: 52px; flex: none; padding: 0 12px 0 20px; box-sizing: border-box; }
+.panel-h .who { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex: 1; margin: 0; font: 600 15px var(--sans); color: var(--ink); white-space: nowrap; overflow: hidden; }
+.panel-h .who .k { font: 12px var(--mono); color: var(--faint); cursor: help; }
+.panel-h .who .st { font: 400 13px var(--sans); color: var(--muted); }
+.panel-h .who .st.busy { color: var(--busy); }
+.panel-h .who .st.need { color: var(--need); }
+.panel-h .lamp { width: 16px; height: 16px; color: var(--muted); flex: none; }
+.panel-h .lamp.busy { color: var(--busy); }
+.panel-h .lamp svg { width: 100%; height: 100%; }
+.panel-h .pick { position: relative; }
+.panel-h .pick { flex: none; min-width: 0; }
+.panel-h .pick > button { display: inline-flex; align-items: center; gap: 6px; height: 32px; max-width: 16rem; padding: 0 8px; margin-left: -4px; border: 0; border-radius: 8px;
+  background: none; color: var(--ink); font: 600 15px var(--sans); }
+.panel-h .pick > button:hover, .panel-h .pick > button[aria-expanded="true"] { background: var(--panel2); }
+.panel-h .pick > button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel-h .pick > button svg { width: 12px; height: 12px; flex: none; color: var(--muted); fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.pickmenu { position: absolute; left: 0; top: 38px; z-index: 9; width: 20rem; max-height: 60vh; overflow: auto; display: flex; flex-direction: column; gap: 1px;
+  padding: 6px; background: var(--panel); border: 1px solid var(--line2); border-radius: 9px; box-shadow: 0 12px 32px rgba(0, 0, 0, .4); }
+.pickmenu[hidden] { display: none; }
+.pickmenu input { height: 2rem; margin-bottom: 4px; padding: 0 .6rem; background: var(--bg); color: var(--ink); border: 1px solid var(--line2); border-radius: 6px; font: .85rem var(--sans); }
+.pickmenu #side-roles { display: flex; flex-direction: column; gap: 1px; }
+.pickmenu .pg { margin: 6px 6px 2px; font: .72rem var(--mono); color: var(--faint); }
+.pickmenu .pi { display: flex; justify-content: space-between; gap: .6rem; padding: 5px 8px; border: 0; border-radius: 6px; background: none; color: var(--ink2); font: .85rem var(--sans); text-align: left; cursor: pointer; }
+.pickmenu .pi:hover, .pickmenu .pi.on { background: var(--panel2); color: var(--ink); }
+.pickmenu .ps { font-size: .75rem; color: var(--faint); white-space: nowrap; }
+.pickmenu .ps.busy { color: var(--busy); } .pickmenu .ps.need { color: var(--need); }
+.pickmenu .pmore { padding: 4px 8px; border: 0; background: none; color: var(--faint); font: .75rem var(--sans); text-align: left; cursor: pointer; }
+.panel-h .tools2 { display: flex; gap: 2px; align-items: center; flex: none; }
+.panel-h .tools2 a, .panel-h .tools2 button { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 8px; background: none; color: var(--muted); text-decoration: none; }
+.panel-h .tools2 svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.panel-h .tools2 [hidden] { display: none; }
+@media (pointer: coarse) { .panel-h .tools2 a, .panel-h .tools2 button, .panel-h .pick > button { min-width: 44px; height: 44px; } }
+/* iOS zooms the page into any focused field under 16px; touch keeps every field at 16px or more. */
+@media (pointer: coarse) { input, textarea, select { font-size: max(16px, 1em) !important; } .pickmenu input { height: 44px; } }
+.panel-h .tools2 a:hover, .panel-h .tools2 button:hover { background: var(--panel2); color: var(--ink); }
+.panel-h .back { display: none; }
+.side-panel iframe { flex: 1; width: 100%; border: 0; background: var(--panel); }
+.side-panel iframe[hidden] { display: none; }
+/* D-07 p6 · the lists in the panel: Parked (filters, groups), Done today (by crew) and History (the drawer folded in). */
+.side-list { flex: 1; min-height: 0; overflow: auto; width: 100%; max-width: 48rem; margin: 0 auto; box-sizing: border-box; padding: .9rem 1.25rem 1.5rem; }
+.side-list[hidden] { display: none; }
+.side-list .fl { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: .9rem; }
+.side-list .fl button { height: 1.7rem; padding: 0 .7rem; border: 1px solid var(--line); border-radius: 6px; background: none; color: var(--muted); font: .8rem var(--sans); }
+.side-list .fl button[aria-pressed="true"] { background: var(--panel2); border-color: var(--line2); color: var(--ink); }
+.side-list .gh { margin: 1.1rem 0 .3rem; font: 600 .78rem var(--sans); color: var(--muted); }
+.side-list .gh:first-of-type { margin-top: 0; }
+/* D-07 r2 · Parked and Done today open the panel: real buttons; the open one is marked. */
+.ro.opens { cursor: pointer; border: 0; text-align: left; font: inherit; color: inherit; background: none; }
+.ro.opens:hover { background: var(--panel); }
+.ro.opens .ro-s::after { content: " ›"; color: var(--muted); }
+.ro.opens[aria-expanded="true"] { background: var(--panel); box-shadow: inset 0 -2px 0 var(--ink2); }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+button.role.card { display: block; width: 100%; text-align: left; font: inherit; color: inherit; cursor: pointer; }
+@media (max-width: 1399px) {
+  .side-panel { top: 0; left: 0; border-left: 0; }
+  .panel-h { padding: 0 8px 0 4px; }
+  .panel-h .who .st { display: none; }
+  .panel-h .back { display: inline-flex; border: 0; background: none; color: var(--ink2); font-size: 1.4rem; padding: 0 .3rem; }
+  .panel-h .tools2 a#side-full { display: none; }
+}
 .feed { overflow: auto; padding: 4px 20px 20px; }
 .e { display: grid; grid-template-columns: 44px 1fr; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); font: 13px/1.4 var(--sans); color: var(--muted); }
 .e time { font: 12px var(--mono); color: var(--faint); padding-top: 1px; }
@@ -413,6 +494,8 @@ body.hidden *, body.hidden *::before, body.hidden *::after { animation-play-stat
   .deck .kbr:hover, .deck .kbr.open { background: var(--panel); border-color: var(--line2); }
   .deck .kbr::before { left: -1px; top: .75rem; bottom: .75rem; }
   .kbr > span { display: none; }
+  /* A card opens on a click anywhere; its «›» is not drawn, but stays the card's button for the keyboard. */
+  .kbr > .chev { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   .kbr > .words.kc { display: flex; flex-direction: column; align-items: stretch; gap: .35rem; white-space: normal; }
   .kc-h { display: flex; align-items: center; gap: .45rem; font: .72rem/1 var(--mono); color: var(--faint); }
   .kc-h .pd { margin-right: 0; }
@@ -510,3 +593,200 @@ body.fv-on { overflow: hidden; }
   .fv-log li { grid-template-columns: 5.5rem minmax(0, 1fr); }
   .fv-who { display: none; }
 }
+
+/* D-07 r4 · on the lean page Parked is one line that opens its list. */
+.parked-line { display: block; width: 100%; min-height: 44px; padding: 0 0 0 14px; border: 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+  background: none; color: var(--muted); font: 600 .8rem var(--sans); letter-spacing: .04em; text-transform: uppercase; text-align: left; cursor: pointer; }
+.parked-line:hover { color: var(--ink); }
+
+/* D-07 s2 · a spare crew: a quiet word and a hollow dot, never red. */
+.chips .ns.spare { color: var(--faint); font-weight: 400; }
+.tick.spare { color: var(--faint); }
+.tick.spare i { background: none; box-shadow: inset 0 0 0 1px var(--faint); }
+
+/* D-07 x2 · quieter session cards: working is said by the breathing lamp and the teal word, not by an outline or glow. */
+@media (min-width: 1400px) {
+  .card.busy { border-color: var(--line2); background: var(--panel); box-shadow: none; }
+}
+.elsewhere { margin-top: .4rem; padding: 0; border: 0; background: none; color: var(--ink2); text-decoration: underline; text-underline-offset: 3px; font: .9rem var(--sans); cursor: pointer; }
+.ev { cursor: pointer; }
+
+/* D-07 h3 · a node's crews in a menu under «N crews ▾». */
+.chips .nm { color: var(--faint); font-size: 12px; padding: 4px 6px; }
+.chipmenu { position: fixed; z-index: 8; min-width: 12rem; max-width: 16rem; display: flex; flex-direction: column; gap: 2px; padding: 4px;
+  background: var(--panel); border: 1px solid var(--line2); border-radius: 9px; box-shadow: 0 12px 32px rgba(0, 0, 0, .35); }
+.chipmenu[hidden] { display: none; }
+.chipmenu button { text-align: left; font: 500 13px var(--sans); color: var(--muted); background: none; border: 0; border-radius: 6px; padding: 6px 10px; }
+.chipmenu button:hover, .chipmenu .on { background: var(--panel2); color: var(--ink); }
+.chipmenu .ns { margin-left: .4rem; font-size: 11px; }
+.chipmenu .ns.bad { color: var(--late); }
+.chipmenu .off { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; margin-top: 2px; padding-top: 4px; border-top: 1px solid var(--line); font: 12px var(--sans); color: var(--faint); }
+
+/* Fable 1 · what is red takes the header's event slot, each a button that opens the crew or the role. */
+.ev.red { display: flex; gap: .4rem; flex-wrap: wrap; overflow: hidden; }
+.ev .redb { border: 1px solid color-mix(in srgb, var(--late) 45%, var(--line2)); border-radius: 6px; background: none; color: var(--late);
+  font: 500 .8rem var(--sans); padding: .15rem .55rem; white-space: nowrap; cursor: pointer; }
+.ev .redb:hover { background: color-mix(in srgb, var(--late) 10%, transparent); }
+/* Fable 2 · a session with a question on screen stands in your move, amber like a hold. */
+.mv.screen { --t: var(--need); }
+.mv.screen .tt { color: var(--need); }
+@media (min-width: 1400px) {
+  /* Fable 4 · a question is two lines: its title, then its crew and its reason; the chip has its own slot, and hover
+     actions go under the row, never over the chip. */
+  .deck .mv.ask > .words { flex-wrap: wrap; white-space: normal; row-gap: 2px; }
+  .deck .mv.ask > .words .tt { flex-basis: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .deck .mv.ask > .words .cl, .deck .mv.ask > .words .gr { font: .75rem var(--mono); color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .deck .mv .chip { max-width: 14rem; }
+  .deck .row:not(.open):hover > .hov, .deck .row:not(.open):focus-within > .hov { position: static; grid-column: 1 / -1; padding: 2px 0 0; background: none; justify-content: flex-start; }
+  /* Fable 8 · a task on the board is one row: id · title · holder · age, no note line (it is on the holder's card). */
+  .deck .kbr { padding: .45rem .75rem; border-radius: 6px; }
+  .deck .kbr > .words.kc { flex-direction: row; align-items: baseline; gap: .6rem; flex-wrap: nowrap; }
+  .deck .kbr .kc-h { display: contents; }
+  .deck .kbr .kb-id { order: 1; flex: none; }
+  .deck .kbr .tt { order: 2; flex: 1; min-width: 0; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; -webkit-line-clamp: unset; font-size: .9rem; }
+  .deck .kbr .kc-f { order: 3; flex: none; max-width: 30%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .deck .kbr .kc-age { order: 4; flex: none; }
+  .deck .kbr .kc-x { order: 5; }
+  .deck .kbr:not(.open) .kc-n { display: none; }
+  .deck .row.open.kbr > .words.kc { flex-wrap: wrap; }
+  /* Fable 15 · money is not the brightest number on the strip. */
+  .strip .ro:last-child .ro-n { color: var(--ink2); font-size: 1.8rem; }
+}
+@media (max-width: 860px) {
+  /* Fable 11 · on a phone the chip has its own line under the title. */
+  .row > .chip { grid-area: auto; grid-column: 1 / -1; justify-self: start; max-width: 100%; margin-top: 4px; }
+}
+
+/* A session's question answered from the cockpit: one button per choice, the whole label readable. */
+.choices { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
+.choices .choice { justify-content: flex-start; text-align: left; white-space: normal; height: auto; min-height: 36px; padding: 6px 12px; }
+.choices .choice { flex-direction: column; align-items: flex-start; }
+.choices .choice .cd { font-size: .78rem; font-weight: 400; color: var(--muted); }
+
+/* A card's header never pushes its context ring past the card: the role's name gives way first. */
+@media (min-width: 1400px) {
+  .card .role-n { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .card .role-h .keep { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card .role-h .ring, .card .role-h .ctx { flex: none; }
+}
+
+/* D-09 · the phone is a phone: four tabs at the bottom (Move · Going · Talk · Crews), a 52 px head per tab, the home-screen
+   app. Below 861 px only; the desktop and the cockpit never draw these. */
+.phead, .pro, #down, .pnone, .pdone, .pcrews, .tabbar { display: none; }
+@media (max-width: 860px) {
+  :root { --bar: calc(52px + env(safe-area-inset-bottom)); }
+  .top, .foot, .quiet { display: none; }
+  /* h1–h3 · the head: the tab's name, the live beat, the scope */
+  .phead { display: flex; align-items: center; gap: 8px; height: calc(52px + env(safe-area-inset-top)); padding: env(safe-area-inset-top) 12px 0 16px; box-sizing: border-box; }
+  /* the home-screen app draws the clock over the page: a strip of the page's tone keeps rows from scrolling under it */
+  body::before { content: ""; position: fixed; top: 0; left: 0; right: 0; z-index: 9; height: env(safe-area-inset-top); background: var(--bg); }
+  .phead h1 { margin: 0; font: 600 22px/1 var(--sans); letter-spacing: -.01em; color: var(--ink); }
+  .phead .beat { width: 7px; height: 7px; margin-left: 2px; border-radius: 50%; background: var(--ok); flex: none; }
+  .phead .offl { display: none; font: 500 13px var(--sans); color: var(--late); }
+  body.lost .phead .beat { display: none; }
+  body.lost .phead .offl { display: inline; }
+  .phead .sp { flex: 1; }
+  .scope { position: relative; display: inline-flex; align-items: center; gap: 6px; height: 32px; max-width: 55vw; padding: 0 10px 0 12px;
+    border: 1px solid var(--line2); border-radius: 8px; background: none; font: 500 13px var(--sans); color: var(--ink2); white-space: nowrap; }
+  .scope span { overflow: hidden; text-overflow: ellipsis; }
+  .scope::after { content: ""; position: absolute; inset: -6px -2px; }
+  .scope svg { width: 12px; height: 12px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  body[data-tab="crews"] .scope { display: none; }
+
+  /* the tabs' sections: one column in the page's order; the open tab shows its own */
+  .page { display: flex; flex-direction: column; padding: 0 16px calc(var(--bar) + 16px); }
+  .page .col { display: contents; }
+  section.empty { display: none; }
+  .pro { order: 0; } #down { order: 1; } .pnone { order: 2; } #hold { order: 3; } #ask { order: 4; } #alarms { order: 5; } #later { order: 6; }
+  #go { order: 7; } #others { order: 8; } .pdone { order: 9; } .pcrews { order: 10; }
+  body[data-tab="move"] :is(#go, #others, .pdone, .pcrews),
+  body[data-tab="going"] :is(.pro, #down, .pnone, #hold, #ask, #alarms, #later, .pcrews),
+  body[data-tab="crews"] :is(.pro, #down, .pnone, #hold, #ask, #alarms, #later, #go, #others, .pdone),
+  body[data-tab="talk"] .page { display: none !important; }
+  body[data-tab="move"] .pro { display: grid; }
+  body[data-tab="move"] #down:not([hidden]) { display: block; }
+  body[data-tab="move"] .pnone:not([hidden]) { display: block; }
+  body[data-tab="going"] .pdone { display: flex; margin-top: 12px; }
+  body[data-tab="crews"] .pcrews { display: block; }
+
+  /* m0 · the readout: four numbers that lead to their sections */
+  .pro { grid-template-columns: repeat(4, 1fr); margin: 2px -4px 6px; }
+  .pro button { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-height: 56px; padding: 6px 4px; border: 0; background: none; text-align: left; }
+  .pro b { font: 600 28px/1 var(--sans); font-variant-numeric: tabular-nums; letter-spacing: -.02em; color: var(--faint); }
+  .pro b.x { color: var(--late); } .pro b.n { color: var(--need); } .pro b.b { color: var(--busy); }
+  .pro span { font: 500 12px var(--sans); color: var(--muted); }
+  .pnone { margin: 0; padding: 18px 0 6px; font: 14px var(--sans); color: var(--faint); }
+
+  /* m1 · Down rows: the late rule and title; r2 · a row is its title and its node/crew line, the note only when open */
+  .prow { width: 100%; border: 0; border-top: 1px solid var(--line); background: none; text-align: left; font: inherit; color: inherit; }
+  .row.red { --t: var(--late); }
+  .row.red .tt { color: var(--late); }
+  .row:not(.open) .words .gr { display: none; }
+  .row:not(.open) > .age .wait { display: none; }
+  /* Alarms without alarms keeps its heading and «Set»: the phone has no other way to the first one */
+  #alarms.noal .none { display: none; }
+
+  /* c1 · Crews */
+  .pcrews .grp { display: block; margin: 14px 0 4px; padding: 0; min-height: 0; border: 0; font: 12px var(--mono); color: var(--faint); }
+  .pcrews .cr { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 0 10px; width: 100%; min-height: 48px; padding: 0 4px 0 6px;
+    border: 0; border-top: 1px solid var(--line); background: none; text-align: left; font: inherit; color: inherit; }
+  .pcrews .cr:first-child { margin-top: 4px; }
+  .pcrews .cr:has(+ .grp), .pcrews .cr:has(+ .lks) { border-bottom: 1px solid var(--line); }
+  .pcrews .cr.on { background: color-mix(in srgb, var(--panel) 70%, transparent); }
+  .pcrews .n { font: 500 15px var(--sans); color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pcrews .s { font: 13px var(--sans); color: var(--muted); text-align: right; }
+  .pcrews .s.x { color: var(--late); } .pcrews .s.b { color: var(--busy); } .pcrews .s.f { color: var(--faint); }
+  .pcrews .ck { width: 18px; height: 18px; fill: none; stroke: var(--ink); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .pcrews .lamp { width: 8px; height: 8px; margin: 0 auto; border-radius: 50%; background: var(--ok); }
+  .pcrews .lamp.x { background: var(--late); } .pcrews .lamp.b { background: var(--busy); }
+  .pcrews .lamp.h { background: none; box-shadow: inset 0 0 0 1.5px var(--faint); }
+  .pcrews { padding: 4px 0 0; }
+  .pcrews .lks { margin-top: 28px; }
+  .pcrews .lk { display: flex; justify-content: space-between; align-items: center; width: 100%; min-height: 48px; padding: 0 4px 0 6px;
+    border: 0; border-top: 1px solid var(--line); background: none; text-align: left; font: 500 15px var(--sans); color: var(--ink); }
+  .pcrews .lk:last-child { border-bottom: 1px solid var(--line); }
+  .pcrews .lk span:last-child { font: 14px var(--sans); color: var(--muted); }
+
+  /* t1–t3 · the bar */
+  .tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 8; display: grid; grid-template-columns: repeat(4, 1fr); height: var(--bar);
+    padding-bottom: env(safe-area-inset-bottom); box-sizing: border-box; background: var(--panel); border-top: 1px solid var(--line); }
+  body.keyboard .tabbar { display: none; }
+  .tabbar button { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; min-height: 44px;
+    border: 0; background: none; font: 500 11px/1 var(--sans); color: var(--muted); -webkit-tap-highlight-color: transparent; }
+  .tabbar svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .tabbar [aria-current="page"] { color: var(--ink); font-weight: 600; }
+  .tabbar [aria-current="page"] svg { stroke-width: 2; }
+  .tabbar .bd { position: absolute; top: 3px; left: calc(50% + 6px); min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 9px;
+    box-shadow: 0 0 0 2px var(--panel); background: var(--need); color: var(--bg); font: 700 11px/18px var(--sans); font-variant-numeric: tabular-nums; }
+  .tabbar .bd.x { background: var(--late); }
+  .tabbar .dot { position: absolute; top: 6px; left: calc(50% + 8px); width: 8px; height: 8px; border-radius: 50%; box-shadow: 0 0 0 2px var(--panel); background: var(--need); }
+  .tabbar .dot.x { background: var(--late); }
+  .tabbar .pop { animation: pop 200ms var(--ease); }
+  .toasts { bottom: calc(var(--bar) + 12px); }
+
+  /* k1 · Talk: the D-08 panel full screen inside the tab, above the bar; the bar is the way out */
+  .side-panel { bottom: var(--bar); padding-top: env(safe-area-inset-top); animation: none; }
+  body.keyboard .side-panel { bottom: 0; }
+  /* No overflow: hidden on the Talk tab's page: opened on it, the home-screen app then took the window as the screen
+     less the clock (894 of 956) and the bar stood above the bottom. A keyboard's scroll is undone by pinPanel. */
+  /* D-11 h1 · the head floats over the conversation: no bar, a fade from the panel tone; centred name (the picker)
+     with node/crew under it; Terminal a round button at the right; the lamp goes (working is said in the thread) */
+  body[data-tab="talk"] .panel-h { position: absolute; top: env(safe-area-inset-top); left: 0; right: 0; z-index: 3; display: block; height: 80px;
+    padding: 0; background: linear-gradient(var(--panel) 56px, transparent 80px); pointer-events: none; }
+  body[data-tab="talk"] .panel-h > * { pointer-events: auto; }
+  body[data-tab="talk"] .panel-h .lamp { display: none; }
+  /* above node/crew and the tools: its open menu must take the taps it covers */
+  body[data-tab="talk"] .panel-h .pick { position: absolute; left: 50%; top: 2px; z-index: 2; transform: translateX(-50%); }
+  body[data-tab="talk"] .panel-h .pick > button { height: 40px; margin: 0; padding: 0 12px; gap: 5px; font: 600 17px/1.2 var(--sans); }
+  body[data-tab="talk"] .panel-h .pick > button:hover, body[data-tab="talk"] .panel-h .pick > button[aria-expanded="true"] { background: none; }
+  body[data-tab="talk"] .pickmenu { left: 50%; transform: translateX(-50%); width: min(20rem, calc(100vw - 24px)); }
+  body[data-tab="talk"] .panel-h .who { position: absolute; left: 25%; right: 25%; top: 40px; justify-content: center; cursor: pointer; }
+  body[data-tab="talk"] .panel-h .who .k { font: 13px/1.2 var(--sans); color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+  body[data-tab="talk"] .panel-h .tools2 { position: absolute; right: 12px; top: 14px; }
+  body[data-tab="talk"] .panel-h .tools2 #side-term { border-radius: 50%; background: var(--panel2); color: var(--ink2); }
+  body[data-tab="talk"] .panel-h .back, body[data-tab="talk"] #side-close, body[data-tab="talk"] #side-full { display: none; }
+  body[data-tab="talk"] .panel-h .pick > button { height: 44px; font-size: 17px; }
+  body[data-tab="talk"] .panel-h .tools2 a, body[data-tab="talk"] .panel-h .tools2 button { width: 44px; height: 44px; }
+  body[data-tab="talk"] .panel-h .tools2 svg { width: 20px; height: 20px; }
+}
+@keyframes pop { from { transform: scale(.6); } }

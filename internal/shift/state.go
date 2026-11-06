@@ -87,6 +87,8 @@ type RoleState struct {
 	RecoveryDrops   int    `json:"recovery_drops,omitempty"`
 	// ChatReceipts deduplicates accepted owner messages from browser/mesh clients.
 	ChatReceipts []chat.Receipt `json:"chat_receipts,omitempty"`
+	// AnsweredQuestions are the screen questions (tool call ids) Chat has answered or is answering: never twice.
+	AnsweredQuestions []string `json:"answered_questions,omitempty"`
 	// Up is whether the role was up when zmina last looked; a role that was up and is not has ended.
 	Up bool `json:"up,omitempty"`
 	// Started is when zmina last started (or tried to start) it.

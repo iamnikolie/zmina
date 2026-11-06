@@ -189,6 +189,9 @@ type Crew struct {
 	Retired string `yaml:"retired"`
 	// MovedTo is the crew it went on as, <node>/<crew>; set alone it marks the crew retired too.
 	MovedTo string `yaml:"moved_to"`
+	// Spare marks the owner's standby copy of a crew: no ticker by design, its dispatcher started by hand. Its silent
+	// ticker is never an alarm on the cockpit.
+	Spare bool `yaml:"spare"`
 	// Namespace is the CLAUDE_CONFIG_DIR every role runs with.
 	Namespace string `yaml:"namespace"`
 	// Dir is the default working directory.

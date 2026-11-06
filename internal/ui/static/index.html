@@ -5,7 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>zmina</title>
 <link rel="icon" id="favicon" href="assets/mark.svg">
+<!-- D-09 s1 · the phone's home-screen app. No manifest, no status-bar style and no app-capable meta: with them iOS opens a
+     cold-launched home-screen app in a web view short by the status bar and leaves a strip under the page that no CSS
+     can reach (WebKit bug 313800); without them iOS still opens it standalone, under an opaque status bar. -->
+<meta name="apple-mobile-web-app-title" content="zmina">
+<meta name="theme-color" content="#0f1113" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f6f7f8" media="(prefers-color-scheme: light)">
+<link rel="apple-touch-icon" href="assets/touch-icon.png">
 <link rel="stylesheet" href="app.css">
+<script src="patch.js" defer></script>
 <script src="app.js" defer></script>
 </head>
 <body class="sk">
@@ -14,16 +22,31 @@
   <p class="ev" id="ev"></p>
   <div class="say" id="say" aria-live="polite"><i class="ph" style="width:min(560px,80%)"></i></div>
   <div class="tools">
-    <a href="chat.html">Chat</a>
+    <button type="button" class="talk" id="talk-open" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg><span>Talk</span></button>
     <span class="mark" id="mark" aria-hidden="true"></span>
     <nav class="chips" id="chips" aria-label="Crew"></nav>
     <div class="clock" id="clock"><i></i><span></span></div>
   </div>
 </header>
 
+<div class="chipmenu" id="chipmenu" role="menu" hidden></div>
+
+<!-- D-09 · the phone: a 52 px head per tab (name, the beat, the scope) in place of the header stack -->
+<header class="phead" id="phead">
+  <h1 id="phead-h">Your move</h1><span class="beat" id="phead-beat" title="live"></span><span class="offl">Offline</span>
+  <span class="sp"></span>
+  <button type="button" class="scope" id="scope"><span id="scope-n">All</span><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5l3 3 3-3"/></svg></button>
+</header>
+
 <main class="page">
   <div class="col">
     <p class="quiet" id="quiet" hidden></p>
+    <div class="pro" id="pro" role="group" aria-label="Readout"></div>
+    <section id="down" aria-labelledby="down-h" hidden>
+      <h2 class="lab" id="down-h"></h2>
+      <div class="rows" id="down-rows"></div>
+    </section>
+    <p class="pnone" id="pnone" hidden>Nothing waits on you</p>
     <section id="hold" aria-labelledby="hold-h">
       <h2 class="lab" id="hold-h"><i class="ph" style="width:120px"></i></h2>
       <div class="rows" id="hold-rows"><div class="row ph-row"><i class="ph"></i></div></div>
@@ -35,14 +58,6 @@
     </section>
   </div>
   <div class="col">
-    <section id="go" aria-labelledby="go-h">
-      <h2 class="lab" id="go-h"><i class="ph" style="width:80px"></i></h2>
-      <div class="rows" id="go-rows"><div class="row ph-row"><i class="ph"></i></div></div>
-    </section>
-    <section id="later" aria-labelledby="later-h" hidden>
-      <h2 class="lab" id="later-h"></h2>
-      <div class="rows" id="later-rows"></div>
-    </section>
     <section id="alarms" aria-labelledby="alarms-h">
       <h2 class="lab" id="alarms-h"></h2>
       <div class="rows" id="alarms-rows"></div>
@@ -51,6 +66,16 @@
       <h2 class="lab" id="others-h"></h2>
       <div class="rows" id="others-rows"></div>
     </section>
+    <section id="go" aria-labelledby="go-h">
+      <h2 class="lab" id="go-h"><i class="ph" style="width:80px"></i></h2>
+      <div class="rows" id="go-rows"><div class="row ph-row"><i class="ph"></i></div></div>
+    </section>
+    <section id="later" aria-labelledby="later-h" hidden>
+      <h2 class="lab" id="later-h"></h2>
+      <div class="rows" id="later-rows"></div>
+    </section>
+    <div class="rows pdone" id="pdone"></div>
+    <section class="pcrews" id="pcrews" aria-label="Crews"></section>
   </div>
   <footer class="foot" id="foot"></footer>
 </main>
@@ -75,8 +100,28 @@
   </div>
 </main>
 
+<!-- D-09 t1–t3 · four tabs at the bottom of the phone -->
+<nav class="tabbar" id="tabbar" aria-label="Sections">
+  <button type="button" data-tab="move"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg>Move<span class="bd" hidden></span></button>
+  <button type="button" data-tab="going"><svg viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M8 7v7M12 7v4M16 7v9"/></svg>Going</button>
+  <button type="button" data-tab="talk"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/></svg>Talk<span class="dot" hidden></span></button>
+  <button type="button" data-tab="crews"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 12V8"/></svg>Crews<span class="dot x" hidden></span></button>
+</nav>
+
 <div class="toasts" id="toasts" aria-live="polite"></div>
 <div class="full" id="full" hidden></div>
+<section class="side-panel" id="side" aria-labelledby="side-role side-who" tabindex="-1" hidden>
+  <div class="panel-h">
+    <button type="button" class="back" id="side-back" aria-label="Back">‹</button>
+    <span class="lamp" id="side-lamp" aria-hidden="true"></span>
+    <span class="pick"><button type="button" id="side-pick" aria-haspopup="listbox" aria-expanded="false" aria-label="Other role"><span id="side-role"></span><svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5l3 3 3-3"/></svg></button>
+      <span class="pickmenu" id="side-menu" hidden><input id="side-filter" type="search" placeholder="Find a role…" aria-label="Find a role"><span id="side-roles" role="listbox"></span></span></span>
+    <h2 class="who" id="side-who"></h2>
+    <div class="tools2"><a id="side-term" target="_blank" rel="noreferrer" aria-label="Terminal" title="Terminal"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M7 9l3 3-3 3M12.5 15H17"/></svg></a><a id="side-full" target="_blank" rel="noreferrer" aria-label="Full screen" title="Full screen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></svg></a><button type="button" id="side-close" aria-label="Close" title="Close · Esc"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+  </div>
+  <iframe id="side-frame" title="Conversation" allow="clipboard-write"></iframe>
+  <div class="side-list" id="side-list" hidden></div>
+</section>
 <aside class="drawer" id="history" aria-labelledby="history-h" hidden>
   <div class="drawer-h"><h2 id="history-h"></h2><button type="button" class="q" id="history-close" aria-label="Close">✕</button></div>
   <div class="feed" id="feed"></div>

@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -551,6 +552,11 @@ func answerTodo(s *shift.Shift, from, action, id, words string) (string, error) 
 		id = it.ID
 	default:
 		return "", fmt.Errorf("%s: not an ask (A-n), a waiting task (T-n) or a parked item (L-n)", id)
+	}
+
+	// A role that records what the owner said in chat says so: the answer is his words relayed, not his own click.
+	if from != "hand" && from != "ui" && os.Getenv("ZMINA_ROLE") != "" {
+		note += " (the owner's answer in chat, recorded by " + from + ")"
 	}
 
 	if _, err := s.Note(from, note, false); err != nil {

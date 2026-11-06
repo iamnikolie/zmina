@@ -220,7 +220,7 @@ func (n *Node) ServeTerminals(ctx context.Context, rw io.ReadWriter, deliver Del
 
 		switch w.Op {
 		case "terminal/list", "terminal/open", "terminal/history", "chat/read", "chat/send", "chat/action", "chat/upload", "chat/file",
-			"crew/status":
+			"crew/status", "todo/act", "alarm/act":
 			return n.serveTerminal(ctx, c, w, services)
 		case "terminal/tunnel":
 			return n.serveTunnel(ctx, rw, c, w, transport)

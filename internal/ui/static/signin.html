@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<meta name="apple-mobile-web-app-title" content="zmina">
+<meta name="theme-color" content="#0f1113" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f6f7f8" media="(prefers-color-scheme: light)">
+<title>Sign in · zmina</title>
+<link rel="stylesheet" href="signin.css">
+<script src="signin.js" defer></script>
+</head>
+<body>
+<main class="box">
+  <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><path class="z" d="M5.6 7.6C5.4 3.9 18.6 3.7 18.1 7.4L6.2 16.8C5.4 20.4 18.6 20.2 18.4 16.4"/><circle cx="5.6" cy="7.6" r="1.6"/><circle cx="18.4" cy="16.4" r="1.6"/></svg>
+  <h1 id="head">Sign in on this device</h1>
+  <p class="lead" id="lead">zmina sends a one-time code to your Telegram.</p>
+  <form id="ask">
+    <button type="submit" class="primary" id="send">Send code</button>
+    <p class="status" id="ask-status" role="status" aria-live="polite"></p>
+  </form>
+  <form id="enter" hidden>
+    <label for="code">Code from Telegram</label>
+    <input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required aria-describedby="status">
+    <p class="status" id="status" role="status" aria-live="polite"></p>
+    <button type="submit" class="primary" id="go">Sign in</button>
+    <button type="button" class="link" id="again">Send a new code</button>
+  </form>
+</main>
+</body>
+</html>

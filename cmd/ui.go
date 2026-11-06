@@ -29,6 +29,7 @@ import (
 	"github.com/iamnikolie/zmina/internal/events"
 	"github.com/iamnikolie/zmina/internal/later"
 	"github.com/iamnikolie/zmina/internal/ledger"
+	"github.com/iamnikolie/zmina/internal/mesh"
 	"github.com/iamnikolie/zmina/internal/record"
 	"github.com/iamnikolie/zmina/internal/shift"
 	"github.com/iamnikolie/zmina/internal/task"
@@ -47,6 +48,7 @@ const (
 func (a *app) uiCommand() *cobra.Command {
 	var (
 		addr, token string
+		codeCommand string
 		noOpen      bool
 		allowHosts  []string
 	)
@@ -61,6 +63,12 @@ func (a *app) uiCommand() *cobra.Command {
 			}
 			if len(allowHosts) > 0 && token == "" {
 				return errors.New("--allow-host needs --token (or $ZMINA_UI_TOKEN)")
+			}
+			if codeCommand == "" {
+				codeCommand = os.Getenv("ZMINA_UI_CODE_COMMAND")
+			}
+			if codeCommand != "" && token == "" {
+				return errors.New("--code-command needs --token (or $ZMINA_UI_TOKEN): a code signs a device in to it")
 			}
 
 			host, _, err := net.SplitHostPort(addr)
@@ -118,6 +126,9 @@ func (a *app) uiCommand() *cobra.Command {
 			}
 
 			a.uiLogins = newUILogins()
+			if codeCommand != "" {
+				a.uiSignin = newUISignin(codeCommand, func(line string) { fmt.Fprintln(a.err, "zmina ui:", line) })
+			}
 			srv := &http.Server{Handler: a.uiHandler(ln.Addr().String(), loopback, token, allowHosts...),
 				ReadHeaderTimeout: 10 * time.Second}
 
@@ -164,6 +175,8 @@ func (a *app) uiCommand() *cobra.Command {
 		"$ZMINA_UI_TOKEN")
 	c.Flags().BoolVar(&noOpen, "no-open", false, "print the address, do not open a browser")
 	c.Flags().StringSliceVar(&allowHosts, "allow-host", nil, "additional exact Host for a private reverse proxy; requires a token")
+	c.Flags().StringVar(&codeCommand, "code-command", "", "shell command that sends a sign-in code to the owner (the "+
+		"message on its stdin), so a new device signs in with a code; requires a token; default $ZMINA_UI_CODE_COMMAND")
 
 	return c
 }
@@ -287,7 +300,13 @@ func (a *app) uiHandler(bound string, loopback bool, token string, allowHosts ..
 	mux := http.NewServeMux()
 
 	static, _ := fs.Sub(ui.Files, "static")
-	mux.Handle("GET /", http.FileServerFS(static))
+	// The page's files carry no date (they are embedded): without no-cache a browser may keep an old app.css next
+	// to a new chat.js — the home-screen app did. They are small and local; each load asks again.
+	files := http.FileServerFS(static)
+	mux.Handle("GET /", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		files.ServeHTTP(w, r)
+	}))
 	mux.HandleFunc("GET /api/ping", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "zmina") })
 	peers := a.cockpitPeers
 	if peers == nil {
@@ -382,8 +401,7 @@ func (a *app) uiHandler(bound string, loopback bool, token string, allowHosts ..
 			return
 		}
 
-		if !map[string]bool{"yes": true, "done": true, "answer": true, "park": true, "ignore": true, "back": true,
-			"drop": true, "mine": true}[in.Action] {
+		if !todoActions[in.Action] {
 			http.Error(w, "action: yes, done, answer, park, ignore, back, drop or mine", http.StatusBadRequest)
 
 			return
@@ -391,19 +409,11 @@ func (a *app) uiHandler(bound string, loopback bool, token string, allowHosts ..
 
 		var line string
 
-		// The answer goes to the dispatcher of the item's own crew; «mine» changes the task itself.
-		c, err := a.crewApp(in.Crew)
-		if err == nil {
-			err = c.withState(func(s *shift.Shift) error {
-				var err error
-				if in.Action == "mine" {
-					line, err = c.takeBack(s, in.ID)
-				} else {
-					line, err = answerTodo(s, "ui", in.Action, in.ID, in.Text)
-				}
-
-				return err
-			})
+		var err error
+		if node, crew, ok := peerCrew(in.Crew); ok {
+			line, err = a.peerAct(r.Context(), node, "todo/act", mesh.TerminalRequest{Crew: crew, Action: in.Action, ID: in.ID, Text: in.Text})
+		} else {
+			line, err = a.localTodoAct(in.Crew, in.Action, in.ID, in.Text)
 		}
 
 		if err != nil {
@@ -428,16 +438,12 @@ func (a *app) uiHandler(bound string, loopback bool, token string, allowHosts ..
 
 		var line string
 
-		c, err := a.crewApp(in.Crew)
-		if err == nil {
-			err = c.withState(func(s *shift.Shift) error {
-				s.By = "ui"
-
-				var err error
-				line, err = alarmAction(s, in.Action, in.ID, in.When, in.Text, in.Role)
-
-				return err
-			})
+		var err error
+		if node, crew, ok := peerCrew(in.Crew); ok {
+			line, err = a.peerAct(r.Context(), node, "alarm/act", mesh.TerminalRequest{Crew: crew, Action: in.Action, ID: in.ID,
+				When: in.When, Text: in.Text, Role: in.Role})
+		} else {
+			line, err = a.localAlarmAct(in.Crew, in.Action, in.ID, in.When, in.Text, in.Role)
 		}
 
 		if err != nil {
@@ -449,7 +455,7 @@ func (a *app) uiHandler(bound string, loopback bool, token string, allowHosts ..
 		writeJSON(w, map[string]string{"done": line})
 	})
 
-	return guardLogins(mux, bound, loopback, token, a.uiLogins, allowHosts...)
+	return guardLogins(mux, bound, loopback, token, a.uiLogins, a.uiSignin, allowHosts...)
 }
 
 // alarmAction is the page's set, move and off; the caller holds the lock. set is a reminder for the owner, or for a
@@ -515,12 +521,13 @@ func (a *app) takeBack(s *shift.Shift, id string) (string, error) {
 // one of them. A write must carry X-Zmina, which a cross-site form or fetch cannot send without a preflight this
 // server never answers.
 func guard(next http.Handler, bound string, loopback bool, token string, allowHosts ...string) http.Handler {
-	return guardLogins(next, bound, loopback, token, nil, allowHosts...)
+	return guardLogins(next, bound, loopback, token, nil, nil, allowHosts...)
 }
 
 // guardLogins is guard that also takes one-time login codes (?login=) and hands them out to a second zmina ui
-// that shows the handoff secret (POST /api/handoff), when logins is set.
-func guardLogins(next http.Handler, bound string, loopback bool, token string, logins *uiLogins,
+// that shows the handoff secret (POST /api/handoff), when logins is set; with signin, a browser not signed in gets
+// the sign-in page and signs in with a code sent to the owner.
+func guardLogins(next http.Handler, bound string, loopback bool, token string, logins *uiLogins, signin *uiSignin,
 	allowHosts ...string) http.Handler {
 	_, port, _ := net.SplitHostPort(bound)
 	hosts := map[string]bool{bound: true, "localhost:" + port: true, "127.0.0.1:" + port: true, "[::1]:" + port: true}
@@ -548,6 +555,26 @@ func guardLogins(next http.Handler, bound string, loopback bool, token string, l
 			}
 
 			if subtle.ConstantTimeCompare([]byte(given), []byte(token)) != 1 {
+				if signin != nil {
+					if serveSignin(w, r, signin, token, allowHosts) {
+						return
+					}
+					if r.Method == http.MethodGet && signinAsset(r.URL.Path) {
+						w.Header().Set("X-Content-Type-Options", "nosniff")
+						next.ServeHTTP(w, r)
+
+						return
+					}
+					if r.Method == http.MethodGet && (r.URL.Path == "/" || strings.HasSuffix(r.URL.Path, ".html")) {
+						signinPage(w)
+
+						return
+					}
+					http.Error(w, "sign in first", http.StatusUnauthorized)
+
+					return
+				}
+
 				w.Header().Set("Content-Type", "text/html; charset=utf-8")
 				w.Header().Set("Cache-Control", "no-store")
 				w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -571,8 +598,13 @@ func guardLogins(next http.Handler, bound string, loopback bool, token string, l
 
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
+		// Only Chat may be framed, and only by the cockpit itself (its talk panel); every other page by nobody.
+		ancestors := "'none'"
+		if r.URL.Path == "/chat.html" {
+			ancestors = "'self'"
+		}
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; "+
-			"img-src 'self' data:; frame-ancestors 'none'")
+			"img-src 'self' data:; frame-ancestors "+ancestors)
 		next.ServeHTTP(w, r)
 	})
 }
@@ -684,6 +716,14 @@ type milestone struct {
 	At   time.Time `json:"at"`
 }
 
+// uiDone is a task closed as done today, as the Done today list shows it.
+type uiDone struct {
+	ID    string    `json:"id"`
+	Title string    `json:"title"`
+	Role  string    `json:"role,omitempty"`
+	At    time.Time `json:"at"`
+}
+
 // uiCrewView is one crew's header and roles.
 type uiCrewView struct {
 	Key      string    `json:"key"`
@@ -694,9 +734,11 @@ type uiCrewView struct {
 	Roles    []uiRole  `json:"roles"`
 	// Waiting is how many todo items the crew has; DoneToday how many tasks it closed as done today; Error why it
 	// could not be read.
-	Waiting   int    `json:"waiting"`
-	DoneToday int    `json:"done_today"`
-	Error     string `json:"error,omitempty"`
+	Waiting   int `json:"waiting"`
+	DoneToday int `json:"done_today"`
+	// Done are the tasks it closed as done today, newest first: what the Done today readout counts and opens.
+	Done  []uiDone `json:"done,omitempty"`
+	Error string   `json:"error,omitempty"`
 	// Node is the mesh node the crew runs on (empty without a mesh); Remote a peer's crew, read over the mesh and
 	// shown read-only; Stale when that read is older than it should be; Dormant a crew stopped on purpose with
 	// nothing waiting on the owner, folded away on the page.
@@ -706,6 +748,13 @@ type uiCrewView struct {
 	Dormant bool   `json:"dormant,omitempty"`
 	// Silent is a crew not stopped whose ticker has not beaten for an hour: it stays on the page, marked.
 	Silent bool `json:"silent,omitempty"`
+	// Spare is the owner's standby crew (spare: true): no ticker by design, never red. Retired is a crew the owner
+	// retired (zmina retire), MovedTo the crew it went on as: it leaves the page.
+	Spare bool `json:"spare,omitempty"`
+	// Dispatcher is the crew's dispatcher role: where the page's Talk goes for the crew.
+	Dispatcher string `json:"dispatcher,omitempty"`
+	Retired    bool   `json:"retired,omitempty"`
+	MovedTo    string `json:"moved_to,omitempty"`
 }
 
 // Each list across crews carries the crew's key.
@@ -818,6 +867,7 @@ func (a *app) uiSnapshot() uiSnapshot {
 			}
 
 			cv.LastTick, cv.Stopped, cv.Stuck = s.State.LastTick, s.State.Stopped, s.Crew.StuckMinutes
+			cv.Spare, cv.Retired, cv.MovedTo, cv.Dispatcher = s.Crew.Spare, s.Crew.IsRetired(), s.Crew.MovedTo, s.Crew.Dispatcher
 
 			// The first crew to pin a project's tint has it.
 			for p, tint := range s.Crew.Tints() {
@@ -951,6 +1001,7 @@ func (a *app) readCrew(s *shift.Shift, key string, cv *uiCrewView, snap *uiSnaps
 	for _, t := range tasks {
 		if t.State == task.Done && !t.Updated.Before(today) {
 			cv.DoneToday++
+			cv.Done = append(cv.Done, uiDone{ID: t.ID, Title: t.Headline(), Role: t.Role, At: t.Updated})
 		}
 
 		if !t.State.Active() {

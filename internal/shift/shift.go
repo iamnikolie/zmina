@@ -221,6 +221,8 @@ type View struct {
 	Problem string `json:"problem,omitempty"`
 	// Prompt is true while an up role's screen shows a dialog or a question instead of its input line.
 	Prompt bool `json:"prompt,omitempty"`
+	// Dialog is the question on its screen and its numbered choices, when Prompt and the screen reads as one.
+	Dialog *Dialog `json:"dialog,omitempty"`
 	// Now is what the role last said it is doing: its screen's last status line (NowLine), NowAt since when it
 	// says so (when the ticker first read it; the time of this read when the line is newer than the last beat).
 	Now   string    `json:"now,omitempty"`
@@ -373,6 +375,9 @@ func (s *Shift) Views() []View {
 			}
 
 			if text, err := s.Tmux.Capture(name, nowLines); err == nil {
+				if v.Prompt && !s.isCodex(name) {
+					v.Dialog = ParseDialog(text)
+				}
 				if line := NowLine(text); line != "" {
 					v.Now = line
 					v.NowAt = rs.NowAt
@@ -461,6 +466,9 @@ func (s *Shift) bootText(r *crew.Role, tagged bool) string {
 	if r.Name != "" && r.Name == s.Crew.Dispatcher {
 		text = strings.TrimSpace(text + "\n\n" + RemoteRule)
 	}
+	if text != "" {
+		text = strings.TrimSpace(text + "\n\n" + AsksRule)
+	}
 	// A retired crew tells every role; a crew that stood still tells whoever reads its ledger first.
 	if n := s.Standing(); n != "" && (s.Crew.IsRetired() || r.Name == s.Crew.Dispatcher) {
 		text = strings.TrimSpace(text + "\n\n[zmina] " + n)
@@ -520,6 +528,15 @@ func (s *Shift) ackRule() string {
 }
 
 // MixedRuntimeRule gives both engines a transport they can use to reach every seat.
+// AsksRule is what zmina tells every role at boot about questions for the owner: they go on his list, and his answers
+// in chat are recorded there, so nothing he answered stays open and nothing he was asked is lost in a conversation.
+const AsksRule = "[zmina] Questions for the owner: one only he can answer (a decision, a check only he can do) goes on " +
+	"his list, not only into chat: zmina todo add \"<question>\" --title \"<few words>\" [--rec \"<your answer>\" " +
+	"--reason \"<why>\"] [--task T-n]; it prints A-n: name A-n when you ask in chat. When he answers it in chat, " +
+	"record it at once: zmina todo answer A-n \"<his words>\" (zmina todo yes A-n takes your recommendation, zmina todo " +
+	"done A-n closes a check). An answer he gives on his list or the cockpit reaches the dispatcher by itself. Never " +
+	"leave a question he answered open; zmina todo ls shows what is."
+
 const MixedRuntimeRule = "[zmina] This crew includes Codex seats. For inter-role messages use " +
 	"`zmina send <role> --when-idle <text>` with a role key from `zmina ls`; Claude SendMessage cannot reach " +
 	"Codex seats. Your role key is $ZMINA_ROLE; $ZMINA_CREW selects this crew."

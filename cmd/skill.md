@@ -50,6 +50,7 @@ day_start: "09:00"                       # when morning, tomorrow, thu or a date
 # prefix: ops-                           # default session names (default zm-); no '/': it reads as <node>/<crew>
 # retired: "2026-11-05"                  # zmina retire writes these two: this crew is no longer the live one
 # moved_to: box-ops/ops                  # ... and went on as this crew; alone it marks the crew retired too
+# spare: true                            # the owner's standby copy: no ticker by design; the cockpit never shows it red
 # projects:                              # the ui page's colour per task project (default: one of five, by name)
 #   site: {tint: p3}                     # p1 … p5: pin one when two projects collide
 roles:
@@ -526,7 +527,14 @@ uncached; uploaded HTML/SVG is never executed or embedded. Files are never execu
 
 `POST /api/chat/action` accepts the same destination plus `action`: `start` explicitly starts a down
 role with its configured settings; `stop` sends one Ctrl+C only when the observed role is actively
-working and has no draft/dialog. Chat does not answer native approval prompts: open **Terminal**.
+working and has no draft/dialog; `choose:<n>:<dialog id>` answers the question on its screen (a Claude Code dialog
+with numbered choices: the ❯ on a choice, its footer last) with choice n — only while the session's status is
+`waiting` and the dialog's id, a fingerprint of its question and every choice with its description, is still the one given, else refused —
+by moving the dialog's cursor there and pressing Enter; `dismiss:<message ID>` sets aside an owner message whose delivery stayed unconfirmed
+(its conversation changed before it showed there; the page's Dismiss): it is no longer listed as pending, in any
+browser, and its receipt stays so a retry with that ID is still recognised. A message queued, sent or failed is
+refused. Messages not yet seen in the conversation stand where they were sent, by time; one not from today shows its
+date. Chat does not answer native approval prompts: open **Terminal**.
 Reading Chat does not resume a Codex thread or attach another native app writer. Chat is not a tmux
 attachment and does not pin an idle role against the configured release policy.
 
@@ -583,7 +591,7 @@ no mesh enrollment. The UI's token and Host guard still apply; WebSocket upgrade
 exact same-origin browser. For Tailscale, bind the UI to its tailnet address with `--token` (or
 `ZMINA_UI_TOKEN`), or keep it on loopback behind a private reverse proxy that preserves Host/Origin and
 supports WebSocket upgrades. For the latter use `--allow-host <exact-hostname[:port]>` with the token to
-allow that proxy hostname through the loopback Host guard (repeat or comma-separate for multiple hosts). Open `?token=...` once to set the HttpOnly, SameSite Strict cookie. It lasts 90 days and renews on each authenticated HTML page load. Secure is set for native TLS or HTTPS forwarded by a loopback proxy on an explicitly allowed hostname. Missing authentication returns an uncached HTML sign-in hint.
+allow that proxy hostname through the loopback Host guard (repeat or comma-separate for multiple hosts). Open `?token=...` once to set the HttpOnly, SameSite Strict cookie. It lasts 90 days and renews on each authenticated HTML page load. Secure is set for native TLS or HTTPS forwarded by a loopback proxy on an explicitly allowed hostname. Missing authentication returns an uncached HTML sign-in hint. With `--code-command <shell command>` (or `$ZMINA_UI_CODE_COMMAND`; needs a token) a device that is not signed in gets a sign-in page instead: **Send code** runs the command with the message on its stdin (never in its argv; its output is dropped), so it reaches the owner through their own notifier — e.g. a Telegram bot's send command reading the text from stdin; the chat and the bot stay in that command, not in zmina. The code is six digits, single use, 5 minutes, ended by 5 wrong tries; one may be asked for a minute, 10 an hour (a failed send counts). A right code sets the same cookie as `?token=`. Every send, refusal and wrong try is logged to the server's stderr without the code. `?token=` keeps working.
 
 The mesh uses its existing SSH/command addresses, not a separate terminal port on each worker. If the destination
 has no direct address, a learned `Through` route opens authenticated live tunnels through intermediary nodes;
@@ -762,10 +770,14 @@ until the task changes again (`task set`): the turn is the dispatcher's.
 | `zmina todo ls [--full] [--json]` | what waits, in that order, one line each (its title when it has one); the parked list's count last. `--full`: the whole text. `--json`: `{items, later}`. |
 | `zmina todo yes <id>` | take a decision's recommendation. |
 | `zmina todo done <id>` | a check (or a decision) is dealt with. |
-| `zmina todo answer <id> <text...>` | answer an ask or a waiting task (`T-62`) in the owner's words. |
+| `zmina todo answer <id> <text...>` | answer an ask or a waiting task (`T-62`) in the owner's words. Run by a role (`$ZMINA_ROLE`), it records what the owner said in chat, and the dispatcher's note says so: `(the owner's answer in chat, recorded by <role>)`. |
 | `zmina todo park <id>` | put it on the parked list (an ask becomes `L-n`, "from A-3"); for a waiting task the dispatcher hears `T-62 · later`. |
 | `zmina todo done L-3` / `todo park L-3` | a parked item its alarm brought back (`later add --until`): done closes it (the dispatcher hears `L-3 · done`); park puts it back on the list, off the todo, quietly. |
 | `zmina todo ignore <id>` | set it aside for good: an ask closes with no parked entry; a waiting task only leaves the todo (until it changes), the task stays as it is. The dispatcher hears `A-3 · ignored`. |
+
+Every role hears at boot, from zmina itself (`shift.AsksRule`): a question only the owner can answer goes on his list
+with `zmina todo add` (and is named by its A-n when asked in chat); when he answers in chat, the role records it at once
+(`todo answer` / `yes` / `done`), so no question he answered stays open.
 
 Every answer — from these commands or the ui page — closes the ask (a waiting task keeps its state) and queues a
 note for the dispatcher like `zmina note`: `hand: A-3 · yes: <rec> — <text>`, `ui: T-62 · <words>`,
@@ -786,8 +798,27 @@ A machine without peers is a mesh of one. It opens the page in the browser.
   every peer: an older one answers `update zmina on this node`.
 - **One view**: «All» merges every node's crews; every item, a question too, is labelled `node/crew` once there is more
   than one node (a crew's key on a peer is `<node>/<crew>`; the label is dropped once the switch narrows to that node or
-  crew); the switch filters by node or by crew. A peer's items open in place read-only, `answer on <node>` where
-  the actions would be (answer on that node's cockpit or through its dispatcher).
+  crew); the switch filters by node or by crew. A peer's items are answered in place like this node's: the answer,
+  Done, Later, a reminder set or moved, goes to the item's own node as an owner-signed mesh write (`todo/act`,
+  `alarm/act`, through relays like a terminal; the owner signs the node it is for, and only that node does it), which
+  does it as its own page would — to that crew's dispatcher — and
+  says what it did. A node older than this one answers `update zmina on this node`, and the row says so.
+- **The switch** is nodes: «All», then each node with its health dot; a node with more than one crew reads «box-ops 3 crews
+  ▾» and opens a menu of its crews (spare and silent words, then its stopped line); a crew chosen shows as «/ acme ✕».
+  The newest event in the header is one clause cut at a word to 80 characters, whole in its tooltip; a click opens
+  History. A filter with nothing in your move says so and links back to All with what waits elsewhere.
+- **A question on a session's screen** (a dialog with numbered choices) stands first in your move: the row says the
+  question, and opened offers each choice as a button (`chat/action choose`, on the node the session runs on); choices
+  that ask for words (Type something, Chat about this) are left to Talk and its Terminal. `zmina ls --json` carries
+  it as `dialog: {question, options (n, label, detail), cursor, id}`.
+- **Talk**: every session card, and the holder line of an opened task, has «Talk»: the role's conversation (Chat) opens
+  in a panel beside the cockpit, which stays in view and keeps updating behind it; on a phone the panel is the whole
+  screen. Any role of any node: a peer's over the mesh as Chat reads it. «Open page» opens it as its own page; Esc
+  closes it. Only Chat may be framed, and only by the cockpit itself.
+- **Red means act now**: a live crew's ticker overdue, a peer node offline, a role down that holds an active task
+  (not one asleep). Nothing else is red. A `spare: true` crew shows the quiet word «spare» and is never red; a crew
+  retired into another (`zmina retire --moved-to`) leaves the page, the switch and every count; one retired with no
+  successor sits in the stopped line as «retired».
 - **Stopped crews**: a crew stopped on purpose (`zmina stop`) with nothing waiting on the owner leaves «All»: one
   muted line names them, a tap shows one. A crew whose ticker has been silent for an hour without a stop stays,
   its chip marked `silent 1h`; a stopped crew that still holds something waiting on the owner stays too.
@@ -853,7 +884,8 @@ together. An opened board card puts every button on one small line under the fie
 keep only their icon, the word in the tooltip. Amber marks only what waits on
 you; a project is a dot before the title. While a reply is typed the page holds still and catches up after.
 
-Rows carry no buttons: a tap (Enter, Space) opens the row in place, one at a time, Esc closes it — the title
+Rows carry no buttons: a tap opens the row in place (its «›» is the row's own button, named by its title, for the
+keyboard and assistive tech; the actions it opens sit beside it, never inside it), one at a time, Esc closes it — the title
 wraps, then the latest note, one faint line (who waits, the link named by its source; ids in the row's tooltip),
 and one action line: the reply field where the row takes words, one primary (the recommendation, Done, Bring back,
 Take it back; Send once words are typed), the rest muted (Later, No, Hide, Discard); from 860 px hovering a row
@@ -866,7 +898,9 @@ Todo answers never type into a role. The separate Terminals page attaches direct
 Bound to 127.0.0.1 by default and only answers requests that name it (`Host`), so another web page cannot read or
 write through the browser. Writes need the page's own header. A non-loopback `--addr` is refused unless
 `--token <secret>` (or `$ZMINA_UI_TOKEN`) is set: the page then needs `?token=` once on a new device (it is kept in a 90-day HttpOnly, SameSite Strict cookie, renewed on authenticated page loads); on this machine `zmina ui` signs the browser in with a one-time login code, and the address it prints carries no token.
-Live over server-sent events; the files are inside the binary.
+Live over server-sent events; the files are inside the binary. Each update is patched in: what did not change stays
+the very element it was, so its focus, its scroll and an agent's reference to it hold; an element with a handler is
+always the one just drawn, so it acts on what it shows (`testdata/patch.html` checks it in a browser).
 
 ## Later — the parked list
 
@@ -1067,7 +1101,11 @@ alone for the beat — never taken as ended; a role being put down is left alone
    `<namespace>/projects/*/<session id>.jsonl`), idle for 5 min, its input line on screen and empty
    (a half-typed line would swallow the command; a dialog has no input line), nothing typed into it
    this beat and nothing waiting for it (for the dispatcher: no signals or notes), gets `/compact` —
-   the conversation goes on, summarised. With `context_action: clear` it gets `/clear` once idle
+   the conversation goes on, summarised. A compaction also reaches a role whose turn is over while a background shell
+   or agent it started keeps its status off idle (a dispatcher with a watcher running would otherwise never be
+   compacted); a clear does not. Idle counts from the later of the status's change and the turn's end (a role off
+   idle whose turn end is unknown is left alone). Over its limit by more than a quarter, it waits 2 min idle instead
+   of 5: a dispatcher that gets a line every few minutes is seldom idle for five. With `context_action: clear` it gets `/clear` once idle
    `idle_minutes` and with no terminal attached, and then its boot line on the
    next beat, before any signal: a fresh conversation (`resume: always` then resumes that one). A
    role holding an active task is compacted, never cleared. At most once per 30 min per role;

@@ -95,10 +95,10 @@ func TestTrimClearsAndBootsAgainUnlessATaskIsHeld(t *testing.T) {
 	did := f.s.Tick()
 	assert.Equal(t, []string{"/compact", "/clear"}, f.tm.typed["dev"])
 	assert.Contains(t, did, "dev: /clear, context 120k over 100k")
-	assert.Equal(t, []string{"read dev and boot"}, f.s.State.Role("dev").Inbox, "booted again on the next beat")
+	assert.Equal(t, []string{"read dev and boot\n\n" + AsksRule}, f.s.State.Role("dev").Inbox, "booted again on the next beat")
 
 	f.s.Tick()
-	assert.Equal(t, []string{"/compact", "/clear", "read dev and boot"}, f.tm.typed["dev"])
+	assert.Equal(t, []string{"/compact", "/clear", "read dev and boot\n\n" + AsksRule}, f.tm.typed["dev"])
 }
 
 func TestTrimNeverFeedsItself(t *testing.T) {
@@ -110,7 +110,7 @@ func TestTrimNeverFeedsItself(t *testing.T) {
 	f.status("dev", "idle", f.now.Add(-time.Hour))
 	f.s.Tick()
 	f.s.Tick()
-	require.Equal(t, []string{"/clear", "read dev and boot"}, f.tm.typed["dev"])
+	require.Equal(t, []string{"/clear", "read dev and boot\n\n" + AsksRule}, f.tm.typed["dev"])
 
 	// The clear started another conversation, and its boot alone fills more than context_max.
 	sess := f.rg.byPID[f.tm.up["dev"]]
@@ -296,4 +296,70 @@ func TestTrimRemembersItsCompaction(t *testing.T) {
 	f.s.Tick()
 	assert.Equal(t, 1, compactCount(f.tm.typed["dispatcher"]), "not trimmed again in this conversation")
 	assert.False(t, f.ev.has("dispatcher", "trim-unseen"))
+}
+
+// A dispatcher whose watcher keeps a background shell running is between turns all the same: compacted, never cleared.
+func TestTrimCompactsARoleWithABackgroundShell(t *testing.T) {
+	f := fixtureWith(t, trimCrew)
+	f.s.Tick()
+
+	*f.now = f.now.Add(3 * time.Minute)
+	f.rg.context["sid-dispatcher"] = 170_000
+	f.rg.context["sid-dev"] = 170_000
+	f.rg.ended = map[string]bool{"sid-dispatcher": true, "sid-dev": true}
+	f.rg.endedAt["sid-dispatcher"] = f.now.Add(-10 * time.Minute)
+	f.rg.endedAt["sid-dev"] = f.now.Add(-time.Hour)
+
+	f.status("dispatcher", "shell", f.now.Add(-10*time.Minute))
+	f.status("dev", "shell", f.now.Add(-time.Hour))
+	f.s.Tick()
+
+	assert.Equal(t, []string{"/compact"}, f.tm.typed["dispatcher"])
+	assert.Empty(t, f.tm.typed["dev"], "a clear waits for a plain idle")
+}
+
+// Far over its limit, a role is compacted after a shorter idle: a dispatcher that gets a line every few minutes is
+// seldom idle for five.
+func TestTrimFarOverWaitsLess(t *testing.T) {
+	f := fixtureWith(t, trimCrew)
+	f.s.Tick()
+
+	*f.now = f.now.Add(3 * time.Minute)
+	f.rg.context["sid-dispatcher"] = 170_000 // within a quarter over 150k
+	f.status("dispatcher", "idle", f.now.Add(-3*time.Minute))
+	f.s.Tick()
+	assert.Empty(t, f.tm.typed["dispatcher"])
+
+	f.rg.context["sid-dispatcher"] = 213_000
+	f.s.Tick()
+	assert.Equal(t, []string{"/compact"}, f.tm.typed["dispatcher"])
+}
+
+// Off idle, a background shell's status is older than the turn: the wait runs from when the turn ended, and a role whose
+// turn end is unknown is left alone.
+func TestTrimWaitsFromTheTurnEnd(t *testing.T) {
+	for _, c := range []struct {
+		ended   time.Duration // ago; 0: unknown
+		context int
+		typed   bool
+	}{
+		{time.Second, 213_000, false},
+		{119 * time.Second, 213_000, false},
+		{120 * time.Second, 213_000, true},
+		{4 * time.Minute, 170_000, false},
+		{5 * time.Minute, 170_000, true},
+		{0, 213_000, false},
+	} {
+		f := fixtureWith(t, trimCrew)
+		f.s.Tick()
+		*f.now = f.now.Add(10 * time.Minute)
+		f.rg.context["sid-dispatcher"] = c.context
+		f.rg.ended = map[string]bool{"sid-dispatcher": true}
+		if c.ended > 0 {
+			f.rg.endedAt["sid-dispatcher"] = f.now.Add(-c.ended)
+		}
+		f.status("dispatcher", "shell", f.now.Add(-10*time.Minute))
+		f.s.Tick()
+		assert.Equal(t, c.typed, len(f.tm.typed["dispatcher"]) == 1, "ended %s ago, %d", c.ended, c.context)
+	}
 }

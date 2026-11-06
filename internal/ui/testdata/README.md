@@ -25,3 +25,11 @@ persistence (including attachment and draft Blob bytes), concurrent same-ID writ
 following acknowledgement, bounded queue refusal, and bounded history retention.
 No crew or network message delivery is involved. Do not serve this fixture on a
 production chat origin: it exercises that origin's IndexedDB queue capacity.
+
+# Cockpit patching test
+
+With the same static server, open `http://127.0.0.1:7530/testdata/patch.html`;
+`window.patchResults.passed` must be true. It runs `static/patch.js` in a real DOM: a
+same-title check left after the other goes opens its own item, a group's control acts on the
+group it is drawn for after groups trade places, an unchanged row stays the same element, a
+kept row's panel buttons carry the current handlers, and focus follows a swapped button.

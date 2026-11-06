@@ -43,6 +43,8 @@ type app struct {
 	cockpitPeers *uiPeerCache
 	// uiLogins hands out one-time login codes for zmina ui (nil: none).
 	uiLogins *uiLogins
+	// uiSignin sends one-time sign-in codes through the owner's notifier for zmina ui (nil: none).
+	uiSignin *uiSignin
 	// spawn starts a detached zmina with these arguments (nil: spawnDetached; tests set a fake).
 	spawn func(args []string) error
 	// parent reads a process's parent pid (nil: procParent; tests set a fake).

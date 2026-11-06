@@ -11,14 +11,16 @@ const el = (tag, cls, text) => {
   return e;
 };
 
+// ---- patching: patch.js (patch, setText, focusMark, refocus), loaded before this file.
+
 // ---- words: English only; task notes and todo text are shown as written
 
 // A language picked in this browser before the page went English-only is forgotten.
 localStorage.removeItem("zmina.lang");
 
 const W = {
-  hold: "You hold", ask: "Answer", go: "Going", later: "Parked", others: "Waiting on others", all: "All",
-  sayHold: (n) => "You hold " + n, sayAsk: (n) => "answer " + n, sayGo: (n) => "going " + n, sayLater: (n) => "parked " + n,
+  hold: "You hold", ask: "Answer", go: "In progress", later: "Parked", others: "Waiting on others", all: "All",
+  sayHold: (n) => "You hold " + n, sayAsk: (n) => "answer " + n, sayGo: (n) => "in progress " + n, sayLater: (n) => "parked " + n,
   noHold: "you hold nobody up", noAsk: "no questions", noGo: "nothing goes right now",
   yes: "Yes", no: "No", noText: "no", done: "Done", answer: "Answer…", park: "Later", ignore: "Hide", send: "Send", cancel: "Cancel",
   sentTo: "Sent to the dispatcher", parkedTo: "Parked", ignored: "Hidden", broughtBack: "Brought back", dropped: "Discarded",
@@ -26,13 +28,15 @@ const W = {
   notSent: "Not sent: ", rec: "Recommended: ", more: (n) => n + " more", less: "show less", hands: "By hand:",
   waits: (r) => "waits on " + r, from: (r) => "from " + r, doneText: "done", waitOn: (n, who) => n + " waiting on " + who,
   setAside: (n) => n + " set aside by you",
-  doneToday: "done today: ", history: "history", historyH: "What happened",
+  doneToday: "done today: ", history: "history", historyH: "What happened", andHistory: "and history",
+  allN: (n) => "All " + n, olderWeek: "Older than a week", thisWeek: "This week", comesBack: "Comes back", doneTab: "Done today", historyTab: "History",
   shift: "shift", kb: "tasks", kbGo: "in progress", kbYou: "waiting on you", kbOthers: "waiting on others", kbLater: "parked", kbNone: "empty", stack: "stack", spread: "spread", moreN: (n) => "+" + n + " more", stackIdle: "stack idle", idleN: (n) => "+" + n + " idle",
   fullView: "open on the whole screen", close: "close", fvNow: "Now", fvAsked: "Asked", fvResult: "Result", fvNoResult: "No result recorded.", fvReported: "Worker report", fvLog: "Timeline", fvMove: "Your move",
   fvDetails: "Details", fvScreen: "Screen", fvHolder: "held by", fvWaits: "waits on", fvProject: "project", fvCrew: "crew",
   fvCreated: "created", fvUpdated: "changed", fvRepo: "repo", fvBranch: "branch", fvWorktree: "worktree", fvLink: "link",
   fvDown: "not up", fvNoScreen: "the session is not up", fvLoading: "…", fvNoLog: "nothing in the log yet", ctxOf: (n, max) => n + " of " + max + " before compact", ctxPast: " · compacts when idle", move: "your move", roDone: "done today", oldest: "oldest · ", nobody: "nobody",
-  withRec: (n) => n + " with an answer ready", upOf: (u, t) => u + " up of " + t, noDue: "no due date",
+  withRec: (n) => n + " with an answer ready", upOf: (u, t) => u + " up of " + t, rolesWorking: (n) => n + (n === 1 ? " role" : " roles") + " working",
+  bandCounts: (w, u) => w + " working · " + u + " up", parkedLine: (n, old, back) => "Parked " + n + (old ? " · oldest " + old : "") + (back ? " · " + back + " come back" : ""), noDue: "no due date",
   people: (n) => n + " " + (n === 1 ? "person" : "people"),
   roSpent: "spent today", spentWeek: (v) => "7 days " + v, spentNone: "API-equivalent",
   spentRole: (v) => v + " today", spentTip: "API-equivalent dollars: what these tokens would cost at API rates; the crews run on a subscription", fvCost: "cost",
@@ -44,11 +48,19 @@ const W = {
   min: "min", h: "h", d: "d", lessMin: "<1 min", busyLive: "working", notLive: "not working",
   alarms: "Alarms", alSet: "Set", alNew: "Remind me", alWhat: "What to remind you of", alWhen: "tomorrow 09:00, +2h", alWhenLabel: "When: tomorrow 09:00, +2h, thu, a date",
   alMove: "Move", alOff: "Off", alMoved: "Moved", alOffDone: "Taken off", alSetDone: "Set", alNone: "no alarms set",
-  alFor: (f) => (f === "you" ? "for you" : "for " + f), alWakes: (r) => r + " wakes", alBack: "back: ", alIn: (d) => "in " + d,
+  alFor: (f) => (f === "you" ? "" : "for " + f), alWakes: (r) => r + " wakes", alBack: "back: ", alIn: (d) => "in " + d,
   alAsWords: (w) => "set as «" + w + "»", alDue: "due now", backTag: "back",
   seen: (a) => "seen " + a, staleN: (a) => "stale" + (a ? " " + a : ""), stale: "stale", offline: "offline", stoppedList: "stopped:",
-  silent: (a) => "silent" + (a ? " " + a : ""),
+  silent: (a) => "ticker stopped" + (a ? " " + a : ""),
+  spare: "spare", retiredW: "retired", choicesN: (n) => n + " choices", chose: (r, l) => r + ": " + l, notUpN: (n) => "+" + n + " not up", fixTicker: (c) => "zmina" + (c === "default" ? "" : " --config " + c.split("/").pop()) + " ticker status",
+  fixDown: (r) => "start it, or hand its task on: zmina up " + r, onScreenN: (n) => n + " on screen", crewsN: (n) => n + " crews", nothingOn: (w) => "Nothing waits on you on " + w + ".",
+  elsewhere: (h, q) => "Elsewhere: " + h + " hold · " + q + " answer → All", downHolds: (r, ts) => r + ": down, holds " + ts,
   answerOn: (n) => "answer on " + n, detailsOn: (n) => "details on " + n,
+  talk: "Talk", talkTo: (r) => "Talk to " + r,
+  byHand: "by hand", down: "Down", tabMove: "Your move", tabGoing: "Going", tabCrews: "Crews", allCrews: "All crews",
+  roDown: "down", roHold: "hold", roAnswer: "answer", roGoing: "going", overMesh: " · over the mesh", upW: "up",
+  nDown: (n) => n + " down", roleDown: (r) => r + " down", nWorking: (n) => n + " working", tickerStopped: "ticker stopped",
+  stoppedW: "stopped", doneTodayN: "Done today", parkedN: (n, old) => n + (old ? " · oldest " + old : ""),
   ev: {
     alarm: "alarm: ", sleep: "asleep ",
     new: "started: ", waitingOn: "waits on you: ", waitingWho: (w) => "waits on " + w + ": ", done: "done", dropped: "dropped",
@@ -102,9 +114,11 @@ const remote = (crew) => !!crewOf(crew)?.remote;
 const nodeOf = (crew) => crewOf(crew)?.node || crew.split("/")[0];
 // crewLabel names a crew on the page: its name; with more than one node, node/crew, the node alone for «default».
 function crewLabel(crew) {
-  if (!multiNode()) return crewName(crew);
+  const c = crewOf(crew);
+  const moved = c && c.retired && c.moved_to ? " → " + c.moved_to : "";
+  if (!multiNode()) return crewName(crew) + moved;
   const full = remote(crew) || !snap.self ? crew : snap.self + "/" + crew;
-  return full.replace(/\/default$/, "");
+  return full.replace(/\/default$/, "") + moved;
 }
 // shownLabel is the label a row carries: «always» also for the node's default crew when there is one node. With more
 // than one node it drops what the crew switch already says: a crew drops all of it, a node drops the node.
@@ -136,8 +150,18 @@ const key = (crew, id) => crew + "/" + id;
 const otherKey = (w) => "others:" + key(w.crew, w.id);
 // A crew stopped on purpose with nothing waiting on the owner (dormant) is folded away from «all» (unless every crew
 // is); its name in the crew switch, or its node's chip, brings it back.
-const folded = (c) => !!c.dormant && snap.crews.some((x) => !x.dormant);
+const folded = (c) => (!!c.dormant || (c.retired && !c.moved_to)) && snap.crews.some((x) => !x.dormant && !x.retired);
+// away is a crew the owner retired into another (D-07 s4): gone from the page, the switch and every count.
+const away = (crew) => { const c = crewOf(crew); return !!(c && c.retired && c.moved_to); };
+// successor is the page's key of the crew a retired one went on as: this node's crews go by their bare name.
+const successor = (c) => (snap.self && c.moved_to.startsWith(snap.self + "/") ? c.moved_to.slice(snap.self.length + 1) : c.moved_to);
 const shows = (crew) => {
+  // A retired crew leaves the switch, the sessions and the counts of crews, but what it still holds stays in sight:
+  // under All and under the crew it went on as, labelled «crew → successor», answered on its own crew (D-07 s4).
+  if (away(crew)) {
+    const s = successor(crewOf(crew));
+    return filter === "all" || filter === s || (filter.startsWith("node:") && nodeOf(s) === filter.slice(5));
+  }
   if (filter === "all") { const c = crewOf(crew); return !c || !folded(c); }
   if (filter.startsWith("node:")) return nodeOf(crew) === filter.slice(5);
   return filter === crew;
@@ -170,6 +194,7 @@ function render() {
   if (!snap) return;
   // A reply being typed keeps its focus and caret through a re-render.
   const typing = document.activeElement?.classList.contains("field") ? document.activeElement.selectionStart : -1;
+  const focused = focusMark();
   // The saved choice holds while it matches something: a peer's crews may come after the first snapshot.
   const saved = localStorage.getItem("zmina.crew") || "all";
   filter = validFilter(saved) ? saved : "all";
@@ -199,12 +224,15 @@ function render() {
   renderQuiet();
   renderFoot();
   renderCockpit(hold, asks, others, parked);
+  renderPhone(hold, asks, going, parked);
   for (const k of seenNow) seen.add(k);
   seenNow.clear();
   if (!$("history").hidden) renderFeed();
   renderFull();
+  renderSide();
   applyHover();
   indent();
+  refocus(focused);
   if (typing >= 0) {
     // Both layouts draw the open row; the one on screen takes the caret.
     const f = full ? $("full").querySelector(".field")
@@ -217,8 +245,12 @@ function render() {
 }
 
 function renderSay(hold, asks, going, parked) {
-  const say = $("say");
-  say.replaceChildren();
+  // Drawn aside and patched in: the line is a live region, read out again only when it says something new.
+  const say = el("div");
+  try { sayParts(say, hold, asks, going, parked); } finally { patch($("say"), [...say.childNodes]); }
+}
+
+function sayParts(say, hold, asks, going, parked) {
   if (!snap.crews.length) {
     say.append(el("span", "x", W.noCrew));
     return;
@@ -228,21 +260,18 @@ function renderSay(hold, asks, going, parked) {
     [W.sayGo(going.length), "b", "go"], [W.sayLater(parked.length), "m", "later"]];
   parts.forEach(([text, cls, target], i) => {
     if (i) say.append(" · ");
+    // The line is a live region: its parts carry no handler of their own (one listener on the line below), so an
+    // update that changes nothing in it changes nothing in the page.
     const s = el("span", "k " + cls, text);
-    s.onclick = () => $(target).scrollIntoView({ behavior: "smooth", block: "start" });
+    s.dataset.to = target;
     say.append(s);
   });
-  // A folded crew is told in the crew switch, not here; a peer read long ago says «stale», not «ticker stopped».
-  const dead = [];
-  for (const c of snap.crews.filter((c) => !folded(c) && !c.stale)) {
-    if (!zero(c.stopped)) dead.push(W.shiftStopped(crewLabel(c.key)));
-    else if (tickerDead(c)) dead.push(W.stopped(crewLabel(c.key), zero(c.last_tick) ? "" : ago(c.last_tick)));
-  }
+  const dead = redList().map((d) => d.text);
   for (const d of dead) say.append(" · ", el("span", "k x", d));
 
   $("clock").classList.toggle("dead", dead.length > 0);
   $("mark").classList.toggle("stopped", dead.length > 0);
-  $("clock").lastElementChild.textContent = hhmm(nowMs());
+  setText($("clock").lastElementChild, hhmm(nowMs()));
   document.title = ["zmina", ...dead, hold.length ? W.sayHold(hold.length) : "", asks.length ? W.sayAsk(asks.length) : ""]
     .filter(Boolean).join(" · ");
   favicon(dead.length || long ? "#ff7b72" : hold.length + asks.length ? "#f0b45a" : "");
@@ -251,6 +280,26 @@ function renderSay(hold, asks, going, parked) {
   const newest = snap.crews.map((c) => c.last_tick || "").sort().pop() || "";
   if (newest && lastTick && newest !== lastTick) beat();
   lastTick = newest;
+}
+
+// redList is what is red, act now (D-07 s5): a live crew's ticker overdue, a role down that holds an active task (a peer
+// node offline is red on its chip). A stopped, retired or spare crew is never red; a peer read long ago says «stale».
+// Each names what to do: the crew's dispatcher to open, or the role.
+function redList(all) {
+  const out = [];
+  for (const c of snap.crews.filter((c) => !folded(c) && !c.stale && !c.retired && !c.spare && (all || shows(c.key)))) {
+    if (!zero(c.stopped)) continue;
+    if (tickerDead(c)) {
+      out.push({ text: W.stopped(crewLabel(c.key) || c.name, zero(c.last_tick) ? "" : ago(c.last_tick)), crew: c.key,
+        role: c.dispatcher || "dispatcher", fix: W.fixTicker(c.key), kind: "ticker" });
+    }
+    for (const r of c.roles || []) {
+      if (r.state !== "up" && (r.tasks || []).length && zero(r.asleep || "")) {
+        out.push({ text: W.downHolds(who(c.key, r.role) || r.role, r.tasks.join(", ")), crew: c.key, role: r.role, fix: W.fixDown(r.role), kind: "down" });
+      }
+    }
+  }
+  return out;
 }
 
 function beat() {
@@ -268,9 +317,11 @@ function favicon(color) {
 
 // crewChip is one choice of the crew switch: «all», a node (node:name) or a crew; note is a word after the name.
 function crewChip(k, label, cls, note) {
-  const b = button([filter === k ? "on" : "", cls].filter(Boolean).join(" "), label, () => { filter = k; localStorage.setItem("zmina.crew", k); render(); });
+  const b = button([filter === k ? "on" : "", cls].filter(Boolean).join(" "), label, () => { filter = k; menuNode = ""; localStorage.setItem("zmina.crew", k); render(); });
   b.setAttribute("aria-pressed", filter === k ? "true" : "false");
-  if (note) b.append(el("span", "ns bad", note));
+  const c = crewOf(k);
+  if (c && c.spare) b.append(el("span", "ns spare", W.spare));
+  else if (note) b.append(el("span", "ns bad", note));
   return b;
 }
 
@@ -297,32 +348,76 @@ function renderChips() {
   if (!multi()) return;
   nav.classList.toggle("mesh", multiNode());
   const items = [crewChip("all", W.all)];
+  const menu = $("chipmenu");
   if (multiNode()) {
-    // One group per node: the node, then its crews that are not folded away.
+    // D-07 h3: the switch is nodes. A node with more than one crew reads «box-ops 3 crews ▾» and opens a menu of its crews
+    // (spare and silent words, then its stopped line); a crew chosen shows as «box-ops / acme ✕».
     for (const n of snap.nodes) {
       const g = el("span", "ng");
-      g.append(nodeChip(n), ...(n.crews || []).map(crewOf).filter((c) => c && !folded(c)).map((c) => crewChip(c.key, c.key.split("/").pop(), "", silent(c))));
+      const crews = (n.crews || []).map(crewOf).filter((c) => c && !away(c.key));
+      g.append(nodeChip(n));
+      const chosen = crewOf(filter);
+      if (chosen && chosen.node === n.name && crews.length > 1) {
+        g.append(crewChip("node:" + n.name, "/ " + chosen.key.split("/").pop() + " ✕", "on"));
+      } else if (crews.length > 1) {
+        const m = button("nm", W.crewsN(crews.length) + " ▾", () => { menuNode = menuNode === n.name ? "" : n.name; render(); });
+        m.dataset.node = n.name;
+        m.setAttribute("aria-expanded", menuNode === n.name ? "true" : "false");
+        m.setAttribute("aria-haspopup", "menu");
+        g.append(m);
+      }
       items.push(g);
     }
-  } else items.push(...snap.crews.filter((c) => !folded(c)).map((c) => crewChip(c.key, c.name, "", silent(c))));
-  // The folded crews: one muted line, each name brings its crew back.
-  const off = snap.crews.filter(folded);
+  } else items.push(...snap.crews.filter((c) => !folded(c) && !away(c.key)).map((c) => crewChip(c.key, c.name, "", silent(c))));
+  // The folded crews: one muted line, each name brings its crew back (with nodes, in each node's menu).
+  const off = multiNode() ? [] : snap.crews.filter(folded);
   if (off.length) {
     const g = el("span", "ng off");
     g.append(el("span", "", W.stoppedList));
     for (const c of off) {
       const age = ago(zero(c.stopped) ? c.last_tick : c.stopped);
-      g.append(crewChip(c.key, crewLabel(c.key) + (age ? " " + age : "")));
+      g.append(crewChip(c.key, crewLabel(c.key) + (c.retired ? " " + W.retiredW : age ? " " + age : "")));
     }
     items.push(g);
   }
-  nav.replaceChildren(...items);
+  patch(nav, [...items]);
+  renderChipMenu(menu);
   // The edge fades only when the chips scroll.
   nav.classList.toggle("over", nav.scrollWidth > nav.clientWidth + 1);
 }
 
+let menuNode = "";
+
+// renderChipMenu draws the open node's crews under its «N crews ▾».
+function renderChipMenu(menu) {
+  const n = (snap.nodes || []).find((x) => x.name === menuNode);
+  const opener = n && document.querySelector(`.chips .nm[data-node="${CSS.escape(n.name)}"]`);
+  if (!n || !opener) { menu.hidden = true; return; }
+  const crews = (n.crews || []).map(crewOf).filter((c) => c && !away(c.key));
+  const items = crews.filter((c) => !folded(c)).map((c) => crewChip(c.key, c.key.split("/").pop(), "", silent(c)));
+  const off = crews.filter(folded);
+  if (off.length) {
+    const g = el("div", "off");
+    g.append(el("span", "", W.stoppedList));
+    for (const c of off) {
+      const age = ago(zero(c.stopped) ? c.last_tick : c.stopped);
+      g.append(crewChip(c.key, c.key.split("/").pop() + (c.retired ? " " + W.retiredW : age ? " " + age : "")));
+    }
+    items.push(g);
+  }
+  patch(menu, items);
+  const r = opener.getBoundingClientRect();
+  menu.style.top = r.bottom + 6 + "px";
+  menu.style.left = Math.max(8, Math.min(r.left, innerWidth - 260)) + "px";
+  menu.hidden = false;
+}
+
+document.addEventListener("click", (e) => {
+  if (menuNode && !e.target.closest(".chipmenu, .chips .nm")) { menuNode = ""; render(); }
+});
+
 function heading(id, label, n, cls) {
-  $(id).replaceChildren(label + " ", el("b", cls || "", String(n)));
+  patch($(id), [label + " ", el("b", cls || "", String(n))]);
 }
 
 // fresh marks a row that came after the first render, so it enters from the top.
@@ -356,25 +451,22 @@ function toggleRow(k) {
   render();
 }
 
-// rowShell is the focusable row: its words, its age, an optional chip, the «›»; hov the in-place actions (≥ 860),
-// panel what opens under it.
+// rowShell is a row: its words, its age, an optional chip, the «›»; hov the in-place actions (≥ 860), panel what
+// opens under it. A click anywhere on it opens it; the «›» is the row's own button, named by its title, so the
+// keyboard and assistive tech reach it and the actions beside it — never inside a button, where they would be lost.
 function rowShell(k, cls, words, age, chip, hov, panel) {
   const row = fresh(el("div", "row" + (cls ? " " + cls : "")), k);
   row.dataset.k = k;
-  row.tabIndex = 0;
-  row.setAttribute("role", "button");
   const isOpen = openRow === k;
-  row.setAttribute("aria-expanded", isOpen ? "true" : "false");
   row.classList.toggle("open", isOpen);
   row.addEventListener("click", (e) => {
     if (e.target.closest("button, a, input, textarea")) return;
     toggleRow(k);
   });
-  row.addEventListener("keydown", (e) => {
-    if (e.target !== row) return;
-    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleRow(k); }
-  });
-  row.append(words, age || el("span"), chip || el("span"), el("span", "chev", "›"));
+  const toggle = button("chev", "›", () => toggleRow(k));
+  toggle.setAttribute("aria-expanded", isOpen ? "true" : "false");
+  toggle.setAttribute("aria-label", (words.querySelector(".tt") || words).textContent.trim().slice(0, 160));
+  row.append(words, age || el("span"), chip || el("span"), toggle);
   if (hov && hov.childNodes.length) {
     hov.className = "hov";
     row.append(hov);
@@ -388,7 +480,6 @@ function rowShell(k, cls, words, age, chip, hov, panel) {
 
 // act sends the action after a 5 s undo; k is the row it hides, the item's own key unless that row has another.
 function act(it, action, text, word, k = key(it.crew, it.id)) {
-  if (remote(it.crew)) { toast(W.answerOn(nodeOf(it.crew))); return; } // a peer's crew is read-only here
   openRow = "";
   full = null;
   draft = { k: "", text: "" };
@@ -505,10 +596,6 @@ function panel(o) {
     }
     p.append(m);
   }
-  if (o.crew && remote(o.crew)) {
-    p.append(el("p", "onpeer", W.answerOn(nodeOf(o.crew))));
-    return p;
-  }
   // The field, then the buttons as one group: when the line is too narrow the group moves under the field whole
   // and the field takes the width (f2). In a column narrower still, the muted ones move under the primary together;
   // a button never wraps alone.
@@ -571,7 +658,7 @@ function itemPanel(it, holds) {
   else if (it.kind !== "check") muted.push([W.no, () => act(it, "answer", W.noText, W.sentTo), "x"]);
   return panel({
     body: it.id.startsWith("T-") ? taskBody(it.text, it.title, it.note)
-      : [says(it.text, it.title || it.text) ? it.text : "", rec ? it.reason : it.note, rec && remote(it.crew) ? W.rec + it.rec : ""],
+      : [says(it.text, it.title || it.text) ? it.text : "", rec ? it.reason : it.note],
     meta: [holds ? W.waits(who(it.crew, it.blocks || it.role) || "—") : it.role && W.from(who(it.crew, it.role))], url: it.url,
     reply: it, primary, muted, crew: it.crew,
   });
@@ -586,6 +673,8 @@ function backPanel(it) {
 
 // ids is what the row's title attribute carries: the ids leave the screen.
 const ids = (...xs) => [...new Set(xs.filter(Boolean))].join(" · ");
+// idOf is an id as it reads where its crew is not in the same row (D-07 l1): «acme L-5» once more than one crew shows.
+const idOf = (crew, id) => (multi() && filter === "all" ? (crew.split("/").pop() + " ") : "") + id;
 
 function itemWords(it, holds) {
   const words = el("div", "words");
@@ -607,15 +696,15 @@ function ageOf(it) {
 
 // chip is the recommended answer in its own words; a tap takes it (b2).
 function chip(it) {
-  if (!(it.kind === "decision" && it.rec) || remote(it.crew)) return null; // a peer's recommendation is told in the opened row
+  if (!(it.kind === "decision" && it.rec)) return null;
   const c = button("chip", it.rec.length > 28 ? [...it.rec].slice(0, 27).join("") + "…" : it.rec, () => act(it, "yes", "", W.sentTo), W.rec + it.rec);
   c.setAttribute("aria-label", W.yes + ": " + it.rec);
   return c;
 }
 
-// ownHov is the in-place actions of a row; a peer's crew has none.
+// ownHov is the in-place actions of a row. A peer's crew has them too: the answer goes to that node, signed with the
+// owner's key, and is done there (POST /api/todo routes it).
 function ownHov(crew, hov) {
-  if (remote(crew)) hov.replaceChildren();
   return hov;
 }
 
@@ -628,18 +717,18 @@ function renderHold(hold) {
     const hov = el("div");
     hov.append(button("q m", W.park, () => act(it, "park", "", W.parkedTo)), button("q m", W.ignore, () => act(it, "ignore", "", W.ignored)));
     const row = rowShell(k, stl(it.crew), itemWords(it, true), ageOf(it), chip(it), ownHov(it.crew, hov), itemPanel(it, true));
-    row.title = ids(it.id, it.task);
+    row.title = ids(idOf(it.crew, it.id), it.task && idOf(it.crew, it.task));
     if (it.task) row.dataset.w = key(it.crew, it.task);
     return tint(row, it.project);
   });
   $("hold").classList.toggle("empty", !rows.length);
   if (!rows.length) rows.push(el("p", "none", W.noHold));
-  $("hold-rows").replaceChildren(...rows);
+  patch($("hold-rows"), [...rows]);
 }
 
 // ---- L2 · answer (b2): one chip with the recommendation; open: the field, «Later», «No»
 
-function askRow(it) {
+function askRow(it, hand) {
   const k = key(it.crew, it.id);
   const hov = el("div");
   if (it.kind === "later") hov.append(button("q", W.back, () => act(it, "back", "", W.broughtBack)));
@@ -647,8 +736,10 @@ function askRow(it) {
   if (it.kind === "check") hov.append(button("q", W.done, () => act(it, "done", "", W.sentTo)));
   hov.append(button("q", W.park, () => act(it, "park", "", W.parkedTo)));
   if (it.kind !== "check") hov.append(button("q", W.no, () => act(it, "answer", W.noText, W.sentTo)));
-  const row = rowShell(k, stl(it.crew), itemWords(it, false), ageOf(it), chip(it), ownHov(it.crew, hov), itemPanel(it, false));
-  row.title = ids(it.id, it.task);
+  const words = itemWords(it, false);
+  if (hand) words.append(el("span", "cl", W.byHand));
+  const row = rowShell(k, stl(it.crew), words, ageOf(it), chip(it), ownHov(it.crew, hov), itemPanel(it, false));
+  row.title = ids(idOf(it.crew, it.id), it.task && idOf(it.crew, it.task));
   if (it.task) row.dataset.w = key(it.crew, it.task);
   return tint(row, it.project);
 }
@@ -660,32 +751,37 @@ function renderAsks(asks) {
   const checks = live.filter((it) => it.kind === "check");
   const cap = 6;
   const shown = showAllAsks || decisions.length <= cap + 1 ? decisions : decisions.slice(0, cap);
-  const rows = shown.map(askRow);
+  const rows = shown.map((it) => askRow(it));
   if (decisions.length > cap + 1) {
     rows.push(button("morerow", showAllAsks ? W.less : W.more(decisions.length - cap), () => { showAllAsks = !showAllAsks; render(); }));
   }
   $("ask").classList.toggle("empty", !live.length);
   if (!live.length) rows.push(el("p", "none", W.noAsk));
-  $("ask-rows").replaceChildren(...rows);
+  // D-09 r2: on the phone the by-hand answers are rows too, «by hand» in their mono line.
+  if (phone.matches) rows.push(...checks.map((it) => askRow(it, true)));
+  patch($("ask-rows"), [...rows]);
 
   // The checks: one line; a tap on one opens its row under the line.
   const hands = $("hands");
-  hands.hidden = !checks.length;
+  hands.hidden = !checks.length || phone.matches;
+  if (phone.matches) return;
   if (!checks.some((it) => key(it.crew, it.id) === openHand) || openRow !== openHand) openHand = "";
-  hands.replaceChildren(el("span", "hl", W.hands));
+  const kids = [el("span", "hl", W.hands)];
   checks.forEach((it, i) => {
     const k = key(it.crew, it.id);
-    if (i) hands.append(" · ");
+    if (i) kids.push(" · ");
     const link = el("span", "hk" + (openHand === k ? " on" : "") + stl(it.crew), it.title || it.text);
     link.tabIndex = 0;
     link.setAttribute("role", "button");
+    link.setAttribute("aria-expanded", openHand === k ? "true" : "false");
     const flip = () => { openHand = openHand === k ? "" : k; openRow = openHand; render(); };
     link.onclick = flip;
     link.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); flip(); } };
-    hands.append(tint(link, it.project));
+    kids.push(tint(link, it.project));
   });
   const opened = checks.find((it) => key(it.crew, it.id) === openHand);
-  if (opened) hands.append(askRow(opened));
+  if (opened) kids.push(askRow(opened));
+  patch(hands, kids);
 }
 
 // ---- L3 · going: open work, and work waiting on a role of the crew
@@ -725,13 +821,13 @@ function renderGo(going) {
       body: taskBody(w.why, w.title, w.milestone && w.milestone.text),
       meta: [w.on ? W.waits(who(w.crew, w.on)) : ""], url: w.url,
     }));
-    row.title = w.id;
+    row.title = idOf(w.crew, w.id);
     row.dataset.w = k;
     return tint(row, w.project);
   });
   $("go").classList.toggle("empty", !rows.length);
   if (!rows.length) rows.push(el("p", "none", W.noGo));
-  $("go-rows").replaceChildren(...rows);
+  patch($("go-rows"), [...rows]);
 }
 
 // ---- L4 · parked (b4): rows carry nothing; open: «Bring back», «Drop» (muted, no confirm, 5 s undo)
@@ -739,8 +835,13 @@ function renderGo(going) {
 function renderLater(parked) {
   const live = parked.filter((it) => !gone(key(it.crew, it.id)));
   $("later").hidden = !parked.length;
-  heading("later-h", W.later, parked.length);
-  $("later-rows").replaceChildren(...live.map(laterRow));
+  // D-07 r4: one line, «Parked 53 · oldest 12 d · 4 come back ›», that opens the list (the whole screen on a phone).
+  patch($("later-h"), []);
+  const oldest = live.length ? dur(Math.max(...live.map((it) => nowMs() - T(it.created)))) : "";
+  const back = live.filter((it) => (snap.alarms || []).some((a) => a.crew === it.crew && a.later === it.id)).length;
+  const line = button("parked-line", W.parkedLine(live.length, oldest, back) + " ›", () => openList("parked"));
+  line.setAttribute("aria-expanded", side && side.kind === "parked" ? "true" : "false");
+  patch($("later-rows"), [line]);
 }
 
 // laterRow is a parked item on the lean page; opened, its whole text shows in place, with «Bring back» and a muted
@@ -754,7 +855,7 @@ function laterRow(it) {
   const hov = el("div");
   hov.append(button("q", W.back, () => act(it, "back", "", W.broughtBack)), button("q m", W.drop, () => act(it, "drop", "", W.dropped)));
   const row = rowShell(key(it.crew, it.id), "parked" + (old ? " old" : "") + stl(it.crew), words, el("span", "age" + (old ? "" : " m"), dur(a)), null, ownHov(it.crew, hov), laterPanel(it));
-  row.title = it.id;
+  row.title = idOf(it.crew, it.id);
   return row;
 }
 
@@ -795,12 +896,12 @@ function alarmHead() {
 }
 
 // alarmCrew is the crew a new reminder goes to: the one shown, else the shown node's (or this node's) default, else its
-// first; none while a peer's crew or node is shown.
+// first. A peer's crew takes it on its own node (POST /api/alarm routes it there).
 function alarmCrew() {
   const f = crewOf(filter);
-  if (f) return f.remote ? "" : f.key;
+  if (f) return f.key;
   const node = filter.startsWith("node:") ? filter.slice(5) : "";
-  const own = snap.crews.filter((c) => !c.remote && (!node || c.node === node));
+  const own = snap.crews.filter((c) => (node ? c.node === node : !c.remote));
   const awake = own.filter((c) => !folded(c));
   const from = awake.length ? awake : own;
   return (from.find((c) => c.key === "default") || from[0] || {}).key || "";
@@ -832,10 +933,6 @@ function alarmPanel(a, k) {
   if (a.note) p.append(el("p", "pn", a.note));
   const left = T(a.at) - nowMs();
   p.append(el("p", "meta", [left > 0 ? W.alIn(dur(left)) : W.alDue, a.when ? W.alAsWords(a.when) : ""].filter(Boolean).join(" · ")));
-  if (remote(a.crew)) {
-    p.append(el("p", "onpeer", W.answerOn(nodeOf(a.crew))));
-    return p;
-  }
   const line = el("div", "ctl");
   const f = whenField(k, (v) => { draft = { k, text: v }; });
   if (draft.k === k) f.value = draft.text;
@@ -898,7 +995,6 @@ function newAlarmRow(cls) {
 
 // alarmAct posts set, move or off at once (a time typed is seen before it goes); off waits the 5 s undo.
 function alarmAct(a, action, when, text, word, k) {
-  if (remote(a.crew)) { toast(W.answerOn(nodeOf(a.crew))); return; }
   openRow = "";
   draft = { k: "", text: "" };
   const go = async () => {
@@ -922,10 +1018,11 @@ function alarmAct(a, action, when, text, word, k) {
 
 function renderAlarms() {
   const head = alarmHead();
-  $("alarms-h").replaceChildren(...head);
+  patch($("alarms-h"), [...head]);
   const rows = alarmRows("");
+  $("alarms").classList.toggle("noal", !rows.length);
   if (!rows.length) rows.push(el("p", "none", W.alNone));
-  $("alarms-rows").replaceChildren(...rows);
+  patch($("alarms-rows"), [...rows]);
 }
 
 // ---- L5 · waiting on others: one line per person, open on click; a row opens like a going one, with «Take it back»
@@ -956,7 +1053,7 @@ function renderOthers(others) {
     sub.append(...ws.sort((a, b) => T(a.updated) - T(b.updated)).map(otherRow));
     out.push(sub);
   }
-  $("others-rows").replaceChildren(...out);
+  patch($("others-rows"), [...out]);
 }
 
 // otherRow is a task waiting on someone else; it opens to its note, whom it waits on, and «Take it back».
@@ -970,7 +1067,7 @@ function otherRow(w) {
     meta: [w.on ? W.waits(w.on) : ""], url: w.url,
     primary: { label: W.mine, fn: () => act(w, "mine", "", W.madeMine, k), icon: "mine" },
   }));
-  row.title = w.id;
+  row.title = idOf(w.crew, w.id);
   row.dataset.w = key(w.crew, w.id);
   return tint(row, w.project);
 }
@@ -982,7 +1079,7 @@ function renderQuiet() {
   const q = $("quiet");
   q.hidden = !empty.length;
   if (!empty.length) return;
-  q.textContent = empty.map(([, words]) => words).join(" · ");
+  setText(q, empty.map(([, words]) => words).join(" · "));
   $(empty[0][0]).before(q);
 }
 
@@ -991,43 +1088,59 @@ function renderQuiet() {
 // lean page above is the page. Motion is only a working role's lamp and the heartbeat.
 
 function renderCockpit(hold, asks, others, parked) {
-  $("brand-s").textContent = W.shift;
+  setText($("brand-s"), W.shift);
   renderEv();
-  const crews = snap.crews.filter((c) => shows(c.key));
+  const crews = snap.crews.filter((c) => shows(c.key) && !away(c.key));
+  const screens = crews.flatMap((c) => (c.roles || []).filter((r) => r.state === "up" && r.prompt).map((r) => [c, r]));
   const roles = crews.flatMap((c) => c.roles);
   const up = roles.filter((r) => r.state === "up");
   const persons = new Set(others.map((w) => w.on || "")).size;
   const oldest = hold.length ? Math.max(...hold.map((it) => nowMs() - T(it.created))) : 0;
   const cells = [
-    [W.hold, hold.length, hold.length ? W.oldest + dur(oldest) : W.nobody, "need"],
+    [W.hold, hold.length + screens.length, [hold.length ? W.oldest + dur(oldest) : "", screens.length ? W.onScreenN(screens.length) : ""].filter(Boolean).join(" · ") || W.nobody, "need"],
     [W.ask, asks.length, asks.length ? W.withRec(asks.filter((it) => it.rec).length) : W.noAsk, "ink"],
-    [W.go, up.filter((r) => r.status === "busy").length, W.upOf(up.length, roles.length), "busy"],
+    [W.go, snap.work.filter((w) => w.lane === "go" && shows(w.crew)).length, W.rolesWorking(up.filter((r) => r.status === "busy").length), "busy"],
     [W.others, others.length, others.length ? W.people(persons) : W.nobody, "dim"],
-    [W.later, parked.length, W.noDue, "dim"],
-    [W.roDone, crews.reduce((n, c) => n + (c.done_today || 0), 0), multi() ? crews.map((c) => crewLabel(c.key) + " " + (c.done_today || 0)).join(" · ") : "", "dim"],
+    [W.later, parked.length, parked.length ? W.oldest.trim() + " " + dur(Math.max(...parked.map((it) => nowMs() - T(it.created)))) : W.noDue, "dim", "", "", "parked"],
+    [W.roDone, crews.reduce((n, c) => n + (c.done_today || 0), 0), W.andHistory, "dim", "", "", "done"],
   ];
   // Spent today is a readout like the others: dark at nothing, its week and «API-equivalent» under it.
   const today = spent(crews, "today");
   const week = spent(crews, "week");
   cells.push([W.roSpent, today, week ? W.spentWeek(money(week)) : W.spentNone, "dim", money(today), W.spentTip]);
-  $("strip").replaceChildren(...cells.map(([label, n, sub, cls, shown, tip]) => {
-    const ro = el("div", "ro " + cls + (n ? " lit" : " dark"));
+  patch($("strip"), cells.map(([label, n, sub, cls, shown, tip, opens]) => {
+    const ro = el(opens ? "button" : "div", "ro " + cls + (n ? " lit" : " dark") + (opens ? " opens" : ""));
+    if (opens) {
+      ro.type = "button";
+      ro.setAttribute("aria-expanded", side && side.kind === opens ? "true" : "false");
+      ro.addEventListener("click", (e) => (side && side.kind === opens ? closeTalk() : openList(opens, e.currentTarget)));
+    }
     ro.append(el("span", "ro-l", label), el("span", "ro-n", shown || String(n)), el("span", "ro-s", sub));
     if (tip) ro.title = tip;
     return ro;
   }));
 
+  // A session that shows a question on its screen waits on the owner: first in his move.
   // Your move: holds first, then the questions and checks, one line each with the recommendation as the chip.
-  $("move-h").textContent = W.move;
+  setText($("move-h"), W.move);
   const live = (it) => !gone(key(it.crew, it.id));
-  const holds = hold.filter(live).map((it) => moveRow(it, true));
-  if (!holds.length) holds.push(el("p", "dnone", W.noHold));
-  $("move-rows").replaceChildren(...holds);
-  const qs = asks.filter(live);
-  $("move-ask-h").textContent = qs.length ? W.ask : "";
-  $("move-asks").replaceChildren(...qs.map((it) => moveRow(it, false)));
-  $("move-al-h").replaceChildren(...alarmHead());
-  $("move-alarms").replaceChildren(...alarmRows("mv al"));
+  const holds = [...screens.map(([c, r]) => screenRow(c, r)), ...hold.filter(live).map((it) => moveRow(it, true))];
+  if (!holds.length && !asks.filter(live).length && filter !== "all") {
+    const where = filter.startsWith("node:") ? filter.slice(5) : crewLabel(filter) || filter;
+    holds.push(el("p", "dnone", W.nothingOn(where)));
+    const all = snap.todo.filter((it) => !away(it.crew));
+    const h = all.filter((it) => it.holds).length, q = all.length - h;
+    if (all.length) {
+      const b = button("q elsewhere", W.elsewhere(h, q), () => { filter = "all"; localStorage.setItem("zmina.crew", "all"); render(); });
+      holds.push(b);
+    }
+  } else if (!holds.length) holds.push(el("p", "dnone", W.noHold));
+  patch($("move-rows"), [...holds]);
+  const qs = [...asks.filter(live).filter((it) => it.kind !== "check"), ...asks.filter(live).filter((it) => it.kind === "check")];
+  setText($("move-ask-h"), qs.length ? W.ask : "");
+  patch($("move-asks"), [...qs.map((it) => moveRow(it, false))]);
+  patch($("move-al-h"), [...alarmHead()]);
+  patch($("move-alarms"), [...alarmRows("mv al")]);
 
   renderBand(crews);
   renderBoard(parked);
@@ -1061,9 +1174,30 @@ function renderEv() {
   const evs = snap.log.filter((e) => shows(e.crew));
   const answered = new Set(evs.filter((e) => e.event === "answered").map((e) => e.crew + "/" + ((e.detail || "").match(/^(A-\d+)/) || [])[1]));
   const e = evs.map((x) => feedLine(x, answered)).find(Boolean);
-  $("ev").replaceChildren();
-  if (e) $("ev").append(el("i"), [hhmm(e.ts), who(e.crew, e.role || e.by), e.text].filter(Boolean).join(" · "));
+  const whole = e ? [who(e.crew, e.role || e.by), e.text].filter(Boolean).join(" · ") : "";
+  const red = redList();
+  $("ev").classList.toggle("red", red.length > 0);
+  if (red.length) {
+    patch($("ev"), red.map((d) => {
+      const b = button("redb", d.text, () => openTalk(d.crew, d.role), d.fix);
+      return b;
+    }));
+    $("ev").title = whole;
+    return;
+  }
+  patch($("ev"), e ? [el("i"), clause(whole, 60)] : []);
+  $("ev").title = e ? hhmm(e.ts) + " · " + whole : "";
 }
+
+// clause is a text's first sentence, cut at a word to n characters with «…» (D-07 h1).
+function clause(t, n) {
+  const first = t.split(/(?<=[.!?;])\s/)[0];
+  if (first.length <= n) return first;
+  const cut = first.slice(0, n - 1);
+  return (cut.lastIndexOf(" ") > n / 2 ? cut.slice(0, cut.lastIndexOf(" ")) : cut) + "…";
+}
+
+$("ev").addEventListener("click", (e) => { if (!e.target.closest("button")) openHistory(); });
 
 // moveRow is a row of your move: a hold carries its note and «ops · waits on dispatcher» under the title, a question its
 // reason beside it; both open like the lean page's rows (b1, p1–p5).
@@ -1089,13 +1223,53 @@ function moveRow(it, holds) {
     const why = it.kind === "decision" ? it.reason : it.note;
     if (why) words.append(el("span", "gr", why));
   }
-  const tag = chip(it) || (it.kind === "check" ? el("span", "chip ghost", W.check)
-    : it.kind === "later" ? el("span", "chip ghost", W.backTag) : null);
+  const tag = chip(it) || (it.kind === "later" ? el("span", "chip ghost", W.backTag) : null);
   const row = rowShell(key(it.crew, it.id), "mv " + (holds ? "hold" : "ask") + stl(it.crew), words, holds ? ageOf(it) : null, tag, null, itemPanel(it, holds));
-  row.title = ids(it.id, it.task);
+  row.title = ids(idOf(it.crew, it.id), it.task && idOf(it.crew, it.task));
   if (it.task) row.dataset.w = key(it.crew, it.task);
   if (it.project) row.dataset.p = it.project;
   return row;
+}
+
+// screenRow is a session with a question on its screen: amber like a hold. When the screen reads as a question with
+// numbered choices, the row says the question and, opened, offers each choice as a button: zmina moves the dialog's
+// cursor there and takes it (chat/action choose), on this node or a peer's, and refuses if the question changed.
+function screenRow(c, r) {
+  const d = r.dialog;
+  const words = el("div", "words");
+  words.append(el("span", "tt", r.role + " · " + (d && d.question ? d.question : W.onScreen)));
+  const meta = el("span", "mvm");
+  const cl = crewTag(c.key, true);
+  if (cl) meta.append(cl);
+  meta.append(el("span", "", d ? W.choicesN(d.options.length) : plain(r.now || "")));
+  words.append(meta);
+  const p = el("div");
+  if (d) {
+    if (d.question) p.append(el("p", "pn", d.question));
+    const ch = el("div", "choices");
+    for (const o of d.options) {
+      const b = button("btn choice", o.n + ". " + o.label, () => chooseDialog(c, r, o));
+      if (o.detail) b.append(el("span", "cd", o.detail));
+      ch.append(b);
+    }
+    p.append(ch);
+  } else if (r.now) p.append(el("p", "pn", r.now));
+  p.append(button("q", W.talkTo(r.role), () => openTalk(c.key, r.role)));
+  return rowShell("screen:" + c.key + "/" + r.role, "mv hold screen", words, el("span", "age", ago(r.since)), null, null, p);
+}
+
+// chooseDialog answers a session's question with one of its choices, on the node the session runs on.
+async function chooseDialog(c, r, o) {
+  const node = c.remote ? nodeOf(c.key) : "";
+  const crew = node ? c.key.slice(node.length + 1) : c.key;
+  openRow = "";
+  try {
+    await postTo("api/chat/action", { node, crew, role: r.role, action: "choose:" + o.n + ":" + r.dialog.id });
+    toast(W.chose(r.role, o.label));
+  } catch (e) {
+    toast(W.notSent + e.message);
+  }
+  render();
 }
 
 // glyphs holds the role glyphs (assets/roles/*.svg, our own embedded files), read once at start.
@@ -1121,19 +1295,24 @@ function renderBand(crews) {
   const up = crews.flatMap((c) => c.roles.filter((r) => r.state === "up").map((r) => [c, r]));
   const down = crews.flatMap((c) => c.roles.filter((r) => r.state !== "up").map((r) => who(c.key, r.role)));
   const h = el("div", "dh");
-  const counts = el("span", "dc", [W.upN(up.length), W.downN(down.length)].join(" · "));
+  const counts = el("span", "dc", W.bandCounts(up.filter(([, r]) => r.status === "busy").length, up.length));
   if (down.length) counts.title = W.notUp + down.join(", ");
   h.append(el("span", "dl", W.sessions), counts);
-  for (const c of crews) {
-    const tick = el("span", "tick" + (c.stale ? " stale" : tickerDead(c) ? " dead" : ""));
-    tick.append(el("i"), (crews.length > 1 ? crewLabel(c.key) + " " : W.tick) + (zero(c.last_tick) ? "—" : hhmm(c.last_tick)) + (c.stale ? " · " + W.stale : ""));
+  // Only the crews whose tick is not fresh, or that are spare, stand on the line; the fresh ones are in its tooltip
+  // (D-07 x3).
+  const fresh = crews.filter((c) => !c.spare && !c.stale && !tickerDead(c));
+  if (crews.length > 1 && fresh.length) h.title = fresh.map((c) => crewLabel(c.key) + " " + hhmm(c.last_tick)).join(" · ");
+  for (const c of crews.length > 1 ? crews.filter((c) => !fresh.includes(c)) : crews) {
+    const tick = el("span", "tick" + (c.spare ? " spare" : c.stale ? " stale" : tickerDead(c) ? " dead" : ""));
+    const said = c.spare ? W.spare : tickerDead(c) && !c.stale ? W.silent(zero(c.last_tick) ? "" : ago(c.last_tick)) : zero(c.last_tick) ? "—" : hhmm(c.last_tick);
+    tick.append(el("i"), (crews.length > 1 ? crewLabel(c.key) + " · " : W.tick) + said + (c.stale ? " · " + W.stale : ""));
     tick.title = W.tick + crewLabel(c.key);
     h.append(tick);
   }
   // The working ones and those that need you stand in the band; the idle ones lie in one stack after them, the one
   // that went idle last on top, until the owner spreads them (kept in the browser).
   const awake = (r) => r.status === "busy" || r.prompt || r.stuck;
-  const lit = up.filter(([, r]) => awake(r));
+  const lit = up.filter(([, r]) => awake(r)).sort((a, b) => (b[1].prompt || b[1].stuck ? 1 : 0) - (a[1].prompt || a[1].stuck ? 1 : 0));
   const idle = up.filter(([, r]) => !awake(r)).sort((a, b) => T(b[1].since) - T(a[1].since));
   const spread = stacked.has("sessions") || idle.length < 2;
   if (idle.length > 1) {
@@ -1150,7 +1329,7 @@ function renderBand(crews) {
     pile.append(...stackOf([sessionCard(...idle[0])], idle.length - 1, () => { stacked.add("sessions"); keepStacked(); render(); }, W.idleN));
     band.append(pile);
   }
-  $("crew-col").replaceChildren(h, up.length ? band : el("p", "dnone", W.nobodyUp));
+  patch($("crew-col"), [h, up.length ? band : el("p", "dnone", W.nobodyUp)]);
 }
 
 // sessionCard is one session: the role's glyph as its lamp (D-04 i3), the role, its crew while every crew shows, the
@@ -1159,7 +1338,10 @@ function renderBand(crews) {
 function sessionCard(c, r) {
   const busy = r.status === "busy";
   const need = r.prompt || r.stuck;
-  const card = el("div", "role card " + (busy ? "busy" : "idle") + (need ? " need" : "") + stl(c.key));
+  const card = el("button", "role card " + (busy ? "busy" : "idle") + (need ? " need" : "") + stl(c.key));
+  card.type = "button";
+  card.dataset.k = "card:" + c.key + "/" + r.role;
+  card.addEventListener("click", (e) => openTalk(c.key, r.role, e.currentTarget));
   const tip = r.keep === "always" ? [W.always] : [];
   const h = el("div", "role-h");
   h.append(glyph(r.icon), el("span", "role-n", r.role));
@@ -1174,7 +1356,7 @@ function sessionCard(c, r) {
     const said = W.ctxOf(Math.round(r.context / 1000) + "k", Math.round(r.context_max / 1000) + "k") + (share > 1 ? W.ctxPast : "");
     if (p < 0.75) tip.push(said);
     else {
-      const ring = el("span", "ring" + (p >= 0.9 ? " bad" : " need") + (share > 1 ? " over" : ""));
+      const ring = el("span", "ring need" + (share > 1 ? " over" : ""));
       ring.style.setProperty("--deg", Math.round(p * 360) + "deg");
       ring.title = said;
       ring.append(el("span", "", share > 1 ? "100+" : String(Math.round(share * 100))));
@@ -1190,6 +1372,7 @@ function sessionCard(c, r) {
     m.title = W.spentTip;
     line.append(m);
   }
+  card.setAttribute("aria-label", W.talkTo(r.role) + (where ? " · " + where : ""));
   card.append(h, line);
   const now = nowLine(r) || plain(r.now);
   card.append(el("div", "role-now", now || ""));
@@ -1202,17 +1385,16 @@ function sessionCard(c, r) {
 // An empty column folds to a strip with its label and 0; each column scrolls on its own.
 
 function renderBoard(parked) {
-  $("kb-h").textContent = W.kb;
+  setText($("kb-h"), W.kb);
   const work = snap.work.filter((w) => shows(w.crew) && !gone(key(w.crew, w.id)) && !gone(otherKey(w)));
   const busy = (w) => w.role_state === "up" && w.status === "busy";
   const cols = [
     ["go", W.kbGo, work.filter((w) => w.lane === "go").sort((a, b) => busy(b) - busy(a) || T(b.updated) - T(a.updated))],
-    ["you", W.kbYou, work.filter((w) => w.lane === "you").sort((a, b) => T(a.updated) - T(b.updated))],
     ["others", W.kbOthers, work.filter((w) => w.lane === "others")],
-    ["later", W.kbLater, parked.filter((it) => !gone(key(it.crew, it.id))).sort((a, b) => T(b.updated) - T(a.updated))],
   ];
-  $("kb-cols").style.gridTemplateColumns = cols.map(([, , ws]) => (ws.length ? "minmax(0, 1fr)" : "3rem")).join(" ");
-  $("kb-cols").replaceChildren(...cols.map(([lane, label, ws]) => {
+  // Two columns (D-07 r2, r3): what waits on you is first in your move, parked is a readout that opens its list.
+  $("kb-cols").style.gridTemplateColumns = cols.map(([lane, , ws]) => (!ws.length ? "3rem" : lane === "go" ? "minmax(0, 1.4fr)" : "minmax(0, 1fr)")).join(" ");
+  patch($("kb-cols"), cols.map(([lane, label, ws]) => {
     const col = el("div", "kb-col" + (ws.length ? "" : " empty"));
     const h = el("div", "kb-ch");
     h.append(el("span", "", label), el("b", lane === "you" && ws.length ? "n" : "", String(ws.length)));
@@ -1272,7 +1454,8 @@ function personGroups(ws) {
     head.append(el("span", "chev", "›"), el("span", "kb-gn", g || W.setAside(items.length).replace(/^\d+\s*/, "")),
       el("span", "kb-gc", String(items.length)), el("span", "kb-ga", W.oldest + ago(items[0].created)));
     const cards = items.map((w) => boardRow(w, "others", false));
-    return isOpen || cards.length === 1 ? [head, ...cards] : [head, ...stackOf([cards[0]], cards.length - 1, toggle)];
+    // Every item shows, a row each (Fable 9): a stack hid the second item of every person behind a click.
+    return [head, ...cards];
   });
 }
 
@@ -1295,7 +1478,7 @@ function boardRow(w, lane, isBusy) {
   holder.append(whoTag(w.crew, w.role), lane === "go" && isBusy ? " · " + W.working : lane === "go" && w.on ? " · " + W.waits(who(w.crew, w.on)) : "");
   words.append(holder);
   const row = rowShell("kb:" + key(w.crew, w.id), "kbr " + lane + stl(w.crew), words, null, null, null, boardPane(w, lane));
-  row.title = w.id;
+  row.title = idOf(w.crew, w.id);
   row.dataset.w = key(w.crew, w.id);
   if (w.project) row.dataset.p = w.project;
   return row;
@@ -1321,7 +1504,7 @@ function laterBoardRow(it) {
   const cl = shownLabel(it.crew, true);
   if (cl) words.append(el("div", "kc-f cl", cl));
   const row = rowShell(key(it.crew, it.id), "kbr later parked" + stl(it.crew), words, null, null, null, laterPanel(it));
-  row.title = it.id;
+  row.title = idOf(it.crew, it.id);
   return row;
 }
 
@@ -1468,7 +1651,12 @@ function renderFull() {
   const role = (w && w.role) || (t && t.role);
   const r = roleOf(full.crew, role);
   const rs = !r ? "" : r.state !== "up" ? W.fvDown : (r.status === "busy" ? W.working : W.free) + (zero(r.since) ? "" : " · " + ago(r.since));
-  fact(W.fvHolder, [who(full.crew, role), rs].filter(Boolean).join(" · "));
+  if (role) {
+    const holder = el("span", "", [who(full.crew, role), rs].filter(Boolean).join(" · ") + " ");
+    const crewKey = full.crew;
+    holder.append(button("q", W.talkTo(role), () => openTalk(crewKey, role)));
+    fact(W.fvHolder, holder);
+  }
   if (t && t.delivery) fact("Handoff", t.delivery.accepted_at ? "Accepted" : t.delivery.sent_at ? "Sent, awaiting acceptance" : "Queued, awaiting acceptance");
   fact(W.fvWaits, (w && w.on) || (t && t.on));
   fact(W.fvProject, project);
@@ -1510,10 +1698,7 @@ function renderFull() {
   box.replaceChildren(sheet);
 }
 
-function openHistory() {
-  $("history").hidden = false;
-  render();
-}
+function openHistory() { openList("done", null, "history"); }
 
 // ---- L6 · the bottom line; the history drawer
 
@@ -1521,9 +1706,9 @@ function renderFoot() {
   const done = snap.crews.filter((c) => shows(c.key)).reduce((n, c) => n + (c.done_today || 0), 0);
   const line = el("span", "", W.doneToday);
   line.append(el("b", "", String(done)));
-  const h = button("r", W.history, () => { $("history").hidden = !$("history").hidden; render(); });
-  h.setAttribute("aria-expanded", $("history").hidden ? "false" : "true");
-  $("foot").replaceChildren(line, h);
+  const h = button("r", W.history, () => (side && side.kind === "done" ? closeTalk() : openHistory()));
+  h.setAttribute("aria-expanded", side && side.kind === "done" ? "true" : "false");
+  patch($("foot"), [line, h]);
 }
 
 function taskChange(detail) {
@@ -1591,11 +1776,16 @@ function feedLine(e, answered) {
 }
 
 function renderFeed() {
-  $("history-h").textContent = W.historyH;
-  const evs = snap.log.filter((e) => shows(e.crew));
+  setText($("history-h"), W.historyH);
+  patch($("feed"), feedRows());
+}
+
+// feedRows is the history, a line per event, newest first; only shows those today's Done list keeps.
+function feedRows(only) {
+  const evs = snap.log.filter((e) => shows(e.crew) && (!only || only(e)));
   // An ask and its answer are one line: the answer.
   const answered = new Set(evs.filter((e) => e.event === "answered").map((e) => e.crew + "/" + ((e.detail || "").match(/^(A-\d+)/) || [])[1]));
-  $("feed").replaceChildren(...evs.map((e) => feedLine(e, answered)).filter(Boolean).map((e) => {
+  return evs.map((e) => feedLine(e, answered)).filter(Boolean).map((e) => {
     const row = el("div", "e");
     const t = el("time", "", hhmm(e.ts));
     t.title = new Date(e.ts).toLocaleString();
@@ -1609,21 +1799,488 @@ function renderFeed() {
     if (by) s.append(el("i", "", " · " + who(e.crew, by)));
     row.append(t, s);
     return row;
-  }));
+  });
 }
 
+$("say").addEventListener("click", (e) => {
+  const to = e.target.closest?.("[data-to]")?.dataset.to;
+  if (to) $(to).scrollIntoView({ behavior: "smooth", block: "start" });
+});
 $("history-close").addEventListener("click", () => { $("history").hidden = true; render(); });
+
+// ---- the side panel (D-07 p1–p7): a role's conversation (Chat) as a layer over the right zone; your move, the readouts
+// and the header stay in view and keep updating. Any role of any node: a peer's over the mesh, signed with the owner's
+// key, as Chat does. One panel at a time; Esc and ✕ close it and the focus goes back to what opened it.
+
+let side = null; // {crew, role}: what the panel shows
+let sideFrom = null; // the element that opened it
+let sideMark = null; // the same, as something a redrawn page finds again (patch.js focusMark)
+let lastTalk = null; // the last conversation, for the header's Talk
+
+function placeSide() {
+  const mid = document.querySelector(".dcol.mid");
+  const r = mid && mid.offsetParent ? mid.getBoundingClientRect() : null;
+  const pane = $("side");
+  pane.style.setProperty("--side-top", r ? Math.max(0, r.top) + "px" : "0px");
+  pane.style.setProperty("--side-left", r ? r.left + "px" : "0px");
+}
+
+// talkTarget is where the header's Talk goes: the last conversation, else the dispatcher of the crew the switch shows
+// (All: this node's default crew).
+function talkTarget() {
+  return lastTalk || scopeDispatcher();
+}
+
+// scopeDispatcher is the dispatcher of the crew the switch shows (All: this node's default crew).
+function scopeDispatcher() {
+  const f = crewOf(filter);
+  const node = filter.startsWith("node:") ? filter.slice(5) : "";
+  const c = f || snap.crews.find((x) => x.key === "default" && !x.remote && !node)
+    || snap.crews.find((x) => (node ? x.node === node : !x.remote)) || snap.crews[0];
+  if (!c) return null;
+  const d = c.roles.find((r) => r.role === c.dispatcher) || c.roles.find((r) => /dispatcher/.test(r.role)) || c.roles[0];
+  return d ? { crew: c.key, role: d.role } : null;
+}
+
+function openTalk(crewKey, role, from) {
+  side = { kind: "talk", crew: crewKey, role, scope: filter };
+  lastTalk = side;
+  sideFrom = from || document.activeElement;
+  sideMark = markOf(sideFrom);
+  const c = crewOf(crewKey);
+  const node = c && c.remote ? nodeOf(crewKey) : "";
+  const crew = node ? crewKey.slice(node.length + 1) : crewKey;
+  const q = new URLSearchParams({ node, crew, role });
+  const frame = $("side-frame");
+  const src = "chat.html?" + q + "&embed=1";
+  if (frame.getAttribute("src") !== src) frame.setAttribute("src", src);
+  $("side-full").href = "chat.html?" + q;
+  $("side-term").href = "terminals.html?" + new URLSearchParams({ node, crew, role, view: "terminal" });
+  $("history").hidden = true;
+  // D-09 k1: on the phone a conversation is the Talk tab.
+  if (phone.matches && tab !== "talk") goTab("talk");
+  showSide(true);
+  $("talk-open").setAttribute("aria-expanded", "true");
+}
+
+// openList opens Parked or Done today in the panel; tab picks Done's History.
+function openList(kind, from, tab) {
+  side = { kind, f: "all", tab: tab || "done" };
+  sideFrom = from || document.activeElement;
+  sideMark = markOf(sideFrom);
+  $("talk-open").setAttribute("aria-expanded", "false");
+  showSide(false);
+}
+
+function showSide(talking) {
+  $("side-frame").hidden = !talking;
+  $("side-list").hidden = talking;
+  $("side-pick").parentElement.hidden = !talking;
+  $("side-term").hidden = $("side-full").hidden = !talking;
+  placeSide();
+  $("side").hidden = false;
+  render();
+  // D-08 amendment c: the panel takes the focus, not its Close (a ring on ✕ at every open reads as a fault).
+  $("side").focus();
+}
+
+function closeTalk() {
+  const talking = side && side.kind === "talk";
+  side = null;
+  $("side").hidden = true;
+  $("talk-open").setAttribute("aria-expanded", "false");
+  // On the phone the Talk tab is the conversation: closing it goes back to the tab the owner came from.
+  if (talking && phone.matches && tab === "talk") goTab(tabFrom);
+  render();
+  if (sideFrom && sideFrom.isConnected) sideFrom.focus();
+  else if (sideMark) refocus(sideMark);
+}
+
+// markOf is focusMark for a given element: its row or section, its kind and its name.
+function markOf(e) {
+  if (!e || !e.closest) return null;
+  const host = e.closest("[data-k]") || e.closest("[id]");
+  if (!host) return null;
+  return { el: e, host: host.dataset.k ? `[data-k="${CSS.escape(host.dataset.k)}"]` : "#" + CSS.escape(host.id), sig: focusSig(e) };
+}
+
+// renderSide is the panel's head: the role's glyph as its lamp, its name, node/crew, its state and since when, and the
+// picker of every role of every node, grouped by node/crew, up ones first.
+function renderSide() {
+  if (!snap) return;
+  if (!side || side.kind !== "talk") {
+    // The header's Talk says whom it opens.
+    const t = talkTarget();
+    setText($("talk-open").lastElementChild, t ? W.talk + " · " + t.role + " " + (shownLabel(t.crew, true) || crewLabel(t.crew)) : W.talk);
+  }
+  if (!side) return;
+  placeSide();
+  if (side.kind !== "talk") { renderList(); return; }
+  const r = roleOf(side.crew, side.role);
+  const busy = r && r.status === "busy";
+  const need = r && (r.prompt || r.stuck);
+  const lamp = $("side-lamp");
+  lamp.hidden = false;
+  lamp.className = "lamp" + (busy ? " busy" : "");
+  const g = glyph(r ? r.icon : "generic");
+  if (g) patch(lamp, [g]);
+  const st = !r || r.state !== "up" ? W.fvDown : (r.prompt ? W.onScreen : busy ? W.working : W.free) + (zero(r.since) ? "" : " · " + ago(r.since));
+  // D-08 h1–h2: the role name is the picker; node/crew is the whole destination, its tooltip says how it is reached.
+  setText($("side-role"), side.role);
+  const c = crewOf(side.crew), where = remote(side.crew) || !snap.self ? side.crew : snap.self + "/" + side.crew;
+  const k = el("span", "k", where);
+  k.title = c && c.remote ? where + " · over the mesh, signed" : where + " · local";
+  patch($("side-who"), [k, el("span", "st" + (need ? " need" : busy ? " busy" : ""), st)]);
+  if (!$("side-menu").hidden) renderPick();
+  setText($("talk-open").lastElementChild, W.talk + " · " + side.role + " " + (shownLabel(side.crew, true) || crewLabel(side.crew)));
+}
+
+// renderPick is the panel's role list (Fable 3): every crew of every node, up roles first with their state and since
+// when, the ones not up folded into «+N not up»; typing filters it.
+let pickAll = "";
+function renderPick() {
+  const q = $("side-filter").value.trim().toLowerCase();
+  const out = [];
+  for (const c of snap.crews.filter((c) => (c.roles || []).length && !away(c.key))) {
+    const label = shownLabel(c.key, true) || crewLabel(c.key) || c.name;
+    const match = (r) => !q || (label + " " + r.role).toLowerCase().includes(q);
+    const up = c.roles.filter((r) => r.state === "up" && match(r));
+    const down = c.roles.filter((r) => r.state !== "up" && match(r));
+    if (!up.length && !down.length) continue;
+    out.push(el("span", "pg", label));
+    const item = (r) => {
+      const st = r.state !== "up" ? W.fvDown : (r.prompt ? W.onScreen : r.status === "busy" ? W.working : W.free) + (zero(r.since) ? "" : " · " + ago(r.since));
+      const b = button("pi" + (side && side.crew === c.key && side.role === r.role ? " on" : ""), "", () => { $("side-menu").hidden = true; openTalk(c.key, r.role, sideFrom); });
+      b.setAttribute("role", "option");
+      b.append(el("span", "pr", r.role), el("span", "ps" + (r.prompt ? " need" : r.status === "busy" ? " busy" : ""), st));
+      return b;
+    };
+    out.push(...up.map(item));
+    if (down.length && (q || pickAll === c.key)) out.push(...down.map(item));
+    else if (down.length) out.push(button("pmore", W.notUpN(down.length), () => { pickAll = c.key; renderPick(); }));
+  }
+  patch($("side-roles"), out);
+}
+
+// renderList is the panel's Parked (filter chips, older than a week first) or Done today (by crew) with its History tab.
+function renderList() {
+  const head = side.kind === "parked" ? W.later : W.doneTab;
+  $("side-lamp").hidden = true;
+  setText($("side-role"), "");
+  patch($("side-who"), [head]);
+  const out = [];
+  if (side.kind === "parked") {
+    const all = snap.later.filter((it) => shows(it.crew) && !gone(key(it.crew, it.id)));
+    const old = (it) => nowMs() - T(it.created) > 7 * 24 * HOUR;
+    // Comes back: an alarm (later add --until) will bring it back to the owner's todo.
+    const back = (it) => (snap.alarms || []).some((a) => a.crew === it.crew && a.later === it.id);
+    const fl = el("div", "fl");
+    for (const [f, label, n] of [["all", W.allN(all.length)], ["old", W.olderWeek + " " + all.filter(old).length], ["back", W.comesBack + " " + all.filter(back).length]]) {
+      const b = button("", label + (n || ""), () => { side.f = f; render(); });
+      b.setAttribute("aria-pressed", side.f === f ? "true" : "false");
+      fl.append(b);
+    }
+    out.push(fl);
+    const shown = all.filter((it) => (side.f === "old" ? old(it) : side.f === "back" ? back(it) : true)).sort((a, b) => T(a.created) - T(b.created));
+    for (const [label, items] of [[W.olderWeek, shown.filter(old)], [W.thisWeek, shown.filter((it) => !old(it))]]) {
+      if (!items.length) continue;
+      out.push(el("div", "gh", label));
+      const rows = el("div", "rows");
+      rows.append(...items.map(laterRow));
+      out.push(rows);
+    }
+  } else {
+    const fl = el("div", "fl");
+    for (const [t, label] of [["done", W.doneTab], ["history", W.historyTab]]) {
+      const b = button("", label, () => { side.tab = t; render(); });
+      b.setAttribute("aria-pressed", side.tab === t ? "true" : "false");
+      fl.append(b);
+    }
+    out.push(fl);
+    if (side.tab === "history") out.push(...feedRows());
+    else {
+      for (const c of snap.crews.filter((c) => shows(c.key) && (c.done || []).length)) {
+        out.push(el("div", "gh", (crewLabel(c.key) || c.name) + " " + c.done.length));
+        for (const d of [...c.done].sort((a, b) => T(b.at) - T(a.at))) {
+          const row = el("div", "e");
+          row.append(el("time", "", hhmm(d.at)));
+          const t = el("span");
+          t.append(el("b", "", d.id), " · " + d.title, el("i", "", d.role ? " · " + d.role : ""));
+          row.append(t);
+          out.push(row);
+        }
+      }
+    }
+  }
+  patch($("side-list"), out);
+}
+
+$("side-pick").addEventListener("click", () => {
+  const m = $("side-menu");
+  m.hidden = !m.hidden;
+  $("side-pick").setAttribute("aria-expanded", m.hidden ? "false" : "true");
+  if (!m.hidden) { $("side-filter").value = ""; pickAll = ""; renderPick(); $("side-filter").focus(); }
+});
+$("side-filter").addEventListener("input", renderPick);
+// D-11: on the phone node/crew stands under the role's name, and a tap there opens the picker too.
+$("side-who").addEventListener("click", () => { if (phone.matches && side && side.kind === "talk") $("side-pick").click(); });
+$("side-close").addEventListener("click", closeTalk);
+// The conversation is a frame of this page: its Esc arrives as a message, accepted only from that frame and this origin.
+globalThis.addEventListener?.("message", (e) => {
+  if (e.origin !== location.origin || e.source !== $("side-frame").contentWindow) return;
+  if (e.data === "zmina:close" && side) closeTalk();
+  if (e.data === "zmina:typing" || e.data === "zmina:typed") {
+    frameTyping = e.data === "zmina:typing";
+    kbCheck();
+    // iOS scrolls the page to the field and, in the home-screen app, leaves it there when the keyboard goes: the
+    // bar would float above a dead strip. The Talk tab has nothing to scroll, so it goes back to the top.
+    if (!frameTyping && phone.matches && tab === "talk") setTimeout(() => scrollTo(0, 0), 50);
+  }
+});
+$("side-back").addEventListener("click", closeTalk);
+$("talk-open").addEventListener("click", (e) => {
+  if (side) { closeTalk(); return; }
+  const t = talkTarget();
+  if (t) openTalk(t.crew, t.role, e.currentTarget);
+});
+globalThis.addEventListener?.("resize", () => { if (side) placeSide(); });
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
-  if (full) closeFull();
+  if (side) closeTalk();
+  else if (full) closeFull();
   else if (!$("history").hidden) { $("history").hidden = true; render(); } else if (openRow) {
     const k = openRow;
     openRow = "";
     openHand = "";
     render();
-    document.querySelector(`[data-k="${CSS.escape(k)}"]`)?.focus();
+    [...document.querySelectorAll(`[data-k="${CSS.escape(k)}"] > .chev`)].find((x) => x.offsetParent)?.focus();
   }
 });
+
+// ---- the phone (D-09): four tabs at the bottom — Move · Going · Talk · Crews — in place of the header stack. Below
+// 860 px only; the page above draws the rows, the CSS shows the open tab's sections.
+
+const phone = matchMedia("(max-width: 860px)");
+const TABS = ["move", "going", "talk", "crews"];
+const tabSaved = () => { try { return localStorage.getItem("zmina.tab"); } catch (_) { return null; } };
+let tab = [location.hash.slice(1), tabSaved()].find((t) => TABS.includes(t)) || "move";
+const tab0 = tab; // the tab of the history entry the page opened on, which may have no hash
+let tabFrom = "move"; // where Crews and a closed Talk return to
+const tabScroll = {};
+const badges = {};
+document.body.dataset.tab = tab;
+
+// goTab switches the open tab: its scroll is kept, the choice is kept in localStorage and in the URL hash (n1).
+function goTab(t, push = true) {
+  if (t === tab) return;
+  tabScroll[tab] = scrollY;
+  if (tab !== "crews") tabFrom = tab;
+  tab = t;
+  try { localStorage.setItem("zmina.tab", t); } catch (_) { /* the tab is kept for this visit only */ }
+  if (push && location.hash !== "#" + t) history.pushState(null, "", "#" + t);
+  document.body.dataset.tab = t;
+  if (typeof pinPanel === "function") pinPanel();
+  requestAnimationFrame(() => scrollTo(0, tabScroll[t] || 0));
+}
+
+// setTab is a tap on the bar: Talk opens the last conversation, else the scoped crew's dispatcher; another tab
+// puts the panel away.
+function setTab(t, push = true) {
+  goTab(t, push);
+  if (t === "talk") {
+    if (!side || side.kind !== "talk") { const x = phoneTalk(); if (x) openTalk(x.crew, x.role, null); }
+  } else if (side) {
+    side = null;
+    frameTyping = false;
+    document.body.classList.remove("keyboard");
+    $("side").hidden = true;
+    $("talk-open").setAttribute("aria-expanded", "false");
+  }
+  render();
+}
+
+for (const b of document.querySelectorAll("#tabbar [data-tab]")) b.addEventListener("click", () => setTab(b.dataset.tab));
+globalThis.addEventListener?.("popstate", () => {
+  const h = TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : tab0;
+  if (h !== tab) setTab(h, false);
+});
+$("scope").addEventListener("click", () => setTab("crews"));
+phone.addEventListener?.("change", () => { render(); kbCheck(); });
+
+// k2: while a field has the keyboard up the bar steps aside; it never rides up on the keyboard.
+// A field in the conversation says so itself (zmina:typing): iOS does not show the parent a focus inside the frame,
+// and in the home-screen app the visual viewport does not shrink either.
+let frameTyping = false;
+function kbCheck() {
+  const vv = globalThis.visualViewport;
+  const a = document.activeElement;
+  const field = /^(INPUT|TEXTAREA)$/.test(a?.tagName || "");
+  // «keyboard», not «kb»: .kb is the cockpit's board. The phone only; the desktop has no bar to move.
+  document.body.classList.toggle("keyboard", phone.matches && (frameTyping || (!!vv && (field || a === $("side-frame")) && vv.height < innerHeight - 120)));
+}
+globalThis.visualViewport?.addEventListener("resize", kbCheck);
+
+// pinPanel holds the Talk tab's panel to what is on screen while the keyboard is up: iOS pans the page under it to the
+// field, and a panel fixed to the page went up with it — its head under the clock, the conversation jumping.
+function pinPanel() {
+  const vv = globalThis.visualViewport, p = $("side");
+  const up = !!vv && phone.matches && tab === "talk" && vv.height < innerHeight - 120;
+  if (!up) {
+    if (p.style.height) { p.style.top = p.style.height = p.style.bottom = ""; scrollTo(0, 0); }
+    return;
+  }
+  p.style.top = vv.offsetTop + "px";
+  p.style.height = vv.height + "px";
+  p.style.bottom = "auto";
+}
+globalThis.visualViewport?.addEventListener("resize", pinPanel);
+globalThis.visualViewport?.addEventListener("scroll", pinPanel);
+document.addEventListener("focusin", () => setTimeout(kbCheck, 0));
+document.addEventListener("focusout", () => setTimeout(kbCheck, 0));
+globalThis.addEventListener?.("blur", () => setTimeout(kbCheck, 0));
+
+// phoneTalk is whom the Talk tab opens (k1): the last conversation while the scope is the one it was opened under, else the scoped
+// crew's dispatcher — a crew picked in Crews never talks to the one before.
+function phoneTalk() {
+  return lastTalk && lastTalk.scope === filter ? lastTalk : scopeDispatcher();
+}
+
+// scopeLabel is the crew the Move and Going tabs show: «All», a node, or node/crew.
+function scopeLabel() {
+  if (filter === "all") return W.all;
+  if (filter.startsWith("node:")) return filter.slice(5);
+  return shownLabel(filter, true) || crewLabel(filter) || filter;
+}
+
+function renderPhone(hold, asks, going, parked) {
+  if (!phone.matches) return;
+  const red = redList();
+  setText($("phead-h"), tab === "going" ? W.tabGoing : tab === "crews" ? W.tabCrews : W.tabMove);
+  setText($("scope-n"), scopeLabel());
+
+  // m0 · the readout: four numbers, each a way to its section.
+  const live = (xs) => xs.filter((it) => !gone(key(it.crew, it.id)));
+  const cells = [[red.length, W.roDown, "x", () => $("down").scrollIntoView({ block: "start" })],
+    [live(hold).length, W.roHold, "n", () => $("hold").scrollIntoView({ block: "start" })],
+    [live(asks).length, W.roAnswer, "n", () => $("ask").scrollIntoView({ block: "start" })],
+    [going.length, W.roGoing, "b", () => setTab("going")]];
+  patch($("pro"), cells.map(([n, label, cls, fn]) => {
+    const b = button("", "", fn);
+    b.append(el("b", n ? cls : "", String(n)), el("span", "", label));
+    return b;
+  }));
+
+  // m1 · Down: every red item as a row; it opens what the header's red line opens.
+  $("down").hidden = !red.length;
+  heading("down-h", W.down, red.length, "x");
+  patch($("down-rows"), red.map((d) => {
+    const b = button("row red prow", "", () => openTalk(d.crew, d.role, b), d.fix);
+    const words = el("div", "words");
+    words.append(el("span", "tt", d.text), el("span", "cl", crewLabel(d.crew) || crewName(d.crew)));
+    b.append(words, el("span"), el("span"), el("span", "chev", "›"));
+    return b;
+  }));
+  $("pnone").hidden = !!(red.length || hold.length || asks.length || (snap.alarms || []).length);
+
+  // g1 · Going ends with «Done today N ›», a line like Parked.
+  const done = snap.crews.filter((c) => shows(c.key)).reduce((n, c) => n + (c.done_today || 0), 0);
+  patch($("pdone"), [button("parked-line", W.doneTodayN + " " + done + " ›", () => openList("done"))]);
+
+  renderCrews(parked);
+  renderTabs(hold, asks, red);
+  // Opened on #talk (or kept there): the conversation comes with the first snapshot.
+  if (tab === "talk" && !side) setTimeout(() => { const x = !side && tab === "talk" && phoneTalk(); if (x) openTalk(x.crew, x.role, null); }, 0);
+}
+
+// c1 · Crews: what the other tabs show. «All crews», then a group per node, a row per crew with its lamp and state;
+// a tap sets the scope and returns to the tab the owner came from. Parked, Done today and History under the list.
+function renderCrews(parked) {
+  const pick = (k) => { filter = k; menuNode = ""; localStorage.setItem("zmina.crew", k); setTab(tabFrom === "talk" ? "move" : tabFrom); };
+  const row = (k, name, lamp, state, stCls) => {
+    const b = button("cr" + (filter === k ? " on" : ""), "", () => pick(k));
+    b.setAttribute("aria-pressed", filter === k ? "true" : "false");
+    if (filter === k) {
+      const ck = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      ck.setAttribute("viewBox", "0 0 24 24");
+      ck.setAttribute("class", "ck");
+      ck.innerHTML = '<path d="M5 12.5l4.5 4.5L19 7.5"/>';
+      b.append(ck);
+    } else b.append(el("span", "lamp " + lamp));
+    b.append(el("span", "n", name), el("span", "s " + stCls, state));
+    return b;
+  };
+  const out = [];
+  const allRed = redList(true);
+  out.push(row("all", W.allCrews, allRed.length ? "x" : "", allRed.length ? W.nDown(allRed.length) : W.upW, allRed.length ? "x" : ""));
+  const nodes = new Map();
+  for (const c of snap.crews.filter((c) => !away(c.key))) {
+    const n = c.node || snap.self || "";
+    if (!nodes.has(n)) nodes.set(n, []);
+    nodes.get(n).push(c);
+  }
+  for (const [n, crews] of nodes) {
+    const remoteNode = crews.some((c) => c.remote);
+    out.push(el("p", "grp", (n || W.all) + (remoteNode ? W.overMesh : "")));
+    for (const c of crews) out.push(row(c.key, c.key.split("/").pop(), ...crewState(c, allRed)));
+  }
+  const live = parked.filter((it) => !gone(key(it.crew, it.id)));
+  const oldest = live.length ? dur(Math.max(...live.map((it) => nowMs() - T(it.created)))) : "";
+  const done = snap.crews.filter((c) => shows(c.key)).reduce((n, c) => n + (c.done_today || 0), 0);
+  const link = (name, value, fn) => {
+    const b = button("lk", "", fn);
+    b.append(el("span", "n", name), el("span", "", value + " ›"));
+    return b;
+  };
+  const links = el("div", "lks");
+  links.append(link(W.later, W.parkedN(live.length, oldest), () => openList("parked")),
+    link(W.doneTodayN, String(done), () => openList("done")), link(W.historyTab, "", openHistory));
+  out.push(links);
+  patch($("pcrews"), out);
+}
+
+// crewState is a crew's lamp, its words and their colour: down first, then working, stale, spare, stopped.
+function crewState(c, red) {
+  const mine = red.filter((d) => d.crew === c.key);
+  const busy = (c.roles || []).filter((r) => r.state === "up" && r.status === "busy").length;
+  if (c.stale) {
+    const n = (snap.nodes || []).find((x) => x.name === c.node);
+    return ["h", W.stale + (n && !zero(n.seen || "") ? " · " + ago(n.seen) : ""), "f"];
+  }
+  if (c.spare) return ["h", W.spare, "f"];
+  if (c.retired || !zero(c.stopped)) return ["h", W.stoppedW, "f"];
+  if (mine.length) {
+    const words = mine.map((d) => (d.kind === "down" ? W.roleDown(d.role) : W.tickerStopped));
+    if (busy) words.push(W.nWorking(busy));
+    return ["x", words.join(" · "), "x"];
+  }
+  if (busy) return ["b", W.nWorking(busy), "b"];
+  return ["", W.upW, ""];
+}
+
+// t3 · the badges: Move counts what waits on you (red while anything is down), Talk dots while its role waits on
+// you, Crews dots while a crew or a role is down. A badge that changes pops once.
+function renderTabs(hold, asks, red) {
+  const set = (t, on, text, cls) => {
+    const b = document.querySelector(`#tabbar [data-tab="${t}"]`);
+    if (tab === t) b.setAttribute("aria-current", "page");
+    else b.removeAttribute("aria-current");
+    const mark = b.querySelector(".bd, .dot");
+    if (!mark) return;
+    mark.hidden = !on;
+    if (text !== undefined) setText(mark, text);
+    if (cls !== undefined) mark.classList.toggle("x", cls);
+    const v = on ? String(text ?? "") + (cls ? "x" : "") : "";
+    if (badges[t] !== undefined && badges[t] !== v && on) { mark.classList.remove("pop"); void mark.offsetWidth; mark.classList.add("pop"); }
+    badges[t] = v;
+  };
+  const n = hold.length + asks.length + red.length;
+  set("move", n > 0, String(n), red.length > 0);
+  set("going", false);
+  const t = side && side.kind === "talk" ? side : phoneTalk();
+  const r = t && roleOf(t.crew, t.role);
+  set("talk", !!(r && (r.prompt || r.stuck)));
+  set("crews", redList(true).length > 0);
+}
 
 // ---- hover: a tinted row raises its project everywhere
 
@@ -1666,12 +2323,14 @@ function connect() {
     got = Date.now();
     snap.tints = snap.tints || {};
     $("mark").classList.remove("lost");
+    document.body.classList.remove("lost");
     // While a reply is being typed the page holds still: the snapshot is drawn when the field is left.
     if (document.activeElement?.classList.contains("field")) stale = true;
     else render();
   });
   es.onerror = () => {
     $("mark").classList.add("lost");
+    document.body.classList.add("lost");
     $("clock").lastElementChild.textContent = W.lost;
   };
 }

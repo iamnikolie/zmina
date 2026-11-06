@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Cockpit patching regression fixtures</title>
+<script src="../static/patch.js"></script>
+<pre id="result">Checking patching…</pre>
+<div id="stage"></div>
+<script>
+(() => {
+  const results = [], stage = document.getElementById("stage");
+  const assert = (condition, name) => { if (!condition) throw new Error(name); results.push(name); };
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
+  let opened = "";
+  // A check of the by-hand line: its key is only in its handler, as in app.js.
+  const check = (k, title) => { const l = el("span", "hk", title); l.tabIndex = 0; l.onclick = () => { opened = k; }; return l; };
+  // A group's «+N more»: which group it opens is only in its handler.
+  const more = (g, n) => { const b = el("button", "more", "+" + n + " more"); b.addEventListener("click", () => { opened = g; }); return b; };
+  // A row: opens by its data-k; its panel's button acts on it.
+  const row = (k, text, open) => {
+    const r = el("div", "row"); r.dataset.k = k;
+    r.addEventListener("click", () => { opened = k; });
+    r.append(el("span", "tt", text), el("button", "chev", "›"));
+    if (open) { const p = el("div", "panel"); const b = el("button", "", "Done"); b.addEventListener("click", (e) => { e.stopPropagation(); opened = "done:" + k; }); p.append(b); r.append(p); }
+    return r;
+  };
+  try {
+    // A: two checks with one title; the first goes. The one left must open A-2.
+    const hands = el("div"); stage.append(hands);
+    patch(hands, [check("A-1", "Review result"), " · ", check("A-2", "Review result")]);
+    patch(hands, [check("A-2", "Review result")]);
+    hands.querySelector(".hk").click();
+    assert(opened === "A-2", "same-title check left after the other goes opens its own item");
+
+    // B: two groups trade places with the same counts; the first «+2 more» must open the group now first.
+    const cols = el("div"); stage.append(cols);
+    const group = (g, n) => { const d = el("div", "grp"); d.append(el("b", "", "group"), more(g, n)); return d; };
+    patch(cols, [group("Alex", 2), group("Blair", 1)]);
+    patch(cols, [group("Blair", 2), group("Alex", 1)]);
+    cols.querySelector(".more").click();
+    assert(opened === "Blair", "a group's control acts on the group it is drawn for");
+
+    // C: an unchanged keyed row stays the same element (focus, scroll, references hold), its handler right.
+    const rows = el("div"); stage.append(rows);
+    patch(rows, [row("T-1", "one", false), row("T-2", "two", false)]);
+    const kept = rows.querySelector('[data-k="T-2"]');
+    patch(rows, [row("T-2", "two", false)]);
+    assert(rows.querySelector('[data-k="T-2"]') === kept, "an unchanged row is kept");
+    kept.click();
+    assert(opened === "T-2", "a kept row opens itself");
+
+    // D: an open row kept: its panel's button is the newly drawn one.
+    patch(rows, [row("T-2", "two", true)]);
+    const before = rows.querySelector(".panel button");
+    patch(rows, [row("T-2", "two", true)]);
+    const after = rows.querySelector(".panel button");
+    assert(after !== before, "a kept row's panel buttons are the current ones");
+    after.click();
+    assert(opened === "done:T-2", "the panel's button acts on its row");
+
+    // F: a changed keyed row or card stays the same element (an animation on it runs on); its words change, its
+    // buttons are the new ones.
+    const band = el("div"); stage.append(band);
+    const card = (k, words) => { const c = el("button", "card"); c.dataset.k = k; c.addEventListener("click", () => { opened = k; }); c.append(el("span", "lamp", "o"), el("span", "now", words)); return c; };
+    patch(band, [card("card:a/dev", "working · 1 min")]);
+    const lit = band.firstChild;
+    patch(band, [card("card:a/dev", "working · 2 min")]);
+    assert(band.firstChild === lit && lit.querySelector(".now").textContent === "working · 2 min", "a changed card is patched in place");
+    lit.click();
+    assert(opened === "card:a/dev", "a patched card opens its own role");
+    patch(rows, [row("T-2", "two, changed", false)]);
+    assert(rows.querySelector('[data-k="T-2"]') === kept && kept.querySelector(".tt").textContent === "two, changed", "a changed row is patched in place");
+
+    // E: focus on a swapped button comes back to its twin.
+    const box = el("div"); box.id = "box"; stage.append(box);
+    const b = () => { const x = el("button", "q", "Set"); x.addEventListener("click", () => {}); return x; };
+    patch(box, [b()]);
+    box.querySelector("button").focus();
+    const m = focusMark();
+    patch(box, [b()]);
+    refocus(m);
+    assert(document.activeElement === box.querySelector("button"), "focus follows a swapped button");
+
+    window.patchResults = { passed: true, results };
+  } catch (e) {
+    window.patchResults = { passed: false, failed: e.message, results };
+  }
+  document.getElementById("result").textContent = JSON.stringify(window.patchResults, null, 1);
+})();
+</script>
+</html>

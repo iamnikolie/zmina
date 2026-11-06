@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -41,6 +42,7 @@ func chatSnapshot(s *shift.Shift, role string) (chat.Snapshot, error) {
 			out.Status = v.Status
 			out.NeedsInput = v.Prompt
 			out.Context = v.Context
+			out.Since = v.Since
 			break
 		}
 	}
@@ -67,6 +69,16 @@ func chatSnapshot(s *shift.Shift, role string) (chat.Snapshot, error) {
 			return out, err
 		}
 		out.Active = out.State == "up" && !turn.Ended && (out.Status == "busy" || out.Status == "shell" || out.Status == "working") && !out.NeedsInput
+		// A question on the screen: Chat shows it with its options and answers it.
+		if out.NeedsInput {
+			if asker, ok := reg.(interface {
+				PendingQuestion(string) (*chat.Question, error)
+			}); ok {
+				if q, err := asker.PendingQuestion(out.Session); err == nil {
+					out.Question = q
+				}
+			}
+		}
 		if turn.Ended && !out.NeedsInput {
 			out.Status = "idle"
 		}
@@ -111,7 +123,7 @@ func chatSnapshot(s *shift.Shift, role string) (chat.Snapshot, error) {
 	}
 	for _, receipt := range rs.ChatReceipts {
 		id := "web:" + receipt.ID
-		if seen[id] {
+		if seen[id] || !receipt.Dismissed.IsZero() {
 			continue
 		}
 		state := "sent"
@@ -277,13 +289,331 @@ func (a *app) localChatAction(key, role, action string) (chat.Snapshot, error) {
 			}
 			return s.PressKeys(role, []string{"C-c"})
 		default:
-			return errors.New("chat action: start or stop")
+			if id, ok := strings.CutPrefix(action, "dismiss:"); ok {
+				return dismissChat(s, role, id, snapshot)
+			}
+			if pick, ok := strings.CutPrefix(action, "choose:"); ok {
+				return chooseDialog(s, role, pick)
+			}
+			if raw, ok := strings.CutPrefix(action, "answer:"); ok {
+				return answerQuestion(s, role, raw, snapshot)
+			}
+			return errors.New("chat action: start, stop, dismiss:<id>, choose:<n>:<id> or answer:<json>")
 		}
 	})
 	if err != nil {
 		return chat.Snapshot{}, err
 	}
 	return a.localChatRead(key, role)
+}
+
+// chooseDialog answers the question on a role's screen with one of its numbered choices, "<n>:<dialog id>": the id is
+// the fingerprint of the whole question the owner read, so a question that changed — even one with the same choices —
+// is never answered blind. Only while the session itself says it waits on a dialog. It moves the dialog's cursor there
+// and takes it, as the owner would with the arrows and Enter.
+func chooseDialog(s *shift.Shift, role, pick string) error {
+	ns, id, ok := strings.Cut(pick, ":")
+	n, err := strconv.Atoi(ns)
+	if !ok || err != nil || n < 1 || n > 9 {
+		return errors.New("choose:<n>:<label>")
+	}
+	screen, err := s.Tmux.Capture(role, 80)
+	if err != nil {
+		return err
+	}
+	if _, ok, err := s.Tmux.Prompt(role); err != nil || ok {
+		return errors.New("no question on its screen now")
+	}
+	if v := viewOf(s, role); v == nil || v.Status != "waiting" {
+		return errors.New("it is not waiting on a question now")
+	}
+	d := shift.ParseDialog(screen)
+	if d == nil {
+		return errors.New("no question on its screen now")
+	}
+	i := slices.IndexFunc(d.Options, func(o shift.DialogOption) bool { return o.N == n })
+	if i < 0 || d.ID != id {
+		return errors.New("the question on its screen changed: look again")
+	}
+	return s.PressKeys(role, d.ChooseKeys(n))
+}
+
+// questionAnswer is the owner's answer to the question on a role's screen, from Chat: per item the chosen options
+// (1-based) or, for a single-choice item, words of their own.
+type questionAnswer struct {
+	ID    string `json:"id"`
+	Items []struct {
+		Choices []int  `json:"choices"`
+		Other   string `json:"other"`
+	} `json:"items"`
+}
+
+// answerStep is what one press does: named keys, or a line of text typed and entered.
+type answerStep struct {
+	Keys []string
+	Text string
+	// Expect is the question the screen must show before this step is pressed, Options its option labels (empty:
+	// no check of the dialog's text; the input line is checked before every step).
+	Expect  string
+	Options []string
+	// Current is the row (1-based) the dialog's cursor must be on before this step (0: any row).
+	Current int
+	// Want is the options a several-choice part must end ticked: the keys are worked out on the live dialog, so an
+	// option already ticked is not ticked off.
+	Want []int
+}
+
+// answerSteps turns an answer into what Claude Code's question dialog takes: a single-choice item is its option's
+// digit (the dialog moves on), its own words are the digit after the last option, the text and Enter; a
+// multi-choice item is the digits that tick its options, then Tab; a question of several items ends on the review
+// screen, whose 1 submits. The last digit, «Chat about this», is never pressed.
+func answerSteps(q *chat.Question, a questionAnswer) ([]answerStep, error) {
+	if q == nil || a.ID != q.ID {
+		return nil, errors.New("the question on its screen changed: look again")
+	}
+	if len(a.Items) != len(q.Items) {
+		return nil, fmt.Errorf("the question has %d parts, the answer %d", len(q.Items), len(a.Items))
+	}
+	var steps []answerStep
+	digit := func(n int) string { return strconv.Itoa(n) }
+	for i, item := range q.Items {
+		ans, n := a.Items[i], len(item.Options)
+		if n < 1 || n > 8 {
+			return nil, fmt.Errorf("part %d: %d options; answer it in Terminal", i+1, n)
+		}
+		for _, c := range ans.Choices {
+			if c < 1 || c > n {
+				return nil, fmt.Errorf("part %d: no option %d", i+1, c)
+			}
+		}
+		other := strings.TrimSpace(ans.Other)
+		first := len(steps)
+		if item.MultiSelect {
+			if other != "" {
+				return nil, fmt.Errorf("part %d: words of your own go as a reply, not with ticks", i+1)
+			}
+			if len(ans.Choices) == 0 {
+				return nil, fmt.Errorf("part %d: tick at least one option", i+1)
+			}
+			if len(q.Items) == 1 {
+				return nil, errors.New("a single question with ticks: answer it in Terminal")
+			}
+			want := []int{}
+			for _, c := range ans.Choices {
+				if !slices.Contains(want, c) {
+					want = append(want, c)
+				}
+			}
+			slices.Sort(want)
+			steps = append(steps, answerStep{Want: want, Keys: []string{"Tab"}})
+			steps[first].Expect, steps[first].Options = item.Question, labels(item)
+			continue
+		}
+		switch {
+		case other != "" && len(ans.Choices) == 0:
+			steps = append(steps, answerStep{Keys: []string{digit(n + 1)}}, answerStep{Text: other, Expect: item.Question, Options: labels(item), Current: n + 1})
+		case other == "" && len(ans.Choices) == 1:
+			steps = append(steps, answerStep{Keys: []string{digit(ans.Choices[0])}})
+		default:
+			return nil, fmt.Errorf("part %d: one option, or words of your own", i+1)
+		}
+		steps[first].Expect, steps[first].Options = item.Question, labels(item)
+	}
+	if len(q.Items) > 1 {
+		steps = append(steps, answerStep{Keys: []string{"1"}, Expect: "Review your answers", Options: []string{"Submit answers", "Cancel"}})
+	}
+	return steps, nil
+}
+
+// labels are an item's option labels as the dialog draws them.
+func labels(item chat.QuestionItem) []string {
+	out := make([]string, 0, len(item.Options))
+	for _, o := range item.Options {
+		out = append(out, o.Label)
+	}
+	return out
+}
+
+// dialogOption is a numbered row of the active question dialog: its number, label and, for ticks, whether ticked.
+type dialogOption struct {
+	N       int
+	Label   string
+	Ticked  bool
+	Current bool
+}
+
+var dialogRow = regexp.MustCompile(`^\s*(❯\s*)?(\d+)\.\s+(?:\[([ ✔])\]\s+)?(.*?)\s*$`)
+
+// activeDialog reads the question dialog at the bottom of the screen: the last place the question starts, its whole
+// text from there, and the numbered rows under it in order. ok is false when that question is not the active one.
+func activeDialog(screen, question string) ([]dialogOption, bool) {
+	flat := func(t string) string { return strings.Join(strings.Fields(t), " ") }
+	q := flat(question)
+	head := []rune(q)
+	if len(head) > 20 {
+		head = head[:20]
+	}
+	lines := strings.Split(screen, "\n")
+	at := -1
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.Contains(flat(lines[i]), string(head)) {
+			at = i
+			break
+		}
+	}
+	if q == "" || at < 0 || !strings.Contains(flat(strings.Join(lines[at:], " ")), q) {
+		return nil, false
+	}
+	var out []dialogOption
+	current := 0
+	for _, l := range lines[at:] {
+		m := dialogRow.FindStringSubmatch(l)
+		if m == nil {
+			continue
+		}
+		n, _ := strconv.Atoi(m[2])
+		if n == 1 && len(out) > 0 {
+			return nil, false // numbering starts again: another dialog below this text, the active one is not it
+		}
+		if n != len(out)+1 {
+			continue // a number in the question's own text, not a row
+		}
+		out = append(out, dialogOption{N: n, Label: flat(m[4]), Ticked: m[3] == "✔", Current: m[1] != ""})
+		if m[1] != "" {
+			current++
+		}
+	}
+	// The active dialog has its cursor on exactly one of its rows; text that only looks like one has none.
+	return out, len(out) > 0 && current == 1
+}
+
+// dialogMatches reports whether the active dialog's rows are the part's options, in order, by number.
+func dialogMatches(rows []dialogOption, labels []string) bool {
+	if len(rows) < len(labels) {
+		return false
+	}
+	for i, l := range labels {
+		if rows[i].Label != strings.Join(strings.Fields(l), " ") {
+			return false
+		}
+	}
+	return true
+}
+
+// onScreen reports whether the screen shows the whole question and every one of its options, line breaks and runs
+// of spaces aside: another question that starts alike is not this one.
+func onScreen(screen, want string, options ...string) bool {
+	flat := func(t string) string { return strings.Join(strings.Fields(t), " ") }
+	s, w := flat(screen), flat(want)
+	if w == "" || !strings.Contains(s, w) {
+		return false
+	}
+	for _, o := range options {
+		if !strings.Contains(s, flat(o)) {
+			return false
+		}
+	}
+	return true
+}
+
+// answerQuestion answers the question on a role's screen with the owner's choices, if it is still the one shown.
+func answerQuestion(s *shift.Shift, role, raw string, snapshot chat.Snapshot) error {
+	var a questionAnswer
+	if err := json.Unmarshal([]byte(raw), &a); err != nil {
+		return errors.New("answer:<json>")
+	}
+	if !snapshot.NeedsInput || snapshot.Question == nil {
+		return errors.New("no question on its screen now")
+	}
+	steps, err := answerSteps(snapshot.Question, a)
+	if err != nil {
+		return err
+	}
+	// Never twice: a second request for the same question (a retry, another browser) is refused. The mark is made
+	// before the first key, under the state lock the whole answer holds.
+	rs := s.State.Role(role)
+	if slices.Contains(rs.AnsweredQuestions, a.ID) {
+		return errors.New("this question was answered from Chat already; look at Terminal")
+	}
+	if _, ok, err := s.Tmux.Prompt(role); err != nil || ok {
+		return errors.New("no question on its screen now")
+	}
+	rs.AnsweredQuestions = append(rs.AnsweredQuestions, a.ID)
+	if n := len(rs.AnsweredQuestions); n > 20 {
+		rs.AnsweredQuestions = rs.AnsweredQuestions[n-20:]
+	}
+	for i, step := range steps {
+		if i > 0 {
+			// The dialog redraws between parts; a key sent into the redraw is lost.
+			time.Sleep(250 * time.Millisecond)
+		}
+		// Each step is checked on the live screen first: no input line (the dialog is still up), and the part's
+		// whole question with its options — a question closed or changed in Terminal meanwhile stops the answer
+		// instead of typing into the role's input line.
+		if i > 0 {
+			if _, ok, err := s.Tmux.Prompt(role); err != nil || ok {
+				return fmt.Errorf("stopped at step %d: the question is gone from its screen; look at Terminal", i+1)
+			}
+		}
+		if step.Expect != "" {
+			screen, err := s.Tmux.Capture(role, 120)
+			if err != nil {
+				return err
+			}
+			stop := fmt.Errorf("stopped at step %d: the question on its screen is not the one answered; look at Terminal", i+1)
+			if len(step.Options) == 0 {
+				if !onScreen(screen, step.Expect) {
+					return stop
+				}
+			} else {
+				// The active dialog, at the bottom: this part's whole question and its options by number, in order.
+				rows, ok := activeDialog(screen, step.Expect)
+				if !ok || !dialogMatches(rows, step.Options) || step.Current > 0 && (len(rows) < step.Current || !rows[step.Current-1].Current) {
+					return stop
+				}
+				if step.Want != nil {
+					// Ticks: press only the options whose tick differs from the one wanted.
+					keys := []string{}
+					for k, r := range rows[:len(step.Options)] {
+						if r.Ticked != slices.Contains(step.Want, k+1) {
+							keys = append(keys, strconv.Itoa(k+1))
+						}
+					}
+					step.Keys = append(keys, step.Keys...)
+				}
+			}
+		}
+		if step.Text != "" {
+			if err := s.Tmux.Type(role, step.Text); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := s.PressKeys(role, step.Keys); err != nil {
+			return err
+		}
+	}
+	s.Log(role, "answered", "", fmt.Sprintf("question %s from Chat", a.ID))
+	return nil
+}
+
+// dismissChat sets aside an owner message whose delivery stayed unconfirmed (its conversation changed before it was
+// seen there): the owner has looked and need not see it under every newer reply. Only such a message: one still
+// queued, sent or failed has a delivery in play.
+func dismissChat(s *shift.Shift, role, id string, snapshot chat.Snapshot) error {
+	if !chat.ValidID(id) {
+		return errors.New("message request ID is invalid")
+	}
+	if !slices.ContainsFunc(snapshot.Pending, func(m chat.Message) bool { return m.ID == "web:"+id && m.State == "unconfirmed" }) {
+		return errors.New("only a message whose delivery is unconfirmed can be dismissed")
+	}
+	rs := s.State.Role(role)
+	for i := range rs.ChatReceipts {
+		if rs.ChatReceipts[i].ID == id {
+			rs.ChatReceipts[i].Dismissed = s.Now()
+		}
+	}
+	return nil
 }
 
 func (a *app) chatCall(ctx context.Context, node, op string, req mesh.TerminalRequest) (chat.Snapshot, error) {
@@ -356,4 +686,14 @@ func (a *app) uiChat(mux *http.ServeMux) {
 			writeJSON(w, snapshot)
 		})
 	}
+}
+
+// viewOf is the role's view as ls shows it, nil when it has none.
+func viewOf(s *shift.Shift, role string) *shift.View {
+	for _, v := range s.Views() {
+		if v.Role == role {
+			return &v
+		}
+	}
+	return nil
 }

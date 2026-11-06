@@ -35,10 +35,14 @@ type Snapshot struct {
 	State                string      `json:"state"`
 	Status               string      `json:"status,omitempty"`
 	NeedsInput           bool        `json:"needs_input,omitempty"`
+	// Question is the question on the role's screen, when it is one Chat can show and answer (AskUserQuestion).
+	Question *Question `json:"question,omitempty"`
 	Active               bool        `json:"active"`
-	Context              int         `json:"context,omitempty"`
-	Messages             []Message   `json:"messages"`
-	Pending              []Message   `json:"pending"`
+	// Since is when the role's status last changed: how long it has been working.
+	Since    time.Time `json:"since,omitzero"`
+	Context  int       `json:"context,omitempty"`
+	Messages []Message `json:"messages"`
+	Pending  []Message `json:"pending"`
 }
 
 // Receipt persists browser request identity in the same transaction as the role's queue entry.
@@ -50,6 +54,9 @@ type Receipt struct {
 	Text        string       `json:"text"`
 	Line        string       `json:"line"`
 	At          time.Time    `json:"at"`
+	// Dismissed is when the owner set aside a message whose delivery stayed unconfirmed: it is no longer shown as
+	// pending. The receipt stays, so a retry with the same ID is still recognised.
+	Dismissed time.Time `json:"dismissed,omitzero"`
 }
 
 var idPattern = regexp.MustCompile(`^[a-f0-9-]{16,64}$`)
