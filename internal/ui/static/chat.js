@@ -12,6 +12,11 @@
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && !e.defaultPrevented) window.parent.postMessage("zmina:close", location.origin);
     });
+    // D-11: on the phone the Talk tab reads like the Claude iOS app; the cockpit's width says which it is (this frame
+    // may be narrow on the desktop too).
+    const phone = () => { try { document.body.classList.toggle("phone", window.parent.matchMedia("(max-width: 860px)").matches); } catch (_) { /* a frame of another page */ } };
+    phone();
+    try { window.parent.addEventListener("resize", phone); } catch (_) { /* as above */ }
     // A field here with the keyboard up: the cockpit's tab bar steps aside (D-09 k2). The parent cannot see a focus
     // inside this frame on iOS, so it is told.
     const typing = (on) => window.parent.postMessage(on ? "zmina:typing" : "zmina:typed", location.origin);
@@ -219,7 +224,7 @@
       const date = new Date(row.at), shown = Number.isNaN(date.getTime()) ? "" : (date.toDateString() === new Date().toDateString() ? clock : dated).format(date);
       for (const time of article.querySelectorAll("time")) time.textContent = shown;
       // D-08 c3: every message keeps its full time in its title; the meta row shows it under a run's last one.
-      article.title = Number.isNaN(date.getTime()) ? "" : date.toLocaleString();
+      article.title = (row.event?.kind === "session" ? "Session message · " : "") + (Number.isNaN(date.getTime()) ? "" : date.toLocaleString());
       if (article._text !== row.text || article._presentation!==presentation) { const body = article.querySelector(".message-body"); if (row.event) {
         const title = document.createElement("p"), summary = document.createElement("p");
         title.className = "event-status";

@@ -2022,6 +2022,8 @@ $("side-pick").addEventListener("click", () => {
   if (!m.hidden) { $("side-filter").value = ""; pickAll = ""; renderPick(); $("side-filter").focus(); }
 });
 $("side-filter").addEventListener("input", renderPick);
+// D-11: on the phone node/crew stands under the role's name, and a tap there opens the picker too.
+$("side-who").addEventListener("click", () => { if (phone.matches && side && side.kind === "talk") $("side-pick").click(); });
 $("side-close").addEventListener("click", closeTalk);
 // The conversation is a frame of this page: its Esc arrives as a message, accepted only from that frame and this origin.
 globalThis.addEventListener?.("message", (e) => {

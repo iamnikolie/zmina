@@ -164,3 +164,39 @@ html.chat-document { height: 100%; overflow: hidden; }
   #conversation { padding: 8px 16px 24px; }
   .chat-composer { padding: 0 max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); }
 }
+
+/* D-11 · the Talk tab on the phone reads like the Claude iOS app. .phone is set by chat.js from the cockpit's width;
+   the desktop keeps D-08. */
+.chat-page.phone #conversation { padding-top: 76px; -webkit-mask-image: none; mask-image: none; }
+/* c1 · the role's text in the system sans, full ink */
+.chat-page.phone .chat-message.assistant { font: 17px/1.55 var(--sans); color: var(--ink); }
+.chat-page.phone .assistant .message-body p { margin: 0 0 14px; }
+.chat-page.phone .assistant .message-body code { font-size: .82em; }
+/* b1 · the owner's bubble lighter than the page; 18 px to the next turn */
+.chat-page.phone .chat-message.user .message-body { background: var(--line2); }
+.chat-page.phone #messages > .chat-message.user.run-end { margin-bottom: 10px; }
+@media (prefers-color-scheme: light) { .chat-page.phone .chat-message.user .message-body { background: var(--panel2); } }
+/* s1 · a session message from the owner is his bubble: no card, no caption (origin and time in its title) */
+.chat-page.phone .chat-message.event.session { align-self: flex-end; max-width: min(80%, 36rem); padding: 10px 16px; border: 0; border-radius: 18px;
+  background: var(--line2); color: var(--ink); font: 15px/1.55 var(--sans); }
+@media (prefers-color-scheme: light) { .chat-page.phone .chat-message.event.session { background: var(--panel2); } }
+.chat-page.phone .event.session .message-head { display: none; }
+.chat-page.phone .event.session .message-body > p { margin: 0; }
+.chat-page.phone .event.session details > summary { min-height: 32px; padding: 6px 0 0; }
+.chat-page.phone #messages > .event.session, .chat-page.phone #messages > .event.session + .chat-message { margin-top: 16px; }
+/* m1 · under a reply: Copy only, no time; none under the owner's bubble */
+.chat-page.phone .message-meta { height: 44px; margin: -6px 0 0 -10px; }
+.chat-page.phone .message-meta time, .chat-page.phone .chat-message.user > .message-meta { display: none; }
+.chat-page.phone .message-meta .ib { width: 44px; height: 44px; color: var(--muted); }
+.chat-page.phone .message-meta .ib svg { width: 19px; height: 19px; }
+/* k1 · the composer: r 24; plus, dictate and send as 40 px circles; send is ink once there is text, no brand colour */
+.chat-page.phone .composer-box { border-radius: 24px; padding: 14px 8px 8px 16px; }
+.chat-page.phone #message { font-size: 17px; }
+.chat-page.phone .composer-row { gap: 6px; }
+.chat-page.phone .composer-row .ib, .chat-page.phone .composer-row .send { position: relative; width: 40px; height: 40px; margin: 2px; border: 0; border-radius: 50%;
+  background: var(--line2); color: var(--ink2); }
+.chat-page.phone .composer-row .ib::after, .chat-page.phone .composer-row .send::after { content: ""; position: absolute; inset: -2px; }
+.chat-page.phone .composer-row svg { width: 20px; height: 20px; }
+.chat-page.phone .composer-row .send:disabled { background: var(--line2); color: var(--faint); }
+.chat-page.phone .composer-row .send:not(:disabled) { background: var(--ink); color: var(--bg); }
+.chat-page.phone .composer-row .send svg { stroke-width: 2.2; }

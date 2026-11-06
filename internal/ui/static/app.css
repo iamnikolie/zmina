@@ -767,7 +767,20 @@ body.fv-on { overflow: hidden; }
   body.keyboard .side-panel { bottom: 0; }
   /* The Talk tab is the panel alone: the page under it does not scroll, so iOS has nothing to leave scrolled */
   html:has(body[data-tab="talk"]), body[data-tab="talk"] { overflow: hidden; }
-  body[data-tab="talk"] .panel-h { padding: 0 8px 0 16px; gap: 6px; }
+  /* D-11 h1 · the head floats over the conversation: no bar, a fade from the panel tone; centred name (the picker)
+     with node/crew under it; Terminal a round button at the right; the lamp goes (working is said in the thread) */
+  body[data-tab="talk"] .panel-h { position: absolute; top: env(safe-area-inset-top); left: 0; right: 0; z-index: 3; display: block; height: 72px;
+    padding: 0; background: linear-gradient(var(--panel) calc(100% - 24px), transparent); pointer-events: none; }
+  body[data-tab="talk"] .panel-h > * { pointer-events: auto; }
+  body[data-tab="talk"] .panel-h .lamp { display: none; }
+  body[data-tab="talk"] .panel-h .pick { position: absolute; left: 50%; top: 2px; transform: translateX(-50%); }
+  body[data-tab="talk"] .panel-h .pick > button { height: 40px; margin: 0; padding: 0 12px; gap: 5px; font: 600 17px/1.2 var(--sans); }
+  body[data-tab="talk"] .panel-h .pick > button:hover, body[data-tab="talk"] .panel-h .pick > button[aria-expanded="true"] { background: none; }
+  body[data-tab="talk"] .pickmenu { left: 50%; transform: translateX(-50%); width: min(20rem, calc(100vw - 24px)); }
+  body[data-tab="talk"] .panel-h .who { position: absolute; left: 25%; right: 25%; top: 40px; justify-content: center; cursor: pointer; }
+  body[data-tab="talk"] .panel-h .who .k { font: 13px/1.2 var(--sans); color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+  body[data-tab="talk"] .panel-h .tools2 { position: absolute; right: 12px; top: 14px; }
+  body[data-tab="talk"] .panel-h .tools2 #side-term { border-radius: 50%; background: var(--panel2); color: var(--ink2); }
   body[data-tab="talk"] .panel-h .back, body[data-tab="talk"] #side-close, body[data-tab="talk"] #side-full { display: none; }
   body[data-tab="talk"] .panel-h .pick > button { height: 44px; font-size: 17px; }
   body[data-tab="talk"] .panel-h .tools2 a, body[data-tab="talk"] .panel-h .tools2 button { width: 44px; height: 44px; }
