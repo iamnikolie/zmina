@@ -71,6 +71,7 @@ const document = {
 const store = {};
 const phone = process.argv[3] === "phone";
 const listeners = {};
+const media = { matches: phone, addEventListener() {} };
 const ctx = vm.createContext({
   addEventListener: (name, fn) => { (listeners[name] = listeners[name] || []).push(fn); },
   document,
@@ -81,7 +82,7 @@ const ctx = vm.createContext({
   clearTimeout: () => {},
   fetch: () => new Promise(() => {}),
   EventSource: class { addEventListener() {} },
-  matchMedia: () => ({ matches: phone, addEventListener() {} }),
+  matchMedia: () => media,
   location: { hash: "", search: "", origin: "http://127.0.0.1" },
   history: { pushState() {}, replaceState() {} },
   requestAnimationFrame: () => 0,
@@ -101,7 +102,8 @@ vm.runInContext(fs.readFileSync(process.argv[2], "utf8"), ctx, { filename: "app.
 
 if (phone) {
   // D-09: whom Talk opens after the scope changes, Alarms with no alarm, Back to the entry the page opened on.
-  ctx.fire = (name) => (listeners[name] || []).forEach((fn) => fn({}));
+  ctx.fire = (name, e) => (listeners[name] || []).forEach((fn) => fn(e || {}));
+  ctx.media = media;
   ctx.byId = byId;
   const out = vm.runInContext(`
     const role = (r) => ({ role: r, state: "up", status: "idle" });
@@ -124,6 +126,16 @@ if (phone) {
     location.hash = "";
     fire("popstate");
     res.back = { tab, body: document.body.dataset.tab };
+    // The conversation's field says the keyboard is up: the bar steps aside on the phone, never on the desktop.
+    const typing = (on) => fire("message", { origin: location.origin, source: undefined, data: on ? "zmina:typing" : "zmina:typed" });
+    typing(true);
+    res.keyboardPhone = document.body.className;
+    typing(false);
+    media.matches = false;
+    typing(true);
+    res.keyboardDesktop = document.body.className;
+    typing(false);
+    media.matches = true;
     snap = s;
     JSON.stringify(res);
   `, ctx);

@@ -2032,7 +2032,7 @@ globalThis.addEventListener?.("message", (e) => {
     kbCheck();
     // iOS scrolls the page to the field and, in the home-screen app, leaves it there when the keyboard goes: the
     // bar would float above a dead strip. The Talk tab has nothing to scroll, so it goes back to the top.
-    if (!frameTyping && tab === "talk") setTimeout(() => scrollTo(0, 0), 50);
+    if (!frameTyping && phone.matches && tab === "talk") setTimeout(() => scrollTo(0, 0), 50);
   }
 });
 $("side-back").addEventListener("click", closeTalk);
@@ -2089,7 +2089,7 @@ function setTab(t, push = true) {
   } else if (side) {
     side = null;
     frameTyping = false;
-    document.body.classList.remove("kb");
+    document.body.classList.remove("keyboard");
     $("side").hidden = true;
     $("talk-open").setAttribute("aria-expanded", "false");
   }
@@ -2102,7 +2102,7 @@ globalThis.addEventListener?.("popstate", () => {
   if (h !== tab) setTab(h, false);
 });
 $("scope").addEventListener("click", () => setTab("crews"));
-phone.addEventListener?.("change", () => render());
+phone.addEventListener?.("change", () => { render(); kbCheck(); });
 
 // k2: while a field has the keyboard up the bar steps aside; it never rides up on the keyboard.
 // A field in the conversation says so itself (zmina:typing): iOS does not show the parent a focus inside the frame,
@@ -2112,7 +2112,8 @@ function kbCheck() {
   const vv = globalThis.visualViewport;
   const a = document.activeElement;
   const field = /^(INPUT|TEXTAREA)$/.test(a?.tagName || "");
-  document.body.classList.toggle("kb", frameTyping || (!!vv && (field || a === $("side-frame")) && vv.height < innerHeight - 120));
+  // «keyboard», not «kb»: .kb is the cockpit's board. The phone only; the desktop has no bar to move.
+  document.body.classList.toggle("keyboard", phone.matches && (frameTyping || (!!vv && (field || a === $("side-frame")) && vv.height < innerHeight - 120)));
 }
 globalThis.visualViewport?.addEventListener("resize", kbCheck);
 document.addEventListener("focusin", () => setTimeout(kbCheck, 0));

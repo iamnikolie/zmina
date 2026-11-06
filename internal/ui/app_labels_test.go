@@ -59,6 +59,8 @@ func TestPhoneTabs(t *testing.T) {
 		OtherScope struct{ Crew, Role string } `json:"otherScope"`
 		Alarms     string                      `json:"alarms"`
 		Back       struct{ Tab, Body string }  `json:"back"`
+		KbPhone    string                      `json:"keyboardPhone"`
+		KbDesktop  string                      `json:"keyboardDesktop"`
 	}
 	require.NoError(t, json.Unmarshal(raw, &res))
 
@@ -68,4 +70,7 @@ func TestPhoneTabs(t *testing.T) {
 	assert.NotContains(t, res.Alarms, "empty", "an empty Alarms is not hidden: its Set is the way to the first one")
 	assert.Equal(t, "move", res.Back.Tab)
 	assert.Equal(t, "move", res.Back.Body)
+	assert.Contains(t, res.KbPhone, "keyboard", "a field in the conversation hides the bar on the phone")
+	assert.NotContains(t, res.KbDesktop, "keyboard", "never on the desktop")
+	assert.NotContains(t, res.KbDesktop, "kb", "nor as the board's own class")
 }

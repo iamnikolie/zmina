@@ -748,7 +748,7 @@ body.fv-on { overflow: hidden; }
   /* t1–t3 · the bar */
   .tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 8; display: grid; grid-template-columns: repeat(4, 1fr); height: var(--bar);
     padding-bottom: env(safe-area-inset-bottom); box-sizing: border-box; background: var(--panel); border-top: 1px solid var(--line); }
-  body.kb .tabbar { display: none; }
+  body.keyboard .tabbar { display: none; }
   .tabbar button { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; min-height: 44px;
     border: 0; background: none; font: 500 11px/1 var(--sans); color: var(--muted); -webkit-tap-highlight-color: transparent; }
   .tabbar svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
@@ -764,7 +764,7 @@ body.fv-on { overflow: hidden; }
 
   /* k1 · Talk: the D-08 panel full screen inside the tab, above the bar; the bar is the way out */
   .side-panel { bottom: var(--bar); padding-top: env(safe-area-inset-top); animation: none; }
-  body.kb .side-panel { bottom: 0; }
+  body.keyboard .side-panel { bottom: 0; }
   /* The Talk tab is the panel alone: the page under it does not scroll, so iOS has nothing to leave scrolled */
   html:has(body[data-tab="talk"]), body[data-tab="talk"] { overflow: hidden; }
   body[data-tab="talk"] .panel-h { padding: 0 8px 0 16px; gap: 6px; }
