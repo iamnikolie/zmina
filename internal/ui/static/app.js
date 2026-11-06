@@ -2077,6 +2077,7 @@ function goTab(t, push = true) {
   try { localStorage.setItem("zmina.tab", t); } catch (_) { /* the tab is kept for this visit only */ }
   if (push && location.hash !== "#" + t) history.pushState(null, "", "#" + t);
   document.body.dataset.tab = t;
+  if (typeof pinPanel === "function") pinPanel();
   requestAnimationFrame(() => scrollTo(0, tabScroll[t] || 0));
 }
 
@@ -2116,6 +2117,22 @@ function kbCheck() {
   document.body.classList.toggle("keyboard", phone.matches && (frameTyping || (!!vv && (field || a === $("side-frame")) && vv.height < innerHeight - 120)));
 }
 globalThis.visualViewport?.addEventListener("resize", kbCheck);
+
+// pinPanel holds the Talk tab's panel to what is on screen while the keyboard is up: iOS pans the page under it to the
+// field, and a panel fixed to the page went up with it — its head under the clock, the conversation jumping.
+function pinPanel() {
+  const vv = globalThis.visualViewport, p = $("side");
+  const up = !!vv && phone.matches && tab === "talk" && vv.height < innerHeight - 120;
+  if (!up) {
+    if (p.style.height) { p.style.top = p.style.height = p.style.bottom = ""; scrollTo(0, 0); }
+    return;
+  }
+  p.style.top = vv.offsetTop + "px";
+  p.style.height = vv.height + "px";
+  p.style.bottom = "auto";
+}
+globalThis.visualViewport?.addEventListener("resize", pinPanel);
+globalThis.visualViewport?.addEventListener("scroll", pinPanel);
 document.addEventListener("focusin", () => setTimeout(kbCheck, 0));
 document.addEventListener("focusout", () => setTimeout(kbCheck, 0));
 globalThis.addEventListener?.("blur", () => setTimeout(kbCheck, 0));
