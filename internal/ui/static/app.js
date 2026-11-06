@@ -57,6 +57,10 @@ const W = {
   elsewhere: (h, q) => "Elsewhere: " + h + " hold · " + q + " answer → All", downHolds: (r, ts) => r + ": down, holds " + ts,
   answerOn: (n) => "answer on " + n, detailsOn: (n) => "details on " + n,
   talk: "Talk", talkTo: (r) => "Talk to " + r,
+  byHand: "by hand", down: "Down", tabMove: "Your move", tabGoing: "Going", tabCrews: "Crews", allCrews: "All crews",
+  roDown: "down", roHold: "hold", roAnswer: "answer", roGoing: "going", overMesh: " · over the mesh", upW: "up",
+  nDown: (n) => n + " down", roleDown: (r) => r + " down", nWorking: (n) => n + " working", tickerStopped: "ticker stopped",
+  stoppedW: "stopped", doneTodayN: "Done today", parkedN: (n, old) => n + (old ? " · oldest " + old : ""),
   ev: {
     alarm: "alarm: ", sleep: "asleep ",
     new: "started: ", waitingOn: "waits on you: ", waitingWho: (w) => "waits on " + w + ": ", done: "done", dropped: "dropped",
@@ -220,6 +224,7 @@ function render() {
   renderQuiet();
   renderFoot();
   renderCockpit(hold, asks, others, parked);
+  renderPhone(hold, asks, going, parked);
   for (const k of seenNow) seen.add(k);
   seenNow.clear();
   if (!$("history").hidden) renderFeed();
@@ -280,17 +285,17 @@ function sayParts(say, hold, asks, going, parked) {
 // redList is what is red, act now (D-07 s5): a live crew's ticker overdue, a role down that holds an active task (a peer
 // node offline is red on its chip). A stopped, retired or spare crew is never red; a peer read long ago says «stale».
 // Each names what to do: the crew's dispatcher to open, or the role.
-function redList() {
+function redList(all) {
   const out = [];
-  for (const c of snap.crews.filter((c) => !folded(c) && !c.stale && !c.retired && !c.spare && shows(c.key))) {
+  for (const c of snap.crews.filter((c) => !folded(c) && !c.stale && !c.retired && !c.spare && (all || shows(c.key)))) {
     if (!zero(c.stopped)) continue;
     if (tickerDead(c)) {
       out.push({ text: W.stopped(crewLabel(c.key) || c.name, zero(c.last_tick) ? "" : ago(c.last_tick)), crew: c.key,
-        role: c.dispatcher || "dispatcher", fix: W.fixTicker(c.key) });
+        role: c.dispatcher || "dispatcher", fix: W.fixTicker(c.key), kind: "ticker" });
     }
     for (const r of c.roles || []) {
       if (r.state !== "up" && (r.tasks || []).length && zero(r.asleep || "")) {
-        out.push({ text: W.downHolds(who(c.key, r.role) || r.role, r.tasks.join(", ")), crew: c.key, role: r.role, fix: W.fixDown(r.role) });
+        out.push({ text: W.downHolds(who(c.key, r.role) || r.role, r.tasks.join(", ")), crew: c.key, role: r.role, fix: W.fixDown(r.role), kind: "down" });
       }
     }
   }
@@ -723,7 +728,7 @@ function renderHold(hold) {
 
 // ---- L2 · answer (b2): one chip with the recommendation; open: the field, «Later», «No»
 
-function askRow(it) {
+function askRow(it, hand) {
   const k = key(it.crew, it.id);
   const hov = el("div");
   if (it.kind === "later") hov.append(button("q", W.back, () => act(it, "back", "", W.broughtBack)));
@@ -731,7 +736,9 @@ function askRow(it) {
   if (it.kind === "check") hov.append(button("q", W.done, () => act(it, "done", "", W.sentTo)));
   hov.append(button("q", W.park, () => act(it, "park", "", W.parkedTo)));
   if (it.kind !== "check") hov.append(button("q", W.no, () => act(it, "answer", W.noText, W.sentTo)));
-  const row = rowShell(k, stl(it.crew), itemWords(it, false), ageOf(it), chip(it), ownHov(it.crew, hov), itemPanel(it, false));
+  const words = itemWords(it, false);
+  if (hand) words.append(el("span", "cl", W.byHand));
+  const row = rowShell(k, stl(it.crew), words, ageOf(it), chip(it), ownHov(it.crew, hov), itemPanel(it, false));
   row.title = ids(idOf(it.crew, it.id), it.task && idOf(it.crew, it.task));
   if (it.task) row.dataset.w = key(it.crew, it.task);
   return tint(row, it.project);
@@ -744,17 +751,20 @@ function renderAsks(asks) {
   const checks = live.filter((it) => it.kind === "check");
   const cap = 6;
   const shown = showAllAsks || decisions.length <= cap + 1 ? decisions : decisions.slice(0, cap);
-  const rows = shown.map(askRow);
+  const rows = shown.map((it) => askRow(it));
   if (decisions.length > cap + 1) {
     rows.push(button("morerow", showAllAsks ? W.less : W.more(decisions.length - cap), () => { showAllAsks = !showAllAsks; render(); }));
   }
   $("ask").classList.toggle("empty", !live.length);
   if (!live.length) rows.push(el("p", "none", W.noAsk));
+  // D-09 r2: on the phone the by-hand answers are rows too, «by hand» in their mono line.
+  if (phone.matches) rows.push(...checks.map((it) => askRow(it, true)));
   patch($("ask-rows"), [...rows]);
 
   // The checks: one line; a tap on one opens its row under the line.
   const hands = $("hands");
-  hands.hidden = !checks.length;
+  hands.hidden = !checks.length || phone.matches;
+  if (phone.matches) return;
   if (!checks.some((it) => key(it.crew, it.id) === openHand) || openRow !== openHand) openHand = "";
   const kids = [el("span", "hl", W.hands)];
   checks.forEach((it, i) => {
@@ -1010,6 +1020,7 @@ function renderAlarms() {
   const head = alarmHead();
   patch($("alarms-h"), [...head]);
   const rows = alarmRows("");
+  $("alarms").classList.toggle("empty", !rows.length);
   if (!rows.length) rows.push(el("p", "none", W.alNone));
   patch($("alarms-rows"), [...rows]);
 }
@@ -1842,6 +1853,8 @@ function openTalk(crewKey, role, from) {
   $("side-full").href = "chat.html?" + q;
   $("side-term").href = "terminals.html?" + new URLSearchParams({ node, crew, role, view: "terminal" });
   $("history").hidden = true;
+  // D-09 k1: on the phone a conversation is the Talk tab.
+  if (phone.matches && tab !== "talk") goTab("talk");
   showSide(true);
   $("talk-open").setAttribute("aria-expanded", "true");
 }
@@ -1868,9 +1881,12 @@ function showSide(talking) {
 }
 
 function closeTalk() {
+  const talking = side && side.kind === "talk";
   side = null;
   $("side").hidden = true;
   $("talk-open").setAttribute("aria-expanded", "false");
+  // On the phone the Talk tab is the conversation: closing it goes back to the tab the owner came from.
+  if (talking && phone.matches && tab === "talk") goTab(tabFrom);
   render();
   if (sideFrom && sideFrom.isConnected) sideFrom.focus();
   else if (sideMark) refocus(sideMark);
@@ -2027,6 +2043,201 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+// ---- the phone (D-09): four tabs at the bottom — Move · Going · Talk · Crews — in place of the header stack. Below
+// 860 px only; the page above draws the rows, the CSS shows the open tab's sections.
+
+const phone = matchMedia("(max-width: 860px)");
+const TABS = ["move", "going", "talk", "crews"];
+const tabSaved = () => { try { return localStorage.getItem("zmina.tab"); } catch (_) { return null; } };
+let tab = [location.hash.slice(1), tabSaved()].find((t) => TABS.includes(t)) || "move";
+let tabFrom = "move"; // where Crews and a closed Talk return to
+const tabScroll = {};
+const badges = {};
+document.body.dataset.tab = tab;
+
+// goTab switches the open tab: its scroll is kept, the choice is kept in localStorage and in the URL hash (n1).
+function goTab(t, push = true) {
+  if (t === tab) return;
+  tabScroll[tab] = scrollY;
+  if (tab !== "crews") tabFrom = tab;
+  tab = t;
+  try { localStorage.setItem("zmina.tab", t); } catch (_) { /* the tab is kept for this visit only */ }
+  if (push && location.hash !== "#" + t) history.pushState(null, "", "#" + t);
+  document.body.dataset.tab = t;
+  requestAnimationFrame(() => scrollTo(0, tabScroll[t] || 0));
+}
+
+// setTab is a tap on the bar: Talk opens the last conversation, else the scoped crew's dispatcher; another tab
+// puts the panel away.
+function setTab(t, push = true) {
+  goTab(t, push);
+  if (t === "talk") {
+    if (!side || side.kind !== "talk") { const x = talkTarget(); if (x) openTalk(x.crew, x.role, null); }
+  } else if (side) {
+    side = null;
+    $("side").hidden = true;
+    $("talk-open").setAttribute("aria-expanded", "false");
+  }
+  render();
+}
+
+for (const b of document.querySelectorAll("#tabbar [data-tab]")) b.addEventListener("click", () => setTab(b.dataset.tab));
+globalThis.addEventListener?.("popstate", () => {
+  const h = location.hash.slice(1);
+  if (TABS.includes(h) && h !== tab) setTab(h, false);
+});
+$("scope").addEventListener("click", () => setTab("crews"));
+phone.addEventListener?.("change", () => render());
+
+// k2: while a field has the keyboard up the bar steps aside; it never rides up on the keyboard.
+function kbCheck() {
+  const vv = globalThis.visualViewport;
+  const a = document.activeElement;
+  const typing = a === $("side-frame") || /^(INPUT|TEXTAREA)$/.test(a?.tagName || "");
+  document.body.classList.toggle("kb", !!vv && typing && vv.height < innerHeight - 120);
+}
+globalThis.visualViewport?.addEventListener("resize", kbCheck);
+document.addEventListener("focusin", () => setTimeout(kbCheck, 0));
+document.addEventListener("focusout", () => setTimeout(kbCheck, 0));
+globalThis.addEventListener?.("blur", () => setTimeout(kbCheck, 0));
+
+// scopeLabel is the crew the Move and Going tabs show: «All», a node, or node/crew.
+function scopeLabel() {
+  if (filter === "all") return W.all;
+  if (filter.startsWith("node:")) return filter.slice(5);
+  return shownLabel(filter, true) || crewLabel(filter) || filter;
+}
+
+function renderPhone(hold, asks, going, parked) {
+  if (!phone.matches) return;
+  const red = redList();
+  setText($("phead-h"), tab === "going" ? W.tabGoing : tab === "crews" ? W.tabCrews : W.tabMove);
+  setText($("scope-n"), scopeLabel());
+
+  // m0 · the readout: four numbers, each a way to its section.
+  const live = (xs) => xs.filter((it) => !gone(key(it.crew, it.id)));
+  const cells = [[red.length, W.roDown, "x", () => $("down").scrollIntoView({ block: "start" })],
+    [live(hold).length, W.roHold, "n", () => $("hold").scrollIntoView({ block: "start" })],
+    [live(asks).length, W.roAnswer, "n", () => $("ask").scrollIntoView({ block: "start" })],
+    [going.length, W.roGoing, "b", () => setTab("going")]];
+  patch($("pro"), cells.map(([n, label, cls, fn]) => {
+    const b = button("", "", fn);
+    b.append(el("b", n ? cls : "", String(n)), el("span", "", label));
+    return b;
+  }));
+
+  // m1 · Down: every red item as a row; it opens what the header's red line opens.
+  $("down").hidden = !red.length;
+  heading("down-h", W.down, red.length, "x");
+  patch($("down-rows"), red.map((d) => {
+    const b = button("row red prow", "", () => openTalk(d.crew, d.role, b), d.fix);
+    const words = el("div", "words");
+    words.append(el("span", "tt", d.text), el("span", "cl", crewLabel(d.crew) || crewName(d.crew)));
+    b.append(words, el("span"), el("span"), el("span", "chev", "›"));
+    return b;
+  }));
+  $("pnone").hidden = !!(red.length || hold.length || asks.length || (snap.alarms || []).length);
+
+  // g1 · Going ends with «Done today N ›», a line like Parked.
+  const done = snap.crews.filter((c) => shows(c.key)).reduce((n, c) => n + (c.done_today || 0), 0);
+  patch($("pdone"), [button("parked-line", W.doneTodayN + " " + done + " ›", () => openList("done"))]);
+
+  renderCrews(parked);
+  renderTabs(hold, asks, red);
+  // Opened on #talk (or kept there): the conversation comes with the first snapshot.
+  if (tab === "talk" && !side) setTimeout(() => { const x = !side && tab === "talk" && talkTarget(); if (x) openTalk(x.crew, x.role, null); }, 0);
+}
+
+// c1 · Crews: what the other tabs show. «All crews», then a group per node, a row per crew with its lamp and state;
+// a tap sets the scope and returns to the tab the owner came from. Parked, Done today and History under the list.
+function renderCrews(parked) {
+  const pick = (k) => { filter = k; menuNode = ""; localStorage.setItem("zmina.crew", k); setTab(tabFrom === "talk" ? "move" : tabFrom); };
+  const row = (k, name, lamp, state, stCls) => {
+    const b = button("cr" + (filter === k ? " on" : ""), "", () => pick(k));
+    b.setAttribute("aria-pressed", filter === k ? "true" : "false");
+    if (filter === k) {
+      const ck = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      ck.setAttribute("viewBox", "0 0 24 24");
+      ck.setAttribute("class", "ck");
+      ck.innerHTML = '<path d="M5 12.5l4.5 4.5L19 7.5"/>';
+      b.append(ck);
+    } else b.append(el("span", "lamp " + lamp));
+    b.append(el("span", "n", name), el("span", "s " + stCls, state));
+    return b;
+  };
+  const out = [];
+  const allRed = redList(true);
+  out.push(row("all", W.allCrews, allRed.length ? "x" : "", allRed.length ? W.nDown(allRed.length) : W.upW, allRed.length ? "x" : ""));
+  const nodes = new Map();
+  for (const c of snap.crews.filter((c) => !away(c.key))) {
+    const n = c.node || snap.self || "";
+    if (!nodes.has(n)) nodes.set(n, []);
+    nodes.get(n).push(c);
+  }
+  for (const [n, crews] of nodes) {
+    const remoteNode = crews.some((c) => c.remote);
+    out.push(el("p", "grp", (n || W.all) + (remoteNode ? W.overMesh : "")));
+    for (const c of crews) out.push(row(c.key, c.key.split("/").pop(), ...crewState(c, allRed)));
+  }
+  const live = parked.filter((it) => !gone(key(it.crew, it.id)));
+  const oldest = live.length ? dur(Math.max(...live.map((it) => nowMs() - T(it.created)))) : "";
+  const done = snap.crews.filter((c) => shows(c.key)).reduce((n, c) => n + (c.done_today || 0), 0);
+  const link = (name, value, fn) => {
+    const b = button("lk", "", fn);
+    b.append(el("span", "n", name), el("span", "", value + " ›"));
+    return b;
+  };
+  const links = el("div", "lks");
+  links.append(link(W.later, W.parkedN(live.length, oldest), () => openList("parked")),
+    link(W.doneTodayN, String(done), () => openList("done")), link(W.historyTab, "", openHistory));
+  out.push(links);
+  patch($("pcrews"), out);
+}
+
+// crewState is a crew's lamp, its words and their colour: down first, then working, stale, spare, stopped.
+function crewState(c, red) {
+  const mine = red.filter((d) => d.crew === c.key);
+  const busy = (c.roles || []).filter((r) => r.state === "up" && r.status === "busy").length;
+  if (c.stale) {
+    const n = (snap.nodes || []).find((x) => x.name === c.node);
+    return ["h", W.stale + (n && !zero(n.seen || "") ? " · " + ago(n.seen) : ""), "f"];
+  }
+  if (c.spare) return ["h", W.spare, "f"];
+  if (c.retired || !zero(c.stopped)) return ["h", W.stoppedW, "f"];
+  if (mine.length) {
+    const words = mine.map((d) => (d.kind === "down" ? W.roleDown(d.role) : W.tickerStopped));
+    if (busy) words.push(W.nWorking(busy));
+    return ["x", words.join(" · "), "x"];
+  }
+  if (busy) return ["b", W.nWorking(busy), "b"];
+  return ["", W.upW, ""];
+}
+
+// t3 · the badges: Move counts what waits on you (red while anything is down), Talk dots while its role waits on
+// you, Crews dots while a crew or a role is down. A badge that changes pops once.
+function renderTabs(hold, asks, red) {
+  const set = (t, on, text, cls) => {
+    const b = document.querySelector(`#tabbar [data-tab="${t}"]`);
+    if (tab === t) b.setAttribute("aria-current", "page");
+    else b.removeAttribute("aria-current");
+    const mark = b.querySelector(".bd, .dot");
+    if (!mark) return;
+    mark.hidden = !on;
+    if (text !== undefined) setText(mark, text);
+    if (cls !== undefined) mark.classList.toggle("x", cls);
+    const v = on ? String(text ?? "") + (cls ? "x" : "") : "";
+    if (badges[t] !== undefined && badges[t] !== v && on) { mark.classList.remove("pop"); void mark.offsetWidth; mark.classList.add("pop"); }
+    badges[t] = v;
+  };
+  const n = hold.length + asks.length + red.length;
+  set("move", n > 0, String(n), red.length > 0);
+  set("going", false);
+  const t = side && side.kind === "talk" ? side : talkTarget();
+  const r = t && roleOf(t.crew, t.role);
+  set("talk", !!(r && (r.prompt || r.stuck)));
+  set("crews", redList(true).length > 0);
+}
+
 // ---- hover: a tinted row raises its project everywhere
 
 function setHover(node) {
@@ -2068,12 +2279,14 @@ function connect() {
     got = Date.now();
     snap.tints = snap.tints || {};
     $("mark").classList.remove("lost");
+    document.body.classList.remove("lost");
     // While a reply is being typed the page holds still: the snapshot is drawn when the field is left.
     if (document.activeElement?.classList.contains("field")) stale = true;
     else render();
   });
   es.onerror = () => {
     $("mark").classList.add("lost");
+    document.body.classList.add("lost");
     $("clock").lastElementChild.textContent = W.lost;
   };
 }

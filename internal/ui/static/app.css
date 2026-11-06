@@ -669,3 +669,104 @@ body.fv-on { overflow: hidden; }
   .card .role-h .keep { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .card .role-h .ring, .card .role-h .ctx { flex: none; }
 }
+
+/* D-09 · the phone is a phone: four tabs at the bottom (Move · Going · Talk · Crews), a 52 px head per tab, the home-screen
+   app. Below 861 px only; the desktop and the cockpit never draw these. */
+.phead, .pro, #down, .pnone, .pdone, .pcrews, .tabbar { display: none; }
+@media (max-width: 860px) {
+  :root { --bar: calc(52px + env(safe-area-inset-bottom)); }
+  .top, .foot, .quiet { display: none; }
+  /* h1–h3 · the head: the tab's name, the live beat, the scope */
+  .phead { display: flex; align-items: center; gap: 8px; height: calc(52px + env(safe-area-inset-top)); padding: env(safe-area-inset-top) 12px 0 16px; box-sizing: border-box; }
+  .phead h1 { margin: 0; font: 600 22px/1 var(--sans); letter-spacing: -.01em; color: var(--ink); }
+  .phead .beat { width: 7px; height: 7px; margin-left: 2px; border-radius: 50%; background: var(--ok); flex: none; }
+  .phead .offl { display: none; font: 500 13px var(--sans); color: var(--late); }
+  body.lost .phead .beat { display: none; }
+  body.lost .phead .offl { display: inline; }
+  .phead .sp { flex: 1; }
+  .scope { position: relative; display: inline-flex; align-items: center; gap: 6px; height: 32px; max-width: 55vw; padding: 0 10px 0 12px;
+    border: 1px solid var(--line2); border-radius: 8px; background: none; font: 500 13px var(--sans); color: var(--ink2); white-space: nowrap; }
+  .scope span { overflow: hidden; text-overflow: ellipsis; }
+  .scope::after { content: ""; position: absolute; inset: -6px -2px; }
+  .scope svg { width: 12px; height: 12px; flex: none; fill: none; stroke: var(--muted); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  body[data-tab="crews"] .scope { display: none; }
+
+  /* the tabs' sections: one column in the page's order; the open tab shows its own */
+  .page { display: flex; flex-direction: column; padding: 0 16px calc(var(--bar) + 16px); }
+  .page .col { display: contents; }
+  section.empty { display: none; }
+  .pro { order: 0; } #down { order: 1; } .pnone { order: 2; } #hold { order: 3; } #ask { order: 4; } #alarms { order: 5; } #later { order: 6; }
+  #go { order: 7; } #others { order: 8; } .pdone { order: 9; } .pcrews { order: 10; }
+  body[data-tab="move"] :is(#go, #others, .pdone, .pcrews),
+  body[data-tab="going"] :is(.pro, #down, .pnone, #hold, #ask, #alarms, #later, .pcrews),
+  body[data-tab="crews"] :is(.pro, #down, .pnone, #hold, #ask, #alarms, #later, #go, #others, .pdone),
+  body[data-tab="talk"] .page { display: none !important; }
+  body[data-tab="move"] .pro { display: grid; }
+  body[data-tab="move"] #down:not([hidden]) { display: block; }
+  body[data-tab="move"] .pnone:not([hidden]) { display: block; }
+  body[data-tab="going"] .pdone { display: flex; margin-top: 12px; }
+  body[data-tab="crews"] .pcrews { display: block; }
+
+  /* m0 · the readout: four numbers that lead to their sections */
+  .pro { grid-template-columns: repeat(4, 1fr); margin: 2px -4px 6px; }
+  .pro button { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-height: 56px; padding: 6px 4px; border: 0; background: none; text-align: left; }
+  .pro b { font: 600 28px/1 var(--sans); font-variant-numeric: tabular-nums; letter-spacing: -.02em; color: var(--faint); }
+  .pro b.x { color: var(--late); } .pro b.n { color: var(--need); } .pro b.b { color: var(--busy); }
+  .pro span { font: 500 12px var(--sans); color: var(--muted); }
+  .pnone { margin: 0; padding: 18px 0 6px; font: 14px var(--sans); color: var(--faint); }
+
+  /* m1 · Down rows: the late rule and title; r2 · a row is its title and its node/crew line, the note only when open */
+  .prow { width: 100%; border: 0; border-top: 1px solid var(--line); background: none; text-align: left; font: inherit; color: inherit; }
+  .row.red { --t: var(--late); }
+  .row.red .tt { color: var(--late); }
+  .row:not(.open) .words .gr { display: none; }
+  .row:not(.open) > .age .wait { display: none; }
+
+  /* c1 · Crews */
+  .pcrews .grp { display: block; margin: 14px 0 4px; padding: 0; min-height: 0; border: 0; font: 12px var(--mono); color: var(--faint); }
+  .pcrews .cr { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 0 10px; width: 100%; min-height: 48px; padding: 0 4px 0 6px;
+    border: 0; border-top: 1px solid var(--line); background: none; text-align: left; font: inherit; color: inherit; }
+  .pcrews .cr:first-child { margin-top: 4px; }
+  .pcrews .cr:has(+ .grp), .pcrews .cr:has(+ .lks) { border-bottom: 1px solid var(--line); }
+  .pcrews .cr.on { background: color-mix(in srgb, var(--panel) 70%, transparent); }
+  .pcrews .n { font: 500 15px var(--sans); color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pcrews .s { font: 13px var(--sans); color: var(--muted); text-align: right; }
+  .pcrews .s.x { color: var(--late); } .pcrews .s.b { color: var(--busy); } .pcrews .s.f { color: var(--faint); }
+  .pcrews .ck { width: 18px; height: 18px; fill: none; stroke: var(--ink); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .pcrews .lamp { width: 8px; height: 8px; margin: 0 auto; border-radius: 50%; background: var(--ok); }
+  .pcrews .lamp.x { background: var(--late); } .pcrews .lamp.b { background: var(--busy); }
+  .pcrews .lamp.h { background: none; box-shadow: inset 0 0 0 1.5px var(--faint); }
+  .pcrews { padding: 4px 0 0; }
+  .pcrews .lks { margin-top: 28px; }
+  .pcrews .lk { display: flex; justify-content: space-between; align-items: center; width: 100%; min-height: 48px; padding: 0 4px 0 6px;
+    border: 0; border-top: 1px solid var(--line); background: none; text-align: left; font: 500 15px var(--sans); color: var(--ink); }
+  .pcrews .lk:last-child { border-bottom: 1px solid var(--line); }
+  .pcrews .lk span:last-child { font: 14px var(--sans); color: var(--muted); }
+
+  /* t1–t3 · the bar */
+  .tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 8; display: grid; grid-template-columns: repeat(4, 1fr); height: var(--bar);
+    padding-bottom: env(safe-area-inset-bottom); box-sizing: border-box; background: var(--panel); border-top: 1px solid var(--line); }
+  body.kb .tabbar { display: none; }
+  .tabbar button { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; min-height: 44px;
+    border: 0; background: none; font: 500 11px/1 var(--sans); color: var(--muted); -webkit-tap-highlight-color: transparent; }
+  .tabbar svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .tabbar [aria-current="page"] { color: var(--ink); font-weight: 600; }
+  .tabbar [aria-current="page"] svg { stroke-width: 2; }
+  .tabbar .bd { position: absolute; top: 3px; left: calc(50% + 6px); min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 9px;
+    box-shadow: 0 0 0 2px var(--panel); background: var(--need); color: var(--bg); font: 700 11px/18px var(--sans); font-variant-numeric: tabular-nums; }
+  .tabbar .bd.x { background: var(--late); }
+  .tabbar .dot { position: absolute; top: 6px; left: calc(50% + 8px); width: 8px; height: 8px; border-radius: 50%; box-shadow: 0 0 0 2px var(--panel); background: var(--need); }
+  .tabbar .dot.x { background: var(--late); }
+  .tabbar .pop { animation: pop 200ms var(--ease); }
+  .toasts { bottom: calc(var(--bar) + 12px); }
+
+  /* k1 · Talk: the D-08 panel full screen inside the tab, above the bar; the bar is the way out */
+  .side-panel { bottom: var(--bar); padding-top: env(safe-area-inset-top); animation: none; }
+  body.kb .side-panel { bottom: 0; }
+  body[data-tab="talk"] .panel-h { padding: 0 8px 0 16px; gap: 6px; }
+  body[data-tab="talk"] .panel-h .back, body[data-tab="talk"] #side-close, body[data-tab="talk"] #side-full { display: none; }
+  body[data-tab="talk"] .panel-h .pick > button { height: 44px; font-size: 17px; }
+  body[data-tab="talk"] .panel-h .tools2 a, body[data-tab="talk"] .panel-h .tools2 button { width: 44px; height: 44px; }
+  body[data-tab="talk"] .panel-h .tools2 svg { width: 20px; height: 20px; }
+}
+@keyframes pop { from { transform: scale(.6); } }
