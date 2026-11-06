@@ -678,6 +678,8 @@ body.fv-on { overflow: hidden; }
   .top, .foot, .quiet { display: none; }
   /* h1–h3 · the head: the tab's name, the live beat, the scope */
   .phead { display: flex; align-items: center; gap: 8px; height: calc(52px + env(safe-area-inset-top)); padding: env(safe-area-inset-top) 12px 0 16px; box-sizing: border-box; }
+  /* the home-screen app draws the clock over the page: a strip of the page's tone keeps rows from scrolling under it */
+  body::before { content: ""; position: fixed; top: 0; left: 0; right: 0; z-index: 9; height: env(safe-area-inset-top); background: var(--bg); }
   .phead h1 { margin: 0; font: 600 22px/1 var(--sans); letter-spacing: -.01em; color: var(--ink); }
   .phead .beat { width: 7px; height: 7px; margin-left: 2px; border-radius: 50%; background: var(--ok); flex: none; }
   .phead .offl { display: none; font: 500 13px var(--sans); color: var(--late); }
@@ -769,8 +771,8 @@ body.fv-on { overflow: hidden; }
   html:has(body[data-tab="talk"]), body[data-tab="talk"] { overflow: hidden; }
   /* D-11 h1 · the head floats over the conversation: no bar, a fade from the panel tone; centred name (the picker)
      with node/crew under it; Terminal a round button at the right; the lamp goes (working is said in the thread) */
-  body[data-tab="talk"] .panel-h { position: absolute; top: env(safe-area-inset-top); left: 0; right: 0; z-index: 3; display: block; height: 72px;
-    padding: 0; background: linear-gradient(var(--panel) calc(100% - 24px), transparent); pointer-events: none; }
+  body[data-tab="talk"] .panel-h { position: absolute; top: env(safe-area-inset-top); left: 0; right: 0; z-index: 3; display: block; height: 80px;
+    padding: 0; background: linear-gradient(var(--panel) 56px, transparent 80px); pointer-events: none; }
   body[data-tab="talk"] .panel-h > * { pointer-events: auto; }
   body[data-tab="talk"] .panel-h .lamp { display: none; }
   body[data-tab="talk"] .panel-h .pick { position: absolute; left: 50%; top: 2px; transform: translateX(-50%); }

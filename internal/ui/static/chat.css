@@ -167,7 +167,7 @@ html.chat-document { height: 100%; overflow: hidden; }
 
 /* D-11 · the Talk tab on the phone reads like the Claude iOS app. .phone is set by chat.js from the cockpit's width;
    the desktop keeps D-08. */
-.chat-page.phone #conversation { padding-top: 76px; -webkit-mask-image: none; mask-image: none; }
+.chat-page.phone #conversation { padding-top: 84px; -webkit-mask-image: none; mask-image: none; }
 /* c1 · the role's text in the system sans, full ink */
 .chat-page.phone .chat-message.assistant { font: 17px/1.55 var(--sans); color: var(--ink); }
 .chat-page.phone .assistant .message-body p { margin: 0 0 14px; }
@@ -187,6 +187,8 @@ html.chat-document { height: 100%; overflow: hidden; }
 /* m1 · under a reply: Copy only, no time; none under the owner's bubble */
 .chat-page.phone .message-meta { height: 44px; margin: -6px 0 0 -10px; }
 .chat-page.phone .message-meta time, .chat-page.phone .chat-message.user > .message-meta { display: none; }
+/* D-11 amendment c: an older reply keeps no empty row; its Copy shows when it is tapped */
+.chat-page.phone .chat-message.assistant:not(.newest):not(:focus-within) > .message-meta { display: none; }
 .chat-page.phone .message-meta .ib { width: 44px; height: 44px; color: var(--muted); }
 .chat-page.phone .message-meta .ib svg { width: 19px; height: 19px; }
 /* k1 · the composer: r 24; plus, dictate and send as 40 px circles; send is ink once there is text, no brand colour */
