@@ -352,8 +352,10 @@ type questionAnswer struct {
 type answerStep struct {
 	Keys []string
 	Text string
-	// Expect is what the screen must show before this step is pressed (empty: no check).
-	Expect string
+	// Expect is the question the screen must show before this step is pressed, Options its option labels (empty:
+	// no check of the dialog's text; the input line is checked before every step).
+	Expect  string
+	Options []string
 }
 
 // answerSteps turns an answer into what Claude Code's question dialog takes: a single-choice item is its option's
@@ -400,18 +402,18 @@ func answerSteps(q *chat.Question, a questionAnswer) ([]answerStep, error) {
 				}
 			}
 			steps = append(steps, answerStep{Keys: append(keys, "Tab")})
-			steps[first].Expect = item.Question
+			steps[first].Expect, steps[first].Options = item.Question, labels(item)
 			continue
 		}
 		switch {
 		case other != "" && len(ans.Choices) == 0:
-			steps = append(steps, answerStep{Keys: []string{digit(n + 1)}}, answerStep{Text: other})
+			steps = append(steps, answerStep{Keys: []string{digit(n + 1)}}, answerStep{Text: other, Expect: item.Question})
 		case other == "" && len(ans.Choices) == 1:
 			steps = append(steps, answerStep{Keys: []string{digit(ans.Choices[0])}})
 		default:
 			return nil, fmt.Errorf("part %d: one option, or words of your own", i+1)
 		}
-		steps[first].Expect = item.Question
+		steps[first].Expect, steps[first].Options = item.Question, labels(item)
 	}
 	if len(q.Items) > 1 {
 		steps = append(steps, answerStep{Keys: []string{"1"}, Expect: "Review your answers"})
@@ -419,14 +421,29 @@ func answerSteps(q *chat.Question, a questionAnswer) ([]answerStep, error) {
 	return steps, nil
 }
 
-// onScreen reports whether the screen shows the start of want, line breaks and runs of spaces aside.
-func onScreen(screen, want string) bool {
-	flat := func(t string) string { return strings.Join(strings.Fields(t), " ") }
-	w := []rune(flat(want))
-	if len(w) > 30 {
-		w = w[:30]
+// labels are an item's option labels as the dialog draws them.
+func labels(item chat.QuestionItem) []string {
+	out := make([]string, 0, len(item.Options))
+	for _, o := range item.Options {
+		out = append(out, o.Label)
 	}
-	return len(w) > 0 && strings.Contains(flat(screen), string(w))
+	return out
+}
+
+// onScreen reports whether the screen shows the whole question and every one of its options, line breaks and runs
+// of spaces aside: another question that starts alike is not this one.
+func onScreen(screen, want string, options ...string) bool {
+	flat := func(t string) string { return strings.Join(strings.Fields(t), " ") }
+	s, w := flat(screen), flat(want)
+	if w == "" || !strings.Contains(s, w) {
+		return false
+	}
+	for _, o := range options {
+		if !strings.Contains(s, flat(o)) {
+			return false
+		}
+	}
+	return true
 }
 
 // answerQuestion answers the question on a role's screen with the owner's choices, if it is still the one shown.
@@ -460,14 +477,20 @@ func answerQuestion(s *shift.Shift, role, raw string, snapshot chat.Snapshot) er
 			// The dialog redraws between parts; a key sent into the redraw is lost.
 			time.Sleep(250 * time.Millisecond)
 		}
-		// Each part is checked on the live screen before its keys: a question closed or moved on in Terminal
-		// meanwhile stops the answer instead of typing digits into the role's input line.
+		// Each step is checked on the live screen first: no input line (the dialog is still up), and the part's
+		// whole question with its options — a question closed or changed in Terminal meanwhile stops the answer
+		// instead of typing into the role's input line.
+		if i > 0 {
+			if _, ok, err := s.Tmux.Prompt(role); err != nil || ok {
+				return fmt.Errorf("stopped at step %d: the question is gone from its screen; look at Terminal", i+1)
+			}
+		}
 		if step.Expect != "" {
-			screen, err := s.Tmux.Capture(role, 80)
+			screen, err := s.Tmux.Capture(role, 120)
 			if err != nil {
 				return err
 			}
-			if !onScreen(screen, step.Expect) {
+			if !onScreen(screen, step.Expect, step.Options...) {
 				return fmt.Errorf("stopped at step %d: the question on its screen is not the one answered; look at Terminal", i+1)
 			}
 		}

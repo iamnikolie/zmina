@@ -33,12 +33,14 @@ func TestAnswerStepsFollowTheDialog(t *testing.T) {
 	q := question(item(false, 2), item(true, 3))
 	steps, err := answerSteps(q, answer(t, `{"id":"toolu_1","items":[{"choices":[2]},{"choices":[1,3]}]}`))
 	require.NoError(t, err)
-	assert.Equal(t, []answerStep{{Keys: []string{"2"}, Expect: "q"}, {Keys: []string{"1", "3", "Tab"}, Expect: "q"},
+	o2, o3 := []string{"o", "o"}, []string{"o", "o", "o"}
+	assert.Equal(t, []answerStep{{Keys: []string{"2"}, Expect: "q", Options: o2}, {Keys: []string{"1", "3", "Tab"}, Expect: "q", Options: o3},
 		{Keys: []string{"1"}, Expect: "Review your answers"}}, steps, "each part is checked on the screen first")
 
 	steps, err = answerSteps(question(item(false, 2)), answer(t, `{"id":"toolu_1","items":[{"other":"my own words"}]}`))
 	require.NoError(t, err)
-	assert.Equal(t, []answerStep{{Keys: []string{"3"}, Expect: "q"}, {Text: "my own words"}}, steps, "one part: no review screen")
+	assert.Equal(t, []answerStep{{Keys: []string{"3"}, Expect: "q", Options: []string{"o", "o"}}, {Text: "my own words", Expect: "q"}}, steps,
+		"one part: no review screen; the words are typed only while the question is still up")
 }
 
 func TestAnswerStepsRefuseWhatTheDialogCannotTake(t *testing.T) {
@@ -67,4 +69,7 @@ func TestOnScreenReadsThroughWrapping(t *testing.T) {
 	assert.True(t, onScreen(screen, "zmina на телефоне: с какого экрана открываться и какие вкладки?"))
 	assert.False(t, onScreen("❯ ordinary prompt", "zmina на телефоне: с какого экрана"))
 	assert.False(t, onScreen(screen, ""))
+	assert.False(t, onScreen(screen, "zmina на телефоне: с какого экрана открываться и какие вкладки оставить?"), "the whole question, not its start")
+	assert.True(t, onScreen(screen, "zmina на телефоне: с какого экрана открываться и какие вкладки?", "Agents"))
+	assert.False(t, onScreen(screen, "zmina на телефоне: с какого экрана открываться и какие вкладки?", "Agents", "Move"), "every option")
 }
