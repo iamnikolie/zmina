@@ -64,6 +64,7 @@ func TestPhoneTabs(t *testing.T) {
 			Rows      []struct{ Cls, Text string }
 		} `json:"agents"`
 		Readout []string `json:"readout"`
+		BothRed string   `json:"bothRed"`
 		Hand    []string `json:"hand"`
 		Head    string   `json:"head"`
 		Sheet   []string `json:"sheet"`
@@ -104,6 +105,7 @@ func TestPhoneTabs(t *testing.T) {
 	assert.Equal(t, []string{"ag busy one | testerdefault3 min›", "ag busy two | devdefaultBuild the login page11 min›"}, group(1))
 	assert.Equal(t, []string{"ag idle one | scribedefault40 min›"}, group(2))
 	assert.Equal(t, "Yours by hand1 · oldest 8 d ›", res.Agents[3].Text)
+	assert.Equal(t, "Ticker stopped · the crew does not wake · Down · holds T-9", res.BothRed, "a down dispatcher over a stopped ticker says both")
 
 	// l1: Later's by-hand list, and its item as a sheet with one primary and Talk to the role that raised it.
 	assert.Equal(t, "Yours by hand", res.Head)

@@ -2211,9 +2211,12 @@ function agents(lists) {
     }
     return rows.get(k);
   };
+  // A crew's dispatcher both down with a task and over a stopped ticker says both, the ticker first.
   for (const d of redList()) {
     const tasks = (roleOf(d.crew, d.role)?.tasks || []).join(", ");
-    get(d.crew, d.role).red = d.kind === "down" ? W.downHoldsP(tasks) : W.tickerNoWake;
+    const row = get(d.crew, d.role);
+    const text = d.kind === "down" ? W.downHoldsP(tasks) : W.tickerNoWake;
+    row.red = !row.red ? text : d.kind === "down" ? row.red + " · " + text : text + " · " + row.red;
   }
   for (const c of lists.crews) {
     for (const r of c.roles || []) if (r.state === "up" && r.prompt) get(c.key, r.role).q = firstLine(r.dialog && r.dialog.question);
@@ -2449,8 +2452,16 @@ function closeSheet() {
   if (!sheet) return;
   sheet = null;
   render();
-  if (sheetFrom && sheetFrom.isConnected) sheetFrom.focus();
-  else if (sheetFrom?.dataset.k) [...document.querySelectorAll(`#plater [data-k="${CSS.escape(sheetFrom.dataset.k)}"]`)][0]?.focus();
+  backToRow();
+}
+
+// backToRow gives the focus back to the row that opened the sheet, as the list has it now; the first row of the list
+// once that one is gone (dealt with in the sheet, or by the snapshot).
+function backToRow() {
+  const k = sheetFrom?.dataset.k;
+  const t = (sheetFrom?.isConnected && sheetFrom) || (k && document.querySelector(`#plater [data-k="${CSS.escape(k)}"]`))
+    || document.querySelector("#plater .li, #plater .ln");
+  t?.focus();
 }
 
 // sheetItem is what the sheet shows, as the snapshot has it now; gone once it was dealt with.
@@ -2469,15 +2480,18 @@ function renderSheet() {
   const sh = $("psheet");
   const it = phone.matches && sheet && tab === "later" ? sheetItem(sheet) : null;
   // aria-modal: while the sheet is open the page behind it is inert, so Tab stays in the sheet.
-  for (const n of [$("phead"), document.querySelector("main.page"), $("tabbar")]) {
+  for (const n of [$("phead"), document.querySelector("main.page"), $("tabbar"), $("toasts")]) {
     if (!n) continue;
     if (it) n.setAttribute("inert", "");
     else n.removeAttribute("inert");
   }
   if (!it) {
+    // The item went while its sheet was open (the snapshot dropped it): the focus goes back to the list.
+    const lost = !!sheet && phone.matches && sh.contains(document.activeElement);
     if (sheet && phone.matches) sheet = null;
     sh.hidden = $("pshade").hidden = true;
     sh.dataset.k = "";
+    if (lost) backToRow();
     return;
   }
   sh.hidden = $("pshade").hidden = false;
@@ -2510,8 +2524,9 @@ function renderSheet() {
   kids.push(h);
   if (text) kids.push(el("p", "sn", text));
   const shut = () => { sheet = null; };
-  if (s.kind === "hand") primary = button("pri", W.done, () => { shut(); doneHand(it); });
-  else if (s.kind === "parked") primary = button("pri", W.back, () => { shut(); act(it, "back", "", W.broughtBack); });
+  // An action closes the sheet; the focus goes back to the list, not to the body under a hidden button.
+  if (s.kind === "hand") primary = button("pri", W.done, () => { shut(); doneHand(it); backToRow(); });
+  else if (s.kind === "parked") primary = button("pri", W.back, () => { shut(); act(it, "back", "", W.broughtBack); backToRow(); });
   else if (!s.moving) primary = button("pri", W.moveTo, () => { sheet.moving = true; render(); $("psheet").querySelector(".wc")?.focus(); });
   else {
     const f = el("textarea", "field when");
@@ -2523,6 +2538,7 @@ function renderSheet() {
       if (!v) return;
       shut();
       alarmAct(it, "move", v, "", W.alMoved, alarmKey(it));
+      backToRow();
     });
     const sync = () => { primary.disabled = !f.value.trim(); };
     sync();
@@ -2541,7 +2557,7 @@ function renderSheet() {
     f.addEventListener("input", () => { pick(null); sync(); });
     f.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && f.value.trim()) { e.preventDefault(); primary.click(); }
-      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); sheet.moving = false; render(); }
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); sheet.moving = false; render(); $("psheet").querySelector(".pri")?.focus(); }
     });
     kids.push(chips, f);
   }

@@ -146,6 +146,10 @@ if (phone) {
     res.readout = byId.pagents.children[0].children.map((b) => b.children.map(text).join(" "));
     res.agents = byId.pagents.children.slice(1).map((sec) => ({ cls: sec.className, text: text(sec.children[0] || sec),
       rows: (sec.children[1]?.children || []).map((row) => ({ cls: row.className, text: text(row) })) }));
+    // A crew's dispatcher both down with a task and over a stopped ticker says both.
+    Object.assign(snap.crews[1].roles[0], { state: "down", tasks: ["T-9"] });
+    res.bothRed = agents(phoneLists()).waiting.find((x) => x.crew === "node-b/ops").line;
+    Object.assign(snap.crews[1].roles[0], { state: "up", tasks: undefined });
     tab = "later";
     laterSub = "hand";
     renderPhone();
