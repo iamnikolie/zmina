@@ -203,3 +203,6 @@ html.chat-document { height: 100%; overflow: hidden; }
 .chat-page.phone .composer-row .send:disabled { background: var(--line2); color: var(--faint); }
 .chat-page.phone .composer-row .send:not(:disabled) { background: var(--ink); color: var(--bg); }
 .chat-page.phone .composer-row .send svg { stroke-width: 2.2; }
+/* With the keyboard up the composer sits on it: the home indicator's inset is under the keyboard, not under the box. */
+.chat-page.phone.typing .chat-composer { padding-bottom: 8px; }
+.chat-page.phone.typing #composer-status:empty { display: none; }

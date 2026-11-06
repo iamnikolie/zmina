@@ -19,7 +19,7 @@
     try { window.parent.addEventListener("resize", phone); } catch (_) { /* as above */ }
     // A field here with the keyboard up: the cockpit's tab bar steps aside (D-09 k2). The parent cannot see a focus
     // inside this frame on iOS, so it is told.
-    const typing = (on) => window.parent.postMessage(on ? "zmina:typing" : "zmina:typed", location.origin);
+    const typing = (on) => { document.body.classList.toggle("typing", on); window.parent.postMessage(on ? "zmina:typing" : "zmina:typed", location.origin); };
     document.addEventListener("focusin", (e) => { if (e.target.matches?.("textarea, input:not([type=file])")) typing(true); });
     document.addEventListener("focusout", (e) => { if (e.target.matches?.("textarea, input:not([type=file])")) typing(false); });
     // D-11 m1: on the phone an older reply's Copy is folded away; a tap on the reply (not on a link, a button or a
