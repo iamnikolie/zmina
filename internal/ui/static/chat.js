@@ -229,7 +229,12 @@
     const n = q.items.length, review = ask.step >= n, go = (s) => { ask.step = s; renderQuestion(); };
     const answered = (a) => (a.other !== null ? a.other.trim() !== "" : a.choices.length > 0);
     const words = (it, a) => (a.other !== null ? a.other.trim() : a.choices.map(c => it.options[c - 1].label.replace(REC, "")).join(", "));
-    const send = () => action("answer:" + JSON.stringify({id: q.id, items: ask.items.map(a => ({choices: a.other !== null ? [] : a.choices, other: a.other || ""}))}));
+    // Nothing goes with a part unanswered: the first such part opens instead.
+    const send = () => {
+      const gap = ask.items.findIndex(a => !answered(a));
+      if (gap >= 0) { go(gap); return; }
+      action("answer:" + JSON.stringify({id: q.id, items: ask.items.map(a => ({choices: a.other !== null ? [] : a.choices, other: a.other || ""}))}));
+    };
     const after = () => (n === 1 ? send() : go(ask.step + 1));
     const top = el("div", "q-top");
     top.append(el("span", "q-hdr", review ? "Check and send" : (q.items[ask.step].header || "Question") + (q.items[ask.step].multi_select ? " · choose any" : "")));
@@ -262,7 +267,8 @@
           if (ask.moving) return; // a second tap within the 200 ms must not skip the next part
           const step = ask.step;
           ask.moving = true; a.other = null; a.choices = [i + 1]; renderQuestion();
-          setTimeout(() => { if (!ask || ask.id !== q.id) return; ask.moving = false; if (ask.step === step) after(); }, matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 200);
+          // The move goes only if the part still holds this choice: Other or another row meanwhile cancels it.
+          ask.timer = setTimeout(() => { if (!ask || ask.id !== q.id) return; ask.moving = false; if (ask.step === step && a.other === null && a.choices[0] === i + 1) after(); }, matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 200);
         });
         row.setAttribute("role", it.multi_select ? "checkbox" : "radio");
         row.setAttribute("aria-checked", on ? "true" : "false");
@@ -277,7 +283,7 @@
       // Words of one's own: the dialog takes them on a one-choice item (its «Type something»).
       if (!it.multi_select) {
         const on = a.other !== null, row = el("div", "q-opt q-other" + (on ? " on" : ""));
-        const pick = btn("q-otherpick", "", () => { a.other = a.other ?? ""; a.choices = []; renderQuestion(); box.querySelector(".q-otherfield")?.focus(); });
+        const pick = btn("q-otherpick", "", () => { clearTimeout(ask.timer); ask.moving = false; a.other = a.other ?? ""; a.choices = []; renderQuestion(); box.querySelector(".q-otherfield")?.focus(); });
         pick.setAttribute("role", "radio"); pick.setAttribute("aria-checked", on ? "true" : "false");
         pick.append(el("span", "q-ctl"), el("span", "q-label", "Other…"));
         row.append(pick);
