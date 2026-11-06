@@ -48,6 +48,7 @@ const (
 func (a *app) uiCommand() *cobra.Command {
 	var (
 		addr, token string
+		codeCommand string
 		noOpen      bool
 		allowHosts  []string
 	)
@@ -62,6 +63,12 @@ func (a *app) uiCommand() *cobra.Command {
 			}
 			if len(allowHosts) > 0 && token == "" {
 				return errors.New("--allow-host needs --token (or $ZMINA_UI_TOKEN)")
+			}
+			if codeCommand == "" {
+				codeCommand = os.Getenv("ZMINA_UI_CODE_COMMAND")
+			}
+			if codeCommand != "" && token == "" {
+				return errors.New("--code-command needs --token (or $ZMINA_UI_TOKEN): a code signs a device in to it")
 			}
 
 			host, _, err := net.SplitHostPort(addr)
@@ -119,6 +126,9 @@ func (a *app) uiCommand() *cobra.Command {
 			}
 
 			a.uiLogins = newUILogins()
+			if codeCommand != "" {
+				a.uiSignin = newUISignin(codeCommand, func(line string) { fmt.Fprintln(a.err, "zmina ui:", line) })
+			}
 			srv := &http.Server{Handler: a.uiHandler(ln.Addr().String(), loopback, token, allowHosts...),
 				ReadHeaderTimeout: 10 * time.Second}
 
@@ -165,6 +175,8 @@ func (a *app) uiCommand() *cobra.Command {
 		"$ZMINA_UI_TOKEN")
 	c.Flags().BoolVar(&noOpen, "no-open", false, "print the address, do not open a browser")
 	c.Flags().StringSliceVar(&allowHosts, "allow-host", nil, "additional exact Host for a private reverse proxy; requires a token")
+	c.Flags().StringVar(&codeCommand, "code-command", "", "shell command that sends a sign-in code to the owner (the "+
+		"message on its stdin), so a new device signs in with a code; requires a token; default $ZMINA_UI_CODE_COMMAND")
 
 	return c
 }
@@ -437,7 +449,7 @@ func (a *app) uiHandler(bound string, loopback bool, token string, allowHosts ..
 		writeJSON(w, map[string]string{"done": line})
 	})
 
-	return guardLogins(mux, bound, loopback, token, a.uiLogins, allowHosts...)
+	return guardLogins(mux, bound, loopback, token, a.uiLogins, a.uiSignin, allowHosts...)
 }
 
 // alarmAction is the page's set, move and off; the caller holds the lock. set is a reminder for the owner, or for a
@@ -503,12 +515,13 @@ func (a *app) takeBack(s *shift.Shift, id string) (string, error) {
 // one of them. A write must carry X-Zmina, which a cross-site form or fetch cannot send without a preflight this
 // server never answers.
 func guard(next http.Handler, bound string, loopback bool, token string, allowHosts ...string) http.Handler {
-	return guardLogins(next, bound, loopback, token, nil, allowHosts...)
+	return guardLogins(next, bound, loopback, token, nil, nil, allowHosts...)
 }
 
 // guardLogins is guard that also takes one-time login codes (?login=) and hands them out to a second zmina ui
-// that shows the handoff secret (POST /api/handoff), when logins is set.
-func guardLogins(next http.Handler, bound string, loopback bool, token string, logins *uiLogins,
+// that shows the handoff secret (POST /api/handoff), when logins is set; with signin, a browser not signed in gets
+// the sign-in page and signs in with a code sent to the owner.
+func guardLogins(next http.Handler, bound string, loopback bool, token string, logins *uiLogins, signin *uiSignin,
 	allowHosts ...string) http.Handler {
 	_, port, _ := net.SplitHostPort(bound)
 	hosts := map[string]bool{bound: true, "localhost:" + port: true, "127.0.0.1:" + port: true, "[::1]:" + port: true}
@@ -536,6 +549,26 @@ func guardLogins(next http.Handler, bound string, loopback bool, token string, l
 			}
 
 			if subtle.ConstantTimeCompare([]byte(given), []byte(token)) != 1 {
+				if signin != nil {
+					if serveSignin(w, r, signin, token, allowHosts) {
+						return
+					}
+					if r.Method == http.MethodGet && signinAsset(r.URL.Path) {
+						w.Header().Set("X-Content-Type-Options", "nosniff")
+						next.ServeHTTP(w, r)
+
+						return
+					}
+					if r.Method == http.MethodGet && (r.URL.Path == "/" || strings.HasSuffix(r.URL.Path, ".html")) {
+						signinPage(w)
+
+						return
+					}
+					http.Error(w, "sign in first", http.StatusUnauthorized)
+
+					return
+				}
+
 				w.Header().Set("Content-Type", "text/html; charset=utf-8")
 				w.Header().Set("Cache-Control", "no-store")
 				w.Header().Set("X-Content-Type-Options", "nosniff")
