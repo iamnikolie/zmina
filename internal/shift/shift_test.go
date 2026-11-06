@@ -1174,3 +1174,84 @@ func TestWakeReportsWhatTheStartDid(t *testing.T) {
 	assert.Contains(t, line, "started fresh (sid-designer is gone)")
 	assert.NotContains(t, line, "resumed")
 }
+
+// A conversation resumed under a new session name is renamed to it, once; resumed under the name it already has, it is
+// left as it is.
+func TestResumeUnderANewNameRenames(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	require.NoError(t, f.s.Up("designer"))
+	f.status("designer", "idle", *f.now)
+	require.NoError(t, f.s.Down("designer", DownOptions{}))
+	assert.Equal(t, "zm-designer", f.s.State.Role("designer").Title)
+
+	require.NoError(t, f.s.UpWith("designer", UpOptions{Resume: "last"}))
+	assert.NotContains(t, f.s.State.Role("designer").Inbox, "/rename zm-designer", "same name: nothing to rename")
+	f.status("designer", "idle", *f.now)
+	require.NoError(t, f.s.Down("designer", DownOptions{}))
+
+	f.s.Crew.Roles["designer"].Session = "ops-designer"
+	require.NoError(t, f.s.UpWith("designer", UpOptions{Resume: "last"}))
+	assert.Equal(t, "/rename ops-designer", f.s.State.Role("designer").Inbox[0])
+	assert.True(t, f.ev.has("designer", "rename"))
+	assert.Equal(t, "ops-designer", f.s.State.Role("designer").Title)
+}
+
+// typeQueued lets a role's first queued line be typed: booted, idle, a beat.
+func typeQueued(f fix, role string) {
+	*f.now = f.now.Add(3 * time.Minute)
+	f.status(role, "idle", f.now.Add(-time.Minute))
+	f.s.Tick()
+}
+
+// The title is a conversation's, changed only by a rename typed into it: another conversation resumed under the same
+// name is renamed if it ran under another; a rename that never went (a stop, a drop, a failed line) changes nothing,
+// and a later start renames again.
+func TestRenameBelongsToAConversationAndAStart(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	f.s.State.noteTitle("old-sid", "ops-designer")
+
+	require.NoError(t, f.s.UpWith("designer", UpOptions{Resume: "old-sid"}))
+	rs := f.s.State.Role("designer")
+	assert.Equal(t, "/rename zm-designer", rs.Inbox[0])
+
+	// Stopped before it was typed, then dropped from the queue: the title stays, the next resume renames again.
+	require.NoError(t, f.s.Down("designer", DownOptions{}))
+	rs.Inbox = nil
+	require.NoError(t, f.s.UpWith("designer", UpOptions{Fresh: true}))
+	assert.Equal(t, "ops-designer", f.s.State.Titles["old-sid"])
+	require.NoError(t, f.s.Down("designer", DownOptions{}))
+	require.NoError(t, f.s.UpWith("designer", UpOptions{Resume: "old-sid"}))
+	assert.Equal(t, "/rename zm-designer", rs.Inbox[0])
+
+	// Typed: the conversation runs under the name now, and the next resume under it leaves it.
+	typeQueued(f, "designer")
+	assert.Contains(t, f.tm.typed["designer"], "/rename zm-designer")
+	assert.Equal(t, "zm-designer", f.s.State.Titles["old-sid"])
+	require.NoError(t, f.s.Down("designer", DownOptions{}))
+	require.NoError(t, f.s.UpWith("designer", UpOptions{Resume: "old-sid"}))
+	assert.NotContains(t, rs.Inbox, "/rename zm-designer")
+}
+
+// One conversation resumed by two roles in turn keeps one title, the crew's: each switch renames it; a role whose
+// rename never went does not roll back the name another role gave it since.
+func TestRenameAcrossRolesAndFailedLines(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	f.s.State.noteTitle("conv", "zm-designer")
+
+	require.NoError(t, f.s.UpWith("harvester", UpOptions{Resume: "conv"}))
+	typeQueued(f, "harvester")
+	assert.Equal(t, "zm-harvester", f.s.State.Titles["conv"])
+	require.NoError(t, f.s.Down("harvester", DownOptions{}))
+
+	require.NoError(t, f.s.UpWith("designer", UpOptions{Resume: "conv"}))
+	designer := f.s.State.Role("designer")
+	require.Equal(t, "/rename zm-designer", designer.Inbox[0], "back to the first role: renamed back")
+
+	// It failed to type and sits in the failed lines; then a fresh start: no retry can type it, nothing rolled back.
+	designer.Inbox = designer.Inbox[1:]
+	designer.Failed = append(designer.Failed, Failed{Line: "/rename zm-designer"})
+	require.NoError(t, f.s.Down("designer", DownOptions{}))
+	require.NoError(t, f.s.UpWith("designer", UpOptions{Fresh: true}))
+	assert.Empty(t, designer.Failed)
+	assert.Equal(t, "zm-harvester", f.s.State.Titles["conv"])
+}

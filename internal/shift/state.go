@@ -33,6 +33,9 @@ var (
 // (up, started, stretches already reported) and could be seen again; most is what it was told or decided (holds,
 // broken marks, queues, last sessions, schedule progress) and exists nowhere else.
 type State struct {
+	// Titles is the name each Claude conversation of the crew last ran under, by session id: a conversation resumed
+	// under another name keeps its stored title until it is renamed.
+	Titles map[string]string `json:"titles,omitempty"`
 	// AcceptanceNotified commits alert deduplication with its dispatcher queue entry. Keys include the
 	// submitted session/time; legacy task/packet keys remain readable until a fresh submission.
 	AcceptanceNotified map[string]time.Time `json:"acceptance_notified,omitempty"`
@@ -111,6 +114,12 @@ type RoleState struct {
 	LastDir     string `json:"last_dir,omitempty"`
 	// LastSession is the role's last conversation id, for --resume.
 	LastSession string `json:"last_session,omitempty"`
+	// Title is the session name the role's current start runs under (claude --name). QueuedRename is the /rename this
+	// start queued, taken out again (from the inbox and the failed lines) at the next start.
+	Title        string `json:"title,omitempty"`
+	QueuedRename string `json:"queued_rename,omitempty"`
+	// RenameOf is the conversation that rename is for: its title in State.Titles changes only once the rename is typed.
+	RenameOf string `json:"rename_of,omitempty"`
 	// Inbox holds lines typed into the role the next time it is idle; Attempts counts failed tries of the first.
 	Inbox    []string `json:"inbox,omitempty"`
 	Attempts int      `json:"attempts,omitempty"`
@@ -587,4 +596,22 @@ func decodeV1(raw []byte) (*State, error) {
 	st.init()
 
 	return st, nil
+}
+
+// titlesMax is how many conversations' titles a role keeps.
+const titlesMax = 200
+
+// noteTitle records the name a conversation runs under, for the whole crew (one conversation may be resumed by
+// another role); past titlesMax one older entry gives way.
+func (s *State) noteTitle(session, title string) {
+	if s.Titles == nil {
+		s.Titles = map[string]string{}
+	}
+	if _, ok := s.Titles[session]; !ok && len(s.Titles) >= titlesMax {
+		for k := range s.Titles {
+			delete(s.Titles, k)
+			break
+		}
+	}
+	s.Titles[session] = title
 }
