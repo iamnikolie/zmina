@@ -128,7 +128,7 @@ if (phone) {
       crews: [{ key: "default", name: "default", node: "node-a", dispatcher: "dispatcher", last_tick: at(0), done_today: 3, roles: [
           r("dispatcher", { icon: "dispatcher" }), r("dev", { status: "busy", since: at(11), tasks: ["T-7"] }),
           r("designer", { prompt: true, dialog: { question: "Which palette?\\nA or B", options: [] } }),
-          r("devops", { state: "down", tasks: ["T-2"] }), r("seo", { state: "down" }), r("reviewer"), r("scribe", { since: at(40) })] },
+          r("devops", { state: "down", tasks: ["T-2"] }), r("seo", { state: "down" }), r("reviewer"), r("scribe", { since: at(40) }), r("tester", { status: "busy", since: at(3) })] },
         { key: "node-b/ops", name: "ops", node: "node-b", remote: true, dispatcher: "dispatcher", last_tick: at(30), roles: [r("dispatcher")] },
         { key: "node-b/spare", name: "spare", node: "node-b", remote: true, spare: true, last_tick: at(0), roles: [r("dev")] }],
       todo: [{ crew: "default", id: "A-1", kind: "decision", title: "Ship it?", text: "Ship it?", role: "dispatcher", created: at(60) },
@@ -143,9 +143,9 @@ if (phone) {
     idleOpen = true;
     renderPhone();
     const text = (n) => (typeof n === "string" ? n : n.textContent);
-    res.agents = byId.pagents.children.map((sec) => ({ cls: sec.className, text: text(sec.children[0] || sec),
+    res.readout = byId.pagents.children[0].children.map((b) => b.children.map(text).join(" "));
+    res.agents = byId.pagents.children.slice(1).map((sec) => ({ cls: sec.className, text: text(sec.children[0] || sec),
       rows: (sec.children[1]?.children || []).map((row) => ({ cls: row.className, text: text(row) })) }));
-    res.badge = byId.pagents.children.length;
     tab = "later";
     laterSub = "hand";
     renderPhone();

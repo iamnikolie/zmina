@@ -63,9 +63,10 @@ func TestPhoneTabs(t *testing.T) {
 			Cls, Text string
 			Rows      []struct{ Cls, Text string }
 		} `json:"agents"`
-		Hand  []string `json:"hand"`
-		Head  string   `json:"head"`
-		Sheet []string `json:"sheet"`
+		Readout []string `json:"readout"`
+		Hand    []string `json:"hand"`
+		Head    string   `json:"head"`
+		Sheet   []string `json:"sheet"`
 	}
 	require.NoError(t, json.Unmarshal(raw, &res))
 
@@ -77,9 +78,11 @@ func TestPhoneTabs(t *testing.T) {
 	assert.NotContains(t, res.KbDesktop, "keyboard", "never on the desktop")
 	assert.NotContains(t, res.KbDesktop, "kb", "nor as the board's own class")
 
-	// D-12 a1–a3: red first (a role down with a task, a peer crew's stopped ticker), then a question on screen, then the
-	// oldest wait; a role with two items is one row with its count; the busy role with its task; the idle one; by hand a
-	// line. A down role that holds nothing, a spare crew and the roles that wait never show twice.
+	// D-12 a1–a3: the readout (a); red first (a role down with a task, a peer crew's stopped ticker), then a question on
+	// screen, then the oldest wait; a role with two items is one row with its count; a busy role with its task on a
+	// second line, one without on one line and no words (b); the idle one; by hand a line. A down role that holds
+	// nothing, a spare crew and the roles that wait never show twice.
+	assert.Equal(t, []string{"5 waiting on you", "2 working", "1 idle"}, res.Readout)
 	require.Len(t, res.Agents, 4)
 	group := func(i int) []string {
 		var out []string
@@ -89,7 +92,7 @@ func TestPhoneTabs(t *testing.T) {
 
 		return out
 	}
-	assert.Equal(t, "Waiting on you 5", res.Agents[0].Text)
+	assert.Equal(t, "Waiting on you", res.Agents[0].Text)
 	assert.Equal(t, []string{
 		"ag x | devopsdefaultDown · holds T-2›",
 		"ag x | dispatcherops · node-bTicker stopped · the crew does not wake›",
@@ -97,8 +100,8 @@ func TestPhoneTabs(t *testing.T) {
 		"ag n | 2reviewerdefaultCheck the copy4 d›",
 		"ag n | dispatcherdefaultShip it?1 h›",
 	}, group(0))
-	assert.Equal(t, "Working 1", res.Agents[1].Text)
-	assert.Equal(t, []string{"ag busy one | devdefault · Build the login page11 min›"}, group(1))
+	assert.Equal(t, "Working", res.Agents[1].Text)
+	assert.Equal(t, []string{"ag busy one | testerdefault3 min›", "ag busy two | devdefaultBuild the login page11 min›"}, group(1))
 	assert.Equal(t, []string{"ag idle one | scribedefault40 min›"}, group(2))
 	assert.Equal(t, "Yours by hand1 · oldest 8 d ›", res.Agents[3].Text)
 

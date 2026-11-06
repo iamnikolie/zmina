@@ -59,9 +59,10 @@ const W = {
   talk: "Talk", talkTo: (r) => "Talk to " + r,
   tabAgents: "Agents", tabLater: "Later", overMesh: " · over the mesh", upW: "up",
   waitingOn: "Waiting on you", workingW: "Working", idleW: "Idle", yoursByHand: "Yours by hand", crewsNodes: "Crews and nodes",
-  nothingWaits: "Nothing waits on you", busyNoTask: "busy, no task", downHoldsP: (ts) => "Down · holds " + ts,
+  nothingWaits: "Nothing waits on you", readout: "Roles", roWaiting: "waiting on you", roWorking: "working", roIdle: "idle", downHoldsP: (ts) => "Down · holds " + ts,
   tickerNoWake: "Ticker stopped · the crew does not wake", asksQ: (q) => "Asks: " + q, nWaiting: (n) => n + " waiting",
   oldestW: (d) => "oldest " + d, nextAt: (w) => "next " + w, raisedBy: (r) => "raised by " + r, moveTo: "Move to…", alarmW: "Alarm",
+  whenChips: [["+2h", "+2h"], ["Tonight 20:00", "today 20:00"], ["Tomorrow 09:00", "tomorrow 09:00"], ["Mon 09:00", "mon 09:00"]],
   nDown: (n) => n + " down", roleDown: (r) => r + " down", nWorking: (n) => n + " working", tickerStopped: "ticker stopped",
   stoppedW: "stopped", doneTodayN: "Done today", parkedN: (n, old) => n + (old ? " · oldest " + old : ""),
   ev: {
@@ -2237,7 +2238,7 @@ function agents(lists) {
   const since = (a, b) => ts(b) - ts(a);
   const up = lists.crews.flatMap((c) => (c.roles || []).filter((r) => r.state === "up" && !rows.has(c.key + "/" + r.role))
     .map((r) => ({ crew: c.key, role: r.role, icon: r.icon, r, age: ago(r.since) })));
-  const working = up.filter((a) => a.r.status === "busy").sort(since).map((a) => Object.assign(a, { kind: "busy", line: taskOf(a.crew, a.r) || W.busyNoTask }));
+  const working = up.filter((a) => a.r.status === "busy").sort(since).map((a) => Object.assign(a, { kind: "busy", line: taskOf(a.crew, a.r) }));
   const idle = up.filter((a) => a.r.status !== "busy").sort(since).map((a) => Object.assign(a, { kind: "idle", line: "" }));
   return { waiting, working, idle };
 }
@@ -2252,11 +2253,13 @@ function taskOf(crew, r) {
 }
 
 // agentRow (a1, a2, a4) is a role: its glyph in a circle coloured by its state, with how many items wait on the
-// owner as a pill once there are two; who and where; what it waits on you for (one line for a working or idle role);
-// the oldest wait. A tap is Talk with that role. No buttons, chips or fields inside it.
+// owner as a pill once there are two; who and where; what it waits on you for; the oldest wait. A working role (b) is
+// two lines, its task under it — one line without a task; an idle role one line. A tap is Talk with that role. No
+// buttons, chips or fields inside it.
 function agentRow(a) {
-  const one = a.kind === "busy" || a.kind === "idle";
-  const b = button("ag " + a.kind + (one ? " one" : "") + stl(a.crew), "", () => openTalk(a.crew, a.role, b));
+  const one = a.kind === "idle" || (a.kind === "busy" && !a.line);
+  const two = a.kind === "busy" && !!a.line;
+  const b = button("ag " + a.kind + (one ? " one" : two ? " two" : "") + stl(a.crew), "", () => openTalk(a.crew, a.role, b));
   b.dataset.k = "agent:" + a.crew + "/" + a.role;
   const av = el("span", "av " + a.kind);
   av.append(glyph(a.icon));
@@ -2265,20 +2268,22 @@ function agentRow(a) {
   const rn = el("span", "rn");
   const where = phoneWhere(a.crew);
   rn.append(el("span", "r", a.role), el("small", "", where));
-  if (a.kind === "busy") rn.append(el("span", "tk", " · " + a.line));
   w.append(rn);
-  if (!one) w.append(el("span", "ask", a.line));
-  b.append(av, w, el("span", "age" + (one ? " m" : a.late ? " x" : ""), a.age || ""), el("span", "chev", "›"));
+  if (two) w.append(el("span", "tk", a.line));
+  else if (!one) w.append(el("span", "ask", a.line));
+  const quiet = a.kind === "busy" || a.kind === "idle";
+  b.append(av, w, el("span", "age" + (quiet ? " m" : a.late ? " x" : ""), a.age || ""), el("span", "chev", "›"));
   b.setAttribute("aria-label", [W.talkTo(a.role), where, a.line, a.n >= 2 ? W.nWaiting(a.n) : "", a.age].filter(Boolean).join(" · "));
   if (a.items && a.items.length) b.title = a.items.map((it) => idOf(it.crew, it.id)).join(" · ");
   return b;
 }
 
-// agentSection is a group of rows under its heading; fold makes the heading the way to fold it back.
-function agentSection(label, rows, cls, fold) {
+// agentSection is a group of rows under its heading (its count is the readout's, a); fold makes the heading the way
+// to fold it back.
+function agentSection(id, label, rows, fold) {
   const s = el("section", "ags");
-  const h = fold ? button("lab fold", "", fold) : el("h2", "lab");
-  h.append(label + " ", el("b", cls, String(rows.length)));
+  s.id = id;
+  const h = fold ? button("lab fold", label, fold) : el("h2", "lab", label);
   if (fold) h.setAttribute("aria-expanded", "true");
   const list = el("div", "rows2");
   list.append(...rows.map(agentRow));
@@ -2295,13 +2300,35 @@ function lineTo(name, value, fn, cls) {
 
 const oldestOf = (xs) => (xs.length ? dur(nowMs() - T(xs[0].created)) : "");
 
+// readout (D-12 a) is three numerals under the head — waiting on you, working, idle — each a way to its section (idle
+// opens its fold). A count that changed rolls once.
+const roShown = {};
+function readout(a) {
+  const ro = el("div", "pro3");
+  ro.setAttribute("role", "group");
+  ro.setAttribute("aria-label", W.readout);
+  const go = (id) => () => $(id)?.scrollIntoView({ block: "start", behavior: "smooth" });
+  const cells = [["w" + (a.waiting.some((x) => x.red) ? " x" : ""), a.waiting.length, W.roWaiting, go("ag-wait")],
+    ["b", a.working.length, W.roWorking, go("ag-work")],
+    ["i", a.idle.length, W.roIdle, () => { idleOpen = true; render(); requestAnimationFrame(go("ag-idle")); }]];
+  for (const [cls, n, label, fn] of cells) {
+    const k = cls[0];
+    const b = button(cls, "", fn);
+    b.append(el("span", "v" + (roShown[k] !== undefined && roShown[k] !== n ? " roll" : ""), String(n)), el("span", "k", label));
+    b.setAttribute("aria-label", n + " " + label);
+    roShown[k] = n;
+    ro.append(b);
+  }
+  return ro;
+}
+
 function renderAgents(lists, a) {
-  const out = [];
-  if (a.waiting.length) out.push(agentSection(W.waitingOn, a.waiting, a.waiting.some((x) => x.red) ? "x" : "n"));
+  const out = [readout(a)];
+  if (a.waiting.length) out.push(agentSection("ag-wait", W.waitingOn, a.waiting));
   else out.push(el("p", "pnone", W.nothingWaits));
-  if (a.working.length) out.push(agentSection(W.workingW, a.working, "b"));
+  if (a.working.length) out.push(agentSection("ag-work", W.workingW, a.working));
   if (a.idle.length) {
-    if (idleOpen) out.push(agentSection(W.idleW, a.idle, "", () => { idleOpen = false; render(); }));
+    if (idleOpen) out.push(agentSection("ag-idle", W.idleW, a.idle, () => { idleOpen = false; render(); }));
     else {
       const l = lineTo(W.idleW, String(a.idle.length), () => { idleOpen = true; render(); }, "fold");
       l.setAttribute("aria-expanded", "false");
@@ -2479,7 +2506,7 @@ function renderSheet() {
   const shut = () => { sheet = null; };
   if (s.kind === "hand") primary = button("pri", W.done, () => { shut(); doneHand(it); });
   else if (s.kind === "parked") primary = button("pri", W.back, () => { shut(); act(it, "back", "", W.broughtBack); });
-  else if (!s.moving) primary = button("pri", W.moveTo, () => { sheet.moving = true; render(); $("psheet").querySelector(".field")?.focus(); });
+  else if (!s.moving) primary = button("pri", W.moveTo, () => { sheet.moving = true; render(); $("psheet").querySelector(".wc")?.focus(); });
   else {
     const f = el("textarea", "field when");
     f.rows = 1;
@@ -2493,12 +2520,24 @@ function renderSheet() {
     });
     const sync = () => { primary.disabled = !f.value.trim(); };
     sync();
-    f.addEventListener("input", sync);
+    // D-12 e: four chips above the field; a chip fills it and enables Move, typing clears the chip. Tonight goes once
+    // 20:00 has passed (the time would be refused as past).
+    const chips = el("div", "whens");
+    const pick = (c) => {
+      for (const x of chips.children) { x.classList.toggle("on", x === c); x.setAttribute("aria-pressed", x === c ? "true" : "false"); }
+    };
+    for (const [label, when] of W.whenChips) {
+      if (when === "today 20:00" && new Date(nowMs()).getHours() >= 20) continue;
+      const c = button("wc", label, () => { f.value = when; pick(c); sync(); });
+      c.setAttribute("aria-pressed", "false");
+      chips.append(c);
+    }
+    f.addEventListener("input", () => { pick(null); sync(); });
     f.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && f.value.trim()) { e.preventDefault(); primary.click(); }
       if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); sheet.moving = false; render(); }
     });
-    kids.push(f);
+    kids.push(chips, f);
   }
   kids.push(primary, button("sec", W.talkTo(talkRole), () => { const c = s.crew; shut(); openTalk(c, talkRole, null); }));
   patch(sh, kids);
