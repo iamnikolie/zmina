@@ -696,7 +696,7 @@ body.fv-on { overflow: hidden; }
   .page .col { display: contents; }
   .page section:not(.ags), .page .hands { display: none !important; }
   body[data-tab="agents"] .pagents, body[data-tab="later"] .plater { display: block; }
-  body[data-tab="talk"] .page { display: none !important; }
+  body[data-tab="talk"] :is(.page, .phead) { display: none !important; }
 
   /* a3 · sections: Waiting on you, Working, Idle */
   .pagents .lab { margin: 12px 0 0; padding: 0 0 8px; min-height: 0; border: 0; background: none; width: 100%; text-align: left; }
@@ -801,22 +801,24 @@ body.fv-on { overflow: hidden; }
      less the clock (894 of 956) and the bar stood above the bottom. A keyboard's scroll is undone by pinPanel. */
   /* D-11 h1 · the head floats over the conversation: no bar, a fade from the panel tone; centred name (the picker)
      with node/crew under it; Terminal a round button at the right; the lamp goes (working is said in the thread) */
-  body[data-tab="talk"] .panel-h { position: absolute; top: env(safe-area-inset-top); left: 0; right: 0; z-index: 3; display: block; height: 80px;
-    padding: 0; background: linear-gradient(var(--panel) 56px, transparent 80px); pointer-events: none; }
+  /* D-14 h1 · compact: a 60 px head, the name 15 px in a 36 px button, node/crew 12 px, Terminal a 36 px circle; every hit 44 */
+  body[data-tab="talk"] .panel-h { position: absolute; top: env(safe-area-inset-top); left: 0; right: 0; z-index: 3; display: block; height: 60px;
+    padding: 0; background: linear-gradient(var(--panel) 44px, transparent 60px); pointer-events: none; }
   body[data-tab="talk"] .panel-h > * { pointer-events: auto; }
   body[data-tab="talk"] .panel-h .lamp { display: none; }
   /* above node/crew and the tools: its open menu must take the taps it covers */
-  body[data-tab="talk"] .panel-h .pick { position: absolute; left: 50%; top: 2px; z-index: 2; transform: translateX(-50%); }
-  body[data-tab="talk"] .panel-h .pick > button { height: 40px; margin: 0; padding: 0 12px; gap: 5px; font: 600 17px/1.2 var(--sans); }
+  body[data-tab="talk"] .panel-h .pick { position: absolute; left: 50%; top: 0; z-index: 2; transform: translateX(-50%); }
+  body[data-tab="talk"] .panel-h .pick > button { position: relative; height: 36px; margin: 0; padding: 0 12px; gap: 5px; font: 600 15px/1.2 var(--sans); }
+  body[data-tab="talk"] .panel-h .pick > button::after { content: ""; position: absolute; inset: -4px 0; }
   body[data-tab="talk"] .panel-h .pick > button:hover, body[data-tab="talk"] .panel-h .pick > button[aria-expanded="true"] { background: none; }
   body[data-tab="talk"] .pickmenu { left: 50%; transform: translateX(-50%); width: min(20rem, calc(100vw - 24px)); }
-  body[data-tab="talk"] .panel-h .who { position: absolute; left: 25%; right: 25%; top: 40px; justify-content: center; cursor: pointer; }
-  body[data-tab="talk"] .panel-h .who .k { font: 13px/1.2 var(--sans); color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
-  body[data-tab="talk"] .panel-h .tools2 { position: absolute; right: 12px; top: 14px; }
+  body[data-tab="talk"] .panel-h .who { position: absolute; left: 25%; right: 25%; top: 30px; justify-content: center; cursor: pointer; }
+  body[data-tab="talk"] .panel-h .who .k { font: 12px/1.2 var(--sans); color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+  body[data-tab="talk"] .panel-h .tools2 { position: absolute; right: 10px; top: 8px; }
   body[data-tab="talk"] .panel-h .tools2 #side-term { border-radius: 50%; background: var(--panel2); color: var(--ink2); }
   body[data-tab="talk"] .panel-h .back, body[data-tab="talk"] #side-close, body[data-tab="talk"] #side-full { display: none; }
-  body[data-tab="talk"] .panel-h .pick > button { height: 44px; font-size: 17px; }
-  body[data-tab="talk"] .panel-h .tools2 a, body[data-tab="talk"] .panel-h .tools2 button { width: 44px; height: 44px; }
-  body[data-tab="talk"] .panel-h .tools2 svg { width: 20px; height: 20px; }
+  body[data-tab="talk"] .panel-h .tools2 a, body[data-tab="talk"] .panel-h .tools2 button { position: relative; width: 36px; height: 36px; min-width: 0; }
+  body[data-tab="talk"] .panel-h .tools2 a::after, body[data-tab="talk"] .panel-h .tools2 button::after { content: ""; position: absolute; inset: -4px; }
+  body[data-tab="talk"] .panel-h .tools2 svg { width: 18px; height: 18px; }
 }
 @keyframes pop { from { transform: scale(.6); } }
