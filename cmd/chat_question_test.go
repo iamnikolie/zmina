@@ -39,7 +39,7 @@ func TestAnswerStepsFollowTheDialog(t *testing.T) {
 
 	steps, err = answerSteps(question(item(false, 2)), answer(t, `{"id":"toolu_1","items":[{"other":"my own words"}]}`))
 	require.NoError(t, err)
-	assert.Equal(t, []answerStep{{Keys: []string{"3"}, Expect: "q", Options: []string{"o", "o"}}, {Text: "my own words", Expect: "q"}}, steps,
+	assert.Equal(t, []answerStep{{Keys: []string{"3"}, Expect: "q", Options: []string{"o", "o"}}, {Text: "my own words", Expect: "q", Options: []string{"o", "o"}, Current: 3}}, steps,
 		"one part: no review screen; the words are typed only while the question is still up")
 }
 
@@ -96,4 +96,11 @@ func TestActiveDialogReadsTheBottomQuestion(t *testing.T) {
 
 	_, ok = activeDialog(liveDialog, "Which screen?")
 	assert.False(t, ok)
+
+	// An old question's text above another dialog: the rows that follow restart at 1, so it is not the active one.
+	stale := "Which tabs?\n  1. Talk\n  2. Later\nDeploy now?\n❯ 1. Yes\n  2. No"
+	_, ok = activeDialog(stale, "Which tabs?")
+	assert.False(t, ok, "old text above another dialog")
+	_, ok = activeDialog("Which tabs?\n  1. Talk\n  2. Later", "Which tabs?")
+	assert.False(t, ok, "rows without a cursor are not a live dialog")
 }

@@ -356,6 +356,8 @@ type answerStep struct {
 	// no check of the dialog's text; the input line is checked before every step).
 	Expect  string
 	Options []string
+	// Current is the row (1-based) the dialog's cursor must be on before this step (0: any row).
+	Current int
 	// Want is the options a several-choice part must end ticked: the keys are worked out on the live dialog, so an
 	// option already ticked is not ticked off.
 	Want []int
@@ -409,7 +411,7 @@ func answerSteps(q *chat.Question, a questionAnswer) ([]answerStep, error) {
 		}
 		switch {
 		case other != "" && len(ans.Choices) == 0:
-			steps = append(steps, answerStep{Keys: []string{digit(n + 1)}}, answerStep{Text: other, Expect: item.Question})
+			steps = append(steps, answerStep{Keys: []string{digit(n + 1)}}, answerStep{Text: other, Expect: item.Question, Options: labels(item), Current: n + 1})
 		case other == "" && len(ans.Choices) == 1:
 			steps = append(steps, answerStep{Keys: []string{digit(ans.Choices[0])}})
 		default:
@@ -463,18 +465,26 @@ func activeDialog(screen, question string) ([]dialogOption, bool) {
 		return nil, false
 	}
 	var out []dialogOption
+	current := 0
 	for _, l := range lines[at:] {
 		m := dialogRow.FindStringSubmatch(l)
 		if m == nil {
 			continue
 		}
 		n, _ := strconv.Atoi(m[2])
+		if n == 1 && len(out) > 0 {
+			return nil, false // numbering starts again: another dialog below this text, the active one is not it
+		}
 		if n != len(out)+1 {
 			continue // a number in the question's own text, not a row
 		}
 		out = append(out, dialogOption{N: n, Label: flat(m[4]), Ticked: m[3] == "✔", Current: m[1] != ""})
+		if m[1] != "" {
+			current++
+		}
 	}
-	return out, len(out) > 0
+	// The active dialog has its cursor on exactly one of its rows; text that only looks like one has none.
+	return out, len(out) > 0 && current == 1
 }
 
 // dialogMatches reports whether the active dialog's rows are the part's options, in order, by number.
@@ -558,7 +568,7 @@ func answerQuestion(s *shift.Shift, role, raw string, snapshot chat.Snapshot) er
 			} else {
 				// The active dialog, at the bottom: this part's whole question and its options by number, in order.
 				rows, ok := activeDialog(screen, step.Expect)
-				if !ok || !dialogMatches(rows, step.Options) {
+				if !ok || !dialogMatches(rows, step.Options) || step.Current > 0 && (len(rows) < step.Current || !rows[step.Current-1].Current) {
 					return stop
 				}
 				if step.Want != nil {
