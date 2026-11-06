@@ -101,7 +101,7 @@ if (phone) Object.assign(ctx, { patch: (el, kids) => el.replaceChildren(...kids)
 vm.runInContext(fs.readFileSync(process.argv[2], "utf8"), ctx, { filename: "app.js" });
 
 if (phone) {
-  // D-09: whom Talk opens after the scope changes, Alarms with no alarm, Back to the entry the page opened on.
+  // D-09: whom Talk opens after the scope changes, Back to the entry the page opened on; D-12: the Agents and Later tabs.
   ctx.fire = (name, e) => (listeners[name] || []).forEach((fn) => fn(e || {}));
   ctx.media = media;
   ctx.byId = byId;
@@ -118,11 +118,50 @@ if (phone) {
     res.sameScope = phoneTalk();
     filter = "node-b/ops";
     res.otherScope = phoneTalk();
-    renderAlarms();
-    res.alarms = byId.alarms.className;
+
+    // D-12: the Agents tab, a row per role in three groups, every crew (the phone has no switch); Later's by-hand list
+    // and an item's sheet.
+    const now = Date.now(), at = (min) => new Date(now - min * 60000).toISOString();
+    const r = (role, o) => Object.assign({ role, state: "up", status: "idle", since: at(5), icon: "generic" }, o);
+    snap = {
+      now: new Date(now).toISOString(), self: "node-a", nodes: [{ name: "node-a", self: true }, { name: "node-b" }], tints: {},
+      crews: [{ key: "default", name: "default", node: "node-a", dispatcher: "dispatcher", last_tick: at(0), done_today: 3, roles: [
+          r("dispatcher", { icon: "dispatcher" }), r("dev", { status: "busy", since: at(11), tasks: ["T-7"] }),
+          r("designer", { prompt: true, dialog: { question: "Which palette?\\nA or B", options: [] } }),
+          r("devops", { state: "down", tasks: ["T-2"] }), r("seo", { state: "down" }), r("reviewer"), r("scribe", { since: at(40) })] },
+        { key: "node-b/ops", name: "ops", node: "node-b", remote: true, dispatcher: "dispatcher", last_tick: at(30), roles: [r("dispatcher")] },
+        { key: "node-b/spare", name: "spare", node: "node-b", remote: true, spare: true, last_tick: at(0), roles: [r("dev")] }],
+      todo: [{ crew: "default", id: "A-1", kind: "decision", title: "Ship it?", text: "Ship it?", role: "dispatcher", created: at(60) },
+        { crew: "default", id: "T-5", kind: "waiting", title: "Check the copy", text: "Check the copy", role: "reviewer", blocks: "reviewer", created: at(4 * 24 * 60) },
+        { crew: "default", id: "A-3", kind: "decision", title: "Which font?", text: "Which font?", role: "reviewer", created: at(30) },
+        { crew: "default", id: "A-2", kind: "check", title: "Sign in and publish", text: "Sign in and publish the test board", role: "dispatcher", created: at(8 * 24 * 60) }],
+      later: [], alarms: [], log: [], tasks: [],
+      work: [{ crew: "default", id: "T-7", role: "dev", state: "open", lane: "go", title: "Build the login page" }],
+    };
+    got = now;
+    filter = "all"; // render() sets it so on the phone
+    idleOpen = true;
+    renderPhone();
+    const text = (n) => (typeof n === "string" ? n : n.textContent);
+    res.agents = byId.pagents.children.map((sec) => ({ cls: sec.className, text: text(sec.children[0] || sec),
+      rows: (sec.children[1]?.children || []).map((row) => ({ cls: row.className, text: text(row) })) }));
+    res.badge = byId.pagents.children.length;
+    tab = "later";
+    laterSub = "hand";
+    renderPhone();
+    res.hand = byId.plater.children.map(text);
+    res.head = byId["phead-h"].textContent;
+    sheet = { kind: "hand", crew: "default", id: "A-2" };
+    renderPhone();
+    res.sheet = byId.psheet.children.map(text);
+    res.sheetHidden = byId.psheet.hidden;
+    tab = "agents";
+    laterSub = "";
+    sheet = null;
+
     const s = snap;
     snap = null; // the tab switches below draw nothing
-    goTab("going");
+    goTab("later");
     location.hash = "";
     fire("popstate");
     res.back = { tab, body: document.body.dataset.tab };
