@@ -60,7 +60,7 @@ const W = {
   tabAgents: "Agents", tabLater: "Later", overMesh: " · over the mesh", upW: "up",
   waitingOn: "Waiting on you", workingW: "Working", idleW: "Idle", yoursByHand: "Yours by hand", crewsNodes: "Crews and nodes",
   nothingWaits: "Nothing waits on you", readout: "Roles", roWaiting: "waiting on you", roWorking: "working", roIdle: "idle", downHoldsP: (ts) => "Down · holds " + ts,
-  tickerNoWake: "Ticker stopped · the crew does not wake", asksQ: (q) => "Asks: " + q, nWaiting: (n) => n + " waiting",
+  tickerNoWake: "Ticker stopped · the crew does not wake", asksQ: (q) => "Asks: " + q, nWaiting: (n) => n + " waiting", nIdle: (n) => n + " idle",
   oldestW: (d) => "oldest " + d, nextAt: (w) => "next " + w, raisedBy: (r) => "raised by " + r, moveTo: "Move to…", alarmW: "Alarm",
   whenChips: [["+2h", "+2h"], ["Tonight 20:00", "today 20:00"], ["Tomorrow 09:00", "tomorrow 09:00"], ["Mon 09:00", "mon 09:00"]],
   nDown: (n) => n + " down", roleDown: (r) => r + " down", nWorking: (n) => n + " working", tickerStopped: "ticker stopped",
@@ -1314,12 +1314,41 @@ function renderBand(crews) {
   const awake = (r) => r.status === "busy" || r.prompt || r.stuck;
   const lit = up.filter(([, r]) => awake(r)).sort((a, b) => (b[1].prompt || b[1].stuck ? 1 : 0) - (a[1].prompt || a[1].stuck ? 1 : 0));
   const idle = up.filter(([, r]) => !awake(r)).sort((a, b) => T(b[1].since) - T(a[1].since));
-  const spread = stacked.has("sessions") || idle.length < 2;
+  // D-19 d1: more than one crew shown, the cards stand under a head line per crew, each crew's idle cards in a stack of
+  // its own; the switch spreads or stacks them all.
+  const groups = crewGroups(agents(phoneLists())).filter((g) => up.some(([c]) => c.name === g.name));
+  const keys = groups.length > 1 ? groups.map((g) => "sessions:" + g.name) : ["sessions"];
+  const spread = keys.some((k) => stacked.has(k)) || idle.length < 2;
   if (idle.length > 1) {
-    const t = labelled(button("kb-st", "", () => { spread ? stacked.delete("sessions") : stacked.add("sessions"); keepStacked(); render(); }),
+    const t = labelled(button("kb-st", "", () => { for (const k of keys) spread ? stacked.delete(k) : stacked.add(k); keepStacked(); render(); }),
       spread ? "stack" : "spread", spread ? W.stackIdle : W.spread);
     t.setAttribute("aria-pressed", spread ? "false" : "true");
     h.insertBefore(t, counts.nextSibling);
+  }
+  // The crew's head line is the phone's block head (g1, g2): its name, its machines, how its roles stand.
+  if (groups.length > 1) {
+    const out = [h];
+    for (const g of groups) {
+      const mine = ([c]) => c.name === g.name;
+      const at = ([c]) => (g.multi ? machineOf(c.key) : "");
+      const gl = lit.filter(mine), gi = idle.filter(mine), k = "sessions:" + g.name;
+      const band = el("div", "band");
+      band.append(...gl.map((x) => sessionCard(x[0], x[1], at(x))));
+      if (gi.length < 2 || stacked.has(k)) band.append(...gi.map((x) => sessionCard(x[0], x[1], at(x))));
+      else {
+        const pile = el("div", "sstack");
+        pile.append(...stackOf([sessionCard(gi[0][0], gi[0][1], at(gi[0]))], gi.length - 1, () => { stacked.add(k); keepStacked(); render(); }, W.idleN));
+        band.append(pile);
+      }
+      const head = crewHead(Object.assign({}, g, { rank: Math.min(g.rank, 2) }), false);
+      head.classList.add("cgd");
+      const block = el("div", "cgd-b");
+      block.dataset.k = "crewband:" + g.name;
+      block.append(head, band);
+      out.push(block);
+    }
+    patch($("crew-col"), out);
+    return;
   }
   const band = el("div", "band");
   band.append(...lit.map(([c, r]) => sessionCard(c, r)));
@@ -1335,7 +1364,7 @@ function renderBand(crews) {
 // sessionCard is one session: the role's glyph as its lamp (D-04 i3), the role, its crew while every crew shows, the
 // context ring once it nears a trim; the state word and since when; what it says it does. A working one is lit, an idle
 // one dimmed unless it needs you.
-function sessionCard(c, r) {
+function sessionCard(c, r, at) {
   const busy = r.status === "busy";
   const need = r.prompt || r.stuck;
   const card = el("button", "role card " + (busy ? "busy" : "idle") + (need ? " need" : "") + stl(c.key));
@@ -1345,7 +1374,8 @@ function sessionCard(c, r) {
   const tip = r.keep === "always" ? [W.always] : [];
   const h = el("div", "role-h");
   h.append(glyph(r.icon), el("span", "role-n", r.role));
-  const where = multiNode() ? shownLabel(c.key, true) : filter === "all" && multi() ? c.name : "";
+  // Under its crew's head line (D-19 d1) a card names only its machine, and only when the crew lives on more than one.
+  const where = at !== undefined ? at : multiNode() ? shownLabel(c.key, true) : filter === "all" && multi() ? c.name : "";
   if (where) h.append(el("span", "keep", where));
   h.append(el("span", "fill"));
   if (r.context && r.context_max) {
@@ -1815,7 +1845,10 @@ $("history-close").addEventListener("click", () => { $("history").hidden = true;
 let side = null; // {crew, role}: what the panel shows
 let sideFrom = null; // the element that opened it
 let sideMark = null; // the same, as something a redrawn page finds again (patch.js focusMark)
-let lastTalk = null; // the last conversation, for the header's Talk
+// lastTalk is the last conversation, for the header's Talk and the phone's Talk tab; kept across a reload (D-19 t1: Talk
+// remembers the last one chosen, and a new build reloads the page by itself).
+let lastTalk = null;
+try { const t = JSON.parse(localStorage.getItem("zmina.talk") || "null"); if (t && t.crew && t.role) lastTalk = { kind: "talk", crew: t.crew, role: t.role, scope: t.scope }; } catch (_) { /* none kept */ }
 
 function placeSide() {
   const mid = document.querySelector(".dcol.mid");
@@ -1828,7 +1861,7 @@ function placeSide() {
 // talkTarget is where the header's Talk goes: the last conversation, else the dispatcher of the crew the switch shows
 // (All: this node's default crew).
 function talkTarget() {
-  return lastTalk || scopeDispatcher();
+  return lastTalk && crewOf(lastTalk.crew) ? lastTalk : scopeDispatcher();
 }
 
 // scopeDispatcher is the dispatcher of the crew the switch shows (All: this node's default crew).
@@ -1845,6 +1878,7 @@ function scopeDispatcher() {
 function openTalk(crewKey, role, from) {
   side = { kind: "talk", crew: crewKey, role, scope: filter };
   lastTalk = side;
+  try { localStorage.setItem("zmina.talk", JSON.stringify({ crew: crewKey, role, scope: filter })); } catch (_) { /* this visit only */ }
   sideFrom = from || document.activeElement;
   sideMark = markOf(sideFrom);
   const c = crewOf(crewKey);
@@ -1930,7 +1964,15 @@ function renderSide() {
   const c = crewOf(side.crew), where = remote(side.crew) || !snap.self ? side.crew : snap.self + "/" + side.crew;
   const k = el("span", "k", where);
   k.title = c && c.remote ? where + " · over the mesh, signed" : where + " · local";
-  patch($("side-who"), [k, el("span", "st" + (need ? " need" : busy ? " busy" : ""), st)]);
+  if (phone.matches) {
+    // D-19 t1: on the phone the head is a title only — «crew · machine · state», the state word coloured; the
+    // conversation is changed on the Agents tab, so the name is no picker there.
+    const down = !r || r.state !== "up";
+    const word = down ? W.fvDown : (r.prompt ? W.onScreen : busy ? W.working : W.free) + (zero(r.since) ? "" : " " + ago(r.since));
+    const at = [c ? c.name : side.crew, machineOf(side.crew)].filter(Boolean).join(" · ");
+    patch($("side-who"), [el("span", "k", at + " ·"), el("span", "st" + (down ? " late" : need ? " need" : busy ? " busy" : ""), word)]);
+  } else patch($("side-who"), [k, el("span", "st" + (need ? " need" : busy ? " busy" : ""), st)]);
+  $("side-pick").disabled = phone.matches;
   if (!$("side-menu").hidden) renderPick();
   setText($("talk-open").lastElementChild, W.talk + " · " + side.role + " " + (shownLabel(side.crew, true) || crewLabel(side.crew)));
 }
@@ -2022,8 +2064,7 @@ $("side-pick").addEventListener("click", () => {
   if (!m.hidden) { $("side-filter").value = ""; pickAll = ""; renderPick(); $("side-filter").focus(); }
 });
 $("side-filter").addEventListener("input", renderPick);
-// D-11: on the phone node/crew stands under the role's name, and a tap there opens the picker too.
-$("side-who").addEventListener("click", () => { if (phone.matches && side && side.kind === "talk") $("side-pick").click(); });
+// D-19 t1: on the phone it is a title, not a way to the picker (D-11's tap on node/crew is gone).
 $("side-close").addEventListener("click", closeTalk);
 // The conversation is a frame of this page: its Esc arrives as a message, accepted only from that frame and this origin.
 globalThis.addEventListener?.("message", (e) => {
@@ -2077,7 +2118,7 @@ let tab = [location.hash.slice(1), tabSaved()].map(tabOf).find(Boolean) || "agen
 const tab0 = tab; // the tab of the history entry the page opened on, which may have no hash
 let tabFrom = "agents"; // where a closed Talk returns to
 let laterSub = ""; // the Later list open: "" (the links), parked, alarms, hand, crews
-let idleOpen = false; // a3: the idle roles laid out in place of their one line
+const idleOpen = new Set(); // D-19 g3: the crews whose idle roles are laid out in place of their one line
 let sheet = null; // l1: the item opened in the bottom sheet: {kind, crew, id, moving}
 let sheetFrom = null; // the row that opened it
 const tabScroll = {};
@@ -2166,7 +2207,7 @@ globalThis.addEventListener?.("blur", () => setTimeout(kbCheck, 0));
 // phoneTalk is whom the Talk tab opens (k1): the last conversation while the scope is the one it was opened under, else the scoped
 // crew's dispatcher. The phone has no scope of its own (D-12 h1): it shows every crew.
 function phoneTalk() {
-  return lastTalk && lastTalk.scope === filter ? lastTalk : scopeDispatcher();
+  return lastTalk && lastTalk.scope === filter && crewOf(lastTalk.crew) ? lastTalk : scopeDispatcher();
 }
 
 // phoneWhere is a row's crew tag (D-12 a1): the crew alone for this machine's crews, «crew · node» for a peer's.
@@ -2264,7 +2305,7 @@ function taskOf(crew, r) {
 // owner as a pill once there are two; who and where; what it waits on you for; the oldest wait. A working role (b) is
 // two lines, its task under it — one line without a task; an idle role one line. A tap is Talk with that role. No
 // buttons, chips or fields inside it.
-function agentRow(a) {
+function agentRow(a, at) {
   const one = a.kind === "idle" || (a.kind === "busy" && !a.line);
   const two = a.kind === "busy" && !!a.line;
   const b = button("ag " + a.kind + (one ? " one" : two ? " two" : "") + stl(a.crew), "", () => openTalk(a.crew, a.role, b));
@@ -2274,7 +2315,8 @@ function agentRow(a) {
   if (a.n >= 2) av.append(el("span", "cnt", String(a.n)));
   const w = el("span", "w");
   const rn = el("span", "rn");
-  const where = phoneWhere(a.crew);
+  // D-19 g2: inside its crew's block a row names only its machine, and only when the crew lives on more than one.
+  const where = at === undefined ? phoneWhere(a.crew) : at;
   rn.append(el("span", "r", a.role), el("small", "", where));
   w.append(rn);
   if (two) w.append(el("span", "tk", a.line));
@@ -2284,19 +2326,6 @@ function agentRow(a) {
   b.setAttribute("aria-label", [W.talkTo(a.role), where, a.line, a.n >= 2 ? W.nWaiting(a.n) : "", a.age].filter(Boolean).join(" · "));
   if (a.items && a.items.length) b.title = a.items.map((it) => idOf(it.crew, it.id)).join(" · ");
   return b;
-}
-
-// agentSection is a group of rows under its heading (its count is the readout's, a); fold makes the heading the way
-// to fold it back.
-function agentSection(id, label, rows, fold) {
-  const s = el("section", "ags");
-  s.id = id;
-  const h = fold ? button("lab fold", label, fold) : el("h2", "lab", label);
-  if (fold) h.setAttribute("aria-expanded", "true");
-  const list = el("div", "rows2");
-  list.append(...rows.map(agentRow));
-  s.append(h, list);
-  return s;
 }
 
 // lineTo is a one-line opener: a name and its count, «›» (a3, l1).
@@ -2318,7 +2347,7 @@ function readout(a) {
   const go = (id) => () => $(id)?.scrollIntoView({ block: "start", behavior: "smooth" });
   const cells = [["w" + (a.waiting.some((x) => x.red) ? " x" : ""), a.waiting.length, W.roWaiting, go("ag-wait")],
     ["b", a.working.length, W.roWorking, go("ag-work")],
-    ["i", a.idle.length, W.roIdle, () => { idleOpen = true; render(); requestAnimationFrame(go("ag-idle")); }]];
+    ["i", a.idle.length, W.roIdle, () => { for (const g of crewGroups(a)) idleOpen.add(g.name); render(); requestAnimationFrame(go("ag-idle")); }]];
   for (const [cls, n, label, fn] of cells) {
     const k = cls[0];
     const b = button(cls, "", fn);
@@ -2330,18 +2359,85 @@ function readout(a) {
   return ro;
 }
 
+// crewGroups (D-19 g1, g2) are the roles of the Agents tab by crew — the crew's name is the key, so «ops» on this machine
+// and on a peer is one block — with the machines it lives on (this one first), in the order: a crew with a role down,
+// one waiting on the owner, one working, then idle-only; ties by name.
+function crewGroups(a) {
+  const by = new Map();
+  const group = (crew) => {
+    const name = crewOf(crew)?.name || crew;
+    if (!by.has(name)) by.set(name, { name, keys: new Set(), down: [], waiting: [], working: [], idle: [] });
+    const g = by.get(name);
+    g.keys.add(crew);
+    return g;
+  };
+  for (const r of a.waiting) group(r.crew)[r.red ? "down" : "waiting"].push(r);
+  for (const r of a.working) group(r.crew).working.push(r);
+  for (const r of a.idle) group(r.crew).idle.push(r);
+  const rank = (g) => (g.down.length ? 0 : g.waiting.length ? 1 : g.working.length ? 2 : 3);
+  return [...by.values()].map((g) => {
+    const crews = [...g.keys].map(crewOf).filter(Boolean).sort((x, y) => !!x.remote - !!y.remote || (x.node || "").localeCompare(y.node || ""));
+    const machines = [...new Set(crews.map((c) => c.node || (c.remote ? nodeOf(c.key) : snap.self || "")).filter(Boolean))];
+    return Object.assign(g, { machines, multi: machines.length > 1, rank: rank(g) });
+  }).sort((x, y) => x.rank - y.rank || x.name.localeCompare(y.name));
+}
+
+// machineOf is the machine a crew key runs on, for a row inside a block that spans more than one.
+const machineOf = (crew) => { const c = crewOf(crew); return (c && c.node) || (c && c.remote ? nodeOf(crew) : snap.self || ""); };
+
+// crewHead (g1) is a block's head: the crew's name, its machines, and how its roles stand — «1 down» only when one is,
+// «1 waiting» amber, «2 working», «4 idle». An idle-only crew's head is the whole block, a line that opens it (g3).
+function crewHead(g, open) {
+  const sum = el("span", "cg-sum");
+  const part = (n, word, cls) => { if (!n) return; if (sum.childNodes.length) sum.append(" · "); sum.append(el("span", cls || "", word(n))); };
+  part(g.down.length, W.nDown, "x");
+  part(g.waiting.length, W.nWaiting, "n");
+  part(g.working.length, W.nWorking, "b");
+  part(g.idle.length, W.nIdle);
+  const kids = [el("b", "cg-n", g.name), el("span", "cg-m", g.machines.join(" · ")), sum];
+  if (g.rank < 3) { const h = el("div", "cg-h"); h.append(...kids); return h; }
+  const h = button("cg-h cg-line", "", () => { open ? idleOpen.delete(g.name) : idleOpen.add(g.name); render(); });
+  h.setAttribute("aria-expanded", open ? "true" : "false");
+  h.append(...kids, el("span", "chev", "›"));
+  return h;
+}
+
+// idleLine (g3) is a block's idle roles folded into one line: «4 idle · devops, dispatcher, …», a tap opens them.
+function idleLine(g, open) {
+  const b = button("cg-idle", "", () => { open ? idleOpen.delete(g.name) : idleOpen.add(g.name); render(); });
+  b.setAttribute("aria-expanded", open ? "true" : "false");
+  const t = el("span", "t");
+  t.append(el("span", "c", W.nIdle(g.idle.length)), " · ");
+  g.idle.forEach((r, i) => {
+    if (i) t.append(", ");
+    t.append(el("b", "", r.role));
+    if (g.multi) t.append(" ", el("span", "m", machineOf(r.crew)));
+  });
+  b.append(t, el("span", "chev", "›"));
+  return b;
+}
+
 function renderAgents(lists, a) {
   const out = [readout(a)];
-  if (a.waiting.length) out.push(agentSection("ag-wait", W.waitingOn, a.waiting));
-  else out.push(el("p", "pnone", W.nothingWaits));
-  if (a.working.length) out.push(agentSection("ag-work", W.workingW, a.working));
-  if (a.idle.length) {
-    if (idleOpen) out.push(agentSection("ag-idle", W.idleW, a.idle, () => { idleOpen = false; render(); }));
-    else {
-      const l = lineTo(W.idleW, String(a.idle.length), () => { idleOpen = true; render(); }, "fold");
-      l.setAttribute("aria-expanded", "false");
-      out.push(l);
-    }
+  const groups = crewGroups(a);
+  if (!a.waiting.length) out.push(el("p", "pnone", W.nothingWaits));
+  let wait = false, work = false, idle = false;
+  for (const g of groups) {
+    const open = idleOpen.has(g.name);
+    const s = el("section", "ags cg" + (g.rank === 3 ? " cgq" : ""));
+    // The readout's numerals go to the first block that has what they count.
+    if (!wait && g.rank <= 1) { s.id = "ag-wait"; wait = true; }
+    else if (!work && g.working.length) { s.id = "ag-work"; work = true; }
+    else if (!idle && g.rank === 3) { s.id = "ag-idle"; idle = true; }
+    s.dataset.k = "crew:" + g.name;
+    s.append(crewHead(g, open));
+    const at = (r) => (g.multi ? machineOf(r.crew) : "");
+    const list = el("div", "rows2");
+    list.append(...[...g.down, ...g.waiting, ...g.working].map((r) => agentRow(r, at(r))));
+    if (g.idle.length && g.rank < 3) list.append(idleLine(g, open));
+    if (g.idle.length && open) list.append(...g.idle.map((r) => agentRow(r, at(r))));
+    s.append(list);
+    out.push(s);
   }
   const tail = [];
   if (lists.hand.length) tail.push(lineTo(W.yoursByHand, lists.hand.length + " · " + W.oldestW(oldestOf(lists.hand)), () => openLater("hand")));

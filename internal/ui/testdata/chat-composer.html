@@ -45,7 +45,7 @@
       };
     <\/script>`;
     fixture.snapshot = () => ({presentation_version: 1, attachments_supported: true, retry_window_seconds: 604800, role: "dev", runtime: "claude",
-      state: "up", status: "idle", session: "session-1", messages: structuredClone(messages), pending: []});
+      state: "up", status: fixture.busy ? "busy" : "idle", active: !!fixture.busy, session: "session-1", messages: structuredClone(messages), pending: []});
     const doc = frame.contentDocument;
     doc.open(); doc.write(page.replace("<head>", "<head>" + stub)); doc.close();
     const $ = (sel) => frame.contentDocument.querySelector(sel), $$ = (sel) => [...frame.contentDocument.querySelectorAll(sel)];
@@ -139,6 +139,17 @@
       await new Promise(r => setTimeout(r, 50));
       assert(box(latest).width === 36, cls + ": back once the field lets go");
     }
+    // The role at work: «Working · Stop» stands over the composer, and the arrow stands 8 px over that line, never on Stop.
+    fixture.busy = true;
+    frame.contentDocument.dispatchEvent(new win.Event("visibilitychange"));
+    const stop = await wait("Stop", () => { const b = $("#stop-turn"); return b && !b.hidden && box(b).width && b; });
+    $("#conversation").scrollTop = 0;
+    $("#conversation").dispatchEvent(new win.Event("scroll"));
+    await new Promise(r => setTimeout(r, 100));
+    const ab = box(latest), sb2 = box(stop), line = box($(".chat-state"));
+    assert(ab.bottom <= sb2.top || ab.right <= sb2.left || ab.left >= sb2.right || ab.top >= sb2.bottom, cls + ": the arrow is not on Stop");
+    assert(Math.round(line.top - ab.bottom) === 8, cls + ": 8 px over the working line: " + Math.round(line.top - ab.bottom));
+    fixture.busy = false;
     assert(!fixture.err, cls + ": no script error " + (fixture.err || ""));
   }
 

@@ -140,12 +140,20 @@ if (phone) {
     };
     got = now;
     filter = "all"; // render() sets it so on the phone
-    idleOpen = true;
+    idleOpen.add("default"); idleOpen.add("ops");
     renderPhone();
     const text = (n) => (typeof n === "string" ? n : n.textContent);
     res.readout = byId.pagents.children[0].children.map((b) => b.children.map(text).join(" "));
     res.agents = byId.pagents.children.slice(1).map((sec) => ({ cls: sec.className, text: text(sec.children[0] || sec),
       rows: (sec.children[1]?.children || []).map((row) => ({ cls: row.className, text: text(row) })) }));
+    // D-19 g1, g2: the same crew name on another machine is the same block; its rows name their machine.
+    snap.crews.push({ key: "node-b/default", name: "default", node: "node-b", remote: true, dispatcher: "dispatcher", last_tick: at(0),
+      roles: [r("builder", { status: "busy", since: at(2) }), r("dispatcher", { since: at(9) })] });
+    renderPhone();
+    const merged = byId.pagents.children.find((sec) => sec.dataset && sec.dataset.k === "crew:default");
+    res.merged = { head: text(merged.children[0]), rows: merged.children[1].children.map(text) };
+    snap.crews.pop();
+    renderPhone();
     // A crew's dispatcher both down with a task and over a stopped ticker says both.
     Object.assign(snap.crews[1].roles[0], { state: "down", tasks: ["T-9"] });
     res.bothRed = agents(phoneLists()).waiting.find((x) => x.crew === "node-b/ops").line;

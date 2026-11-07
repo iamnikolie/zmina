@@ -753,6 +753,27 @@ body.fv-on { overflow: hidden; }
   .pro3 .b .v { color: var(--busy); } .pro3 .i .v { color: var(--ink2); }
   .pro3 .roll { animation: roll 150ms var(--ease); }
   .ags { scroll-margin-top: calc(56px + env(safe-area-inset-top)); }
+  /* D-19 g1 · one block per crew: its name, its machines, how its roles stand; 18 px above each */
+  .pagents .cg { margin: 0; padding: 18px 0 0; }
+  .cg-h { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 0 4px 8px 0; border: 0; border-bottom: 1px solid var(--line2);
+    background: none; text-align: left; font: inherit; color: inherit; }
+  .cg-h .cg-n { font: 600 17px/1.2 var(--sans); color: var(--ink); }
+  .cg-h .cg-m { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: 13px var(--sans); color: var(--muted); }
+  .cg-h .cg-sum { margin-left: auto; white-space: nowrap; font: 500 12px var(--sans); color: var(--faint); }
+  .cg-sum .x { color: var(--late); } .cg-sum .n { color: var(--need); } .cg-sum .b { color: var(--busy); }
+  .cg .rows2 > .ag { border-top: 0; border-bottom: 1px solid var(--line); }
+  /* g3 · the idle roles folded into one 44 px line; an idle-only crew is its head alone, one line that opens it */
+  .cg-idle { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 44px; padding: 0 4px 0 0; border: 0; border-bottom: 1px solid var(--line);
+    background: none; text-align: left; font: 14px var(--sans); color: var(--muted); -webkit-tap-highlight-color: transparent; }
+  .cg-idle .t { flex: 1; min-width: 0; margin-left: 52px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .cg-idle .t .c { font-weight: 500; }
+  .cg-idle .t b { font-weight: 500; color: var(--ink2); }
+  .cg-idle .t .m { color: var(--faint); }
+  .cg-idle .chev, .cg-line .chev { color: var(--faint); }
+  .pagents .cg.cgq { padding-top: 8px; }
+  .pagents .cg.cgq + .cg.cgq { padding-top: 0; }
+  .cg-line { align-items: center; min-height: 44px; padding: 0 4px 0 0; border-bottom: 1px solid var(--line); cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .cg-line .cg-sum { font: 500 13px var(--sans); color: var(--muted); }
   /* a3 · one-line openers: Idle folded, Yours by hand, Alarms; l1 · Later's links */
   .ln { display: flex; justify-content: space-between; align-items: center; gap: 12px; width: 100%; min-height: 48px; padding: 0 4px 0 0;
     border: 0; border-bottom: 1px solid var(--line); background: none; text-align: left; font: 500 15px var(--sans); color: var(--ink); }
@@ -840,6 +861,14 @@ body.fv-on { overflow: hidden; }
   body[data-tab="talk"] .pickmenu { left: 50%; transform: translateX(-50%); width: min(20rem, calc(100vw - 24px)); }
   body[data-tab="talk"] .panel-h .who { position: absolute; left: 25%; right: 25%; top: 30px; justify-content: center; cursor: pointer; }
   body[data-tab="talk"] .panel-h .who .k { font: 12px/1.2 var(--sans); color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+  /* D-19 t1 · a title only: the role 600 15px, «crew · machine · state» 12px with the state word coloured; no ▾, no button */
+  body[data-tab="talk"] .panel-h .who { cursor: default; left: 12%; right: 12%; gap: 4px; }
+  body[data-tab="talk"] .panel-h .who .st { display: inline; font: 12px/1.2 var(--sans); color: var(--muted); white-space: nowrap; }
+  body[data-tab="talk"] .panel-h .who .st.busy { color: var(--busy); } body[data-tab="talk"] .panel-h .who .st.need { color: var(--need); }
+  body[data-tab="talk"] .panel-h .who .st.late { color: var(--late); }
+  body[data-tab="talk"] .panel-h .who .k { flex: 0 1 auto; min-width: 0; }
+  body[data-tab="talk"] .panel-h .pick > button:disabled { cursor: default; opacity: 1; color: var(--ink); }
+  body[data-tab="talk"] .panel-h .pick > button:disabled svg { display: none; }
   body[data-tab="talk"] .panel-h .tools2 { position: absolute; right: 10px; top: 8px; }
   body[data-tab="talk"] .panel-h .tools2 #side-term { border-radius: 50%; background: var(--panel2); color: var(--ink2); }
   body[data-tab="talk"] .panel-h .back, body[data-tab="talk"] #side-close, body[data-tab="talk"] #side-full { display: none; }
@@ -850,3 +879,12 @@ body.fv-on { overflow: hidden; }
 @keyframes pop { from { transform: scale(.6); } }
 @keyframes agspin { to { transform: rotate(360deg); } }
 @keyframes roll { from { transform: translateY(40%); opacity: 0; } }
+
+/* D-19 d1 · desktop Sessions: a head line per crew over its cards, the phone's g1 values at 15 px */
+.cgd-b { margin: 0; padding: 4px 1.5rem 0; }
+.cgd-b .band { padding: 0 0 18px; }
+.cg-h.cgd { display: flex; align-items: baseline; gap: 8px; margin: 0 0 10px; padding: 0 4px 8px 0; border: 0; border-bottom: 1px solid var(--line2); }
+.cgd .cg-n { font: 600 15px/1.2 var(--sans); color: var(--ink); }
+.cgd .cg-m { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: 13px var(--sans); color: var(--muted); }
+.cgd .cg-sum { margin-left: auto; white-space: nowrap; font: 500 12px var(--sans); color: var(--faint); }
+.cgd .cg-sum .x { color: var(--late); } .cgd .cg-sum .n { color: var(--need); } .cgd .cg-sum .b { color: var(--busy); }
