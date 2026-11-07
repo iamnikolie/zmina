@@ -1,6 +1,8 @@
 package chat
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"github.com/stretchr/testify/require"
 	"strings"
@@ -54,4 +56,46 @@ func TestHistoryPagesBoundLargeUnicodeMessages(t *testing.T) {
 	second := Page(original, first.Cursor)
 	require.False(t, second.Reset)
 	require.Equal(t, "after", second.Messages[0].Text)
+}
+
+// A runtime reader keeps only a transcript's recent tail: as the conversation grows its oldest messages leave the
+// window. The client has them already, so that is no gap; an edit among the recent ones still is.
+func TestHistoryCursorResumesAsTheOldestMessagesLeaveTheWindow(t *testing.T) {
+	messages := func(from, to int) []Message {
+		out := []Message{}
+		for i := from; i < to; i++ {
+			out = append(out, Message{ID: fmt.Sprint(i), Role: "assistant", Text: fmt.Sprint("reply ", i)})
+		}
+		return out
+	}
+	cursor := Page(Snapshot{Session: "one", Messages: messages(0, 120)}, "").Cursor
+
+	next := Page(Snapshot{Session: "one", Messages: messages(30, 125)}, cursor)
+	require.False(t, next.Reset)
+	require.False(t, next.HistoryGap)
+	require.Equal(t, messages(120, 125), next.Messages, "only what is new")
+
+	again := Page(Snapshot{Session: "one", Messages: messages(40, 126)}, next.Cursor)
+	require.False(t, again.HistoryGap)
+	require.Equal(t, messages(125, 126), again.Messages)
+
+	edited := messages(40, 126)
+	edited[len(edited)-3].Text = "edited"
+	require.True(t, Page(Snapshot{Session: "one", Messages: edited}, again.Cursor).HistoryGap, "an edit among the recent messages")
+	require.True(t, Page(Snapshot{Session: "one", Messages: messages(126, 130)}, again.Cursor).HistoryGap, "the cursor's message is gone: messages may be missing")
+}
+
+// A cursor from a zmina before the window still resumes on the whole prefix.
+func TestHistoryCursorWithoutWindowStillResumes(t *testing.T) {
+	snapshot := Snapshot{Session: "one", Messages: []Message{{ID: "a", Text: "first"}, {ID: "b", Text: "second"}}}
+	var c historyCursor
+	raw, err := base64.RawURLEncoding.DecodeString(Page(snapshot, "").Cursor)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(raw, &c))
+	c.Window = ""
+	raw, _ = json.Marshal(c)
+	snapshot.Messages = append(snapshot.Messages, Message{ID: "c", Text: "third"})
+	next := Page(snapshot, base64.RawURLEncoding.EncodeToString(raw))
+	require.False(t, next.Reset)
+	require.Equal(t, "third", next.Messages[0].Text)
 }

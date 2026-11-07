@@ -68,10 +68,19 @@ func (r *Registry) ChatMessages(sessionID string) ([]chat.Message, error) {
 	seen := map[string]bool{}
 	for _, record := range records {
 		var l line
-		if json.Unmarshal(record, &l) != nil || l.Sidechain || l.Meta || l.Compact || (l.Type != "user" && l.Type != "assistant") {
+		if json.Unmarshal(record, &l) != nil || l.Sidechain || l.Compact || (l.Type != "user" && l.Type != "assistant") {
 			continue
 		}
 		if l.UUID != "" && seen[l.UUID] {
+			continue
+		}
+		// A line zmina posted to the session's inbox socket is a meta line from a peer, wrapped in Claude Code's
+		// words; of those only an owner's message from Chat is the conversation's.
+		if l.Meta {
+			if m, ok := peerChat(l); ok {
+				seen[l.UUID] = true
+				out = append(out, m)
+			}
 			continue
 		}
 		seen[l.UUID] = true
@@ -86,4 +95,31 @@ func (r *Registry) ChatMessages(sessionID string) ([]chat.Message, error) {
 		out = append(out, chat.TaskNotification(chat.Normalize(chat.Message{ID: id, Role: l.Type, Text: text, At: l.Timestamp})))
 	}
 	return out, nil
+}
+
+// Claude Code's words around a message another session posted to this one's inbox socket.
+const (
+	peerWrapHead = "Another Claude session sent a message:\n"
+	peerWrapTail = "\n\nThis came from another Claude session"
+)
+
+// peerChat is an owner's message from Chat that zmina posted to the session's inbox socket, without Claude Code's
+// wrapping and zmina's tag; ok is false for any other meta line.
+func peerChat(l line) (chat.Message, bool) {
+	if l.Type != "user" || l.Origin == nil || l.Origin.Kind != "peer" {
+		return chat.Message{}, false
+	}
+	text, ok := strings.CutPrefix(l.text(), peerWrapHead)
+	if !ok {
+		return chat.Message{}, false
+	}
+	if i := strings.LastIndex(text, peerWrapTail); i >= 0 {
+		text = text[:i]
+	}
+	m := chat.Normalize(chat.Message{ID: l.UUID, Role: "user", Text: text, At: l.Timestamp})
+	if !strings.HasPrefix(m.ID, "web:") {
+		return chat.Message{}, false
+	}
+	m.Peer = true
+	return m, true
 }

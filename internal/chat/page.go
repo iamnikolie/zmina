@@ -9,11 +9,19 @@ type historyCursor struct {
 	Session string `json:"s"`
 	ID      string `json:"i"`
 	Digest  string `json:"d"`
+	// Window is the digest of the last messages up to the cursor's (cursorWindow of them): the runtime readers read
+	// only a transcript's recent tail, so its oldest messages drop out as it grows; a cursor that holds this resumes
+	// across that, where the whole prefix's Digest would not.
+	Window string `json:"w,omitempty"`
 }
 
-// Page resumes only an unchanged prefix of the same conversation. A stale or
-// edited transcript explicitly resets instead of silently skipping messages.
-// The runtime readers still bound source history to their most recent 8 MiB.
+// cursorWindow is how many messages up to a cursor's must be unchanged for it to resume.
+const cursorWindow = 50
+
+// Page resumes only after an unchanged recent run of the same conversation: the cursor's message and the
+// cursorWindow-1 before it. A stale or edited transcript explicitly resets instead of silently skipping messages.
+// The runtime readers bound source history to their most recent 8 MiB, so older messages leave the window as the
+// transcript grows: that is not a gap, the client has them.
 func Page(snapshot Snapshot, after string) Snapshot {
 	all := snapshot.Messages
 	start := 0
@@ -30,12 +38,32 @@ func Page(snapshot Snapshot, after string) Snapshot {
 	if valid && previous.ID == "" && previous.Digest == digest {
 		anchor = 0
 	}
+	each := make([]string, len(all))
 	for i, m := range all {
 		raw, _ := json.Marshal(m)
+		each[i] = Hash(string(raw))
 		digest = Hash(digest + string(raw))
 		digests[i+1] = digest
 		if valid && m.ID == previous.ID && digest == previous.Digest {
 			anchor = i + 1
+		}
+	}
+	// The recent run up to the nth message (n counted from 1), on the session's own seed.
+	window := func(n int) string {
+		w := Hash(snapshot.Session)
+		for _, d := range each[max(n-cursorWindow, 0):n] {
+			w = Hash(w + d)
+		}
+		return w
+	}
+	if anchor < 0 && valid && previous.Window != "" && previous.ID != "" {
+		for i := len(all) - 1; i >= 0; i-- {
+			if all[i].ID == previous.ID {
+				if window(i+1) == previous.Window {
+					anchor = i + 1
+				}
+				break
+			}
 		}
 	}
 	snapshot.Reset = anchor < 0
@@ -60,12 +88,11 @@ func Page(snapshot Snapshot, after string) Snapshot {
 		snapshot.Messages[i] = Limit([]Message{m})[0]
 	}
 	snapshot.More = end < len(all)
-	raw, _ := json.Marshal(historyCursor{Session: snapshot.Session, Digest: digests[end], ID: func() string {
-		if end > 0 {
-			return all[end-1].ID
-		}
-		return ""
-	}()})
+	next := historyCursor{Session: snapshot.Session, Digest: digests[end]}
+	if end > 0 {
+		next.ID, next.Window = all[end-1].ID, window(end)
+	}
+	raw, _ := json.Marshal(next)
 	snapshot.Cursor = base64.RawURLEncoding.EncodeToString(raw)
 	return snapshot
 }

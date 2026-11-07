@@ -224,13 +224,21 @@
   let ask = null;
   // A lone question with ticks is left to Terminal: its key path in the dialog is not known.
   const answerable = (q) => (q && !(q.items.length === 1 && q.items[0].multi_select) ? q : null);
+  // D-13 q8: once its answer is sent the card goes, though the role's screen may show the question a moment longer.
+  const sentAnswer = (q) => Boolean(q && ask && ask.id === q.id && ask.sent);
+  // Keys that went but did not close the dialog leave the question on the screen: past this the state line says it
+  // needs input again (Terminal answers it; Chat answers a question once).
+  const ANSWER_SETTLES = 10000;
+  const answerSettling = (q) => sentAnswer(q) && Date.now() - ask.sent < ANSWER_SETTLES;
+  const openQuestion = (q) => (answerable(q) && !sentAnswer(q) ? q : null);
   const REC = /\s*\(Recommended\)\s*$/;
   function renderQuestion() {
-    const box = $("chat-question"), q = live && answerable(snapshot?.question), composerBox = document.querySelector(".composer-box");
-    if (!q) { box.hidden = true; box.replaceChildren(); ask = null; if (composerBox) composerBox.hidden = false; return; }
+    const box = $("chat-question"), all = live && answerable(snapshot?.question), q = openQuestion(all), composerBox = document.querySelector(".composer-box");
+    if (!all) ask = null;
+    if (!q) { box.hidden = true; box.replaceChildren(); if (composerBox) composerBox.hidden = false; return; }
     if (composerBox) composerBox.hidden = true;
     if (!ask || ask.id !== q.id) ask = {id: q.id, step: 0, items: q.items.map(() => ({choices: [], other: null})), sig: ""};
-    const sig = JSON.stringify([ask.step, ask.items, posting]);
+    const sig = JSON.stringify([ask.step, ask.items, posting, ask.failed || ""]);
     box.hidden = false;
     if (ask.sig === sig && box.childElementCount) return;
     ask.sig = sig;
@@ -239,13 +247,25 @@
     const n = q.items.length, review = ask.step >= n, go = (s) => { ask.step = s; renderQuestion(); };
     const answered = (a) => (a.other !== null ? a.other.trim() !== "" : a.choices.length > 0);
     const words = (it, a) => (a.other !== null ? a.other.trim() : a.choices.map(c => it.options[c - 1].label.replace(REC, "")).join(", "));
-    // Nothing goes with a part unanswered: the first such part opens instead.
-    const send = () => {
+    // Nothing goes with a part unanswered: the first such part opens instead. Sent, the card goes and the line under
+    // the field says what went; refused, the card stays with the answers chosen and says why in it (D-13 q8).
+    const send = async () => {
       const gap = ask.items.findIndex(a => !answered(a));
       if (gap >= 0) { go(gap); return; }
-      action("answer:" + JSON.stringify({id: q.id, items: ask.items.map(a => ({choices: a.other !== null ? [] : a.choices, other: a.other || ""}))}));
+      if (!destination || posting) return;
+      const mine = ask, version = generation;
+      const summary = n === 1 ? words(q.items[0], mine.items[0]) : q.items.map((it, i) => (it.header || "Question " + (i + 1)) + ": " + words(it, mine.items[i])).join(" · ");
+      posting = true; mine.failed = ""; controls(); renderQuestion();
+      try {
+        const data = await post("/api/chat/action", {...destination, action: "answer:" + JSON.stringify({id: q.id, items: mine.items.map(a => ({choices: a.other !== null ? [] : a.choices, other: a.other || ""}))})});
+        if (version !== generation) return;
+        mine.sent = Date.now(); error(""); note("Answered · " + summary);
+        applySnapshot(data);
+      } catch (e) { if (version === generation) mine.failed = e.message || "Could not answer."; }
+      finally { posting = false; controls(); if (version === generation) renderQuestion(); }
     };
-    const after = () => (n === 1 ? send() : go(ask.step + 1));
+    // D-13 q6: a single-select tap moves on — to the next part, and from the last to the review that sends.
+    const after = () => go(ask.step + 1);
     const top = el("div", "q-top");
     top.append(el("span", "q-hdr", review ? "Check and send" : (q.items[ask.step].header || "Question") + (q.items[ask.step].multi_select ? " · choose any" : "")));
     if (n > 1) {
@@ -299,7 +319,7 @@
         row.append(pick);
         if (on) {
           const f = el("textarea", "q-otherfield"); f.rows = 1; f.value = a.other; f.setAttribute("aria-label", "Your own answer");
-          f.addEventListener("input", () => { a.other = f.value; ask.sig = JSON.stringify([ask.step, ask.items, posting]); foot.querySelector(".q-primary").disabled = !f.value.trim(); f.style.height = "auto"; f.style.height = Math.min(f.scrollHeight, 120) + "px"; });
+          f.addEventListener("input", () => { a.other = f.value; ask.sig = JSON.stringify([ask.step, ask.items, posting, ask.failed || ""]); foot.querySelector(".q-primary").disabled = !f.value.trim(); f.style.height = "auto"; f.style.height = Math.min(f.scrollHeight, 120) + "px"; });
           f.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && f.value.trim()) { e.preventDefault(); after(); } });
           row.append(f);
         }
@@ -308,11 +328,12 @@
       out.push(list);
       if (ask.step > 0) foot.append(btn("q-back", "Back", () => go(ask.step - 1)));
       if (it.multi_select || a.other !== null) {
-        const label = it.multi_select ? "Continue · " + a.choices.length : n === 1 ? "Send" : ask.step === n - 1 ? "Review" : "Next";
+        const label = it.multi_select ? "Continue · " + a.choices.length : ask.step === n - 1 ? "Review" : "Next";
         const p = btn("q-primary", label, after); p.disabled = posting || !answered(a); foot.append(p);
       }
     }
     out.push(foot);
+    if (ask.failed && review) { const fail = el("p", "q-fail", "Not answered · " + ask.failed); fail.setAttribute("role", "alert"); out.push(fail); }
     // A redraw keeps the focus on the same row (or the first row of a new part when the card had it).
     const had = box.contains(document.activeElement), at = [...box.querySelectorAll(".q-opts > button, .q-rrow")].indexOf(document.activeElement);
     box.replaceChildren(...out);
@@ -412,7 +433,7 @@
     $("empty-chat").hidden = rows.length > 0;
     $("empty-chat").textContent = snapshot.session ? "No saved messages yet. Send a message to this role." : "No conversation yet. Start the role, then send a message.";
     $("runtime-info").textContent = [snapshot.runtime, snapshot.profile, snapshot.context ? new Intl.NumberFormat().format(snapshot.context) + " context tokens" : ""].filter(Boolean).join(" · ");
-    $("agent-state").textContent = !live ? "Connecting… Showing saved conversation" : snapshot.state !== "up" ? "Role stopped · queued messages wait until it starts" : answerable(snapshot.question) ? "Asks you · answer below" : snapshot.needs_input ? "Needs input · open Terminal to respond" : snapshot.active ? "Working…" : snapshot.status === "unknown" || !snapshot.session ? "Status unavailable · open Terminal" : "Idle";
+    $("agent-state").textContent = !live ? "Connecting… Showing saved conversation" : snapshot.state !== "up" ? "Role stopped · queued messages wait until it starts" : openQuestion(snapshot.question) ? "Asks you · answer below" : answerSettling(snapshot.question) ? "Answered · the role goes on" : snapshot.needs_input ? "Needs input · open Terminal to respond" : snapshot.active ? "Working…" : snapshot.status === "unknown" || !snapshot.session ? "Status unavailable · open Terminal" : "Idle";
     // D-08 c6: the state line speaks only when something is off; working and idle are said elsewhere (the working
     // line, the panel's head) and stay for screen readers.
     const quiet = live && snapshot.state === "up" && !snapshot.needs_input && !(snapshot.status === "unknown" || !snapshot.session);

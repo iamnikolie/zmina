@@ -24,6 +24,7 @@ func TestCodexMessagesExposeConversationNotSystemOrReasoning(t *testing.T) {
 	require.Equal(t, "web:abcdefab-1234-1234-1234-123456789abc", messages[0].ID)
 	require.Equal(t, "hello", messages[0].Text)
 	require.Equal(t, "**answer**", messages[1].Text)
+	require.False(t, messages[0].Peer, "typed into the bridge: as before")
 	none, err := CodexMessages(home, "../session")
 	require.NoError(t, err)
 	require.Empty(t, none)
@@ -45,4 +46,20 @@ func TestCodexUsesProvenanceToHideHarnessContextNotOwnerXML(t *testing.T) {
 	require.Equal(t, "<environment_context>literal owner text</environment_context>", got[0].Text)
 	require.Equal(t, "web:abcdefab-1234-1234-1234-123456789abc", got[0].ID)
 	require.Equal(t, "keep this message", got[1].Text)
+}
+
+// A line zmina posted to a role's own channel carries the tag of the role's start; read as the owner's message, it is
+// marked Peer, so it counts as his only when its ID is one of his receipts.
+func TestNormalizeMarksATaggedLinePeer(t *testing.T) {
+	id := "abcdefab-1234-1234-1234-123456789abc"
+	tagged := Normalize(Message{ID: "x", Role: "user", Text: "[zmina:abcdefgh2345] " + Prefix(id) + "hello"})
+	require.Equal(t, "web:"+id, tagged.ID)
+	require.Equal(t, "hello", tagged.Text)
+	require.True(t, tagged.Peer)
+	typed := Normalize(Message{ID: "x", Role: "user", Text: Prefix(id) + "hello"})
+	require.Equal(t, "web:"+id, typed.ID)
+	require.False(t, typed.Peer)
+	other := Normalize(Message{ID: "x", Role: "user", Text: "[zmina:abcdefgh2345] [zmina] dev: T-1 result ready"})
+	require.Equal(t, "x", other.ID)
+	require.False(t, other.Peer)
 }
