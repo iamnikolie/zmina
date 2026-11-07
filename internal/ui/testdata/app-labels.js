@@ -144,6 +144,11 @@ if (phone) {
     renderPhone();
     const text = (n) => (typeof n === "string" ? n : n.textContent);
     res.readout = byId.pagents.children[0].children.map((b) => b.children.map(text).join(" "));
+    // Each numeral of the readout has its way, also when one crew has all three (D-12 a): the element that carries it.
+    const anchors = {};
+    const walk = (n) => { if (typeof n === "string") return; if (n.id) anchors[n.id] = (n.dataset?.k || "") + " " + n.className; (n.children || []).forEach(walk); };
+    walk(byId.pagents);
+    res.anchors = anchors;
     res.agents = byId.pagents.children.slice(1).map((sec) => ({ cls: sec.className, text: text(sec.children[0] || sec),
       rows: (sec.children[1]?.children || []).map((row) => ({ cls: row.className, text: text(row) })) }));
     // D-19 g1, g2: the same crew name on another machine is the same block; its rows name their machine.

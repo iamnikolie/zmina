@@ -2429,20 +2429,27 @@ function renderAgents(lists, a) {
   const out = [readout(a)];
   const groups = crewGroups(a);
   if (!a.waiting.length) out.push(el("p", "pnone", W.nothingWaits));
+  // The readout's numerals go each to the first block that has what they count, set apart, so one block can be the way
+  // for all three: waiting to the block, working to the block or, when waiting took it, its head; idle to the block of
+  // an idle-only crew or to the idle line of one at work.
   let wait = false, work = false, idle = false;
   for (const g of groups) {
     const open = idleOpen.has(g.name);
     const s = el("section", "ags cg" + (g.rank === 3 ? " cgq" : ""));
-    // The readout's numerals go to the first block that has what they count.
-    if (!wait && g.rank <= 1) { s.id = "ag-wait"; wait = true; }
-    else if (!work && g.working.length) { s.id = "ag-work"; work = true; }
-    else if (!idle && g.rank === 3) { s.id = "ag-idle"; idle = true; }
     s.dataset.k = "crew:" + g.name;
-    s.append(crewHead(g, open));
+    const head = crewHead(g, open);
+    if (!wait && g.rank <= 1) { s.id = "ag-wait"; wait = true; }
+    if (!work && g.working.length) { (s.id ? head : s).id = "ag-work"; work = true; }
+    if (!idle && g.rank === 3) { s.id = "ag-idle"; idle = true; }
+    s.append(head);
     const at = (r) => (g.multi ? machineOf(r.crew) : "");
     const list = el("div", "rows2");
     list.append(...[...g.down, ...g.waiting, ...g.working].map((r) => agentRow(r, at(r))));
-    if (g.idle.length && g.rank < 3) list.append(idleLine(g, open));
+    if (g.idle.length && g.rank < 3) {
+      const line = idleLine(g, open);
+      if (!idle) { line.id = "ag-idle"; idle = true; }
+      list.append(line);
+    }
     if (g.idle.length && open) list.append(...g.idle.map((r) => agentRow(r, at(r))));
     s.append(list);
     out.push(s);

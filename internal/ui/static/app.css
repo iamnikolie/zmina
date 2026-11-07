@@ -752,7 +752,7 @@ body.fv-on { overflow: hidden; }
   .pro3 .w .v { color: var(--need); } .pro3 .w.x .v { color: var(--late); }
   .pro3 .b .v { color: var(--busy); } .pro3 .i .v { color: var(--ink2); }
   .pro3 .roll { animation: roll 150ms var(--ease); }
-  .ags { scroll-margin-top: calc(56px + env(safe-area-inset-top)); }
+  .ags, .ags .cg-h, .ags .cg-idle { scroll-margin-top: calc(56px + env(safe-area-inset-top)); }
   /* D-19 g1 · one block per crew: its name, its machines, how its roles stand; 18 px above each */
   .pagents .cg { margin: 0; padding: 18px 0 0; }
   .cg-h { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 0 4px 8px 0; border: 0; border-bottom: 1px solid var(--line2);

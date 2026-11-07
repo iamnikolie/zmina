@@ -926,7 +926,7 @@ the next time it goes out of sight or comes back (a draft's text and files are k
 Below 861 px (a phone, the home-screen app) the page is three tabs at the bottom — **Agents · Talk · Later** — under a
 52 px head with the tab's name and the beat; the phone has no crew switch: it shows every crew, and every row says
 where it is. **Agents** opens with three numerals — waiting on you, working, idle — each a way to the first crew that
-has them, then one block per crew (D-19; the crew's name is the key: `ops` on this machine and on a peer is one block):
+has them (idle to its idle line, opened), then one block per crew (D-19; the crew's name is the key: `ops` on this machine and on a peer is one block):
 its head names the crew, its machines and how its roles stand («1 down · 1 waiting · 2 working · 4 idle»), and the blocks
 come in that order — a crew with a role down, one waiting on you, one working, then idle-only, ties by name. Inside, one
 row per role, never per item: the ones waiting on you (a role down that holds a task and a crew whose ticker stopped

@@ -63,8 +63,9 @@ func TestPhoneTabs(t *testing.T) {
 			Cls, Text string
 			Rows      []struct{ Cls, Text string }
 		} `json:"agents"`
-		Readout []string `json:"readout"`
-		BothRed string   `json:"bothRed"`
+		Readout []string          `json:"readout"`
+		Anchors map[string]string `json:"anchors"`
+		BothRed string            `json:"bothRed"`
 		Merged  struct {
 			Head string   `json:"head"`
 			Rows []string `json:"rows"`
@@ -88,6 +89,8 @@ func TestPhoneTabs(t *testing.T) {
 	// wait), then working, then the idle ones folded into one line (opened here); a row names no machine while the crew
 	// lives on one. A down role that holds nothing, a spare crew and the roles that wait never show twice.
 	assert.Equal(t, []string{"5 waiting on you", "2 working", "1 idle"}, res.Readout)
+	// One crew has all three here: waiting goes to its block, working to its head, idle to its idle line.
+	assert.Equal(t, map[string]string{"ag-wait": "crew:default ags cg", "ag-work": " cg-h", "ag-idle": " cg-idle"}, res.Anchors)
 	require.Len(t, res.Agents, 3)
 	group := func(i int) []string {
 		var out []string
