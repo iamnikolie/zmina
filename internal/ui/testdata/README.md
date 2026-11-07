@@ -45,3 +45,14 @@ question still on the screen 10 s later points to Terminal again); a
 refused answer keeps the card on the review with the choice and the reason in it. Headless:
 `"Google Chrome" --headless=new --virtual-time-budget=30000 --dump-dom <url>` prints the result
 in `#result`.
+
+# Chat ids test
+
+With the same static server, open `http://127.0.0.1:7530/testdata/chat-ids.html`;
+`window.chatIdsResults.passed` must be true (headless as above). It runs the real `static/chat.html`
+at 390 and 1280 px with a `fetch` that answers `/api/items` (D-15): ids become links (not in code,
+not inside a longer word), the first mention of a piece of work in a run carries its short title and
+a dot; a tap opens the sheet (title, state, Left, Latest, Path; a step swaps the card); an ask's
+answer goes once as a todo answer and turns into Sent; an unknown id says so; «Talk to» puts the
+item on the field and the message goes with it; on the desktop a click pins a 360 px popover and Esc
+closes it, the focus back on the id.

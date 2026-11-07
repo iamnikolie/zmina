@@ -23,7 +23,7 @@ import (
 
 // terminalServices only exposes roles resolved from this node's crew files, including running copies.
 func (a *app) terminalServices() *mesh.TerminalServices {
-	return &mesh.TerminalServices{List: a.localTerminals, Open: a.localTerminal, History: a.localTerminalHistory, ChatRead: a.localChatRead, ChatReadSince: a.localChatReadSince, ChatSend: a.localChatSend, ChatSendFiles: a.localChatSendFiles, ChatUpload: a.localChatUpload, ChatFile: a.localChatFile, ChatAction: a.localChatAction, Status: a.localStatus, TodoAct: a.localTodoAct, AlarmAct: a.localAlarmAct}
+	return &mesh.TerminalServices{List: a.localTerminals, Open: a.localTerminal, History: a.localTerminalHistory, ChatRead: a.localChatRead, ChatReadSince: a.localChatReadSince, ChatSend: a.localChatSend, ChatSendFiles: a.localChatSendFiles, ChatUpload: a.localChatUpload, ChatFile: a.localChatFile, ChatAction: a.localChatAction, Status: a.localStatus, TodoAct: a.localTodoAct, AlarmAct: a.localAlarmAct, Items: a.localItems}
 }
 
 func (a *app) localTerminalHistory(key, role string, lines int) (string, error) {

@@ -318,6 +318,7 @@ func (a *app) uiHandler(bound string, loopback bool, token string, allowHosts ..
 	mux.HandleFunc("GET /api/stream", func(w http.ResponseWriter, r *http.Request) { a.uiStream(w, r, snapshot) })
 	a.uiTerminals(mux)
 	a.uiChat(mux)
+	a.uiItems(mux)
 
 	costs := &uiCostCache{read: a.readUICost}
 	mux.HandleFunc("GET /api/cost", func(w http.ResponseWriter, r *http.Request) {
@@ -413,7 +414,7 @@ func (a *app) uiHandler(bound string, loopback bool, token string, allowHosts ..
 		if node, crew, ok := peerCrew(in.Crew); ok {
 			line, err = a.peerAct(r.Context(), node, "todo/act", mesh.TerminalRequest{Crew: crew, Action: in.Action, ID: in.ID, Text: in.Text})
 		} else {
-			line, err = a.localTodoAct(in.Crew, in.Action, in.ID, in.Text)
+			line, err = a.localTodoAct(ownCrewKey(in.Crew), in.Action, in.ID, in.Text)
 		}
 
 		if err != nil {

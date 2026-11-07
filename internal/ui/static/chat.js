@@ -43,7 +43,7 @@
   // Embedded, the conversation wears the cockpit's own tokens (they change with its width and scheme), so the panel's
   // head and the conversation are one surface.
   if (params.get("embed") === "1" && window.parent !== window) {
-    const names = ["--bg", "--panel", "--panel2", "--line", "--line2", "--ink", "--ink2", "--muted", "--faint", "--off", "--busy", "--late", "--ok"];
+    const names = ["--bg", "--panel", "--panel2", "--line", "--line2", "--ink", "--ink2", "--muted", "--faint", "--off", "--busy", "--need", "--late", "--ok"];
     const wear = () => { try { const from = window.parent.getComputedStyle(window.parent.document.documentElement); for (const n of names) { const v = from.getPropertyValue(n).trim(); if (v) document.documentElement.style.setProperty(n, v); } } catch (_) { /* not the cockpit */ } };
     wear(); try { window.parent.addEventListener("resize", wear); window.parent.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", wear); } catch (_) { /* not the cockpit */ }
   }
@@ -53,6 +53,8 @@
   const articles = new Map();
   const fileInput=$("file-input"), attach=$("attach-file"), draftFiles=$("draft-files");
   let selectedFiles=[], filesRevision=0;
+  // D-15 h1: the item a message is about, shown as a chip above the field; it goes as «Re <id> (<title>):».
+  let replyTo = null;
   const fileSignature=files=>JSON.stringify((files||[]).map(file=>[file.id,file.name,file.size]));
   const matches=(entry,row)=>row && row.text===entry.text && fileSignature(entry.files)===fileSignature(row.attachments);
   function renderSelected() {
@@ -163,8 +165,20 @@
   const error = text => { $("chat-error").textContent = text; $("chat-error").hidden = !text; };
   const note = text => { $("composer-status").textContent = text; $("composer-status").hidden = !text; };
   const atBottom = () => conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight < 80;
-  function saveDraft(dest = destination, text = input.value, id = draftID) { if (!dest) return; try { localStorage.setItem(storageKey(dest), JSON.stringify({text, id})); } catch (_) { /* optional browser persistence */ } }
-  function restoreDraft() { selectedFiles=[];renderSelected();const revision=++filesRevision, version=generation, dest={...destination};store.loadFiles(dest).then(files=>{if(version!==generation||revision!==filesRevision)return;selectedFiles=files;renderSelected();controls();}).catch(e=>error("Could not restore draft files. "+e.message)); let saved = {}; try { saved = JSON.parse(localStorage.getItem(storageKey(destination)) || sessionStorage.getItem(storageKey(destination)) || "{}"); } catch (_) { /* optional */ } input.value = saved.text || ""; draftID = saved.id || ""; cleared = null; controls(); }
+  function saveDraft(dest = destination, text = input.value, id = draftID, re = replyTo) { if (!dest) return; try { localStorage.setItem(storageKey(dest), JSON.stringify({text, id, ...(re ? {re} : {})})); } catch (_) { /* optional browser persistence */ } }
+  function renderReply() {
+    const box = $("reply-to"); box.hidden = !replyTo;
+    if (!replyTo) { box.replaceChildren(); return; }
+    const id = document.createElement("b"), title = document.createElement("span"), x = document.createElement("button");
+    id.textContent = replyTo.id; title.textContent = replyTo.title; box.title = replyTo.id + " · " + replyTo.title;
+    x.type = "button"; x.className = "reply-x"; x.setAttribute("aria-label", "Remove " + replyTo.id); x.title = "Remove";
+    x.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17"/></svg>';
+    x.addEventListener("click", () => { replyTo = null; saveDraft(); renderReply(); input.focus(); });
+    box.replaceChildren(id, title, x);
+  }
+  function restoreDraft() { selectedFiles=[];renderSelected();const revision=++filesRevision, version=generation, dest={...destination};store.loadFiles(dest).then(files=>{if(version!==generation||revision!==filesRevision)return;selectedFiles=files;renderSelected();controls();}).catch(e=>error("Could not restore draft files. "+e.message)); let saved = {}; try { saved = JSON.parse(localStorage.getItem(storageKey(destination)) || sessionStorage.getItem(storageKey(destination)) || "{}"); } catch (_) { /* optional */ } input.value = saved.text || ""; draftID = saved.id || ""; replyTo = saved.re && saved.re.id ? {id: String(saved.re.id), title: String(saved.re.title || "")} : null; renderReply(); cleared = null; controls();
+    // Talk to a role from a card (D-15 h1): its field takes the focus once.
+    if (saved.re?.focus) { saveDraft(); setTimeout(() => input.focus(), 0); } }
   try { language.value = localStorage.getItem("zmina-speech-language") || "ru-RU"; } catch (_) { /* optional */ }
   language.addEventListener("change", () => { try { localStorage.setItem("zmina-speech-language", language.value); } catch (_) { /* optional */ } });
   function controls() {
@@ -388,7 +402,7 @@
         if (row.event.result) { const result = document.createElement("p"); result.className = "event-result"; result.textContent = row.event.result; body.append(result); }
         // D-11 amendment b: an owner's session message offers its full text only when the line shown was clipped.
         if (row.event.detail && row.event.kind !== "session") { const details = document.createElement("details"), label = document.createElement("summary"), text = document.createElement("pre"); label.textContent = row.event.kind==="session"?"Full message":"Technical details"; text.textContent = row.event.detail; details.append(label, text); body.append(details); }
-      } else if (row.role === "assistant") window.zminaChatContent.render(row.text, body); else body.textContent = row.text; article._text = row.text; article._presentation=presentation; }
+      } else if (row.role === "assistant") window.zminaChatContent.render(row.text, body); else { const re = window.zminaIds.reply(row.text); if (re) { const line = document.createElement("p"); line.className = "xre"; line.textContent = "↳ " + re.id + " · " + window.zminaIds.short(re.title); body.replaceChildren(line, document.createTextNode(re.text)); } else body.textContent = row.text; } article._text = row.text; article._presentation=presentation; }
       const fileRows=article.querySelector(".message-files"), signature=fileSignature(row.attachments)+Boolean(row.outboxKey);
       if(article._files!==signature){fileRows.replaceChildren();for(const file of row.attachments||[]){const item=document.createElement(row.outboxKey?"span":"a");item.textContent=file.name+" · "+new Intl.NumberFormat().format(file.size)+" bytes";if(!row.outboxKey){item.href="/api/chat/file?"+new URLSearchParams({...destination,id:file.id});item.download=file.name;}fileRows.append(item);}article._files=signature;}
     });
@@ -425,6 +439,7 @@
       if (k) group.push(row); else fillDelivery(article.querySelector(".message-state"), [row]);
     });
     flush();
+    window.zminaIds.decorate(messages, destination);
     renderQuestion();
     // D-08 c6: working shows where the next reply will land.
     const working = $("chat-working"), busy = live && Boolean(snapshot.active);
@@ -477,13 +492,13 @@
   async function post(path, body) { const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), path==="/api/chat/upload"?65000:35000); try { const response = await fetch(path, {signal: controller.signal, method: "POST", headers: {"Content-Type": "application/json", "X-Zmina": "1"}, body: JSON.stringify(body)}); if (!response.ok) { const error = new Error(await response.text()); error.status = response.status; throw error; } return await response.json(); } finally { clearTimeout(timeout); } }
   $("composer").addEventListener("submit", async event => {
     event.preventDefault(); if (send.disabled || !destination) return;
-    const dest = {...destination}, text = input.value, version = generation, files=[...selectedFiles], revision=filesRevision;
+    const dest = {...destination}, raw = input.value, re = replyTo, text = (re ? "Re " + re.id + " (" + re.title + "): " : "") + raw, version = generation, files=[...selectedFiles], revision=filesRevision;
     const id = draftID || uid(); draftID = id; saveDraft(); posting = true; cleared = null; error(""); note(""); controls();
     let accepted=false;
     try {
       await store.enqueue(dest, id, text, files);accepted=true;
       // Storage failure keeps the draft intact and sends nothing over the network.
-      if (version === generation && input.value === text && revision===filesRevision) { input.value = ""; draftID = ""; selectedFiles=[];filesRevision++;renderSelected();await store.saveFiles(dest,[]);saveDraft(); }
+      if (version === generation && input.value === raw && revision===filesRevision) { input.value = ""; draftID = ""; if (replyTo === re) { replyTo = null; renderReply(); } selectedFiles=[];filesRevision++;renderSelected();await store.saveFiles(dest,[]);saveDraft(); }
       await refreshOutbox(); note("Message saved. Delivery resumes when connected."); drainOutbox();
     } catch (e) { error((accepted ? "Message saved. Could not finish updating this draft. " : "Message was not saved. Keep this draft and retry. ") + e.message); if(accepted){refreshOutbox().catch(()=>{});drainOutbox();} }
     finally { posting = false; controls(); }
@@ -535,6 +550,16 @@
   window.addEventListener("online", () => { if (destination) read(); drainOutbox(); });
   fitViewport();
   window.addEventListener("pagehide", () => { saveDraft(); endSpeech(true); clearTimeout(pollTimer); clearTimeout(retryTimer); readRequest?.abort(); });
+  // D-15 h1: «Talk to <role>» on a card — here when it is this conversation, else the role's own, the item on its field
+  // (embedded, the cockpit opens it, so its panel and tabs follow).
+  window.zminaIds.init({post, redraw: () => { if (destination) window.zminaIds.decorate(messages, destination); }, talk(dest, item) {
+    if (destination && dest.node === (destination.node || "") && dest.crew === destination.crew && dest.role === destination.role) { replyTo = {id: item.id, title: item.title}; saveDraft(); renderReply(); input.focus(); return; }
+    const to = {node: dest.node, crew: dest.crew, role: dest.role};
+    let saved = {}; try { saved = JSON.parse(localStorage.getItem(storageKey(to)) || "{}"); } catch (_) { /* optional */ }
+    try { localStorage.setItem(storageKey(to), JSON.stringify({...saved, re: {id: item.id, title: item.title, focus: true}})); } catch (_) { /* optional */ }
+    if (params.get("embed") === "1" && window.parent !== window) window.parent.postMessage({zmina: "talk", ...to}, location.origin);
+    else showDestination(to);
+  }}, messages, conversation);
   if (params.get("crew") && params.get("role")) showDestination({node: params.get("node") || "", crew: params.get("crew"), role: params.get("role")});
   drainOutbox();
   (async () => { try { const response = await fetch("/api/terminal/nodes"); if (!response.ok) throw new Error("Nodes unavailable. Reload this page."); const nodes = await response.json(); node.replaceChildren(); nodes.forEach(row => node.add(new Option(row.local ? `${row.name || "This node"} · local` : row.name, row.local ? "" : row.name))); if ([...node.options].some(option => option.value === params.get("node"))) node.value = params.get("node"); await loadTargets(); } catch (e) { error(e.message); } })();

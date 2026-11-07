@@ -52,6 +52,9 @@ type TerminalServices struct {
 	TodoAct func(crew, action, id, text string) (string, error)
 	// AlarmAct sets, moves or takes off an alarm of one of the node's crews (crew, action, id, when, text, role).
 	AlarmAct func(crew, action, id, when, text, role string) (string, error)
+	// Items resolves the ids a conversation names (crew, comma-separated ids) as the node's JSON: tasks, parked items
+	// and asks, each with its chain. Read-only.
+	Items func(crew, ids string) ([]byte, error)
 }
 
 // TerminalRequest is signed against a fresh server challenge, so a certified peer cannot turn a
@@ -121,6 +124,16 @@ func (n *Node) serveTerminal(ctx context.Context, c *conn, w wire, s *TerminalSe
 			return fail(err)
 		}
 		return c.send(wire{Op: "crew/status-result", Data: data})
+	}
+	if w.Op == "item/read" {
+		if s.Items == nil {
+			return fail(errors.New("item cards unavailable; update zmina on this node"))
+		}
+		data, err := s.Items(req.Crew, req.Text)
+		if err != nil {
+			return fail(err)
+		}
+		return c.send(wire{Op: "item/result", Data: data})
 	}
 	if w.Op == "todo/act" || w.Op == "alarm/act" {
 		if req.To != n.Name {
@@ -278,6 +291,20 @@ func (n *Node) CrewStatus(ctx context.Context, t Transport, node, kind string) (
 		return nil, err
 	}
 	w, err := c.expect("crew/status-result")
+	return w.Data, err
+}
+
+// ItemRead resolves ids of one of a node's crews (comma-separated) as that node's JSON. Owner only.
+func (n *Node) ItemRead(ctx context.Context, t Transport, node, crew, ids string) ([]byte, error) {
+	rw, c, err := n.terminalConnect(ctx, t, node)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rw.Close() }()
+	if err = n.terminalRequest(c, "item/read", TerminalRequest{Crew: crew, Text: ids}); err != nil {
+		return nil, err
+	}
+	w, err := c.expect("item/result")
 	return w.Data, err
 }
 
