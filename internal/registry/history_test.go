@@ -161,5 +161,6 @@ func TestChatMessagesMarksAProvisionalEnd(t *testing.T) {
 	require.Equal(t, []string{"a false", "cmd true"}, write(reply, typed, caveat, cmd))
 	require.Equal(t, []string{"a false", "cmd false"}, write(reply, typed, caveat, cmd, out))
 	require.Equal(t, []string{"typed false", "a false"}, write(typed, reply), "a typed line something followed has stayed")
-	require.Equal(t, []string{"a false", "q false"}, write(reply, `{"type":"user","uuid":"q","message":{"content":"/tmp/x is the path"}}`))
+	require.Equal(t, []string{"a false", "q false"}, write(reply, `{"type":"user","uuid":"q","message":{"content":"the path is /tmp/x"}}`))
+	require.Equal(t, []string{"a false", "multi true"}, write(reply, `{"type":"user","uuid":"multi","message":{"content":"/review the diff\nand the tests"}}`), "a typed command with arguments over lines")
 }

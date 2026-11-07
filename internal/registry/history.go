@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"os"
-	"regexp"
 	"strings"
 
 	"github.com/iamnikolie/zmina/internal/chat"
@@ -175,22 +174,20 @@ func (r *Registry) ChatMessages(sessionID string) ([]chat.Message, error) {
 }
 
 // provisional marks the end of the conversation that Claude Code may still replace or complete: a command's line
-// whose output has not come (command is its index, -1 when none), and a slash command as typed, which goes once
-// Claude Code records it as a command (dropTyped).
+// whose output has not come (command is its index, -1 when none), and an owner's line that starts with a slash — a
+// command as typed, which goes once Claude Code records it as a command (dropTyped takes any such line, arguments
+// over several lines too).
 func provisional(out []chat.Message, command int) {
 	if command >= 0 && command == len(out)-1 {
 		out[command].Provisional = true
 	}
 	if n := len(out); n > 0 {
 		last := &out[n-1]
-		if last.Role == "user" && last.Event == nil && !strings.HasPrefix(last.ID, "web:") && typedCommand.MatchString(strings.TrimSpace(last.Text)) {
+		if last.Role == "user" && last.Event == nil && !strings.HasPrefix(last.ID, "web:") && strings.HasPrefix(strings.TrimSpace(last.Text), "/") {
 			last.Provisional = true
 		}
 	}
 }
-
-// typedCommand is a slash command as typed at Claude Code's prompt: /name and its arguments on one line.
-var typedCommand = regexp.MustCompile(`^/[A-Za-z][\w:.-]*(?: [^\n]*)?$`)
 
 // sentFiles is a SendUserFile call: the files the role sent the owner and the words it sent with them.
 type sentFiles struct {
