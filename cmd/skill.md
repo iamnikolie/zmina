@@ -558,7 +558,8 @@ part of it and names that crew) is a link. In a run of the role's messages (sinc
 mention of a piece of work carries its short title after it; a dot before the id says it waits on the owner or is in
 work. A tap on the phone opens a bottom sheet, hover (350 ms), focus or a click (which pins it) on the desktop a
 popover: the id, what it is (task, parked, ask), its project or who asked, the title, the state in words (Waiting on
-you, Working, Queued, Waiting on <who>, Parked, Done, Dropped; Not found on this crew), Left and Latest from the
+you, Working, With <role> — taken, its role not working now, idle since when —, Queued, Waiting on <who>, Parked,
+Done, Dropped; Not found on this crew), Left and Latest from the
 latest note (`… · left: …`; else the result's summary, a parked item's text, an ask's text), and the path when the
 work went through the parked list — a task parked and taken again is one piece of work, `T-1 → L-1 → T-2`: its
 title is the first task's, its state the newest item's. Its one answer, only while it waits on the owner, goes as the
@@ -569,8 +570,8 @@ bubble shows `↳ <id> · <short title>` over the text.
 
 `GET /api/items?node=&crew=&ids=T-1,L-2,A-3` (up to 200 ids) resolves them on that crew, closed ones too: per id
 `found`, `kind`, `chain` (root first: id, kind, title, state, role, on, project, note, result summary, dates) and
-`at`, an `ask`, the head's `state` (`need`, `busy`, `queued`, `on`, `parked`, `done`, `dropped`), `who`, `since`,
-`overdue`, the `decision` (`id`, `action`, `text`, `word`), `talk` and `back`. A peer's crew is read on its own
+`at`, an `ask`, the head's `state` (`need`, `busy`, `with`, `queued`, `on`, `parked`, `done`, `dropped`), `who`, `since`,
+`idle`, `overdue`, the `decision` (`id`, `action`, `text`, `word`), `talk` and `back`. A peer's crew is read on its own
 node with the owner-signed mesh op `item/read`. `POST /api/todo` also takes this node's own crew as `<node>/<crew>`.
 
 Remote `chat/read`, `chat/send`, `chat/action` use the same owner-signed mesh requests and relay routes

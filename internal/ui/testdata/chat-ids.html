@@ -28,11 +28,12 @@
     "A-1": {id: "A-1", found: true, kind: "ask", ask: {id: "A-1", kind: "decision", title: "Merge the login page", text: "Tests are green.", rec: "merge it", role: "dispatcher", open: true, created: now},
       state: "need", who: "a decision", since: now, decision: {id: "A-1", action: "yes", word: "merge it"}, talk: "dispatcher"},
     "T-9": {id: "T-9", found: false},
+    "T-5": {id: "T-5", found: true, kind: "task", chain: [step("T-5", "task", "Docs", "open")], at: 0, state: "with", who: "dev", idle: true, since: now, talk: "dev"},
   };
   const messages = [
     {id: "m1", role: "assistant", text: "T-1 goes on as T-2 (from L-1). `T-3` is code. A-1 waits on you; T-9 is gone. T-10x is not an id.", at: now},
     {id: "m2", role: "user", text: "Re T-1 (Login page — rework): how far?", at: now},
-    {id: "m3", role: "assistant", text: "T-2 is half done.", at: now},
+    {id: "m3", role: "assistant", text: "T-2 is half done. T-5 waits.", at: now},
   ];
 
   async function open(cls, crew) {
@@ -68,7 +69,7 @@
     {
       const {fixture, $, $$} = await open("phone", "ids-phone");
       const ids = $$(".chat-message.assistant .xid").map((b) => b.textContent);
-      assert(ids.join(" ") === "T-1 T-2 L-1 A-1 T-9 T-2", "every id is a link, not in code, not inside a longer word: " + ids.join(" "));
+      assert(ids.join(" ") === "T-1 T-2 L-1 A-1 T-9 T-2 T-5", "every id is a link, not in code, not inside a longer word: " + ids.join(" "));
       assert(!$$(".xid").some((b) => b.closest("code")), "code stays code");
       await wait("the titles", () => $$(".chat-message.assistant .xt").length >= 2);
       const first = $$(".chat-message.assistant")[0];
@@ -106,7 +107,7 @@
       [...$$(".chat-message.assistant .xid")].find((b) => b.textContent === "A-1").click();
       await wait("the ask's card", () => $(".xsheet .xdo"));
       assert($(".xsheet .xstate b").textContent === "Waiting on you", "an open ask waits on the owner");
-      assert($(".xsheet .xdo").textContent === "merge it", "the button says the recommendation");
+      assert($(".xsheet .xdo").textContent === "Merge it", "the button says the recommendation, a capital first");
       assert($$(".xsheet .xacts button").pop().textContent === "Talk to dispatcher", "Talk is last");
       $(".xsheet .xdo").click();
       await wait("sent", () => $(".xsheet .xsent"));
@@ -118,6 +119,15 @@
       [...$$(".chat-message.assistant .xid")].find((b) => b.textContent === "T-9").click();
       await wait("not found", () => $(".xsheet .xtitle"));
       assert($(".xsheet .xtitle").textContent === "Not found on this crew" && !$(".xsheet .xacts"), "an unknown id says so, no actions");
+      $(".xshade").click();
+
+      // Taken, its role idle: with that role, not working; no dot in the text.
+      const t5 = [...$$(".chat-message.assistant .xid")].find((b) => b.textContent === "T-5");
+      assert(!t5.classList.contains("busy") && !t5.classList.contains("need"), "a task its role is not working on has no dot");
+      t5.click();
+      await wait("its card", () => $(".xsheet .xstate"));
+      assert($(".xsheet .xstate").classList.contains("with") && $(".xsheet .xstate b").textContent === "With dev", "With its role");
+      assert(/^ · idle since \d/.test($(".xsheet .xstate span").textContent), "idle since when: " + $(".xsheet .xstate span").textContent);
       $(".xshade").click();
 
       // Talk to the holder of this very conversation: the item goes on the field, and with the message.

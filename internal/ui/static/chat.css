@@ -316,6 +316,7 @@ html.chat-document { height: 100%; overflow: hidden; }
 .xstate.need i, .xstate.need b { color: var(--need); }
 .xstate.busy i, .xstate.busy b { color: var(--busy); }
 .xstate.on i, .xstate.on b { color: var(--ink2); }
+.xstate.with b { color: var(--ink2); }
 .xstate.done i, .xstate.done b { color: var(--ok); }
 .xrow .xlab { margin: 14px 0 3px; font: 600 12px var(--sans); color: var(--muted); }
 .xrow .xtime { font-weight: 400; color: var(--faint); }

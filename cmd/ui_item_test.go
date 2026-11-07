@@ -120,7 +120,7 @@ func TestItemsQueuedThenInWork(t *testing.T) {
 		Items map[string]itemCard `json:"items"`
 	}
 	require.NoError(t, json.Unmarshal(data, &out))
-	assert.Contains(t, []string{"busy", "queued"}, out.Items["T-1"].State)
+	assert.Contains(t, []string{"with", "queued"}, out.Items["T-1"].State, "its role is not working on it")
 	assert.Equal(t, "dev", out.Items["T-1"].Who)
 }
 

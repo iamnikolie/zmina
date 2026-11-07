@@ -80,12 +80,15 @@ type itemCard struct {
 	Chain []itemStep `json:"chain,omitempty"`
 	At    int        `json:"at"`
 	Ask   *itemAsk   `json:"ask,omitempty"`
-	// State is the head's in a word the page puts in plain words: need (waiting on the owner), busy (in work), queued
-	// (handed, not taken yet), on (waiting on Who), parked, done, dropped.
+	// State is the head's in a word the page puts in plain words: need (waiting on the owner), busy (its role works on
+	// it), with (taken, its role not working now), queued (handed, not taken yet), on (waiting on Who), parked, done,
+	// dropped.
 	State string `json:"state,omitempty"`
 	// Who is whom it is with: the role in work, the one it waits on, the role it was parked from, an ask's kind.
 	Who   string    `json:"who,omitempty"`
 	Since time.Time `json:"since,omitzero"`
+	// Idle is set with "with" while its role is up and idle (since Since).
+	Idle bool `json:"idle,omitempty"`
 	// Overdue is an item waiting on the owner for over 24 h.
 	Overdue  bool          `json:"overdue,omitempty"`
 	Decision *itemDecision `json:"decision,omitempty"`
@@ -101,7 +104,7 @@ type itemIndex struct {
 	asks     map[string]asks.Ask
 	from     map[string]string // a task taken from a parked item → that item
 	todo     map[string]todoItem
-	busy     map[string]bool
+	roles    map[string]shift.View
 	dispatch string
 	stateDir string
 	now      time.Time
@@ -109,7 +112,7 @@ type itemIndex struct {
 
 func readItemIndex(s *shift.Shift) *itemIndex {
 	x := &itemIndex{tasks: map[string]task.Task{}, later: map[string]later.Item{}, asks: map[string]asks.Ask{},
-		from: map[string]string{}, todo: map[string]todoItem{}, busy: map[string]bool{},
+		from: map[string]string{}, todo: map[string]todoItem{}, roles: map[string]shift.View{},
 		dispatch: s.Crew.Dispatcher, stateDir: s.Crew.StateDir(), now: s.Now()}
 
 	tasks, _, _ := taskStore(s.Crew).Scan()
@@ -132,7 +135,7 @@ func readItemIndex(s *shift.Shift) *itemIndex {
 
 	views := s.Views()
 	for _, v := range views {
-		x.busy[v.Role] = v.State == shift.PresenceUp && v.Status == "busy"
+		x.roles[v.Role] = v
 	}
 
 	todos, _ := todo(s.Crew, x.now, views)
@@ -330,9 +333,22 @@ func (x *itemIndex) headState(c *itemCard) {
 			return
 		}
 
-		c.State = "busy"
-		if t.Delivery != nil && t.Delivery.AcceptedAt.IsZero() {
+		v := x.roles[t.Role]
+
+		switch {
+		case t.Delivery != nil && t.Delivery.AcceptedAt.IsZero():
 			c.State = "queued"
+		case v.State == shift.PresenceUp && v.Status == "busy":
+			c.State = "busy"
+		default:
+			// Taken, and its role is not working on anything now: idle (since when it went idle) or down.
+			c.State = "with"
+			if v.State == shift.PresenceUp && v.Status == "idle" {
+				c.Idle = true
+				if !v.Since.IsZero() {
+					c.Since = v.Since
+				}
+			}
 		}
 	}
 }

@@ -178,10 +178,11 @@
     const st = el("p", "xstate " + (card.state === "on" ? "on" : card.state));
     const who = [];
     if (card.state === "parked" && card.who) who.push("last with " + card.who);
-    else if (card.state !== "on" && card.who) who.push(card.who);
+    else if (card.state !== "on" && card.state !== "with" && card.who) who.push(card.who);
     if (card.overdue) who.push("overdue");
-    else { const s = when(card.since); if (s) who.push(/:/.test(s) ? "since " + s : s); }
-    st.append(el("i"), el("b", "", card.state === "on" ? "Waiting on " + card.who : stateWord[card.state] || card.state));
+    else { const s = when(card.since); if (s) who.push((card.idle ? "idle " : "") + (/:/.test(s) ? "since " + s : s)); }
+    const word = card.state === "on" ? "Waiting on " + card.who : card.state === "with" ? "With " + card.who : stateWord[card.state] || card.state;
+    st.append(el("i"), el("b", "", word));
     if (who.length) st.append(el("span", "", " · " + who.join(" · ")));
     out.push(meta, title, st);
     // c2: Left, then Latest (an ask's Details).
@@ -240,7 +241,8 @@
       });
     };
     if (card.state === "need" && card.decision) {
-      const d = card.decision, word = d.word.length > 28 ? d.word.slice(0, 27).trimEnd() + "…" : d.word;
+      // D-15 amendment b: the word starts with a capital.
+      const d = card.decision, cap = d.word.charAt(0).toUpperCase() + d.word.slice(1), word = cap.length > 28 ? cap.slice(0, 27).trimEnd() + "…" : cap;
       main = el("button", "xdo", word);
       main.type = "button";
       main.title = d.word;
