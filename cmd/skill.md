@@ -488,6 +488,11 @@ Unmarked terminal/crew input is a compact Session message with full text collaps
 from name-like prefixes. Explicit owner text is preserved even when it looks like a runtime envelope.
 Runtime task notifications appear as background events with status, summary and result. IDs, file paths
 and event output stay in collapsed technical details; they are never labelled as owner messages.
+A command run at the role's Claude Code prompt (`/compact`, `/model`, `/clear`) is one quiet centred line with its
+time («Context compacted · 12:14», «/model · Set model to …»), never a bubble: the typed line, the recorded
+`<command-*>` elements and the `<local-command-stdout>`/`stderr` it printed fold into it, hook lines dropped; a
+command that is a prompt (a skill) shows as `/name args`. Terminal escapes are taken out of every text Talk shows,
+also of text an older node sends.
 
 `POST /api/chat/send` accepts JSON `node`, `crew`, `role`, `id`, `text` (X-Zmina header required).
 Acceptance is saved in the role's durable queue before delivery. An unchanged retry ID returns the

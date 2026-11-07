@@ -79,3 +79,13 @@ paragraph; a path the node does not show stays text; the owner's image and PDF s
 message's images (its name, «1 of 4», the path), the arrow key goes on, Esc gives the focus back. The
 images themselves load from `/api/chat/...`, which the static server does not have: they draw broken
 here; the layout checks do not depend on them. `chat-send.html` also checks the tile's upload bar.
+
+# Chat command lines test
+
+In a real browser as above, open `http://127.0.0.1:7530/testdata/chat-commands.html`;
+`window.chatCommandsResults.passed` must be true. At 390 and 1280 px, with a `fetch` that answers a
+conversation in which the role's prompt ran /compact, /context and /model: each is one quiet
+centred 12 px line with its time, no card, no head, never the owner's; a command's answer joins its line,
+its full output in the line's title; no terminal escape and no `<command-*>` / `<local-command-*>` tag shows
+anywhere, also in a reply an older node sends with escapes. The transcript side (folding the typed line, the
+recorded command and its output, dropping hook lines) is `TestChatMessagesFoldsLocalCommands`.

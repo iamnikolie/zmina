@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Chat command line regression fixtures</title>
+<style>iframe { height: 760px; border: 1px solid #888; } .phone { width: 390px; } .desk { width: 1280px; }</style>
+<pre id="result">Checking command lines…</pre>
+<script>
+// The real chat page in a frame whose fetch answers with a conversation in which the role's prompt ran /compact and
+// /model: each is one quiet centred line with its time, not the owner's bubble and not a card; no terminal
+// escape and no <command-*> or <local-command-*> tag shows anywhere, also when an older node sends text with escapes.
+(async () => {
+  const results = [];
+  const assert = (condition, name) => { if (!condition) throw new Error(name); results.push(name); };
+  const wait = async (what, test, ms = 4000) => {
+    const end = Date.now() + ms;
+    while (Date.now() < end) { const value = test(); if (value) return value; await new Promise(r => setTimeout(r, 25)); }
+    throw new Error("timed out: " + what);
+  };
+  const page = await (await fetch("../static/chat.html", {cache: "no-store"})).text();
+  const at = new Date(), now = at.toISOString();
+  const clock = new Intl.DateTimeFormat(undefined, {hour: "2-digit", minute: "2-digit"}).format(at);
+  const messages = [
+    {id: "m1", role: "user", text: "Save a checkpoint before the compaction.", at: now},
+    {id: "m2", role: "assistant", text: "Saved.", at: now},
+    {id: "c1", role: "event", text: "", at: now, event: {kind: "command", status: "", summary: "Context compacted"}},
+    {id: "c2", role: "event", text: "", at: now, event: {kind: "command", status: "", summary: "/context all · Context Usage", detail: "## Context Usage\n\n| a | b |"}},
+    // An older node does not fold or clean: its escapes still never show.
+    {id: "m3", role: "assistant", text: "\x1b[1mDone\x1b[22m: the dump is checked.", at: now},
+    {id: "c3", role: "event", text: "", at: now, event: {kind: "command", status: "", summary: "/model · Set model to \x1b[1mOpus\x1b[22m"}},
+  ];
+
+  async function open(cls, crew) {
+    const fixture = {};
+    const frame = document.createElement("iframe");
+    frame.className = cls;
+    document.body.append(frame);
+    frame.contentWindow.fixture = fixture;
+    const stub = `<base href="../static/"><script>
+      history.replaceState(null, "", location.pathname + "?crew=${crew}&role=dev");
+      window.addEventListener("error", (e) => { fixture.err = e.message; });
+      window.fetch = async (url) => {
+        const json = (body, status = 200) => new Response(typeof body === "string" ? body : JSON.stringify(body), {status, headers: {"Content-Type": "application/json"}});
+        const path = String(url).split("?")[0];
+        if (path === "/api/terminal/nodes" || path === "/api/terminal/targets") return json([]);
+        if (path === "/api/chat") return json(fixture.snapshot());
+        if (path === "/api/items") return json({items: {}});
+        return json("not in this fixture", 404);
+      };
+    <\/script>`;
+    fixture.snapshot = () => ({presentation_version: 1, attachments_supported: true, retry_window_seconds: 604800, role: "dev", runtime: "claude",
+      state: "up", status: "idle", session: "session-1", messages: structuredClone(messages), pending: []});
+    const doc = frame.contentDocument;
+    doc.open(); doc.write(page.replace("<head>", "<head>" + stub)); doc.close();
+    const $ = (sel) => frame.contentDocument.querySelector(sel), $$ = (sel) => [...frame.contentDocument.querySelectorAll(sel)];
+    await wait("the command lines", () => $$(".chat-message.command").length === 3);
+    return {frame, fixture, $, $$};
+  }
+
+  async function check(cls, crew) {
+    const {frame, fixture, $, $$} = await open(cls, crew);
+    const lines = $$(".chat-message.command");
+    assert(lines[0].innerText.trim() === "Context compacted · " + clock, cls + ": /compact is one line with its time");
+    assert(lines[2].innerText.trim() === "/model · Set model to Opus · " + clock, cls + ": a command's answer joins its line");
+    assert(lines.every(l => !l.classList.contains("user") && !l.classList.contains("session")), cls + ": no command line is the owner's");
+    const style = frame.contentWindow.getComputedStyle(lines[0]);
+    assert(style.textAlign === "center" && style.borderTopWidth === "0px" && parseFloat(style.fontSize) === 12, cls + ": a quiet centred line, no card");
+    assert(lines.every(l => l.getBoundingClientRect().height < 40), cls + ": one line each");
+    assert(lines.every(l => !l.querySelector(".message-head") || l.querySelector(".message-head").getBoundingClientRect().height === 0), cls + ": no head");
+    assert($(".chat-message.command .command-line").title.includes("Context Usage") || lines[1].querySelector(".command-line").title.includes("Context Usage"), cls + ": the full output in the title");
+    const text = frame.contentDocument.body.innerText;
+    assert(!text.includes("\x1b") && !/\[2?2?m|\[1m/.test(text), cls + ": no terminal escape anywhere");
+    assert(!/<\/?(?:command|local-command)-/.test(text), cls + ": no command tag anywhere");
+    assert($$(".chat-message.assistant").some(a => a.textContent.includes("Done: the dump is checked.")), cls + ": a reply's escapes go, its words stay");
+    assert(!fixture.err, cls + ": no script error " + (fixture.err || ""));
+  }
+
+  try {
+    await check("phone", "commands-phone");
+    await check("desk", "commands-desk");
+    window.chatCommandsResults = {passed: true, results};
+  } catch (e) {
+    window.chatCommandsResults = {passed: false, results, error: e.message};
+  }
+  document.getElementById("result").textContent = JSON.stringify(window.chatCommandsResults, null, 2);
+})();
+</script>

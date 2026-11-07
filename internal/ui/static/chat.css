@@ -115,6 +115,11 @@ html.chat-document { height: 100%; overflow: hidden; }
 .event details pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; }
 .event details > summary::after { content: "+"; margin-left: auto; font-size: 16px; }
 .event details[open] > summary::after { content: "−"; }
+/* a command run at the role's prompt: one quiet centred line like the day line (D-08 c5), no card, no head. */
+.chat-message.event.command { padding: 0; border: 0; border-radius: 0; background: none; text-align: center; font: 12px/1.5 var(--sans); color: var(--faint); }
+.chat-message.event.command .message-head, .chat-message.event.command .message-meta, .chat-message.event.command .message-files { display: none; }
+.chat-message.event.command .message-body > p { margin: 0; overflow-wrap: anywhere; }
+#messages > .event.command, #messages > .event.command + .chat-message { margin-top: 24px; }
 
 /* Intrinsic table/code width belongs to its own scroller, never the message or page. */
 .message-body { min-width: 0; max-width: 100%; }

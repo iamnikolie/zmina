@@ -122,7 +122,7 @@ func chatSnapshot(s *shift.Shift, role string) (chat.Snapshot, error) {
 		}
 	}
 	for i, m := range out.Messages {
-		out.Messages[i] = chat.PresentInput(m)
+		out.Messages[i] = chat.PresentInput(chat.Clean(m))
 	}
 	for _, receipt := range rs.ChatReceipts {
 		id := "web:" + receipt.ID

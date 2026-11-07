@@ -95,7 +95,14 @@
   const sameDestination = dest => destination && store.destinationKey(dest) === store.destinationKey(destination);
   const deadline = 6 * 24 * 60 * 60 * 1000;
   async function refreshOutbox() { outbox = await store.list(); render(); }
+  // a terminal escape never reaches the page as boxes and brackets, whichever node sent the text.
+  const ansi = /\x1b(?:\[[0-?]*[ -\/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|[@-Z\\-_])|\x1b/g;
+  const plain = (text) => typeof text === "string" && text.includes("\x1b") ? text.replace(ansi, "") : text;
   function applySnapshot(data) {
+    for (const row of data.messages || []) {
+      row.text = plain(row.text);
+      if (row.event) for (const k of ["summary", "result", "detail"]) row.event[k] = plain(row.event[k]);
+    }
     const previous = snapshot;
     if (data.cursor && !data.reset && previous?.cursor && previous.session === data.session) {
       const rows = new Map(previous.messages.map(row => [row.id, row]));
@@ -385,6 +392,7 @@
     }
   }, true);
   const eventWord = {completed: "Completed", failed: "Failed", stopped: "Stopped", running: "Running", received: "Received"};
+  const rowClass = (row) => row.event ? (row.event.kind === "session" ? "event session" : row.event.kind === "command" ? "event command" : "event") : row.role === "user" ? "user" : "assistant";
   const kindOf = (row) => row.event ? "event" : row.role === "user" ? "user" : "assistant";
   function render() {
     if (!destination) return;
@@ -400,18 +408,26 @@
     rows.forEach((row, index) => {
       keep.add(row.id);
       let article = articles.get(row.id);
-      if (!article) { article = document.createElement("article"); article.className = "chat-message " + (row.event ? (row.event.kind==="session"?"event session":"event") : row.role === "user" ? "user" : "assistant"); const head = document.createElement("div"); head.className = "message-head"; const who = document.createElement("span"), time = document.createElement("time"); head.append(who, time); const body = document.createElement("div"); body.className = "message-body"; const state = document.createElement("div"); state.className = "message-state"; const files=document.createElement("div");files.className="message-files";const meta=document.createElement("div");meta.className="message-meta";const metaTime=document.createElement("time");const copy=document.createElement("button");copy.type="button";copy.className="ib copy";copy.setAttribute("aria-label","Copy");copy.title="Copy";copy.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>';copy.addEventListener("click",()=>{navigator.clipboard?.writeText(article._text||"").then(()=>{copy.title="Copied";setTimeout(()=>{copy.title="Copy";},1500);},()=>error("Could not copy this message."));});meta.append(metaTime,copy);article.append(head, body, files, state, meta); articles.set(row.id, article); }
-      const presentation=JSON.stringify({role:row.role,event:row.event||null});
-      article.className="chat-message "+(row.event?(row.event.kind==="session"?"event session":"event"):row.role==="user"?"user":"assistant");
+      if (!article) { article = document.createElement("article"); article.className = "chat-message " + rowClass(row); const head = document.createElement("div"); head.className = "message-head"; const who = document.createElement("span"), time = document.createElement("time"); head.append(who, time); const body = document.createElement("div"); body.className = "message-body"; const state = document.createElement("div"); state.className = "message-state"; const files=document.createElement("div");files.className="message-files";const meta=document.createElement("div");meta.className="message-meta";const metaTime=document.createElement("time");const copy=document.createElement("button");copy.type="button";copy.className="ib copy";copy.setAttribute("aria-label","Copy");copy.title="Copy";copy.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>';copy.addEventListener("click",()=>{navigator.clipboard?.writeText(article._text||"").then(()=>{copy.title="Copied";setTimeout(()=>{copy.title="Copy";},1500);},()=>error("Could not copy this message."));});meta.append(metaTime,copy);article.append(head, body, files, state, meta); articles.set(row.id, article); }
+      const date = new Date(row.at), shown = Number.isNaN(date.getTime()) ? "" : (date.toDateString() === new Date().toDateString() ? clock : dated).format(date);
+      // A command's line carries its time, so a new day's format redraws it.
+      const presentation=JSON.stringify({role:row.role,event:row.event||null,shown:row.event?.kind==="command"?shown:""});
+      article.className="chat-message "+rowClass(row);
       // A reply unfolded by a tap stays unfolded through the next render (D-11 m1).
       if (article._metaOn) article.classList.add("meta-on");
       // D-08 c5: a card's label says what it is and how it stands on one line.
       article.querySelector(".message-head span").textContent = row.event ? (row.event.kind==="session"?"Session message":"Background task") + (eventWord[row.event.status] ? " · " + eventWord[row.event.status] : "") : row.role === "user" ? "You" : destination.role;
-      const date = new Date(row.at), shown = Number.isNaN(date.getTime()) ? "" : (date.toDateString() === new Date().toDateString() ? clock : dated).format(date);
       for (const time of article.querySelectorAll("time")) time.textContent = shown;
       // D-08 c3: every message keeps its full time in its title; the meta row shows it under a run's last one.
       article.title = (row.event?.kind === "session" ? "Session message · " : "") + (Number.isNaN(date.getTime()) ? "" : date.toLocaleString());
-      if (article._text !== row.text || article._presentation!==presentation) { const body = article.querySelector(".message-body"); if (row.event) {
+      if (article._text !== row.text || article._presentation!==presentation) { const body = article.querySelector(".message-body"); if (row.event?.kind === "command") {
+        // a command run at the role's prompt (/compact, /model) is one quiet line with its time, not a bubble.
+        const line = document.createElement("p");
+        line.className = "command-line";
+        line.textContent = row.event.summary + (shown ? " · " + shown : "");
+        if (row.event.detail) line.title = row.event.detail;
+        body.replaceChildren(line);
+      } else if (row.event) {
         const title = document.createElement("p"), summary = document.createElement("p");
         title.className = "event-status";
         title.textContent = eventWord[row.event.status] || "Update";
