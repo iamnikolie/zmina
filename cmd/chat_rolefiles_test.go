@@ -114,6 +114,14 @@ func TestRoleFileServesWhatTheRoleSent(t *testing.T) {
 	require.NoError(t, os.Symlink(filepath.Join(elsewhere, "dir"), parent))
 	fake := write(filepath.Join(outside, "fake.pdf"), []byte("<html>"))
 	rewritten := write(filepath.Join(outside, "rewritten.pdf"), pdfBytes)
+	// A hard link swapped in at a sent path to another file of that size, its mtime from before the send.
+	hardlinked := filepath.Join(outside, "hardlinked.pdf")
+	require.NoError(t, os.Link(write(filepath.Join(elsewhere, "secret.pdf"), pdfBytes), hardlinked))
+	// Written after the send with its mtime set back: the inode's change time says so.
+	backdatedAt := time.Now()
+	time.Sleep(20 * time.Millisecond)
+	backdated := write(filepath.Join(outside, "backdated.pdf"), pdfBytes)
+	require.NoError(t, os.Chtimes(backdated, time.Now().Add(-time.Hour), time.Now().Add(-time.Hour)))
 	resized := write(filepath.Join(outside, "resized.pdf"), pdfBytes)
 
 	for name, c := range map[string]struct {
@@ -128,6 +136,8 @@ func TestRoleFileServesWhatTheRoleSent(t *testing.T) {
 		"written since the send":           {rewritten, map[string]registry.SentFile{rewritten: {Path: rewritten, Size: int64(len(pdfBytes)), At: time.Now().Add(-time.Hour)}}},
 		"another size than sent":           {resized, map[string]registry.SentFile{resized: {Path: resized, Size: 1, At: sentAt}}},
 		"sent with no size recorded":       {doc, map[string]registry.SentFile{doc: {Path: doc, At: sentAt}}},
+		"a hard link swapped in":           {hardlinked, send(hardlinked)},
+		"written since, mtime set back":    {backdated, map[string]registry.SentFile{backdated: {Path: backdated, Size: int64(len(pdfBytes)), At: backdatedAt}}},
 	} {
 		_, _, err := roleFile(c.path, roots, c.sent)
 		require.Error(t, err, name)
