@@ -124,7 +124,9 @@
       assert(Math.round(copy.width) === 44 && Math.round(copy.height) === 44 && Math.round(icon.width) === 15, cls + ": Copy a 15 px icon in a 44 px hit (v2): " + Math.round(copy.width) + "/" + Math.round(icon.width));
       await wait("the image drawn", () => $(".fv-img").naturalWidth === 1600);
       const big = $(".fv-img").getBoundingClientRect(), view = frame.contentWindow;
-      assert(cls === "phone" ? Math.round(big.width) === view.innerWidth : big.width > 0.85 * view.innerWidth || big.height > 0.8 * view.innerHeight, cls + ": a 1600 px shot fills the viewer: " + Math.round(big.width) + "×" + Math.round(big.height));
+      const prev = $(".fv-prev")?.getBoundingClientRect(), next = $(".fv-next")?.getBoundingClientRect();
+      assert(cls === "phone" ? Math.round(big.width) === view.innerWidth : big.width > 0.85 * view.innerWidth - 144 || big.height > 0.8 * view.innerHeight, cls + ": a 1600 px shot fills the viewer: " + Math.round(big.width) + "×" + Math.round(big.height));
+      assert(cls === "phone" || (big.left >= prev.right && big.right <= next.left), cls + ": clear of the arrows (v3)");
       assert(third.getAttribute("aria-label") === "Looked at shot-10.png, 3 of 14", cls + ": the tile's label");
       frame.contentDocument.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape", bubbles: true}));
       assert(!$(".fview") && frame.contentDocument.activeElement === third, cls + ": Esc closes, focus back on the tile");

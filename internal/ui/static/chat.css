@@ -477,7 +477,7 @@ html.chat-document { height: 100%; overflow: hidden; }
 .fv-title b { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: 600 15px var(--sans); }
 .fv-title span { display: block; font: 12px var(--sans); color: #a1a8af; }
 .fv-stage { display: flex; align-items: center; justify-content: center; min-height: 0; overflow: hidden; }
-.fv-img { max-width: 92vw; max-height: 85vh; border-radius: 6px; object-fit: contain; transition: transform 160ms var(--ease); }
+.fv-img { max-width: calc(100vw - 144px); max-height: 85vh; border-radius: 6px; object-fit: contain; transition: transform 160ms var(--ease); }
 .fview.small .fv-img { max-width: 100vw; max-height: 100%; border-radius: 0; }
 .fv-img.zoom { transform: scale(2); cursor: zoom-out; }
 .fv-prev, .fv-next { position: absolute; top: 50%; width: 44px !important; height: 44px !important; margin-top: -22px !important; border-radius: 50%;
