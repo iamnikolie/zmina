@@ -81,6 +81,18 @@
   function fileData(blob) {return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result.split(",")[1]);reader.onerror=()=>reject(reader.error);reader.onabort=()=>reject(new Error("File reading stopped."));reader.readAsDataURL(blob);});}
   const store = window.zminaChatStore;
   let outbox = [], draining = false, retryTimer = null, live = false;
+  // The outbox entry this tab is uploading or sending now (name: the file going up), so its bubble says it goes.
+  let inflight = null;
+  const OFFLINE_NOTE = "Saved · sends when you’re back online";
+  // outboxState is how a saved message stands for its bubble: going up or out now; a fresh one goes at once when
+  // the network is there and nothing before it to the same role is stuck (else it waits, and says so).
+  function outboxState(entry) {
+    if (inflight?.key === entry.key) return inflight.name ? "uploading" : "transmitting";
+    if (entry.state !== "local" || entry.attempts || navigator.onLine === false) return entry.state;
+    const scope = store.destinationKey(entry.dest);
+    const stuck = outbox.some((other) => other !== entry && store.destinationKey(other.dest) === scope && other.at <= entry.at && (other.state !== "local" || other.attempts));
+    return stuck ? entry.state : "transmitting";
+  }
   const sameDestination = dest => destination && store.destinationKey(dest) === store.destinationKey(destination);
   const deadline = 6 * 24 * 60 * 60 * 1000;
   async function refreshOutbox() { outbox = await store.list(); render(); }
@@ -136,16 +148,22 @@
           await store.update(entry);
           // Multiple tabs may retry concurrently; the server deduplicates this same ID.
           entry.uploaded ||= [];
+          inflight = {key: entry.key, name: ""};
           for(const file of entry.files||[]) {
             if(entry.uploaded.some(meta=>meta.id===file.id))continue;
+            inflight.name = file.name; render();
             const result=await post("/api/chat/upload",{...entry.dest,upload:{id:file.id,name:file.name,data:await fileData(file.blob)}});
             if(!result.uploaded || result.uploaded.id!==file.id)throw new Error("Attachment upload was not confirmed.");
             entry.uploaded.push(result.uploaded);await store.update(entry);
           }
+          inflight.name = ""; render();
           await post("/api/chat/send", {...entry.dest, id: entry.id, text: entry.text, files:(entry.files||[]).map(file=>file.id)});
-          await store.remove(entry.key);
+          await store.remove(entry.key); inflight = null;
+          // Sent: a note that said it waits for the network no longer holds.
+          if ($("composer-status").textContent === OFFLINE_NOTE) note("");
           if (sameDestination(entry.dest)) read();
         } catch (e) {
+          inflight = null;
           entry.attempts++;
           entry.state = e.status >= 400 && e.status < 500 && ![408, 429].includes(e.status) ? "failed" : "local";
           entry.failure = e.message;
@@ -214,14 +232,14 @@
     const d = new Date(at), today = new Date(), yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
     return d.toDateString() === today.toDateString() ? "Today" : d.toDateString() === yesterday.toDateString() ? "Yesterday" : dayName.format(d);
   }
-  const deliveryText = {local: "Saved on this device · waiting to send", queued: "Queued · delivered when the role is idle", sent: "Sent to the role · awaiting agent confirmation", accepted: "", unconfirmed: "Delivery unconfirmed · the conversation changed", expired: "Delivery unconfirmed · check Terminal before sending again", failed: "Delivery failed", sending: "Saving…", uncertain: "Delivery unconfirmed · retry with the same message ID"};
-  const deliveryKey = (row) => [row.state, row.failure || "", Boolean(row.outboxKey)].join("|");
+  const deliveryText = {uploading: "Uploading…", transmitting: "Sending…", local: "Saved on this device · waiting to send", queued: "Queued · delivered when the role is idle", sent: "Sent to the role · awaiting agent confirmation", accepted: "", unconfirmed: "Delivery unconfirmed · the conversation changed", expired: "Delivery unconfirmed · check Terminal before sending again", failed: "Delivery failed", sending: "Saving…", uncertain: "Delivery unconfirmed · retry with the same message ID"};
+  const deliveryKey = (row) => [row.state, row.upload || "", row.failure || "", Boolean(row.outboxKey)].join("|");
   // fillDelivery writes the delivery state of a group of owner messages (one, or a run in the same state) under its
   // last one; its buttons act on every message of the group, one after another.
   function fillDelivery(state, group) {
     const row = group[group.length - 1], many = group.length > 1;
-    state.replaceChildren(deliveryText[row.state] || "");
-    if (row.failure) state.append(" · " + row.failure);
+    state.replaceChildren(row.state === "uploading" && row.upload ? "Uploading " + row.upload + "…" : deliveryText[row.state] || "");
+    if (row.failure && row.state !== "uploading" && row.state !== "transmitting") state.append(" · " + row.failure);
     const add = (label, run) => { const b = document.createElement("button"); b.type = "button"; b.textContent = label; if (many) b.setAttribute("aria-label", label + " · all " + group.length + " messages"); b.addEventListener("click", () => run().catch(e => error(e.message))); state.append(" ", b); };
     if (row.outboxKey && row.state === "failed") add("Retry delivery", async () => { for (const r of group) await retryEntry(r.outboxKey); });
     // Set aside for every browser: the role's own record keeps it, unshown.
@@ -374,7 +392,7 @@
     snapshot ||= {state: "unknown", messages: [], pending: []};
     const follow = firstPaint || atBottom(), oldScroll = conversation.scrollTop;
     const rows = [...(snapshot.messages || []), ...(snapshot.pending || [])], seen = new Set(rows.map(row => row.id));
-    for (const entry of outbox) if (sameDestination(entry.dest) && !seen.has("web:" + entry.id)) rows.push({id: "web:" + entry.id, role: "user", text: entry.text, at: entry.at, state: entry.state, failure: entry.failure, outboxKey: entry.key, attachments:entry.files||[]});
+    for (const entry of outbox) if (sameDestination(entry.dest) && !seen.has("web:" + entry.id)) rows.push({id: "web:" + entry.id, role: "user", text: entry.text, at: entry.at, state: outboxState(entry), upload: inflight?.key === entry.key ? inflight.name : "", failure: entry.failure, outboxKey: entry.key, attachments:entry.files||[]});
     // A message not yet seen in the conversation stands where it was sent, not under every newer reply; one with no
     // time stays last. The sort is stable, so the conversation's own order holds.
     const when = (row) => { const t = Date.parse(row.at); return Number.isNaN(t) ? Infinity : t; };
@@ -501,7 +519,8 @@
       await store.enqueue(dest, id, text, files);accepted=true;
       // Storage failure keeps the draft intact and sends nothing over the network.
       if (version === generation && input.value === raw && revision===filesRevision) { input.value = ""; draftID = ""; if (replyTo === re) { replyTo = null; renderReply(); } selectedFiles=[];filesRevision++;renderSelected();await store.saveFiles(dest,[]);saveDraft(); }
-      await refreshOutbox(); note("Message saved. Delivery resumes when connected."); drainOutbox();
+      // The bubble says how it goes; only without a network does the line under the field speak.
+      await refreshOutbox(); note(navigator.onLine === false ? OFFLINE_NOTE : ""); drainOutbox();
     } catch (e) { error((accepted ? "Message saved. Could not finish updating this draft. " : "Message was not saved. Keep this draft and retry. ") + e.message); if(accepted){refreshOutbox().catch(()=>{});drainOutbox();} }
     finally { posting = false; controls(); }
 

@@ -57,3 +57,13 @@ a dot; a tap opens the sheet (title, state, Left, Latest, Path; a step swaps the
 answer goes once as a todo answer and turns into Sent; an unknown id says so; «Talk to» puts the
 item on the field and the message goes with it; on the desktop a click pins a 360 px popover and Esc
 closes it, the focus back on the id.
+
+# Chat send state test
+
+Open `http://127.0.0.1:7530/testdata/chat-send.html` in a real browser (e.g. `oko open …`, then read
+`#result` after a few seconds); `window.chatSendResults.passed` must be true. Headless
+`--virtual-time-budget` does not work here: draft files are Blobs in IndexedDB, which take real time
+that virtual time runs ahead of. The page attaches an image and sends it through a `fetch` that is
+slow to take the upload and the message: the owner's bubble says «Uploading shot.png…», then
+«Sending…», never «waiting to send» while the network is there, and no line under the field says
+delivery waits for a connection.

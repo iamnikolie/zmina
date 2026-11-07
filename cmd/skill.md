@@ -500,8 +500,9 @@ network send attempt; expired entries require inspection before a new send. This
 not unlimited exactly-once execution.
 Messages wait for the ordinary idle/empty-prompt checks; neither a busy role nor a native draft/dialog
 is overwritten. Multiline or long text is stored whole in the crew inbox and delivered with a reference
-for the role to read. Delivery states distinguish local storage, server queueing, sent to the role, and
-`accepted`: only a matching owner-message ID in the runtime's visible transcript proves agent acceptance. A line
+for the role to read. Delivery states distinguish local storage, a send in flight (`Uploading <file>…`, then `Sending…`; a fresh
+message reads so at once while the network is there and nothing before it to that role is stuck), server queueing,
+sent to the role, and `accepted`; the line under the field speaks only when the device is offline: only a matching owner-message ID in the runtime's visible transcript proves agent acceptance. A line
 posted to a Claude role's inbox socket shows there as Claude Code's meta line from a peer (`Another Claude session
 sent a message:` and zmina's `[zmina:<tag>]`), a Codex bridge's with the tag: both are read as the owner's message
 once its ID is one of the role's receipts; such a line with an ID no browser sent is shown as a session message.

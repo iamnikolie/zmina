@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Chat send state regression fixtures</title>
+<style>iframe { width: 390px; height: 760px; border: 1px solid #888; }</style>
+<pre id="result">Checking how a message goes…</pre>
+<script>
+// The real chat page in a frame whose fetch takes a while to take an attached image and the message: while they go
+// up the owner's bubble says so (never «waiting to send» with the network there), and once the role has it no line
+// under the field says delivery waits for a connection.
+(async () => {
+  const results = [];
+  const assert = (condition, name) => { if (!condition) throw new Error(name); results.push(name); show(); };
+  const show = () => { document.getElementById("result").textContent = "running: " + results.join(" / "); };
+  const wait = async (what, test, ms = 4000) => {
+    const end = Date.now() + ms;
+    while (Date.now() < end) { const value = test(); if (value) return value; await new Promise(r => setTimeout(r, 20)); }
+    throw new Error("timed out: " + what);
+  };
+  const page = await (await fetch("../static/chat.html", {cache: "no-store"})).text();
+  const fixture = {sends: [], uploads: [], messages: []};
+  const frame = document.createElement("iframe");
+  document.body.append(frame);
+  frame.contentWindow.fixture = fixture;
+  const stub = `<base href="../static/"><script>
+    history.replaceState(null, "", location.pathname + "?crew=send-${Date.now()}&role=dev");
+    window.fetch = async (url, options = {}) => {
+      const json = (body, status = 200) => new Response(typeof body === "string" ? body : JSON.stringify(body), {status, headers: {"Content-Type": "application/json"}});
+      const later = (ms) => new Promise(r => setTimeout(r, ms));
+      const path = String(url).split("?")[0];
+      if (path === "/api/terminal/nodes" || path === "/api/terminal/targets") return json([]);
+      if (path === "/api/chat") return json(fixture.snapshot());
+      if (path === "/api/chat/upload") { const b = JSON.parse(options.body); await later(900); fixture.uploads.push(b.upload.name); return json({uploaded: {id: b.upload.id, name: b.upload.name, size: 3}}); }
+      if (path === "/api/chat/send") { const b = JSON.parse(options.body); await later(600); fixture.sends.push(b); fixture.messages.push({id: "web:" + b.id, role: "user", text: b.text, at: new Date().toISOString(), attachments: [{id: b.files[0], name: "shot.png", size: 3}]}); return json(fixture.snapshot()); }
+      return json("not in this fixture", 404);
+    };
+  <\/script>`;
+  fixture.snapshot = () => ({presentation_version: 1, attachments_supported: true, retry_window_seconds: 604800, role: "dev", runtime: "claude",
+    state: "up", status: "idle", session: "session-1", messages: [{id: "m1", role: "assistant", text: "Send me the screenshot.", at: new Date().toISOString()}, ...fixture.messages], pending: []});
+  const doc = frame.contentDocument;
+  doc.open(); doc.write(page.replace("<head>", "<head>" + stub)); doc.close();
+  const $ = (sel) => frame.contentDocument.querySelector(sel);
+  try {
+    await wait("the conversation", () => $(".chat-message.assistant"));
+    const win = frame.contentWindow, files = new win.DataTransfer();
+    files.items.add(new win.File([new Uint8Array([1, 2, 3])], "shot.png", {type: "image/png"}));
+    $("#file-input").files = files.files;
+    $("#file-input").dispatchEvent(new win.Event("change", {bubbles: true}));
+    await wait("the file on the draft", () => $("#draft-files").textContent.includes("shot.png"), 10000);
+    $("#message").value = "here it is";
+    $("#message").dispatchEvent(new win.Event("input", {bubbles: true}));
+    await wait("Send to be ready", () => !$("#send-message").disabled);
+    // Every state the owner's bubble says, in order, until the role has the message.
+    const said = [];
+    const watch = setInterval(() => { const t = $(".chat-message.user .message-state")?.textContent || ""; if (t && said[said.length - 1] !== t) said.push(t); }, 10);
+    $("#send-message").click();
+    await wait("the role to have it", () => fixture.sends.length === 1, 20000);
+    await wait("the outbox to let it go", () => !$(".chat-message.user .message-state") || !/Uploading|Sending|waiting/.test($(".chat-message.user .message-state").textContent), 20000);
+    clearInterval(watch);
+    assert(fixture.uploads.join() === "shot.png", "the image went up once");
+    assert(!said.some((t) => /waiting to send/.test(t)), "never «waiting to send» while it goes: " + said.join(" / "));
+    assert(said.includes("Uploading shot.png…"), "the bubble says the file goes up: " + said.join(" / "));
+    assert(said.includes("Sending…"), "then that the message goes: " + said.join(" / "));
+    assert(said.indexOf("Uploading shot.png…") < said.lastIndexOf("Sending…"), "in that order");
+    assert(!$("#composer-status").textContent, "no line says delivery waits for a connection: " + $("#composer-status").textContent);
+    window.chatSendResults = {passed: true, results};
+  } catch (e) {
+    window.chatSendResults = {passed: false, results, error: e.message + " | page: " + ($("#chat-error")?.textContent || "") + " | files: " + ($("#draft-files")?.textContent || "") + " | input files: " + ($("#file-input")?.files?.length)};
+  }
+  document.getElementById("result").textContent = JSON.stringify(window.chatSendResults, null, 2);
+})();
+</script>
