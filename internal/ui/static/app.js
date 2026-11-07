@@ -2029,6 +2029,11 @@ $("side-close").addEventListener("click", closeTalk);
 globalThis.addEventListener?.("message", (e) => {
   if (e.origin !== location.origin || e.source !== $("side-frame").contentWindow) return;
   if (e.data === "zmina:close" && side) closeTalk();
+  // D-15 h1: a card's «Talk to <role>» in the conversation opens that role's (its item waits on the field there).
+  if (e.data && e.data.zmina === "talk" && typeof e.data.crew === "string" && typeof e.data.role === "string") {
+    const peer = e.data.node ? e.data.node + "/" + e.data.crew : "";
+    openTalk(peer && crewOf(peer) ? peer : e.data.crew, e.data.role, null);
+  }
   if (e.data === "zmina:typing" || e.data === "zmina:typed") {
     frameTyping = e.data === "zmina:typing";
     kbCheck();

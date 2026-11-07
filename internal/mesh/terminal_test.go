@@ -351,3 +351,29 @@ func TestActIsDoneOnlyByTheNodeItNames(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "done", line)
 }
+
+// A conversation's ids resolve on the node its crew lives on: owner only, relayed, an older node says to update.
+func TestItemReadIsOwnerOnlyAndRelayed(t *testing.T) {
+	owner := newOwner(t, "owner")
+	jump := enroll(t, owner, "jump")
+	worker := enroll(t, owner, "worker")
+	old := enroll(t, owner, "old")
+	addPeer(t, owner, "jump")
+	addPeer(t, owner, "old")
+	addPeer(t, jump, "worker")
+	require.NoError(t, owner.UpdatePeers(func(ps []Peer) []Peer { return append(ps, Peer{Name: "worker", Through: []string{"jump"}}) }))
+	service := &TerminalServices{Items: func(crew, ids string) ([]byte, error) { return []byte(`{"crew":"` + crew + `","ids":"` + ids + `"}`), nil }}
+	transport := &terminalPipes{nodes: map[string]*Node{"jump": jump, "worker": worker, "old": old},
+		services: map[string]*TerminalServices{"worker": service, "old": {}}}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	got, err := owner.ItemRead(ctx, transport, "worker", "ops", "T-1,L-2")
+	require.NoError(t, err)
+	require.JSONEq(t, `{"crew":"ops","ids":"T-1,L-2"}`, string(got))
+
+	_, err = jump.ItemRead(ctx, transport, "worker", "ops", "T-1")
+	require.ErrorContains(t, err, "owner node")
+	_, err = owner.ItemRead(ctx, transport, "old", "ops", "T-1")
+	require.ErrorContains(t, err, "update zmina")
+}

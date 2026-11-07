@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Chat ids regression fixtures</title>
+<style>iframe { height: 760px; border: 1px solid #888; } .phone { width: 390px; } .desk { width: 1280px; }</style>
+<pre id="result">Checking ids as cards…</pre>
+<script>
+// The real chat page in a frame whose fetch answers for a role whose replies name tasks, a parked item and an ask
+// (D-15): ids become links, the first mention of a piece of work carries its short title, a tap opens its card, the
+// card's answer goes as a todo answer, and «Talk to» puts the item on the field.
+(async () => {
+  const results = [];
+  const assert = (condition, name) => { if (!condition) throw new Error(name); results.push(name); };
+  const wait = async (what, test, ms = 4000) => {
+    const end = Date.now() + ms;
+    while (Date.now() < end) { const value = test(); if (value) return value; await new Promise(r => setTimeout(r, 25)); }
+    throw new Error("timed out: " + what);
+  };
+  const page = await (await fetch("../static/chat.html", {cache: "no-store"})).text();
+  const now = new Date().toISOString();
+  const step = (id, kind, title, state, extra = {}) => ({id, kind, title, state, role: "dev", created: now, updated: now, ...extra});
+  const chain = [step("T-1", "task", "Login: the page is reworked from scratch", "parked", {project: "site"}), step("L-1", "later", "the form", "taken"),
+    step("T-2", "task", "Login page — the form", "open", {note: "form built · left: the error states"})];
+  const items = {
+    "T-1": {id: "T-1", found: true, kind: "task", chain, at: 0, state: "busy", who: "dev", since: now, talk: "dev"},
+    "L-1": {id: "L-1", found: true, kind: "later", chain, at: 1, state: "busy", who: "dev", since: now, talk: "dev"},
+    "T-2": {id: "T-2", found: true, kind: "task", chain, at: 2, state: "busy", who: "dev", since: now, talk: "dev"},
+    "A-1": {id: "A-1", found: true, kind: "ask", ask: {id: "A-1", kind: "decision", title: "Merge the login page", text: "Tests are green.", rec: "merge it", role: "dispatcher", open: true, created: now},
+      state: "need", who: "a decision", since: now, decision: {id: "A-1", action: "yes", word: "merge it"}, talk: "dispatcher"},
+    "T-9": {id: "T-9", found: false},
+    "T-5": {id: "T-5", found: true, kind: "task", chain: [step("T-5", "task", "Docs", "open")], at: 0, state: "with", who: "dev", idle: true, since: now, talk: "dev"},
+  };
+  const messages = [
+    {id: "m1", role: "assistant", text: "T-1 goes on as T-2 (from L-1). `T-3` is code. A-1 waits on you; T-9 is gone. T-10x is not an id.", at: now},
+    {id: "m2", role: "user", text: "Re T-1 (Login page — rework): how far?", at: now},
+    {id: "m3", role: "assistant", text: "T-2 is half done. T-5 waits. See src/acme/T-7. Ask box/ops/A-2.", at: now},
+  ];
+
+  async function open(cls, crew, nodes = []) {
+    const fixture = {posts: [], sends: [], reads: []};
+    const frame = document.createElement("iframe");
+    frame.className = cls;
+    document.body.append(frame);
+    frame.contentWindow.fixture = fixture;
+    const stub = `<base href="../static/"><script>
+      history.replaceState(null, "", location.pathname + "?crew=${crew}&role=dev");
+      window.addEventListener("error", (e) => { fixture.err = e.message; });
+      window.fetch = async (url, options = {}) => {
+        const json = (body, status = 200) => new Response(typeof body === "string" ? body : JSON.stringify(body), {status, headers: {"Content-Type": "application/json"}});
+        const [path, query] = String(url).split("?");
+        // The node list comes late, after the first render, as it may on a slow mesh.
+        if (path === "/api/terminal/nodes") { await new Promise(r => setTimeout(r, 300)); return json(fixture.nodes); }
+        if (path === "/api/terminal/targets") return json([]);
+        if (path === "/api/chat") return json(fixture.snapshot());
+        if (path === "/api/items") { const q = new URLSearchParams(query); fixture.reads.push(q.get("ids")); const out = {}; for (const id of q.get("ids").split(",")) out[id] = fixture.items[id] || {id, found: false}; return json({items: out}); }
+        if (path === "/api/todo") { fixture.posts.push(JSON.parse(options.body)); return json({done: "ok"}); }
+        if (path === "/api/chat/send") { const body = JSON.parse(options.body); fixture.sends.push(body); return json({...fixture.snapshot(), accepted_id: body.id}); }
+        return json("not in this fixture", 404);
+      };
+    <\/script>`;
+    fixture.items = items;
+    fixture.nodes = nodes;
+    fixture.snapshot = () => ({presentation_version: 1, attachments_supported: true, retry_window_seconds: 604800, role: "dev", runtime: "claude",
+      state: "up", status: "idle", session: "session-1", messages, pending: []});
+    const doc = frame.contentDocument;
+    doc.open(); doc.write(page.replace("<head>", "<head>" + stub)); doc.close();
+    const $ = (sel) => frame.contentDocument.querySelector(sel), $$ = (sel) => [...frame.contentDocument.querySelectorAll(sel)];
+    await wait("the links", () => $$(".chat-message.assistant .xid").length >= 5);
+    return {frame, fixture, $, $$};
+  }
+
+  try {
+    {
+      const {fixture, $, $$} = await open("phone", "ids-phone");
+      const ids = $$(".chat-message.assistant .xid").map((b) => b.textContent);
+      assert(ids.join(" ") === "T-1 T-2 L-1 A-1 T-9 T-2 T-5", "every id is a link, not in code, not inside a longer word: " + ids.join(" "));
+      assert(!$$(".xid").some((b) => b.closest("code")), "code stays code");
+      await new Promise(r => setTimeout(r, 500));
+      assert(!$$(".xid").some((b) => /A-2/.test(b.textContent)) && /Ask box\/ops\/A-2\./.test($$(".chat-message.assistant")[1].textContent), "an unknown node's id stays text, never this crew's");
+      await wait("the titles", () => $$(".chat-message.assistant .xt").length >= 2);
+      const first = $$(".chat-message.assistant")[0];
+      const titled = [...first.querySelectorAll(".xid")].filter((b) => b.nextSibling?.classList?.contains("xt")).map((b) => b.textContent);
+      assert(titled.join(" ") === "T-1 A-1", "one title per piece of work in a run: " + titled.join(" "));
+      assert(first.querySelector(".xt").textContent === " · the page is reworked from scratch", "the root's short title, its «Login: » dropped");
+      assert(first.querySelector(".xid").classList.contains("busy"), "a piece in work carries the busy dot");
+      assert([...first.querySelectorAll(".xid")].find((b) => b.textContent === "A-1").classList.contains("need"), "an ask waiting on the owner carries the need dot");
+      const last = $$(".chat-message.assistant")[1];
+      assert(last.querySelector(".xt"), "a new run after the owner spoke titles it again");
+      const mine = $(".chat-message.user");
+      assert(mine.querySelector(".xre").textContent === "↳ T-1 · Login page — rework", "the owner's message says what it is about");
+      assert(!mine.querySelector(".xt"), "the owner's words get no titles");
+      assert(fixture.reads.length <= 2, "the ids are asked for at once");
+
+      // A tap opens the sheet.
+      $$(".chat-message.assistant .xid")[0].click();
+      await wait("the sheet", () => $(".xsheet .xtitle"));
+      assert($(".xshade"), "a shade under the sheet");
+      assert($(".xsheet").getAttribute("role") === "dialog", "the card is a dialog");
+      assert($(".xsheet .xtitle").textContent === "Login: the page is reworked from scratch", "the title is the root's, whole");
+      assert($(".xsheet .xmeta").textContent.startsWith("T-1 · task · site"), "the meta line: id, kind, project: " + $(".xsheet .xmeta").textContent);
+      assert($(".xsheet .xstate b").textContent === "Working", "the state in a word");
+      const labels = $$(".xsheet .xlab").map((l) => l.textContent);
+      assert(labels[0] === "Left" && labels[1].startsWith("Latest") && labels[2] === "Path · 3 steps", "Left, Latest, Path: " + labels.join(" / "));
+      assert($$(".xsheet .xtext")[0].textContent === "the error states", "Left is what the note leaves");
+      assert($(".xsheet .xstep.head").textContent === "T-2" && $(".xsheet .xstep.at").textContent === "T-1", "the trail marks the tapped id and the head");
+      assert(!$(".xsheet .xdo"), "no answer when it does not wait on the owner");
+      $$(".xsheet .xstep")[1].click();
+      assert($(".xsheet .xmeta").textContent.startsWith("L-1 · parked"), "a step swaps the card to it");
+      $(".xshade").click();
+      assert(!$(".xsheet"), "a tap on the shade closes it");
+
+      // The ask: its answer goes as the todo answer, once, without a confirm.
+      [...$$(".chat-message.assistant .xid")].find((b) => b.textContent === "A-1").click();
+      await wait("the ask's card", () => $(".xsheet .xdo"));
+      assert($(".xsheet .xstate b").textContent === "Waiting on you", "an open ask waits on the owner");
+      assert($(".xsheet .xdo").textContent === "Merge it", "the button says the recommendation, a capital first");
+      assert($$(".xsheet .xacts button").pop().textContent === "Talk to dispatcher", "Talk is last");
+      $(".xsheet .xdo").click();
+      await wait("sent", () => $(".xsheet .xsent"));
+      assert(fixture.posts.length === 1 && fixture.posts[0].id === "A-1" && fixture.posts[0].action === "yes" && fixture.posts[0].crew === "ids-phone", "the answer goes once as todo yes");
+      assert(/^Sent · /.test($(".xsheet .xsent").textContent), "the button turns into Sent");
+      await new Promise(r => setTimeout(r, 700));
+      assert($(".xsheet .xsent") && !$(".xsheet .xdo"), "Sent stays through the redraw the ledger's read brings");
+      $(".xshade").click();
+
+      // Not found.
+      [...$$(".chat-message.assistant .xid")].find((b) => b.textContent === "T-9").click();
+      await wait("not found", () => $(".xsheet .xtitle"));
+      assert($(".xsheet .xtitle").textContent === "Not found on this crew" && !$(".xsheet .xacts"), "an unknown id says so, no actions");
+      $(".xshade").click();
+
+      // Taken, its role idle: with that role, not working; no dot in the text.
+      const t5 = [...$$(".chat-message.assistant .xid")].find((b) => b.textContent === "T-5");
+      assert(!t5.classList.contains("busy") && !t5.classList.contains("need"), "a task its role is not working on has no dot");
+      t5.click();
+      await wait("its card", () => $(".xsheet .xstate"));
+      assert($(".xsheet .xstate").classList.contains("with") && $(".xsheet .xstate b").textContent === "With dev", "With its role");
+      assert(/^ · idle since \d/.test($(".xsheet .xstate span").textContent), "idle since when: " + $(".xsheet .xstate span").textContent);
+      $(".xshade").click();
+
+      // Talk to the holder of this very conversation: the item goes on the field, and with the message.
+      $$(".chat-message.assistant .xid")[0].click();
+      await wait("the sheet", () => $(".xsheet .xtalk"));
+      $(".xsheet .xtalk").click();
+      assert(!$(".xsheet"), "Talk closes the card");
+      assert(!$("#reply-to").hidden && $("#reply-to b").textContent === "T-1", "the item is on the field");
+      assert($("#reply-to span").textContent === "Login: the page is reworked from scratch", "with its title");
+      assert($("body").ownerDocument.activeElement === $("#message"), "the field has the focus");
+      $("#message").value = "how far?";
+      $("#message").dispatchEvent(new Event("input", {bubbles: true}));
+      await wait("Send to be ready", () => !$("#send-message").disabled);
+      $("#send-message").click();
+      // Saved to the outbox first (delivery follows when the page is visible): its bubble says what it is about.
+      const sent = await wait("the message saved: " + $("#chat-error").textContent + " " + $("#composer-status").textContent,
+        () => $$(".chat-message.user").find((m) => m.querySelector(".xre")?.textContent === "↳ T-1 · the page is reworked from scratch"),
+        // The outbox is IndexedDB, real time: headless virtual time runs ahead of it.
+        20000);
+      assert(sent.querySelector(".message-body").lastChild.textContent === "how far?", "the owner's words under it, the prefix read off");
+      if (fixture.sends.length) assert(fixture.sends[0].text === "Re T-1 (Login: the page is reworked from scratch): how far?", "the message says what it is about: " + fixture.sends[0].text);
+      assert($("#reply-to").hidden, "the chip goes with the message");
+    }
+    {
+      // The desktop: a click pins a popover under the id; Esc closes it and gives the focus back.
+      const {$, $$} = await open("desk", "ids-desk", [{name: "laptop", local: true}, {name: "box", local: false}]);
+      // A path is not a node: src/acme/T-7 stays text, never this crew's T-7.
+      await wait("the node list", () => $$(".chat-message.assistant .xid").some((x) => x.textContent === "box/ops/A-2"));
+      assert(!$$(".chat-message.assistant .xid").some((x) => /T-7/.test(x.textContent)) && /See src\/acme\/T-7\./.test($$(".chat-message.assistant")[1].textContent), "a path stays text");
+      // Opened by hover, then pinned with a click (or Enter): the card takes the focus, so its buttons are next.
+      const h = $$(".chat-message.assistant .xid")[0];
+      h.dispatchEvent(new PointerEvent("pointerover", {bubbles: true, pointerType: "mouse"}));
+      await wait("the hover card", () => $(".xpop .xstate"));
+      assert(h.ownerDocument.activeElement !== $(".xpop"), "hover leaves the focus where it was");
+      h.click();
+      assert(h.ownerDocument.activeElement === $(".xpop"), "pinned, the card has the focus");
+      h.ownerDocument.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape", bubbles: true}));
+      const b = $$(".chat-message.assistant .xid")[0];
+      // Opened before its data is here, it stands in its place all the same.
+      b.click();
+      await wait("the popover", () => $(".xpop .xtitle"));
+      assert(!$(".xshade") && !$(".xsheet"), "no sheet on the desktop");
+      await wait("the card's data", () => $(".xpop .xstate"));
+      const r = b.getBoundingClientRect(), p = $(".xpop").getBoundingClientRect();
+      assert(Math.round(p.width) === 360, "360 px wide: " + p.width);
+      assert(p.top >= r.bottom || p.bottom <= r.top, "under the id, or above when it does not fit");
+      assert($(".xpop .xacts").firstElementChild.textContent === "Talk to dev", "Talk on the left");
+      b.ownerDocument.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape", bubbles: true}));
+      assert(!$(".xpop"), "Esc closes it");
+      assert(b.ownerDocument.activeElement === b, "and gives the focus back to the id");
+
+      // A known peer's id, named after the node list came: that node's, never this crew's.
+      const peer = await wait("the peer's id", () => $$(".chat-message.assistant .xid").find((x) => x.textContent === "box/ops/A-2"));
+      assert(peer.dataset.node === "box" && peer.dataset.crew === "ops" && peer.dataset.id === "A-2", "box/ops/A-2 is box's A-2");
+
+      // The focus stays in the card when an answer goes and when a step swaps it.
+      const ask = $$(".chat-message.assistant .xid").find((x) => x.textContent === "A-1");
+      ask.click();
+      await wait("the ask's card", () => $(".xpop .xdo"));
+      $(".xpop .xdo").focus();
+      $(".xpop .xdo").click();
+      await wait("sent", () => $(".xpop .xsent"));
+      assert(ask.ownerDocument.activeElement === $(".xpop"), "after the answer the focus is on the card");
+      await new Promise(r => setTimeout(r, 700));
+      assert(ask.ownerDocument.activeElement === $(".xpop"), "and stays there through the redraw");
+      ask.ownerDocument.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape", bubbles: true}));
+      b.click();
+      await wait("the card", () => $(".xpop .xstep"));
+      $$(".xpop .xstep")[1].focus();
+      $$(".xpop .xstep")[1].click();
+      assert($(".xpop").contains(b.ownerDocument.activeElement), "a step keeps the focus in the card");
+    }
+    window.chatIdsResults = {passed: true, results};
+  } catch (e) {
+    window.chatIdsResults = {passed: false, results, error: e.message + [...document.querySelectorAll("iframe")].map((f) => f.contentWindow.fixture?.err ? " · page: " + f.contentWindow.fixture.err : "").join("")};
+  }
+  document.getElementById("result").textContent = JSON.stringify(window.chatIdsResults, null, 2);
+})();
+</script>

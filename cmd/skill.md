@@ -553,6 +553,28 @@ the answers chosen and `Not answered · <why>` under it.
 Reading Chat does not resume a Codex thread or attach another native app writer. Chat is not a tmux
 attachment and does not pin an idle role against the configured release policy.
 
+**Ids as cards.** Every `T-n`, `L-n` and `A-n` in a message (not in code or a link; a `<node>/<crew>/` before it stays
+part of it and names that crew when the mesh knows the node; with any other prefix, a path, the whole stays text) is
+a link. In a run of the role's messages (since the owner last spoke) the first
+mention of a piece of work carries its short title after it; a dot before the id says it waits on the owner or is in
+work. A tap on the phone opens a bottom sheet, hover (350 ms), focus or a click (which pins it) on the desktop a
+popover: the id, what it is (task, parked, ask), its project or who asked, the title, the state in words (Waiting on
+you, Working, With <role> — taken, its role not working now, idle since when —, Queued, Waiting on <who>, Parked,
+Done, Dropped; Not found on this crew), Left and Latest from the
+latest note (`… · left: …`; else the result's summary, a parked item's text, an ask's text), and the path when the
+work went through the parked list — a task parked and taken again is one piece of work, `T-1 → L-1 → T-2`: its
+title is the first task's, its state the newest item's. Its one answer, only while it waits on the owner, goes as the
+todo answer does (`todo yes` the recommendation, `done` a check, else `answer … Yes`), no confirm; a parked head offers
+Bring back. «Talk to <role>» (who holds it, the role it was parked from, the role that asked) opens that role's
+conversation with the item on the field as a chip; the message goes as `Re <id> (<title>): <text>`, and the owner's
+bubble shows `↳ <id> · <short title>` over the text.
+
+`GET /api/items?node=&crew=&ids=T-1,L-2,A-3` (up to 200 ids) resolves them on that crew, closed ones too: per id
+`found`, `kind`, `chain` (root first: id, kind, title, state, role, on, project, note, result summary, dates) and
+`at`, an `ask`, the head's `state` (`need`, `busy`, `with`, `queued`, `on`, `parked`, `done`, `dropped`), `who`, `since`,
+`idle`, `overdue`, the `decision` (`id`, `action`, `text`, `word`), `talk` and `back`. A peer's crew is read on its own
+node with the owner-signed mesh op `item/read`. `POST /api/todo` also takes this node's own crew as `<node>/<crew>`.
+
 Remote `chat/read`, `chat/send`, `chat/action` use the same owner-signed mesh requests and relay routes
 as terminals. UI token/Host/CSRF guards still apply. Update gateway, worker and relays before remote use.
 
@@ -829,7 +851,8 @@ A machine without peers is a mesh of one. It opens the page in the browser.
 - **Talk**: every session card, and the holder line of an opened task, has «Talk»: the role's conversation (Chat) opens
   in a panel beside the cockpit, which stays in view and keeps updating behind it; on a phone the panel is the whole
   screen. Any role of any node: a peer's over the mesh as Chat reads it. «Open page» opens it as its own page; Esc
-  closes it. Only Chat may be framed, and only by the cockpit itself.
+  closes it. Only Chat may be framed, and only by the cockpit itself. A card's «Talk to <role>» there (ids as cards,
+  under Browser chat) switches the panel, or the Talk tab, to that role.
 - **Red means act now**: a live crew's ticker overdue, a peer node offline, a role down that holds an active task
   (not one asleep). Nothing else is red. A `spare: true` crew shows the quiet word «spare» and is never red; a crew
   retired into another (`zmina retire --moved-to`) leaves the page, the switch and every count; one retired with no
