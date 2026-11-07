@@ -58,7 +58,6 @@
   // The mesh's nodes by name (this node's is ""): an id's node/crew prefix names one of them, else it is text (D-15 i1).
   let knownNodes = new Map();
   const fileSignature=files=>JSON.stringify((files||[]).map(file=>[file.id,file.name,file.size]));
-  const matches=(entry,row)=>row && row.text===entry.text && fileSignature(entry.files)===fileSignature(row.attachments);
   function renderSelected() {
     draftFiles.replaceChildren();
     selectedFiles.forEach(file=>{
@@ -107,7 +106,7 @@
     let size = 0;
     data.messages = (data.messages || []).slice(-1000).reverse().filter(row => { size += row.text.length; return size <= 4 * 1024 * 1024; }).reverse();
     const evidence = new Map([...(data.messages || []), ...(data.pending || [])].map(row => [row.id, row]));
-    for (const entry of outbox) if (sameDestination(entry.dest) && matches(entry,evidence.get("web:" + entry.id))) {
+    for (const entry of outbox) if (sameDestination(entry.dest) && evidence.has("web:" + entry.id)) {
       store.remove(entry.key).then(refreshOutbox).catch(e => error(e.message));
     }
     snapshot = data; live = true;
@@ -134,7 +133,7 @@
           const status = await fetch("/api/chat?" + new URLSearchParams(entry.dest), {cache: "no-store", signal: AbortSignal.timeout(35000)});
           if (!status.ok) throw new Error("Could not check the destination before delivery.");
           const current = await status.json();
-          if ([...(current.messages || []), ...(current.pending || [])].some(row => row.id === "web:" + entry.id && matches(entry,row))) {
+          if ([...(current.messages || []), ...(current.pending || [])].some(row => row.id === "web:" + entry.id)) {
             await store.remove(entry.key); continue;
           }
           // Old nodes evict recent identities by count. They must never receive
@@ -151,12 +150,12 @@
           inflight = {key: entry.key, name: ""};
           for(const file of entry.files||[]) {
             if(entry.uploaded.some(meta=>meta.id===file.id))continue;
-            inflight.name = file.name; render();
-            const result=await post("/api/chat/upload",{...entry.dest,upload:{id:file.id,name:file.name,data:await fileData(file.blob)}});
+            inflight.name = file.name; inflight.file = file.id; inflight.progress = 0; render();
+            const result=await upload({...entry.dest,upload:{id:file.id,name:file.name,data:await fileData(file.blob)}}, (fraction) => { if (inflight?.file !== file.id) return; inflight.progress = fraction; paintSoon(); });
             if(!result.uploaded || result.uploaded.id!==file.id)throw new Error("Attachment upload was not confirmed.");
             entry.uploaded.push(result.uploaded);await store.update(entry);
           }
-          inflight.name = ""; render();
+          inflight.name = ""; inflight.file = ""; render();
           await post("/api/chat/send", {...entry.dest, id: entry.id, text: entry.text, files:(entry.files||[]).map(file=>file.id)});
           await store.remove(entry.key); inflight = null;
           // Sent: a note that said it waits for the network no longer holds.
@@ -392,7 +391,7 @@
     snapshot ||= {state: "unknown", messages: [], pending: []};
     const follow = firstPaint || atBottom(), oldScroll = conversation.scrollTop;
     const rows = [...(snapshot.messages || []), ...(snapshot.pending || [])], seen = new Set(rows.map(row => row.id));
-    for (const entry of outbox) if (sameDestination(entry.dest) && !seen.has("web:" + entry.id)) rows.push({id: "web:" + entry.id, role: "user", text: entry.text, at: entry.at, state: outboxState(entry), upload: inflight?.key === entry.key ? inflight.name : "", failure: entry.failure, outboxKey: entry.key, attachments:entry.files||[]});
+    for (const entry of outbox) if (sameDestination(entry.dest) && !seen.has("web:" + entry.id)) rows.push({id: "web:" + entry.id, role: "user", text: entry.text, at: entry.at, state: outboxState(entry), upload: inflight?.key === entry.key ? inflight.name : "", uploadFile: inflight?.key === entry.key ? inflight.file : "", uploadProgress: inflight?.key === entry.key ? inflight.progress : 0, uploaded: (entry.uploaded || []).map(meta => meta.id), failure: entry.failure, outboxKey: entry.key, attachments:entry.files||[]});
     // A message not yet seen in the conversation stands where it was sent, not under every newer reply; one with no
     // time stays last. The sort is stable, so the conversation's own order holds.
     const when = (row) => { const t = Date.parse(row.at); return Number.isNaN(t) ? Infinity : t; };
@@ -422,9 +421,10 @@
         if (row.event.result) { const result = document.createElement("p"); result.className = "event-result"; result.textContent = row.event.result; body.append(result); }
         // D-11 amendment b: an owner's session message offers its full text only when the line shown was clipped.
         if (row.event.detail && row.event.kind !== "session") { const details = document.createElement("details"), label = document.createElement("summary"), text = document.createElement("pre"); label.textContent = row.event.kind==="session"?"Full message":"Technical details"; text.textContent = row.event.detail; details.append(label, text); body.append(details); }
-      } else if (row.role === "assistant") window.zminaChatContent.render(row.text, body); else { const re = window.zminaIds.reply(row.text); if (re) { const line = document.createElement("p"); line.className = "xre"; line.textContent = "↳ " + re.id + " · " + window.zminaIds.short(re.title); body.replaceChildren(line, document.createTextNode(re.text)); } else body.textContent = row.text; } body._xids = null; article._text = row.text; article._presentation=presentation; }
+      } else if (row.role === "assistant") window.zminaChatContent.render(row.text, body); else { const re = window.zminaIds.reply(row.text); if (re) { const line = document.createElement("p"); line.className = "xre"; line.textContent = "↳ " + re.id + " · " + window.zminaIds.short(re.title); body.replaceChildren(line, document.createTextNode(re.text)); } else body.textContent = row.text; } body._xids = null; body._xfilesFor = null; article._text = row.text; article._presentation=presentation; }
       const fileRows=article.querySelector(".message-files"), signature=fileSignature(row.attachments)+Boolean(row.outboxKey);
-      if(article._files!==signature){fileRows.replaceChildren();for(const file of row.attachments||[]){const item=document.createElement(row.outboxKey?"span":"a");item.textContent=file.name+" · "+new Intl.NumberFormat().format(file.size)+" bytes";if(!row.outboxKey){item.href="/api/chat/file?"+new URLSearchParams({...destination,id:file.id});item.download=file.name;}fileRows.append(item);}article._files=signature;}
+      if(article._files!==signature){window.zminaFiles.ownerBlock(fileRows,row,destination);article._files=signature;}
+      if(row.role==="user")window.zminaFiles.progress(fileRows,row);
     });
     for (const [id, article] of articles) if (!keep.has(id)) { article._day?.remove(); article.remove(); articles.delete(id); }
     // D-08 c3/c5: consecutive messages of one speaker are a run; a day line where the day changes; the meta row
@@ -460,6 +460,7 @@
     });
     flush();
     window.zminaIds.decorate(messages, destination);
+    window.zminaFiles.decorate(messages, destination);
     renderQuestion();
     // D-08 c6: working shows where the next reply will land.
     const working = $("chat-working"), busy = live && Boolean(snapshot.active);
@@ -509,6 +510,23 @@
     catch (e) { target.replaceChildren(new Option("Roles unavailable", "")); error(e.message); }
     finally { if (chosenNode === node.value) { loadingTargets = false; controls(); } }
   }
+  // upload sends one file with its progress (fetch has none): fraction 0–1 as the bytes leave.
+  function upload(body, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", "/api/chat/upload");
+      xhr.setRequestHeader("Content-Type", "application/json"); xhr.setRequestHeader("X-Zmina", "1");
+      xhr.timeout = 65000;
+      xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+      xhr.onload = () => { if (xhr.status >= 200 && xhr.status < 300) { try { resolve(JSON.parse(xhr.responseText)); } catch (e) { reject(e); } } else { const e = new Error(xhr.responseText || xhr.statusText); e.status = xhr.status; reject(e); } };
+      xhr.onerror = () => reject(new Error("Network error while uploading."));
+      xhr.ontimeout = () => reject(new Error("Upload timed out."));
+      xhr.send(JSON.stringify(body));
+    });
+  }
+  // paintSoon draws the upload's progress at most once a frame.
+  let paintFrame = 0;
+  function paintSoon() { if (!paintFrame) paintFrame = requestAnimationFrame(() => { paintFrame = 0; render(); }); }
   async function post(path, body) { const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), path==="/api/chat/upload"?65000:35000); try { const response = await fetch(path, {signal: controller.signal, method: "POST", headers: {"Content-Type": "application/json", "X-Zmina": "1"}, body: JSON.stringify(body)}); if (!response.ok) { const error = new Error(await response.text()); error.status = response.status; throw error; } return await response.json(); } finally { clearTimeout(timeout); } }
   $("composer").addEventListener("submit", async event => {
     event.preventDefault(); if (send.disabled || !destination) return;
@@ -573,6 +591,7 @@
   window.addEventListener("pagehide", () => { saveDraft(); endSpeech(true); clearTimeout(pollTimer); clearTimeout(retryTimer); readRequest?.abort(); });
   // D-15 h1: «Talk to <role>» on a card — here when it is this conversation, else the role's own, the item on its field
   // (embedded, the cockpit opens it, so its panel and tabs follow).
+  window.zminaFiles.init({post, redraw: () => render()});
   window.zminaIds.init({post, node: (name) => knownNodes.get(name), redraw: () => { if (destination) window.zminaIds.decorate(messages, destination); }, talk(dest, item) {
     if (destination && dest.node === (destination.node || "") && dest.crew === destination.crew && dest.role === destination.role) { replyTo = {id: item.id, title: item.title}; saveDraft(); renderReply(); input.focus(); return; }
     const to = {node: dest.node, crew: dest.crew, role: dest.role};

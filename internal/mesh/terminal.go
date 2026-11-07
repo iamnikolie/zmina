@@ -44,6 +44,9 @@ type TerminalServices struct {
 	ChatFile      func(string, string, string) (chat.Upload, error)
 	ChatSendFiles func(string, string, string, string, []string) (chat.Snapshot, error)
 	ChatAction    func(string, string, string) (chat.Snapshot, error)
+	// ChatPaths says which paths a role named (newline-separated) are files Chat shows; ChatRoleFile reads one.
+	ChatPaths    func(crew, role, paths string) (chat.Snapshot, error)
+	ChatRoleFile func(crew, role, path string) (chat.Upload, error)
 	// Status is what the node's crews show on the cockpit, as JSON: kind "" their state, tasks, asks and alarms;
 	// "cost" their spend. Read-only.
 	Status func(kind string) ([]byte, error)
@@ -176,6 +179,12 @@ func (n *Node) serveTerminal(ctx context.Context, c *conn, w wire, s *TerminalSe
 			snapshot, err = s.ChatSend(req.Crew, req.Role, req.ID, req.Text)
 		case w.Op == "chat/action" && s.ChatAction != nil:
 			snapshot, err = s.ChatAction(req.Crew, req.Role, req.Action)
+		case w.Op == "chat/paths" && s.ChatPaths != nil:
+			snapshot, err = s.ChatPaths(req.Crew, req.Role, req.Text)
+		case w.Op == "chat/rolefile" && s.ChatRoleFile != nil:
+			var file chat.Upload
+			file, err = s.ChatRoleFile(req.Crew, req.Role, req.Text)
+			snapshot.File = &file
 		default:
 			err = errors.New("chat unavailable; update zmina on this node")
 		}

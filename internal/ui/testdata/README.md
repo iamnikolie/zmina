@@ -67,3 +67,15 @@ that virtual time runs ahead of. The page attaches an image and sends it through
 slow to take the upload and the message: the owner's bubble says «Uploading shot.png…», then
 «Sending…», never «waiting to send» while the network is there, and no line under the field says
 delivery waits for a connection.
+
+# Chat attachments test
+
+In a real browser as above, open `http://127.0.0.1:7530/testdata/chat-files.html`;
+`window.chatFilesResults.passed` must be true. At 390 and 1280 px, with a `fetch` that answers
+`/api/chat/paths` (D-16): a list of a role's image paths becomes a gallery in its place, each tile
+named; a path in a sentence becomes its file name with its preview (or a PDF chip) under the
+paragraph; a path the node does not show stays text; the owner's image and PDF sit above his bubble
+(sizes in KB, never bytes) and an image-only message has no bubble; a tap opens the viewer over the
+message's images (its name, «1 of 4», the path), the arrow key goes on, Esc gives the focus back. The
+images themselves load from `/api/chat/...`, which the static server does not have: they draw broken
+here; the layout checks do not depend on them. `chat-send.html` also checks the tile's upload bar.

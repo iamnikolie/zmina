@@ -675,12 +675,18 @@ func (a *app) chatCall(ctx context.Context, node, op string, req mesh.TerminalRe
 		return chat.Snapshot{File: &file}, err
 	case "chat/action":
 		return a.localChatAction(req.Crew, req.Role, req.Action)
+	case "chat/paths":
+		return a.localChatPaths(req.Crew, req.Role, req.Text)
+	case "chat/rolefile":
+		file, err := a.localChatRoleFile(req.Crew, req.Role, req.Text)
+		return chat.Snapshot{File: &file}, err
 	}
 	return chat.Snapshot{}, errors.New("unknown chat operation")
 }
 
 func (a *app) uiChat(mux *http.ServeMux) {
 	a.uiChatFiles(mux)
+	a.uiChatRoleFiles(mux)
 	mux.HandleFunc("GET /api/chat", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 		defer cancel()

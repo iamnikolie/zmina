@@ -377,3 +377,37 @@ func TestItemReadIsOwnerOnlyAndRelayed(t *testing.T) {
 	_, err = owner.ItemRead(ctx, transport, "old", "ops", "T-1")
 	require.ErrorContains(t, err, "update zmina")
 }
+
+// A role's files resolve and open on the node the role runs on: owner only, relayed, an older node says to update.
+func TestChatRoleFilesAreOwnerOnlyAndRelayed(t *testing.T) {
+	owner := newOwner(t, "owner")
+	jump := enroll(t, owner, "jump")
+	worker := enroll(t, owner, "worker")
+	old := enroll(t, owner, "old")
+	addPeer(t, owner, "jump")
+	addPeer(t, owner, "old")
+	addPeer(t, jump, "worker")
+	require.NoError(t, owner.UpdatePeers(func(ps []Peer) []Peer { return append(ps, Peer{Name: "worker", Through: []string{"jump"}}) }))
+	service := &TerminalServices{
+		ChatPaths: func(crew, role, paths string) (chat.Snapshot, error) {
+			return chat.Snapshot{Paths: []chat.PathInfo{{Path: paths, Name: crew + "/" + role, Size: 3, Type: "image/png"}}}, nil
+		},
+		ChatRoleFile: func(crew, role, path string) (chat.Upload, error) { return chat.Upload{Name: path, Data: []byte("png")}, nil },
+	}
+	transport := &terminalPipes{nodes: map[string]*Node{"jump": jump, "worker": worker, "old": old},
+		services: map[string]*TerminalServices{"worker": service, "old": {}}}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	got, err := owner.Chat(ctx, transport, "worker", "chat/paths", TerminalRequest{Crew: "ops", Role: "dev", Text: "/tmp/a.png"})
+	require.NoError(t, err)
+	require.Equal(t, []chat.PathInfo{{Path: "/tmp/a.png", Name: "ops/dev", Size: 3, Type: "image/png"}}, got.Paths)
+	got, err = owner.Chat(ctx, transport, "worker", "chat/rolefile", TerminalRequest{Crew: "ops", Role: "dev", Text: "/tmp/a.png"})
+	require.NoError(t, err)
+	require.Equal(t, "png", string(got.File.Data))
+
+	_, err = jump.Chat(ctx, transport, "worker", "chat/paths", TerminalRequest{Crew: "ops", Role: "dev", Text: "/tmp/a.png"})
+	require.ErrorContains(t, err, "owner node")
+	_, err = owner.Chat(ctx, transport, "old", "chat/paths", TerminalRequest{Crew: "ops", Role: "dev", Text: "/tmp/a.png"})
+	require.ErrorContains(t, err, "update")
+}

@@ -30,9 +30,20 @@
       const path = String(url).split("?")[0];
       if (path === "/api/terminal/nodes" || path === "/api/terminal/targets") return json([]);
       if (path === "/api/chat") return json(fixture.snapshot());
-      if (path === "/api/chat/upload") { const b = JSON.parse(options.body); await later(900); fixture.uploads.push(b.upload.name); return json({uploaded: {id: b.upload.id, name: b.upload.name, size: 3}}); }
       if (path === "/api/chat/send") { const b = JSON.parse(options.body); await later(600); fixture.sends.push(b); fixture.messages.push({id: "web:" + b.id, role: "user", text: b.text, at: new Date().toISOString(), attachments: [{id: b.files[0], name: "shot.png", size: 3}]}); return json(fixture.snapshot()); }
       return json("not in this fixture", 404);
+    };
+    // The upload goes by XMLHttpRequest (for its progress): 40 % at 300 ms, all at 700 ms, taken at 900 ms.
+    window.XMLHttpRequest = class {
+      constructor() { this.upload = {}; this.status = 0; }
+      open(method, url) { this.url = url; }
+      setRequestHeader() {}
+      send(body) {
+        const b = JSON.parse(body), ev = (loaded) => ({lengthComputable: true, loaded, total: 10});
+        setTimeout(() => this.upload.onprogress?.(ev(4)), 300);
+        setTimeout(() => this.upload.onprogress?.(ev(10)), 700);
+        setTimeout(() => { fixture.uploads.push(b.upload.name); this.status = 200; this.responseText = JSON.stringify({uploaded: {id: b.upload.id, name: b.upload.name, size: 3}}); this.onload(); }, 900);
+      }
     };
   <\/script>`;
   fixture.snapshot = () => ({presentation_version: 1, attachments_supported: true, retry_window_seconds: 604800, role: "dev", runtime: "claude",
@@ -52,7 +63,11 @@
     await wait("Send to be ready", () => !$("#send-message").disabled);
     // Every state the owner's bubble says, in order, until the role has the message.
     const said = [];
-    const watch = setInterval(() => { const t = $(".chat-message.user .message-state")?.textContent || ""; if (t && said[said.length - 1] !== t) said.push(t); }, 10);
+    const bars = [];
+    const watch = setInterval(() => {
+      const t = $(".chat-message.user .message-state")?.textContent || ""; if (t && said[said.length - 1] !== t) said.push(t);
+      const tile = $(".chat-message.user .fimg.going"); if (tile) { const p = tile.style.getPropertyValue("--p"); if (bars[bars.length - 1] !== p) bars.push(p); }
+    }, 10);
     $("#send-message").click();
     await wait("the role to have it", () => fixture.sends.length === 1, 20000);
     await wait("the outbox to let it go", () => !$(".chat-message.user .message-state") || !/Uploading|Sending|waiting/.test($(".chat-message.user .message-state").textContent), 20000);
@@ -62,6 +77,9 @@
     assert(said.includes("Uploading shot.png…"), "the bubble says the file goes up: " + said.join(" / "));
     assert(said.includes("Sending…"), "then that the message goes: " + said.join(" / "));
     assert(said.indexOf("Uploading shot.png…") < said.lastIndexOf("Sending…"), "in that order");
+    assert(bars.includes("0.4"), "the tile's bar shows the upload's progress: " + bars.join(" / "));
+    assert(!$(".chat-message.user .fimg.going"), "the tile is whole once the role has it");
+    assert(!/bytes/.test($(".chat-message.user").textContent), "no bytes under the message");
     assert(!$("#composer-status").textContent, "no line says delivery waits for a connection: " + $("#composer-status").textContent);
     window.chatSendResults = {passed: true, results};
   } catch (e) {

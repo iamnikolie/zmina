@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Chat attachments regression fixtures</title>
+<style>iframe { height: 760px; border: 1px solid #888; } .phone { width: 390px; } .desk { width: 1280px; }</style>
+<pre id="result">Checking attachments…</pre>
+<script>
+// The real chat page in a frame whose fetch answers for a role that names its files by path and an owner who sent
+// files (D-16): a part of the message that is only paths becomes a gallery, a path in a sentence its file name with
+// its preview under, a pdf a chip, a path the node does not show stays text; the owner's files sit above his bubble;
+// a tap opens the viewer, the arrows walk the message's images, Esc gives the focus back.
+(async () => {
+  const results = [];
+  const show = () => { document.getElementById("result").textContent = "running: " + results.join(" / "); };
+  const assert = (condition, name) => { if (!condition) throw new Error(name); results.push(name); show(); };
+  const wait = async (what, test, ms = 6000) => {
+    const end = Date.now() + ms;
+    while (Date.now() < end) { const value = test(); if (value) return value; await new Promise(r => setTimeout(r, 25)); }
+    throw new Error("timed out: " + what);
+  };
+  // A real PNG (a canvas's), so the browser draws it.
+  const canvas = Object.assign(document.createElement("canvas"), {width: 64, height: 40});
+  canvas.getContext("2d").fillStyle = "#4fd1c5"; canvas.getContext("2d").fillRect(0, 0, 64, 40);
+  const png = await new Promise(r => canvas.toBlob(r, "image/png"));
+  const dir = "/tmp/claude-1/acme/scratchpad";
+  const files = {[dir + "/a.png"]: 1, [dir + "/b.png"]: 1, [dir + "/c.png"]: 1, [dir + "/d.png"]: 1, [dir + "/report.pdf"]: 1};
+  const now = new Date().toISOString();
+  const role = [
+    "Shots (wide, working, phone):",
+    "",
+    "- " + dir + "/a.png",
+    "- " + dir + "/b.png",
+    "- " + dir + "/c.png",
+    "",
+    "The header is in " + dir + "/d.png and the sheet in `" + dir + "/report.pdf`. Not there: " + dir + "/none.png.",
+  ].join("\n");
+  const messages = [
+    {id: "m1", role: "assistant", text: role, at: now},
+    {id: "web:1", role: "user", text: "Here, look", at: now, state: "accepted", attachments: [
+      {id: "11111111-1111-1111-1111-111111111111", name: "IMG_1.png", size: 429167, type: "image/png"},
+      {id: "22222222-2222-2222-2222-222222222222", name: "sheet.pdf", size: 412000, type: "application/pdf"}]},
+    {id: "web:2", role: "user", text: "", at: now, state: "accepted", attachments: [
+      {id: "33333333-3333-3333-3333-333333333333", name: "IMG_2.png", size: 1200000, type: "image/png"}]},
+  ];
+
+  async function open(cls, crew) {
+    const fixture = {asked: [], files: 0, png};
+    const frame = document.createElement("iframe");
+    frame.className = cls;
+    document.body.append(frame);
+    frame.contentWindow.fixture = fixture;
+    const page = await (await fetch("../static/chat.html", {cache: "no-store"})).text();
+    const stub = `<base href="../static/"><script>
+      history.replaceState(null, "", location.pathname + "?crew=${crew}&role=dev");
+      window.fetch = async (url, options = {}) => {
+        const json = (body, status = 200) => new Response(typeof body === "string" ? body : JSON.stringify(body), {status, headers: {"Content-Type": "application/json"}});
+        const [path, query] = String(url).split("?");
+        if (path === "/api/terminal/nodes" || path === "/api/terminal/targets") return json([]);
+        if (path === "/api/chat") return json(fixture.snapshot());
+        if (path === "/api/items") return json({items: {}});
+        if (path === "/api/chat/paths") { const b = JSON.parse(options.body); fixture.asked.push(...b.paths); return json({paths: b.paths.filter(p => fixture.known[p]).map(p => ({path: p, name: p.split("/").pop(), size: 12000, type: p.endsWith(".pdf") ? "application/pdf" : "image/png"}))}); }
+        return json("not in this fixture", 404);
+      };
+    <\/script>`;
+    fixture.known = files;
+    fixture.snapshot = () => ({presentation_version: 1, attachments_supported: true, retry_window_seconds: 604800, role: "dev", runtime: "claude",
+      state: "up", status: "idle", session: "session-1", messages, pending: []});
+    const doc = frame.contentDocument;
+    doc.open(); doc.write(page.replace("<head>", "<head>" + stub)); doc.close();
+    const $ = (sel) => frame.contentDocument.querySelector(sel), $$ = (sel) => [...frame.contentDocument.querySelectorAll(sel)];
+    await wait("the gallery", () => $(".fgal .fgrid"));
+    return {frame, fixture, $, $$};
+  }
+
+  try {
+    for (const cls of ["phone", "desk"]) {
+      const {fixture, $, $$} = await open(cls, "files-" + cls);
+      const body = $(".chat-message.assistant .message-body");
+      // r2: the list of paths is the gallery in its place.
+      assert(!body.querySelector("ul"), cls + ": a list that is only paths is gone");
+      const grid = body.querySelector(".fgrid:not(.one)");
+      assert(grid && [...grid.querySelectorAll("figcaption")].map(f => f.textContent).join() === "a.png,b.png,c.png", cls + ": three tiles, each with its name");
+      assert(grid.previousElementSibling === null && grid.closest(".fgal").previousElementSibling.textContent.startsWith("Shots"), cls + ": in the list's place");
+      // A path in a sentence: its file name; the preview and the chip under that paragraph.
+      const links = [...body.querySelectorAll(".flink")].map(a => a.textContent + "=" + a.title);
+      assert(links.join() === "d.png=" + dir + "/d.png,report.pdf=" + dir + "/report.pdf", cls + ": paths in a sentence become their names: " + links.join());
+      const under = body.querySelector(".flink").closest("p").nextElementSibling;
+      assert(under.matches(".fgal") && under.querySelector(".fgrid.one figcaption").textContent === "d.png", cls + ": the image's preview under its paragraph");
+      assert(under.querySelector(".fchip .fchip-sub").textContent === "PDF · 12 KB", cls + ": the pdf a chip, its size in KB");
+      assert(body.textContent.includes(dir + "/none.png"), cls + ": a path the node does not show stays text");
+      assert(fixture.asked.includes(dir + "/none.png"), cls + ": and was asked about");
+      // o1–o2: the owner's files above his bubble; an image-only message has no bubble.
+      const [mine, onlyImage] = $$(".chat-message.user");
+      const filesBox = mine.querySelector(".message-files"), bubble = mine.querySelector(".message-body");
+      assert(filesBox.getBoundingClientRect().bottom <= bubble.getBoundingClientRect().top + 1, cls + ": his files sit above his bubble");
+      assert(filesBox.querySelector(".fimgs.one img") && filesBox.querySelector(".fchip .fchip-sub").textContent === "PDF · 412 KB", cls + ": one image, then the pdf chip, never bytes");
+      assert(!/bytes/.test(mine.textContent), cls + ": no bytes anywhere");
+      assert(getComputedStyle(onlyImage.querySelector(".message-body")).display === "none", cls + ": an image-only message has no bubble");
+      // v1: the viewer over the message's images.
+      const tile = grid.querySelector(".fshot");
+      tile.focus(); tile.click();
+      const viewer = await wait("the viewer", () => $(".fview"));
+      assert(viewer.getAttribute("aria-modal") === "true", cls + ": a modal dialog");
+      assert($(".fv-title b").textContent === "a.png" && $(".fv-title span").textContent === "1 of 4", cls + ": the image's name and its place: " + $(".fv-title").textContent);
+      assert($(".fv-path").textContent === dir + "/a.png", cls + ": its full path under it");
+      viewer.ownerDocument.dispatchEvent(new KeyboardEvent("keydown", {key: "ArrowRight", bubbles: true}));
+      assert($(".fv-title b").textContent === "b.png" && $(".fv-title span").textContent === "2 of 4", cls + ": the arrow goes to the next");
+      if (cls === "phone") assert($$(".fv-dots i").length === 4 && !$(".fv-prev"), cls + ": dots, no arrows");
+      else assert($(".fv-prev") && $(".fv-open").href.includes("/api/chat/rolefile") && !$(".fv-dots"), cls + ": arrows and Open original");
+      viewer.ownerDocument.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape", bubbles: true}));
+      assert(!$(".fview"), cls + ": Esc closes it");
+      assert(viewer.ownerDocument.activeElement === tile, cls + ": the focus is back on the tile");
+    }
+    window.chatFilesResults = {passed: true, results};
+  } catch (e) {
+    window.chatFilesResults = {passed: false, results, error: e.message};
+  }
+  document.getElementById("result").textContent = JSON.stringify(window.chatFilesResults, null, 2);
+})();
+</script>

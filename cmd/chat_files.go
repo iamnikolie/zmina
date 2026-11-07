@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -96,11 +94,7 @@ func (a *app) uiChatFiles(mux *http.ServeMux) {
 			http.Error(w, "attachment unavailable on this node", http.StatusBadGateway)
 			return
 		}
-		w.Header().Set("Content-Type", "application/octet-stream")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": snapshot.File.Name}))
-		w.Header().Set("Cache-Control", "private, no-store")
-		w.Header().Set("Content-Length", fmt.Sprint(len(snapshot.File.Data)))
-		_, _ = w.Write(snapshot.File.Data)
+		// ?inline=1: a thumbnail or the viewer — inline only when its first bytes are an image or a pdf.
+		serveFile(w, snapshot.File, q.Get("inline") != "")
 	})
 }
