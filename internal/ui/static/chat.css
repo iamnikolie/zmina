@@ -446,11 +446,12 @@ html.chat-document { height: 100%; overflow: hidden; }
 .chat-message.looked .message-head, .chat-message.looked .message-meta, .chat-message.looked .message-files, .chat-message.looked .message-state { display: none; }
 #messages .lk-label { position: relative; display: inline-flex; align-items: center; gap: 6px; min-height: 0; height: 16px; margin: 0; padding: 0; border: 0;
   background: none; color: var(--muted); font: 12px/16px var(--sans); cursor: pointer; }
-#messages .lk-label::after { content: ""; position: absolute; inset: -14px -8px; }
+#messages button.lk-label::after { content: ""; position: absolute; inset: -14px -8px; }
+#messages .lk-label.plain { cursor: default; }
 #messages .lk-label svg { display: block; fill: none; stroke-linecap: round; stroke-linejoin: round; }
 #messages .lk-eye svg { width: 14px; height: 14px; stroke: var(--faint); stroke-width: 1.8; }
 #messages .lk-chev svg { width: 12px; height: 12px; stroke: var(--faint); stroke-width: 1.5; transition: transform 120ms var(--ease); }
-#messages .lk-label[aria-expanded="true"] .lk-chev svg { transform: rotate(180deg); }
+#messages .lk-label[aria-expanded="true"] .lk-chev svg { transform: rotate(90deg); }
 #messages .lk-tiles { display: flex; flex-wrap: nowrap; gap: 4px; margin-top: 6px; overflow: hidden; }
 #messages .lk-tiles.open { flex-wrap: wrap; }
 #messages .lk-tile { position: relative; flex: none; width: 56px; height: 56px; min-height: 0; margin: 0; padding: 0; box-sizing: border-box;
@@ -458,10 +459,11 @@ html.chat-document { height: 100%; overflow: hidden; }
 #messages .lk-tile:hover, #messages .lk-tile:active, #messages .lk-label:hover, #messages .lk-label:active { transform: none; }
 #messages .lk-label:hover { background: none; color: var(--ink2); }
 #messages .lk-tile:hover { background: var(--panel2); }
-#messages .lk-tile img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top; }
+#messages .lk-tile img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top; opacity: .75; transition: opacity 120ms var(--ease); }
+#messages .lk-tile:hover img, #messages .lk-tile:focus-visible img { opacity: 1; }
 #messages .lk-tile .fmore { font: 600 13px var(--sans); }
 #messages .lk-tile.lk-new img { animation: lk-in 160ms var(--ease) both; }
-@keyframes lk-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes lk-in { from { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { #messages .lk-tile.lk-new img { animation: none; } }
 /* v1 · the viewer: the phone full screen black, the desktop a lightbox the chat does not read through. */
 .fview { position: fixed; inset: 0; z-index: 60; display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; background: #000; color: #eceef0; }
@@ -488,7 +490,6 @@ html.chat-document { height: 100%; overflow: hidden; }
 .fv-pathrow { display: flex; align-items: center; gap: 2px; max-width: 100%; }
 .fv-pathrow[hidden] { display: none; }
 .fv-path { min-width: 0; overflow-wrap: anywhere; background: none; font: 12px/1.4 var(--mono); color: #a1a8af; }
-.fv-copy { position: relative; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; padding: 0; color: #a1a8af !important; }
-.fv-copy::after { content: ""; position: absolute; inset: -6px; }
-.fv-copy svg { width: 15px; height: 15px; }
+.fview .fv-copy { flex: none; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; padding: 0; color: #a1a8af; }
+.fview .fv-copy svg { width: 15px; height: 15px; stroke-width: 1.6; }
 .fv-open { font: 500 13px var(--sans); color: #c3c8cd; }

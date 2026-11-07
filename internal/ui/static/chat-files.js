@@ -251,27 +251,38 @@
   }
 
   // ---- the images a role looked at (D-20) ----
-  // One strip per turn: «Looked at N images» (a button: it opens the strip), then 56 px tiles in read order, five at
-  // most closed — the fifth «+N» — all of them wrapped open. Tiles are thumbnails of the image as the role saw it; a
-  // tile keeps its element while the strip grows, and one that comes after the first draw fades in.
+  // One strip per turn: «Looked at N images», then 56 px tiles in read order, five at most closed — the fifth «+N» —
+  // all of them wrapped open. Over five the label is the button that opens it (› closed, ⌄ open); up to five it is
+  // plain text (l5). Tiles are thumbnails of the image as the role saw it, resting at .75 (l4); a tile keeps its
+  // element while the strip grows, and one that comes after the first draw fades in.
   const EYE = '<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>';
   const lookedURL = (dest, key, thumb) => "/api/chat/looked?" + new URLSearchParams({node: dest.node || "", crew: dest.crew, role: dest.role, key, ...(thumb ? {thumb: "1"} : {})});
   function looked(body, row, dest, owner) {
     let s = body._looked;
     if (!s) {
-      s = {label: el("button", "lk-label"), words: el("span", "lk-words"), tiles: el("div", "lk-tiles"), map: new Map(), drawn: false, list: []};
-      s.label.type = "button";
-      const eye = el("span", "lk-eye"), chev = el("span", "lk-chev");
-      eye.innerHTML = svg(EYE);
-      chev.innerHTML = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5"/></svg>';
-      s.label.append(eye, s.words, chev);
-      s.label.addEventListener("click", () => { owner._lookOpen = !owner._lookOpen; looked(body, owner._lookRow, dest, owner); });
-      body.replaceChildren(s.label, s.tiles);
+      s = {label: null, words: el("span", "lk-words"), tiles: el("div", "lk-tiles"), map: new Map(), drawn: false, list: []};
+      body.replaceChildren(s.tiles);
       body._looked = s;
     }
     owner._lookRow = row;
-    const imgs = row.looked || [], n = imgs.length, open = Boolean(owner._lookOpen);
-    s.label.setAttribute("aria-expanded", String(open));
+    const imgs = row.looked || [], n = imgs.length, many = n > 5;
+    if (!many) owner._lookOpen = false;
+    const open = Boolean(owner._lookOpen);
+    if (!s.label || s.many !== many) {
+      const label = el(many ? "button" : "p", "lk-label" + (many ? "" : " plain")), eye = el("span", "lk-eye");
+      eye.innerHTML = svg(EYE);
+      label.append(eye, s.words);
+      if (many) {
+        label.type = "button";
+        const chev = el("span", "lk-chev");
+        chev.innerHTML = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4.5 3 7.5 6 4.5 9"/></svg>';
+        label.append(chev);
+        label.addEventListener("click", () => { owner._lookOpen = !owner._lookOpen; looked(body, owner._lookRow, dest, owner); });
+      }
+      s.label ? s.label.replaceWith(label) : body.prepend(label);
+      s.label = label; s.many = many;
+    }
+    if (many) s.label.setAttribute("aria-expanded", String(open));
     s.words.textContent = "Looked at " + (n === 1 ? "1 image" : n + " images");
     s.tiles.classList.toggle("open", open);
     s.list = imgs.map((im) => ({name: im.name, src: lookedURL(dest, im.key, false), open: lookedURL(dest, im.key, false), path: im.path, looked: true}));

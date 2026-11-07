@@ -28,6 +28,7 @@
   };
   const images = {};
   for (let i = 0; i < 30; i++) images["k" + i] = await shot(i, i % 3 ? 280 : 420, i % 3 ? 360 : 240);
+  images.k9 = await shot(9, 1600, 1000); // a real desktop screenshot's size: the viewer fills 92vw × 85vh with it
   const strip = (id, from, n, at) => ({id: "looked:" + id, role: "looked", text: "", at, looked: Array.from({length: n}, (_, j) =>
     ({key: "k" + (from + j), path: "/tmp/claude-1/acme/scratchpad/shot-" + (from + j + 1) + ".png", name: "shot-" + (from + j + 1) + ".png", type: "image/png"}))});
   const t = (m) => new Date(Date.now() - m * 60000).toISOString();
@@ -97,7 +98,11 @@
       const box = last.getBoundingClientRect();
       assert(Math.round(box.width) === 56 && Math.round(box.height) === 56, cls + ": 56 px tiles");
       const label = fourteen.querySelector(".lk-label");
-      assert(label.getAttribute("aria-expanded") === "false", cls + ": closed by default");
+      assert(label.tagName === "BUTTON" && label.getAttribute("aria-expanded") === "false", cls + ": over five the label is a button, closed by default");
+      const five = strips[1].querySelector(".lk-label");
+      assert(five.tagName === "P" && !five.querySelector(".lk-chev") && five.textContent === "Looked at 5 images", cls + ": up to five it is plain text, no chevron (l5)");
+      const tileImg = last.querySelector("img");
+      assert(getComputedStyle(tileImg).opacity === "0.75" || tileImg.getAnimations().length > 0, cls + ": tiles rest at .75 (l4)");
       // Spacing: 12 px under the message before, 16 px over the reply.
       const gap = (a, b) => Math.round(b.getBoundingClientRect().top - a.getBoundingClientRect().bottom);
       assert(gap(fourteen.previousElementSibling, fourteen) === 12, cls + ": 12 px under the message before: " + gap(fourteen.previousElementSibling, fourteen));
@@ -115,6 +120,11 @@
       await wait("the viewer", () => $(".fview"));
       assert($(".fv-title b").textContent === "shot-10.png" && $(".fv-title span").textContent === "Looked at · 3 of 14", cls + ": name, then «Looked at · 3 of 14»: " + $(".fv-title").textContent);
       assert($(".fv-path").textContent === "/tmp/claude-1/acme/scratchpad/shot-10.png", cls + ": its path with Copy");
+      const copy = $(".fv-copy").getBoundingClientRect(), icon = $(".fv-copy svg").getBoundingClientRect();
+      assert(Math.round(copy.width) === 44 && Math.round(copy.height) === 44 && Math.round(icon.width) === 15, cls + ": Copy a 15 px icon in a 44 px hit (v2): " + Math.round(copy.width) + "/" + Math.round(icon.width));
+      await wait("the image drawn", () => $(".fv-img").naturalWidth === 1600);
+      const big = $(".fv-img").getBoundingClientRect(), view = frame.contentWindow;
+      assert(cls === "phone" ? Math.round(big.width) === view.innerWidth : big.width > 0.85 * view.innerWidth || big.height > 0.8 * view.innerHeight, cls + ": a 1600 px shot fills the viewer: " + Math.round(big.width) + "×" + Math.round(big.height));
       assert(third.getAttribute("aria-label") === "Looked at shot-10.png, 3 of 14", cls + ": the tile's label");
       frame.contentDocument.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape", bubbles: true}));
       assert(!$(".fview") && frame.contentDocument.activeElement === third, cls + ": Esc closes, focus back on the tile");
@@ -128,6 +138,10 @@
       assert(after[0] === before[0] && after[1] === before[1], cls + ": its tiles are the same elements");
       assert(after[2].classList.contains("lk-new") && !after[0].classList.contains("lk-new"), cls + ": the new one fades in");
       assert(live.querySelector(".lk-words").textContent === "Looked at 3 images", cls + ": the count follows");
+      fixture.live = 7;
+      await wait("past five the label turns into the button", () => live.querySelector("button.lk-label .lk-chev"), 8000);
+      assert(live.querySelectorAll(".lk-tile").length === 5 && live.querySelector(".fmore").textContent === "+3", cls + ": seven: five tiles, +3");
+      assert(after[0] === live.querySelectorAll(".lk-tile")[0], cls + ": the tiles still the same elements");
       live.scrollIntoView({block: "end"});
     }
     window.chatLookedResults = {passed: true, results};
