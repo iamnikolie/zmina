@@ -134,7 +134,10 @@ func TestChatMessagesShowsSendUserFile(t *testing.T) {
 	require.Equal(t, "Sent.", messages[1].Text)
 	sent, err := reg.SentFiles("session")
 	require.NoError(t, err)
-	require.Equal(t, []string{"/tmp/s/report.pdf"}, sent, "the delivered file, not the one whose send failed")
+	require.Equal(t, []SentFile{{Path: "/tmp/s/report.pdf", Size: 376712, At: messages[0].At}}, sent, "the delivered file, not the one whose send failed")
+	again, err := reg.SentFiles("session")
+	require.NoError(t, err)
+	require.Equal(t, sent, again, "from the cache while the transcript stays")
 }
 
 // The end Claude Code may still replace is provisional: a slash command as typed, a command's line before its output.

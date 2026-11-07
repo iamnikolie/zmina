@@ -11,11 +11,13 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/iamnikolie/zmina/internal/chat"
+	"github.com/iamnikolie/zmina/internal/registry"
 )
 
 var (
@@ -72,31 +74,64 @@ func TestRoleFileServesOnlyItsRoots(t *testing.T) {
 	}
 }
 
-// A file the role handed the owner with SendUserFile is served wherever it is, by the path it sent, with every other
-// check as before: a regular image or pdf by its first bytes, at most 8 MiB.
+// A file the role handed the owner with SendUserFile is served wherever it is, by the path it sent, while it is that
+// very file: no link anywhere on the path, the size sent, not written since the send; every other check as before.
 func TestRoleFileServesWhatTheRoleSent(t *testing.T) {
-	root, outside := t.TempDir(), t.TempDir()
+	root, outside, elsewhere := t.TempDir(), mustReal(t, t.TempDir()), mustReal(t, t.TempDir())
 	roots := []string{mustReal(t, root)}
-	doc := filepath.Join(outside, "out", "report.pdf")
-	require.NoError(t, os.MkdirAll(filepath.Dir(doc), 0o700))
-	require.NoError(t, os.WriteFile(doc, pdfBytes, 0o600))
-	fake := filepath.Join(outside, "fake.pdf")
-	require.NoError(t, os.WriteFile(fake, []byte("<html>"), 0o600))
-	other := filepath.Join(outside, "other.pdf")
-	require.NoError(t, os.WriteFile(other, pdfBytes, 0o600))
-	sent := map[string]bool{doc: true, fake: true}
+	write := func(p string, data []byte) string {
+		require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o700))
+		require.NoError(t, os.WriteFile(p, data, 0o600))
 
-	f, info, err := roleFile(doc, roots, sent)
+		return p
+	}
+	sentAt := time.Now().Add(time.Minute)
+	send := func(paths ...string) map[string]registry.SentFile {
+		out := map[string]registry.SentFile{}
+		for _, p := range paths {
+			st, err := os.Lstat(p)
+			size := int64(len(pdfBytes))
+			if err == nil && st.Mode().IsRegular() {
+				size = st.Size()
+			}
+			out[p] = registry.SentFile{Path: p, Size: size, At: sentAt}
+		}
+
+		return out
+	}
+
+	doc := write(filepath.Join(outside, "out", "report.pdf"), pdfBytes)
+	f, info, err := roleFile(doc, roots, send(doc))
 	require.NoError(t, err)
 	_ = f.Close()
 	assert.Equal(t, "report.pdf", info.Name)
 
-	_, _, err = roleFile(fake, roots, sent)
-	require.Error(t, err, "sent, but not a pdf by its bytes")
-	_, _, err = roleFile(other, roots, sent)
-	require.Error(t, err, "next to a sent file, not sent")
-	_, _, err = roleFile(doc, roots, nil)
-	require.Error(t, err, "outside the roots and not sent")
+	private := write(filepath.Join(elsewhere, "private.pdf"), pdfBytes)
+	last := filepath.Join(outside, "swapped.pdf")
+	require.NoError(t, os.Symlink(private, last))
+	write(filepath.Join(elsewhere, "dir", "report.pdf"), pdfBytes)
+	parent := filepath.Join(outside, "linked")
+	require.NoError(t, os.Symlink(filepath.Join(elsewhere, "dir"), parent))
+	fake := write(filepath.Join(outside, "fake.pdf"), []byte("<html>"))
+	rewritten := write(filepath.Join(outside, "rewritten.pdf"), pdfBytes)
+	resized := write(filepath.Join(outside, "resized.pdf"), pdfBytes)
+
+	for name, c := range map[string]struct {
+		path string
+		sent map[string]registry.SentFile
+	}{
+		"sent, but not a pdf by its bytes": {fake, send(fake)},
+		"next to a sent file, not sent":    {write(filepath.Join(outside, "other.pdf"), pdfBytes), send(doc)},
+		"outside the roots and not sent":   {doc, nil},
+		"the sent file is now a link":      {last, send(last)},
+		"a directory above is now a link":  {filepath.Join(parent, "report.pdf"), send(filepath.Join(parent, "report.pdf"))},
+		"written since the send":           {rewritten, map[string]registry.SentFile{rewritten: {Path: rewritten, Size: int64(len(pdfBytes)), At: time.Now().Add(-time.Hour)}}},
+		"another size than sent":           {resized, map[string]registry.SentFile{resized: {Path: resized, Size: 1, At: sentAt}}},
+		"sent with no size recorded":       {doc, map[string]registry.SentFile{doc: {Path: doc, At: sentAt}}},
+	} {
+		_, _, err := roleFile(c.path, roots, c.sent)
+		require.Error(t, err, name)
+	}
 }
 
 func mustReal(t *testing.T, p string) string {

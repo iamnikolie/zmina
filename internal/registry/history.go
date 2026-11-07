@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/iamnikolie/zmina/internal/chat"
 )
@@ -69,24 +71,65 @@ func (r *Registry) records(sessionID string) ([][]byte, error) {
 	return records, nil
 }
 
-// SentFiles are the paths the session handed the owner with SendUserFile, in the part of its transcript Chat reads:
-// the files its Chat messages name as sent.
-func (r *Registry) SentFiles(sessionID string) ([]string, error) {
+// SentFile is a file a session handed the owner with SendUserFile: its path as sent, its size as Claude Code read it
+// (0 when it recorded none) and when the send was recorded.
+type SentFile struct {
+	Path string
+	Size int64
+	At   time.Time
+}
+
+// sentCache keeps each transcript's sent files while the transcript stays as it was: Chat asks for them on every
+// lookup of a role's paths and every file it serves.
+var sentCache = struct {
+	sync.Mutex
+	by map[string]sentEntry
+}{by: map[string]sentEntry{}}
+
+type sentEntry struct {
+	size  int64
+	mtime time.Time
+	files []SentFile
+}
+
+// SentFiles are the files the session handed the owner with SendUserFile, in the part of its transcript Chat reads:
+// the files its Chat messages name as sent, oldest first.
+func (r *Registry) SentFiles(sessionID string) ([]SentFile, error) {
+	path := r.transcript(sessionID)
+	if path == "" {
+		return nil, nil
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	sentCache.Lock()
+	hit, ok := sentCache.by[path]
+	sentCache.Unlock()
+	if ok && hit.size == st.Size() && hit.mtime.Equal(st.ModTime()) {
+		return hit.files, nil
+	}
 	records, err := r.records(sessionID)
 	if err != nil {
 		return nil, err
 	}
-	var out []string
+	var out []SentFile
 	sends := map[string]sentFiles{}
 	for _, record := range records {
 		var l line
 		if json.Unmarshal(record, &l) != nil || l.Sidechain || (l.Type != "user" && l.Type != "assistant") {
 			continue
 		}
-		if _, paths, ok := sentFile(&l, sends); ok {
-			out = append(out, paths...)
+		if _, files, ok := sentFile(&l, sends); ok {
+			out = append(out, files...)
 		}
 	}
+	sentCache.Lock()
+	if len(sentCache.by) > 64 {
+		clear(sentCache.by)
+	}
+	sentCache.by[path] = sentEntry{size: st.Size(), mtime: st.ModTime(), files: out}
+	sentCache.Unlock()
 	return out, nil
 }
 
@@ -199,7 +242,7 @@ type sentFiles struct {
 // caption, then the files' paths as a block of their own, which Chat shows as the role's files (D-16) — paths are
 // those files. A call is remembered from the role's line (ok false), and becomes a message on the line of its result,
 // unless that result is an error.
-func sentFile(l *line, sends map[string]sentFiles) (chat.Message, []string, bool) {
+func sentFile(l *line, sends map[string]sentFiles) (chat.Message, []SentFile, bool) {
 	var blocks []struct {
 		Type      string          `json:"type"`
 		ID        string          `json:"id"`
@@ -228,16 +271,18 @@ func sentFile(l *line, sends map[string]sentFiles) (chat.Message, []string, bool
 			var result struct {
 				Attachments []struct {
 					Path string `json:"path"`
+					Size int64  `json:"size"`
 				} `json:"attachments"`
 				Caption string `json:"caption"`
 			}
-			files := call.Files
+			var files []SentFile
+			for _, f := range call.Files {
+				files = append(files, SentFile{Path: f})
+			}
 			if json.Unmarshal(l.ToolResult, &result) == nil && len(result.Attachments) > 0 {
 				files = nil
 				for _, a := range result.Attachments {
-					if a.Path != "" {
-						files = append(files, a.Path)
-					}
+					files = append(files, SentFile{Path: a.Path, Size: a.Size})
 				}
 			}
 			caption := strings.TrimSpace(call.Caption)
@@ -245,9 +290,12 @@ func sentFile(l *line, sends map[string]sentFiles) (chat.Message, []string, bool
 				caption = strings.TrimSpace(result.Caption)
 			}
 			var paths []string
+			var sent []SentFile
 			for _, f := range files {
-				if f = strings.TrimSpace(f); f != "" && !strings.ContainsAny(f, "`\n") {
-					paths = append(paths, f)
+				if f.Path = strings.TrimSpace(f.Path); f.Path != "" && !strings.ContainsAny(f.Path, "`\n") {
+					f.At = l.Timestamp
+					paths = append(paths, f.Path)
+					sent = append(sent, f)
 				}
 			}
 			if len(paths) == 0 {
@@ -261,7 +309,7 @@ func sentFile(l *line, sends map[string]sentFiles) (chat.Message, []string, bool
 			if id == "" {
 				id = chat.Hash(b.ToolUseID)
 			}
-			return chat.Message{ID: id, Role: "assistant", Text: text, At: l.Timestamp}, paths, true
+			return chat.Message{ID: id, Role: "assistant", Text: text, At: l.Timestamp}, sent, true
 		}
 	}
 	return chat.Message{}, nil, false

@@ -24,8 +24,9 @@ import (
 // A role's files in Chat (design D-16 r1): a path a role names in its message shows as a preview or a chip when the
 // file is one zmina may serve — an image (png, jpeg, gif, webp) or a pdf, by its first bytes and its extension, at most
 // chat.MaxFileBytes, under the role's dir, a worktree of one of its tasks, or the system temp dir (where sessions keep
-// their scratchpads) — or a file the role's session handed the owner with SendUserFile, wherever it is: Claude Code
-// delivered those very bytes to the owner already. Any other path stays text: the page never learns whether it exists.
+// their scratchpads) — or a file the role's session handed the owner with SendUserFile, wherever it is, while it is
+// that very file: Claude Code delivered those bytes to the owner already. Any other path stays text: the page never
+// learns whether it exists.
 
 // rolePathsMax bounds one lookup; rolePathMax one path.
 const (
@@ -91,8 +92,9 @@ func roleRoots(s *shift.Shift, role string) ([]string, error) {
 	return roots, nil
 }
 
-// roleSent are the paths the role's conversation (its current one, else its last) handed the owner with SendUserFile.
-func roleSent(s *shift.Shift, role string) map[string]bool {
+// roleSent are the files the role's conversation (its current one, else its last) handed the owner with SendUserFile,
+// by their path as sent; the latest send of a path stands.
+func roleSent(s *shift.Shift, role string) map[string]registry.SentFile {
 	r, err := s.Role(role)
 	if err != nil || r.IsCodex() {
 		return nil
@@ -117,9 +119,9 @@ func roleSent(s *shift.Shift, role string) map[string]bool {
 		return nil
 	}
 
-	sent := map[string]bool{}
+	sent := map[string]registry.SentFile{}
 	for _, p := range paths {
-		sent[filepath.Clean(p)] = true
+		sent[filepath.Clean(p.Path)] = p
 	}
 
 	return sent
@@ -135,9 +137,10 @@ func within(path, root string) bool {
 }
 
 // roleFile opens a path a role named when zmina may serve it: absolute (or ~/…), a regular file under one of roots
-// after its symlinks are resolved or one the role sent (sent, by its path as sent), a kind of fileKinds by its
-// extension and its first bytes, at most MaxFileBytes. The caller closes the file.
-func roleFile(path string, roots []string, sent map[string]bool) (*os.File, chat.PathInfo, error) {
+// after its symlinks are resolved, or one the role sent (sent, by its path as sent) while it is that file — a path
+// with no link anywhere on it, of the size sent and not written since the send — a kind of fileKinds by its extension
+// and its first bytes, at most MaxFileBytes. The caller closes the file.
+func roleFile(path string, roots []string, sent map[string]registry.SentFile) (*os.File, chat.PathInfo, error) {
 	refuse := errors.New("not a file this conversation shows")
 
 	if strings.HasPrefix(path, "~/") {
@@ -163,7 +166,7 @@ func roleFile(path string, roots []string, sent map[string]bool) (*os.File, chat
 		return nil, chat.PathInfo{}, refuse
 	}
 
-	inside := sent[filepath.Clean(path)]
+	inside := false
 
 	for _, root := range roots {
 		if within(real, root) {
@@ -173,7 +176,14 @@ func roleFile(path string, roots []string, sent map[string]bool) (*os.File, chat
 		}
 	}
 
-	if !inside {
+	// Sent, it is bound to the file as sent, not to its name: a link swapped in since (for the file or a directory
+	// above it) leads elsewhere, and a file of another size or written since is another file.
+	var bound *registry.SentFile
+	if s, ok := sent[filepath.Clean(path)]; ok && !inside && s.Size > 0 && !s.At.IsZero() && real == filepath.Clean(path) {
+		bound = &s
+	}
+
+	if !inside && bound == nil {
 		return nil, chat.PathInfo{}, refuse
 	}
 
@@ -190,7 +200,8 @@ func roleFile(path string, roots []string, sent map[string]bool) (*os.File, chat
 	}
 
 	st, err := f.Stat()
-	if err != nil || !st.Mode().IsRegular() || st.Size() > chat.MaxFileBytes || !os.SameFile(before, st) {
+	if err != nil || !st.Mode().IsRegular() || st.Size() > chat.MaxFileBytes || !os.SameFile(before, st) ||
+		(bound != nil && (st.Size() != bound.Size || st.ModTime().After(bound.At))) {
 		_ = f.Close()
 
 		return nil, chat.PathInfo{}, refuse

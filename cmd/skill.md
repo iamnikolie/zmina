@@ -553,8 +553,9 @@ place (one image in its own shape up to 420 px, more as square tiles three a row
 path in a sentence becomes its file name, linked, with the preview under that paragraph; a PDF is a chip. A file a
 Claude role sends with Claude Code's `SendUserFile` (made for the claude.ai app) is its message in Talk too: the
 caption, then the delivered paths as a block of their own, shown as above. Such a file is served wherever it is (Claude
-Code delivered those bytes to the owner already), by the very path the role's current or last conversation sent, with
-every other check as above; a path a role only names still has to be under the roots, so it copies the file there
+Code delivered those bytes to the owner already), by the very path the role's current or last conversation sent, while
+it is that file — no link anywhere on the path, the size Claude Code recorded, not written since the send — with every
+other check as above; a path a role only names still has to be under the roots, so it copies the file there
 first. Every role hears this at boot (`shift.FilesRule`), so it never says a file is in the chat when it went only to
 Telegram. Images a role reads for itself (Read) are not shown.
 `POST /api/chat/paths` (`node`, `crew`, `role`, up to 64 `paths`) answers which of them the page shows, with name,
