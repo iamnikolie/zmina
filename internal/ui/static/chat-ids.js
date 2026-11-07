@@ -281,8 +281,18 @@
   }
 
   // place puts the popover under its id, above it when it does not fit, inside the window.
+  // anchor finds the open card's id again when the conversation was linked anew under it (the node list came): the
+  // same mention, by its place among the links with the same id; null when it is gone.
+  function anchor() {
+    if (!open) return null;
+    if (open.b.isConnected) return open.b;
+    const same = (x) => x.dataset.id === open.id0 && x.dataset.node === open.dest.node && x.dataset.crew === open.dest.crew;
+    const b = [...document.querySelectorAll(".xid")].filter(same)[open.nth];
+    if (b) { open.b = b; b.classList.add("on"); b.setAttribute("aria-expanded", "true"); }
+    return b || null;
+  }
   function place() {
-    if (!open || open.sheet) return;
+    if (!open || open.sheet || !anchor()) return;
     const r = open.b.getBoundingClientRect(), box = open.box, w = Math.min(360, innerWidth - 16);
     box.style.width = w + "px";
     const left = Math.max(8, Math.min(r.left, innerWidth - w - 8));
@@ -315,7 +325,9 @@
       box.addEventListener("pointerleave", () => { if (!open?.pinned) hideSoon(); });
     }
     document.body.append(box);
-    open = {b, dest, id, pinned: pinned || sheet, box, shade, sheet};
+    // id0 and nth name this mention, so anchor() finds it again after the conversation is linked anew.
+    const nth = [...document.querySelectorAll(".xid")].filter((x) => x.dataset.id === id && x.dataset.node === dest.node && x.dataset.crew === dest.crew).indexOf(b);
+    open = {b, dest, id, id0: id, nth, pinned: pinned || sheet, box, shade, sheet};
     b.classList.add("on");
     b.setAttribute("aria-expanded", "true");
     want(dest, id);
@@ -326,7 +338,7 @@
   function close(back) {
     clearTimeout(showTimer); clearTimeout(hideTimer);
     if (!open) return;
-    const {b, box, shade} = open;
+    const b = anchor() || open.b, {box, shade} = open;
     open = null;
     box.remove(); shade?.remove();
     b.classList.remove("on");
@@ -378,7 +390,7 @@
     document.addEventListener("pointerdown", (e) => {
       if (open && !open.sheet && !open.box.contains(e.target) && e.target !== open.b) close(false);
     });
-    scroller.addEventListener("scroll", () => { if (open && !open.sheet) { if (open.b.isConnected) place(); else close(false); } }, {passive: true});
+    scroller.addEventListener("scroll", () => { if (open && !open.sheet) { if (anchor()) place(); else close(false); } }, {passive: true});
     addEventListener("resize", () => place());
   }
 
