@@ -73,6 +73,37 @@ func TestSSHCommentIsNotAHost(t *testing.T) {
 	}
 }
 
+// A short lowercase host's all-caps spelling is another word: the unit GB is not the host gb.
+func TestSSHHostCapsIsAnotherWord(t *testing.T) {
+	home := writeHome(t, "Host gb\n  HostName localhost\n")
+
+	rules, err := banned(home, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if hits := check(rules, "fixture:1", "sizes in MB under 1 GB, else GB"); len(hits) != 0 {
+		t.Fatalf("the unit taken as the host: %v", hits)
+	}
+
+	for _, line := range []string{"ssh gb", "ssh Gb", "GB and gb", "GB gb"} {
+		if hits := check(rules, "fixture:2", line); len(hits) != 1 {
+			t.Fatalf("%q: host not found: %v", line, hits)
+		}
+	}
+
+	// A longer name is no abbreviation: in capitals it is still the name.
+	home = writeHome(t, "Host review-example\n  HostName localhost\n")
+
+	if rules, err = banned(home, "HEAD"); err != nil {
+		t.Fatal(err)
+	}
+
+	if hits := check(rules, "fixture:3", "ssh REVIEW-EXAMPLE"); len(hits) != 1 {
+		t.Fatalf("a long name in capitals let through: %v", hits)
+	}
+}
+
 // A machine with no crews, no mesh, no ssh config and no denylist bans nothing of its own, and fails nothing.
 func TestNoLocalState(t *testing.T) {
 	home := t.TempDir()
