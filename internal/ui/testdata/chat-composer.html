@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Chat composer regression fixtures</title>
+<style>iframe { height: 760px; border: 1px solid #888; } .phone { width: 390px; } .desk { width: 1280px; }</style>
+<pre id="result">Checking the composer…</pre>
+<script>
+// The real chat page in a frame with a long conversation scrolled up and three picked files (two images, a pdf) on the
+// draft (D-18): the files are tiles in one row above the field (64 px images of themselves, a 176 px tile with
+// «PDF · KB»), each with its ✕ on the corner, 44 px to hit; no clear-draft ✕ in the phone's field; the Latest arrow
+// sits right of the column, 8 px over the composer's top edge, never on the composer, and hides on the phone while the
+// field has the focus. The phone frame carries embed=1: it is a phone when this page is 860 px or narrower (open it
+// inside a 390 px frame for that case; at full width both frames are desktops).
+(async () => {
+  const results = [];
+  const assert = (condition, name) => { if (!condition) throw new Error(name); results.push(name); };
+  const wait = async (what, test, ms = 6000) => {
+    const end = Date.now() + ms;
+    while (Date.now() < end) { const value = test(); if (value) return value; await new Promise(r => setTimeout(r, 25)); }
+    throw new Error("timed out: " + what);
+  };
+  const page = await (await fetch("../static/chat.html", {cache: "no-store"})).text();
+  const now = new Date().toISOString();
+  const messages = Array.from({length: 30}, (_, i) => ({id: "m" + i, role: i % 3 ? "assistant" : "user",
+    text: "A line of the conversation, long enough to fill the column and push the newest reply below the fold, number " + i + ".", at: now}));
+  // A real 2 × 2 PNG, so the tile draws a picture.
+  const png = Uint8Array.from(atob("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVQI12P8z8DAwMDAxMDAwMDAAAANHQEDasKb6QAAAABJRU5ErkJggg=="), c => c.charCodeAt(0));
+
+  async function open(cls, crew) {
+    const frame = document.createElement("iframe");
+    frame.className = cls;
+    document.body.append(frame);
+    const fixture = {};
+    frame.contentWindow.fixture = fixture;
+    const stub = `<base href="../static/"><script>
+      history.replaceState(null, "", location.pathname + "?crew=${crew}&role=dev${cls === "phone" ? "&embed=1" : ""}");
+      window.addEventListener("error", (e) => { fixture.err = e.message; });
+      window.fetch = async (url) => {
+        const json = (body, status = 200) => new Response(typeof body === "string" ? body : JSON.stringify(body), {status, headers: {"Content-Type": "application/json"}});
+        const path = String(url).split("?")[0];
+        if (path === "/api/terminal/nodes" || path === "/api/terminal/targets") return json([]);
+        if (path === "/api/chat") return json(fixture.snapshot());
+        if (path === "/api/items") return json({items: {}});
+        return json("not in this fixture", 404);
+      };
+    <\/script>`;
+    fixture.snapshot = () => ({presentation_version: 1, attachments_supported: true, retry_window_seconds: 604800, role: "dev", runtime: "claude",
+      state: "up", status: "idle", session: "session-1", messages: structuredClone(messages), pending: []});
+    const doc = frame.contentDocument;
+    doc.open(); doc.write(page.replace("<head>", "<head>" + stub)); doc.close();
+    const $ = (sel) => frame.contentDocument.querySelector(sel), $$ = (sel) => [...frame.contentDocument.querySelectorAll(sel)];
+    await wait("the conversation", () => $$(".chat-message").length === 30);
+    return {frame, fixture, $, $$};
+  }
+
+  async function check(cls, crew) {
+    const {frame, fixture, $, $$} = await open(cls, crew);
+    const win = frame.contentWindow, phone = frame.contentDocument.body.classList.contains("phone");
+    const box = (e) => e.getBoundingClientRect();
+    const files = new win.DataTransfer();
+    files.items.add(new win.File([png], "IMG_5547.png", {type: "image/png"}));
+    files.items.add(new win.File([png], "IMG_5548.jpeg", {type: "image/jpeg"}));
+    files.items.add(new win.File([new Uint8Array(412 * 1000)], "notes.pdf", {type: "application/pdf"}));
+    $("#file-input").files = files.files;
+    $("#file-input").dispatchEvent(new win.Event("change", {bubbles: true}));
+    await wait("the tiles", () => $$("#draft-files .dtile").length === 3);
+    $("#message").value = "This I still see\nand here, where I circled";
+    $("#message").dispatchEvent(new win.Event("input", {bubbles: true}));
+    await new Promise(r => setTimeout(r, 100));
+    const tiles = $$("#draft-files .dtile");
+    // f1 · one row, above the field
+    assert(new Set(tiles.map(t => Math.round(box(t).top))).size === 1, cls + ": the files sit in one row");
+    assert(box(tiles[0]).bottom <= box($("#message")).top, cls + ": above the field");
+    assert(win.getComputedStyle($("#draft-files")).overflowX === "auto" && win.getComputedStyle($("#draft-files")).flexWrap === "nowrap", cls + ": the row scrolls sideways, never wraps");
+    // f2 · the tiles
+    assert(box(tiles[0]).width === 64 && box(tiles[0]).height === 64 && tiles[0].querySelector("img")?.src.startsWith("blob:"), cls + ": an image is a 64 px square of itself");
+    assert(box(tiles[2]).width === 176 && box(tiles[2]).height === 64, cls + ": another file a 176 × 64 tile");
+    assert(tiles[2].querySelector(".dt-sub").textContent === "PDF · 412 KB", cls + ": its kind and size in KB, never bytes");
+    assert(!$("#draft-files").textContent.includes("byte"), cls + ": no byte count anywhere");
+    // f3 · the ✕
+    const rm = tiles[1].querySelector(".dt-rm"), rb = box(rm), tb = box(tiles[1]);
+    assert(rb.width === 22 && Math.round(rb.top - tb.top) === -6 && Math.round(tb.right - rb.right) === -6, cls + ": a 22 px ✕ on the corner");
+    const hitAt = (x, y) => frame.contentDocument.elementFromPoint(x, y)?.closest(".dt-rm") === rm;
+    const cx = rb.left + 11, cy = rb.top + 11;
+    assert(hitAt(cx - 20, cy) && hitAt(cx, cy + 20), cls + ": 44 px to hit");
+    const sb = box($("#draft-files"));
+    assert(rb.top >= sb.top && box(tiles[2].querySelector(".dt-rm")).right <= sb.right, cls + ": the row does not cut a ✕");
+    // f4 · the clear-draft ✕
+    const clear = $("#clear-message");
+    if (phone) assert(clear.getBoundingClientRect().width === 0, cls + ": no clear-draft ✕ in the phone's field");
+    else assert(!clear.hidden && clear.getBoundingClientRect().width > 0, cls + ": the desktop keeps its clear-draft ✕");
+    // l1 · the Latest arrow, the conversation scrolled up
+    $("#conversation").scrollTop = 0;
+    $("#conversation").dispatchEvent(new win.Event("scroll"));
+    const latest = await wait("the Latest arrow", () => !$("#chat-latest").hidden && $("#chat-latest"));
+    const lb = box(latest), cb = box($(".composer-box"));
+    assert(lb.width === 36 && lb.height === 36, cls + ": 36 px drawn");
+    assert(Math.round(cb.top - lb.bottom) === 8, cls + ": 8 px over the composer's top edge: " + Math.round(cb.top - lb.bottom));
+    assert(Math.round(cb.right - lb.right) === 16, cls + ": 16 px in from the column's right edge: " + Math.round(cb.right - lb.right));
+    // a removed file goes, the arrow rides down with the composer
+    rm.click();
+    await wait("the file to go", () => $$("#draft-files .dtile").length === 2);
+    $("#draft-files .dtile:last-child .dt-rm").click();
+    await wait("the next file to go", () => $$("#draft-files .dtile").length === 1);
+    $("#draft-files .dtile:last-child .dt-rm").click();
+    await wait("the row to empty", () => $$("#draft-files .dtile").length === 0);
+    await new Promise(r => setTimeout(r, 50));
+    assert(Math.round(box($(".composer-box")).top - box(latest).bottom) === 8, cls + ": the arrow keeps 8 px as the composer shrinks");
+    if (phone) {
+      // A frame out of focus gets no focus events from focus(): the page's own listener is fed as a tap would.
+      $("#message").focus();
+      $("#message").dispatchEvent(new win.FocusEvent("focusin", {bubbles: true}));
+      await new Promise(r => setTimeout(r, 50));
+      assert(box(latest).width === 0, cls + ": no Latest while the field has the focus");
+      $("#message").dispatchEvent(new win.FocusEvent("focusout", {bubbles: true}));
+      $("#message").blur();
+      await new Promise(r => setTimeout(r, 50));
+      assert(box(latest).width === 36, cls + ": back once the field lets go");
+    }
+    assert(!fixture.err, cls + ": no script error " + (fixture.err || ""));
+  }
+
+  try {
+    await check("phone", "composer-phone");
+    await check("desk", "composer-desk");
+    window.chatComposerResults = {passed: true, results};
+  } catch (e) {
+    window.chatComposerResults = {passed: false, results, error: e.message};
+  }
+  document.getElementById("result").textContent = JSON.stringify(window.chatComposerResults, null, 2);
+})();
+</script>

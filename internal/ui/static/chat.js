@@ -58,15 +58,9 @@
   // The mesh's nodes by name (this node's is ""): an id's node/crew prefix names one of them, else it is text (D-15 i1).
   let knownNodes = new Map();
   const fileSignature=files=>JSON.stringify((files||[]).map(file=>[file.id,file.name,file.size]));
+  // D-18 f1–f3: the picked files as tiles in one row above the field, each with its ✕.
   function renderSelected() {
-    draftFiles.replaceChildren();
-    selectedFiles.forEach(file=>{
-      const row=document.createElement("div"), name=document.createElement("span"), remove=document.createElement("button");
-      row.className="draft-file";name.textContent=file.name+" · "+new Intl.NumberFormat(undefined,{style:"unit",unit:"byte",unitDisplay:"short"}).format(file.size);
-      remove.type="button";remove.className="ib";remove.title="Remove";remove.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';remove.setAttribute("aria-label","Remove "+file.name);
-      remove.addEventListener("click",async()=>{try{const version=generation,dest={...destination},next=selectedFiles.filter(item=>item.id!==file.id);await store.saveFiles(dest,next);if(version!==generation)return;selectedFiles=next;filesRevision++;cleared=null;draftID="";renderSelected();controls();}catch(e){error("Could not save the file selection. "+e.message);}});
-      row.append(name,remove);draftFiles.append(row);
-    });
+    window.zminaFiles.draft(draftFiles, selectedFiles, async(file)=>{try{const version=generation,dest={...destination},next=selectedFiles.filter(item=>item.id!==file.id);await store.saveFiles(dest,next);if(version!==generation)return;selectedFiles=next;filesRevision++;cleared=null;draftID="";renderSelected();controls();}catch(e){error("Could not save the file selection. "+e.message);}});
   }
   attach.addEventListener("click",()=>fileInput.click());
   fileInput.addEventListener("change",async()=>{

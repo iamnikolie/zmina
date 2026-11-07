@@ -100,10 +100,15 @@ html.chat-document { height: 100%; overflow: hidden; }
 .chat-page .send svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .chat-page .send:disabled { background: var(--line2); color: var(--faint); cursor: default; }
 #composer-status { max-width: 46rem; margin: 6px auto 0; text-align: center; color: var(--faint); font-size: 12px; overflow-wrap: anywhere; }
-#chat-latest { position: absolute; left: 50%; top: -44px; transform: translateX(-50%); z-index: 2; display: inline-flex; align-items: center; justify-content: center;
-  width: 32px; height: 32px; padding: 0; border: 1px solid var(--line2); border-radius: 50%; background: var(--panel2); color: var(--muted); }
+/* D-18 l1 · Latest: on the right of the column, 16 px in, its bottom 8 px above the composer's top edge (it rides up as
+   the composer grows), 36 px drawn and 44 to hit */
+.chat-composer { --side: 32px; }
+#chat-latest { position: absolute; top: auto; bottom: calc(100% + 8px); left: auto; right: calc(var(--side) + max(0px, (100% - 2 * var(--side) - 46rem) / 2) + 16px);
+  z-index: 2; display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box;
+  width: 36px; height: 36px; min-height: 0; margin: 0; padding: 0; border: 1px solid var(--line2); border-radius: 50%; background: var(--panel2); color: var(--ink2); }
+#chat-latest::after { content: ""; position: absolute; inset: -4px; }
 #chat-latest[hidden] { display: none; }
-#chat-latest svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+#chat-latest svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 @media (hover: hover) { .chat-nav a:hover { background: var(--panel2); } }
 
 /* c5 · a session message or a background task stays a quiet card */
@@ -160,10 +165,27 @@ html.chat-document { height: 100%; overflow: hidden; }
 /* k2 · attachments as chips above the field */
 .chat-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; min-width: 0; }
 .chat-attachments:empty { display: none; }
-.draft-file { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; height: 28px; padding: 0 4px 0 10px; border: 1px solid var(--line2); border-radius: 8px;
-  background: var(--panel); font: 12px var(--sans); color: var(--ink2); }
-.draft-file span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.draft-file .ib { width: 22px; height: 22px; } .draft-file .ib svg { width: 13px; height: 13px; }
+/* D-18 f1 · the picked files: one row above the field, scrolling sideways, never wrapping, no scrollbar drawn */
+#draft-files { flex-wrap: nowrap; gap: 8px; overflow-x: auto; padding: 6px 6px 2px 4px; margin: 0 0 4px; scrollbar-width: none; } /* 6 px: the ✕ on the corner is not cut by the scroller */
+#draft-files::-webkit-scrollbar { display: none; }
+/* f2 · an image a 64 px square of itself; another file a 176 × 64 tile: icon, name, «PDF · 412 KB» */
+.dtile { position: relative; flex: none; width: 64px; height: 64px; }
+.dtile.file { width: 176px; }
+.dtile .dt-open { box-sizing: border-box; width: 100%; height: 100%; min-height: 0; margin: 0; padding: 0; border: 1px solid var(--line2); border-radius: 12px;
+  overflow: hidden; background: var(--panel); color: var(--ink); cursor: pointer; }
+.dtile .dt-open img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.dtile.file .dt-open { display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 0 10px; align-items: center; padding: 0 12px 0 10px; text-align: left; }
+.dtile .dt-icon { display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 8px; background: var(--line); }
+.dtile .dt-icon svg { width: 18px; height: 18px; fill: none; stroke: var(--ink2); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.dtile .dt-text { display: flex; flex-direction: column; min-width: 0; }
+.dtile .dt-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: 500 13px/1.25 var(--sans); color: var(--ink); }
+.dtile .dt-sub { font: 12px/1.3 var(--sans); color: var(--muted); }
+/* f3 · remove: a 22 px ink circle on the corner with a 2 px ring, a 10 px ✕; 44 px to hit, above the tile's own tap */
+.dtile .dt-rm { position: absolute; top: -6px; right: -6px; z-index: 1; box-sizing: border-box; display: flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; min-height: 0; margin: 0; padding: 0; border: 2px solid var(--panel2); border-radius: 50%; background: var(--ink); cursor: pointer; }
+.dtile .dt-rm::after { content: ""; position: absolute; inset: -13px; } /* from its padding box: 18 + 26 = 44 */
+.dtile .dt-rm svg { width: 10px; height: 10px; fill: none; stroke: var(--bg); stroke-width: 2.4; stroke-linecap: round; }
+@media (prefers-color-scheme: light) { .dtile .dt-rm { border-color: var(--panel); } }
 .message-files { display: flex; flex-direction: column; gap: 4px; font-size: 14px; overflow-wrap: anywhere; }
 .message-files a { min-height: 44px; display: flex; align-items: center; text-underline-offset: 3px; }
 
@@ -178,7 +200,7 @@ html.chat-document { height: 100%; overflow: hidden; }
 @media (pointer: coarse) { .chat-page .ib, .chat-page .send, .message-meta .ib { width: 44px; height: 44px; } .chat-state button { height: 44px; } }
 @media (max-width: 600px) {
   #conversation { padding: 8px 16px 24px; }
-  .chat-composer { padding: 0 max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); }
+  .chat-composer { --side: 8px; padding: 0 max(8px, env(safe-area-inset-right)) max(8px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); }
 }
 
 /* D-11 · the Talk tab on the phone reads like the Claude iOS app. .phone is set by chat.js from the cockpit's width;
@@ -242,7 +264,11 @@ html.chat-document { height: 100%; overflow: hidden; }
 .chat-page.phone #message { overflow-y: hidden; scrollbar-width: none; }
 .chat-page.phone #message.capped { overflow-y: auto; }
 .chat-page.phone #message::-webkit-scrollbar { display: none; }
-.chat-page.phone .composer-field .clear { top: 4px; }
+/* D-18 f4 · no clear-draft ✕ in the phone's field (the system's select-all and delete do it); l1: no Latest while the
+   field has the focus (the keyboard is up) */
+.chat-page.phone .composer-field .clear { display: none; }
+.chat-page.phone .composer-field.has-draft #message { padding-right: 4px; }
+.chat-page.phone.typing #chat-latest { display: none; }
 .chat-page.phone .composer-row .ib, .chat-page.phone .composer-row .send { position: relative; width: 36px; height: 36px; margin: 0; border: 0; border-radius: 50%;
   background: var(--line2); color: var(--ink2); }
 .chat-page.phone .composer-row .ib::after, .chat-page.phone .composer-row .send::after { content: ""; position: absolute; inset: -4px; }

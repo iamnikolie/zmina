@@ -250,6 +250,41 @@
     return box;
   }
 
+  // ---- the composer's picked files (D-18 f1–f3) ----
+  // An image is a 64 px square of the picked file itself (an object URL: nothing goes up to draw it), another file a
+  // 176 × 64 tile with its kind's icon, name and «PDF · 412 KB»; a ✕ on the corner removes it, a tap previews it.
+  function draft(box, files, remove) {
+    box.replaceChildren();
+    const images = files.filter((f) => isImage(f.type) && f.blob);
+    const list = images.map((f) => ({name: f.name, src: ownURL({}, f), open: ownURL({}, f)}));
+    for (const f of files) {
+      const image = isImage(f.type) && f.blob, tile = el("div", "dtile" + (image ? "" : " file"));
+      const open = el("button", "dt-open");
+      open.type = "button";
+      open.setAttribute("aria-label", "Preview " + f.name);
+      if (image) {
+        const img = el("img"); img.src = ownURL({}, f); img.alt = ""; img.decoding = "async";
+        open.append(img);
+        open.addEventListener("click", () => view(list, images.indexOf(f), open));
+      } else {
+        const ic = el("span", "dt-icon"); ic.innerHTML = icon(f.name);
+        const text = el("span", "dt-text");
+        text.append(el("span", "dt-name", f.name), el("span", "dt-sub", kindWord(f.name) + " · " + size(f.size)));
+        open.append(ic, text);
+        if (f.blob) open.addEventListener("click", () => window.open(ownURL({}, f), "_blank", "noopener"));
+        else open.disabled = true;
+      }
+      const rm = el("button", "dt-rm");
+      rm.type = "button";
+      rm.setAttribute("aria-label", "Remove " + f.name);
+      rm.title = "Remove";
+      rm.innerHTML = '<svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 2l6 6M8 2 2 8"/></svg>';
+      rm.addEventListener("click", () => remove(f));
+      tile.append(open, rm);
+      box.append(tile);
+    }
+  }
+
   // ---- the viewer (v1) ----
   let viewer = null;
   function view(list, index, from) {
@@ -350,5 +385,5 @@
     }
   }, true);
 
-  window.zminaFiles = Object.freeze({init: (h) => { hooks = h; }, ownerBlock, progress, decorate, size});
+  window.zminaFiles = Object.freeze({init: (h) => { hooks = h; }, ownerBlock, progress, decorate, size, draft});
 })();
