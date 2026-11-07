@@ -51,6 +51,8 @@ type line struct {
 	Cwd       string    `json:"cwd"`
 	Meta      bool      `json:"isMeta"`
 	Compact   bool      `json:"isCompactSummary"`
+	// ToolResult is what Claude Code recorded of a tool's run on the line that carries its result.
+	ToolResult json.RawMessage `json:"toolUseResult"`
 	Origin    *struct {
 		Kind string `json:"kind"`
 		Name string `json:"name"`

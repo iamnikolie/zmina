@@ -99,3 +99,27 @@ func TestHistoryCursorWithoutWindowStillResumes(t *testing.T) {
 	require.False(t, next.Reset)
 	require.Equal(t, "third", next.Messages[0].Text)
 }
+
+// A /compact zmina types shows as typed until Claude Code records it as a command, which takes the typed line away:
+// a cursor on that line would read as edited history and reset the owner's view. The cursor stays before it.
+func TestHistoryCursorStaysBeforeAProvisionalEnd(t *testing.T) {
+	before := []Message{{ID: "a", Role: "assistant", Text: "reply"}}
+	typed := append(append([]Message{}, before...), Message{ID: "typed", Role: "user", Text: "/compact", Provisional: true})
+	first := Page(Snapshot{Session: "one", Messages: typed}, "")
+	require.Equal(t, typed, first.Messages, "the typed line is shown")
+
+	again := Page(Snapshot{Session: "one", Messages: typed}, first.Cursor)
+	require.False(t, again.Reset)
+	require.Equal(t, typed[1:], again.Messages, "sent again while it stands")
+
+	recorded := append(append([]Message{}, before...), Message{ID: "cmd", Role: "event", Event: &Event{Kind: "command", Summary: "Context compacted"}})
+	next := Page(Snapshot{Session: "one", Messages: recorded}, again.Cursor)
+	require.False(t, next.Reset)
+	require.False(t, next.HistoryGap)
+	require.Equal(t, recorded[1:], next.Messages, "its replacement")
+
+	more := append(recorded, Message{ID: "b", Role: "assistant", Text: "after"})
+	last := Page(Snapshot{Session: "one", Messages: more}, next.Cursor)
+	require.False(t, last.HistoryGap)
+	require.Equal(t, more[2:], last.Messages)
+}

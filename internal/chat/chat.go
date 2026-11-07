@@ -17,6 +17,10 @@ type Message struct {
 	Text        string       `json:"text"`
 	At          time.Time    `json:"at,omitempty"`
 	State       string       `json:"state,omitempty"`
+	// Provisional is a message at the conversation's end that the runtime may still replace or complete: a slash
+	// command as typed, before Claude Code records it as a command; a command's line before its output. A page's
+	// cursor stays before it, and the next page sends it again as it stands then.
+	Provisional bool `json:"provisional,omitempty"`
 	// Peer is a message that came through the session's inbox socket (zmina's own channel, but one any session the
 	// inbox is reachable from can write to): it is the owner's only when its ID is one of his receipts.
 	Peer bool `json:"-"`

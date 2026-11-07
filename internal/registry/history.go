@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/iamnikolie/zmina/internal/chat"
@@ -72,12 +73,19 @@ func (r *Registry) ChatMessages(sessionID string) ([]chat.Message, error) {
 	// command line the next output line belongs to, -1 when none.
 	local, command := false, -1
 	var ran [2]string // the name and arguments of that command
+	sends := map[string]sentFiles{} // SendUserFile calls by tool_use id, until their result
 	for _, record := range records {
 		var l line
 		if json.Unmarshal(record, &l) != nil || l.Sidechain || l.Compact || (l.Type != "user" && l.Type != "assistant") {
 			continue
 		}
 		if l.UUID != "" && seen[l.UUID] {
+			continue
+		}
+		if m, ok := sentFile(&l, sends); ok {
+			seen[l.UUID] = true
+			out = append(out, m)
+			local, command = false, -1
 			continue
 		}
 		// A line zmina posted to the session's inbox socket is a meta line from a peer, wrapped in Claude Code's
@@ -132,7 +140,104 @@ func (r *Registry) ChatMessages(sessionID string) ([]chat.Message, error) {
 		local, command = false, -1
 		out = append(out, chat.TaskNotification(chat.Normalize(m)))
 	}
+	provisional(out, command)
 	return out, nil
+}
+
+// provisional marks the end of the conversation that Claude Code may still replace or complete: a command's line
+// whose output has not come (command is its index, -1 when none), and a slash command as typed, which goes once
+// Claude Code records it as a command (dropTyped).
+func provisional(out []chat.Message, command int) {
+	if command >= 0 && command == len(out)-1 {
+		out[command].Provisional = true
+	}
+	if n := len(out); n > 0 {
+		last := &out[n-1]
+		if last.Role == "user" && last.Event == nil && !strings.HasPrefix(last.ID, "web:") && typedCommand.MatchString(strings.TrimSpace(last.Text)) {
+			last.Provisional = true
+		}
+	}
+}
+
+// typedCommand is a slash command as typed at Claude Code's prompt: /name and its arguments on one line.
+var typedCommand = regexp.MustCompile(`^/[A-Za-z][\w:.-]*(?: [^\n]*)?$`)
+
+// sentFiles is a SendUserFile call: the files the role sent the owner and the words it sent with them.
+type sentFiles struct {
+	Files   []string `json:"files"`
+	Caption string   `json:"caption"`
+}
+
+// sentFile reads a role's SendUserFile (Claude Code's way to hand the owner a file) as the role's message in Chat: its
+// caption, then the files' paths as a block of their own, which Chat shows as the role's files where its node may
+// serve them (D-16) and as paths where it may not. A call is remembered from the role's line (ok false), and becomes
+// a message on the line of its result, unless that result is an error.
+func sentFile(l *line, sends map[string]sentFiles) (chat.Message, bool) {
+	var blocks []struct {
+		Type      string          `json:"type"`
+		ID        string          `json:"id"`
+		Name      string          `json:"name"`
+		Input     json.RawMessage `json:"input"`
+		ToolUseID string          `json:"tool_use_id"`
+		IsError   bool            `json:"is_error"`
+	}
+	if json.Unmarshal(l.Message.Content, &blocks) != nil {
+		return chat.Message{}, false
+	}
+	for _, b := range blocks {
+		switch {
+		case l.Type == "assistant" && b.Type == "tool_use" && b.Name == "SendUserFile":
+			var call sentFiles
+			if json.Unmarshal(b.Input, &call) == nil {
+				sends[b.ID] = call
+			}
+		case l.Type == "user" && b.Type == "tool_result":
+			call, ok := sends[b.ToolUseID]
+			if !ok || b.IsError {
+				continue
+			}
+			delete(sends, b.ToolUseID)
+			// The paths Claude Code delivered, as it recorded them; the call's own when it recorded none.
+			var result struct {
+				Attachments []struct {
+					Path string `json:"path"`
+				} `json:"attachments"`
+				Caption string `json:"caption"`
+			}
+			files := call.Files
+			if json.Unmarshal(l.ToolResult, &result) == nil && len(result.Attachments) > 0 {
+				files = nil
+				for _, a := range result.Attachments {
+					if a.Path != "" {
+						files = append(files, a.Path)
+					}
+				}
+			}
+			caption := strings.TrimSpace(call.Caption)
+			if caption == "" {
+				caption = strings.TrimSpace(result.Caption)
+			}
+			var paths []string
+			for _, f := range files {
+				if f = strings.TrimSpace(f); f != "" && !strings.ContainsAny(f, "`\n") {
+					paths = append(paths, f)
+				}
+			}
+			if len(paths) == 0 {
+				continue
+			}
+			text := "```\n" + strings.Join(paths, "\n") + "\n```"
+			if caption != "" {
+				text = caption + "\n\n" + text
+			}
+			id := l.UUID
+			if id == "" {
+				id = chat.Hash(b.ToolUseID)
+			}
+			return chat.Message{ID: id, Role: "assistant", Text: text, At: l.Timestamp}, true
+		}
+	}
+	return chat.Message{}, false
 }
 
 // dropTyped takes away the line just before a recorded command when it is that command as typed at the prompt
