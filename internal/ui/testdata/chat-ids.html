@@ -49,7 +49,7 @@
         const json = (body, status = 200) => new Response(typeof body === "string" ? body : JSON.stringify(body), {status, headers: {"Content-Type": "application/json"}});
         const [path, query] = String(url).split("?");
         // The node list comes late, after the first render, as it may on a slow mesh.
-        if (path === "/api/terminal/nodes") { await new Promise(r => setTimeout(r, 300)); return json(fixture.nodes); }
+        if (path === "/api/terminal/nodes") { await new Promise(r => setTimeout(r, fixture.nodes.length ? 1500 : 300)); return json(fixture.nodes); }
         if (path === "/api/terminal/targets") return json([]);
         if (path === "/api/chat") return json(fixture.snapshot());
         if (path === "/api/items") { const q = new URLSearchParams(query); fixture.reads.push(q.get("ids")); const out = {}; for (const id of q.get("ids").split(",")) out[id] = fixture.items[id] || {id, found: false}; return json({items: out}); }
@@ -162,6 +162,16 @@
     {
       // The desktop: a click pins a popover under the id; Esc closes it and gives the focus back.
       const {$, $$} = await open("desk", "ids-desk", [{name: "laptop", local: true}, {name: "box", local: false}]);
+      // A card open while the node list comes (the conversation is linked anew under it): Esc still gives the focus
+      // to its id, as it is now.
+      const before = $$(".chat-message.assistant .xid")[0];
+      before.click();
+      await wait("the card", () => $(".xpop .xstate"));
+      await wait("the conversation linked anew", () => !before.isConnected, 6000);
+      assert($(".xpop"), "the card stays open");
+      before.ownerDocument.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape", bubbles: true}));
+      const now = before.ownerDocument.activeElement;
+      assert(!$(".xpop") && now.classList.contains("xid") && now.textContent === "T-1" && now.isConnected, "Esc gives the focus to the id as it is now");
       // A path is not a node: src/acme/T-7 stays text, never this crew's T-7.
       await wait("the node list", () => $$(".chat-message.assistant .xid").some((x) => x.textContent === "box/ops/A-2"));
       assert(!$$(".chat-message.assistant .xid").some((x) => /T-7/.test(x.textContent)) && /See src\/acme\/T-7\./.test($$(".chat-message.assistant")[1].textContent), "a path stays text");
