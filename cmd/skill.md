@@ -468,7 +468,9 @@ the destination; developer/system instructions, thinking and tool records are ex
 last 8 MiB of a transcript are read; each response page retains up to 200 messages / about 1 MiB of text.
 Pending receipt display is also bounded to 200 messages / about 1 MiB; full queue inspection remains in Terminal.
 An optional opaque `cursor` query resumes after the cursor's message when it and the 49 before it are unchanged in
-that session (messages leaving the 8 MiB tail as the transcript grows are not a change: the client has them); `more`
+that session (the cursor never stands on a `provisional` end — a slash command as typed, which Claude Code replaces
+once it records the command, or a command's line before its output: the next page sends it again as it stands, and the
+page drops the provisional rows it had; so a `/compact` is no history gap) (messages leaving the 8 MiB tail as the transcript grows are not a change: the client has them); `more`
 asks the client to fetch the next page immediately. `reset` replaces the client window when the session or that run
 changed; `history_gap` explicitly reports unavailable/edited history in the same session: the cursor's message gone,
 or an edit among those 50. A cursor from an older zmina resumes on its whole prefix, as before. Cursors are carried inside
@@ -548,7 +550,14 @@ role's node may serve it: a PNG, JPEG, GIF, WebP or PDF by its extension and its
 most 8 MiB under the role's dir, a worktree of one of its tasks, or the system temp dir (`$TMPDIR`, `/tmp`) after
 symlinks. Any other path stays text. A list, paragraph or code block that is only such paths becomes a gallery in its
 place (one image in its own shape up to 420 px, more as square tiles three a row, six at most, each with its name); a
-path in a sentence becomes its file name, linked, with the preview under that paragraph; a PDF is a chip.
+path in a sentence becomes its file name, linked, with the preview under that paragraph; a PDF is a chip. A file a
+Claude role sends with Claude Code's `SendUserFile` (made for the claude.ai app) is its message in Talk too: the
+caption, then the delivered paths as a block of their own, shown as above. Such a file is served wherever it is (Claude
+Code delivered those bytes to the owner already), by the very path the role's current or last conversation sent, while
+it is that file — no link anywhere on the path, the size Claude Code recorded, not written since the send — with every
+other check as above; a path a role only names still has to be under the roots, so it copies the file there
+first. Every role hears this at boot (`shift.FilesRule`), so it never says a file is in the chat when it went only to
+Telegram. Images a role reads for itself (Read) are not shown.
 `POST /api/chat/paths` (`node`, `crew`, `role`, up to 64 `paths`) answers which of them the page shows, with name,
 size and type; `GET /api/chat/rolefile?node=&crew=&role=&path=` serves one inline (`&download=1`: as a download).
 A peer's are read on its node with the owner-signed mesh ops `chat/paths` and `chat/rolefile`. A tap on an image opens
@@ -839,7 +848,8 @@ until the task changes again (`task set`): the turn is the dispatcher's.
 
 Every role hears at boot, from zmina itself (`shift.AsksRule`): a question only the owner can answer goes on his list
 with `zmina todo add` (and is named by its A-n when asked in chat); when he answers in chat, the role records it at once
-(`todo answer` / `yes` / `done`), so no question he answered stays open.
+(`todo answer` / `yes` / `done`), so no question he answered stays open. And how a file reaches him in Talk
+(`shift.FilesRule`, under Browser chat).
 
 Every answer — from these commands or the ui page — closes the ask (a waiting task keeps its state) and queues a
 note for the dispatcher like `zmina note`: `hand: A-3 · yes: <rec> — <text>`, `ui: T-62 · <words>`,

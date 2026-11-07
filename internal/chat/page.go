@@ -88,9 +88,17 @@ func Page(snapshot Snapshot, after string) Snapshot {
 		snapshot.Messages[i] = Limit([]Message{m})[0]
 	}
 	snapshot.More = end < len(all)
-	next := historyCursor{Session: snapshot.Session, Digest: digests[end]}
-	if end > 0 {
-		next.ID, next.Window = all[end-1].ID, window(end)
+	// The cursor stands after the last settled message: a provisional end (a typed /compact Claude Code is about to
+	// record as a command) may yet go or change, and a cursor on it would read as edited history.
+	settled := end
+	if !snapshot.More {
+		for settled > start && all[settled-1].Provisional {
+			settled--
+		}
+	}
+	next := historyCursor{Session: snapshot.Session, Digest: digests[settled]}
+	if settled > 0 {
+		next.ID, next.Window = all[settled-1].ID, window(settled)
 	}
 	raw, _ := json.Marshal(next)
 	snapshot.Cursor = base64.RawURLEncoding.EncodeToString(raw)

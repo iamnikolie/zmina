@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -103,4 +104,66 @@ func TestChatMessagesFoldsLocalCommands(t *testing.T) {
 	require.NotContains(t, history, "<local-command")
 	require.NotContains(t, history, "hook")
 	require.Contains(t, history, "Session:\nContext compacted")
+}
+
+// A role's SendUserFile (as Claude Code records it: the call on the role's line, the delivered paths on its result's)
+// is the role's message in Chat: its caption, then the paths as a block of their own, which Chat shows as files.
+func TestChatMessagesShowsSendUserFile(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "projects", "example")
+	require.NoError(t, os.MkdirAll(dir, 0700))
+	lines := []string{
+		`{"type":"assistant","uuid":"call","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"SendUserFile","input":{"files":["/tmp/s/report.pdf"],"caption":"The report, 20 pages.","status":"normal","display":"attach"}}]}}`,
+		`{"type":"user","uuid":"res","timestamp":"2026-11-07T21:02:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"1 file delivered to user."}]},"toolUseResult":{"caption":"The report, 20 pages.","attachments":[{"path":"/tmp/s/report.pdf","size":376712,"pathValidated":true}]}}`,
+		`{"type":"api-request-blob","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"SendUserFile","input":{"files":["/tmp/s/report.pdf"]}}]}}`,
+		`{"type":"assistant","uuid":"call2","message":{"content":[{"type":"tool_use","id":"toolu_2","name":"SendUserFile","input":{"files":["/nope.png"]}}]}}`,
+		`{"type":"user","uuid":"res2","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_2","is_error":true,"content":"no such file"}]}}`,
+		`{"type":"assistant","uuid":"call3","message":{"content":[{"type":"tool_use","id":"toolu_3","name":"Bash","input":{"command":"ls"}}]}}`,
+		`{"type":"user","uuid":"res3","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_3","content":"a.pdf"}]},"toolUseResult":{"stdout":"a.pdf"}}`,
+		`{"type":"assistant","uuid":"a","message":{"content":[{"type":"text","text":"Sent."}]}}`,
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "session.jsonl"), []byte(strings.Join(lines, "\n")), 0600))
+	reg := Registry{Namespace: root}
+	messages, err := reg.ChatMessages("session")
+	require.NoError(t, err)
+	require.Len(t, messages, 2)
+	require.Equal(t, "res", messages[0].ID)
+	require.Equal(t, "assistant", messages[0].Role)
+	require.Equal(t, "The report, 20 pages.\n\n```\n/tmp/s/report.pdf\n```", messages[0].Text)
+	require.False(t, messages[0].At.IsZero())
+	require.Equal(t, "Sent.", messages[1].Text)
+	sent, err := reg.SentFiles("session")
+	require.NoError(t, err)
+	require.Equal(t, []SentFile{{Path: "/tmp/s/report.pdf", Size: 376712, At: messages[0].At}}, sent, "the delivered file, not the one whose send failed")
+	again, err := reg.SentFiles("session")
+	require.NoError(t, err)
+	require.Equal(t, sent, again, "from the cache while the transcript stays")
+}
+
+// The end Claude Code may still replace is provisional: a slash command as typed, a command's line before its output.
+func TestChatMessagesMarksAProvisionalEnd(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "projects", "example")
+	require.NoError(t, os.MkdirAll(dir, 0700))
+	write := func(lines ...string) []string {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "session.jsonl"), []byte(strings.Join(lines, "\n")), 0600))
+		messages, err := (&Registry{Namespace: root}).ChatMessages("session")
+		require.NoError(t, err)
+		var got []string
+		for _, m := range messages {
+			got = append(got, fmt.Sprint(m.ID, " ", m.Provisional))
+		}
+		return got
+	}
+	reply := `{"type":"assistant","uuid":"a","message":{"content":[{"type":"text","text":"Done."}]}}`
+	typed := `{"type":"user","uuid":"typed","message":{"content":"/compact"}}`
+	caveat := `{"type":"user","isMeta":true,"uuid":"c","message":{"content":"<local-command-caveat>The command below was run directly in Claude Code, not sent to you as a request.</local-command-caveat>"}}`
+	cmd := `{"type":"user","uuid":"cmd","message":{"content":"<command-name>/compact</command-name>\n<command-message>compact</command-message>\n<command-args></command-args>"}}`
+	out := `{"type":"user","uuid":"out","message":{"content":"<local-command-stdout>Compacted</local-command-stdout>"}}`
+	require.Equal(t, []string{"a false", "typed true"}, write(reply, typed))
+	require.Equal(t, []string{"a false", "cmd true"}, write(reply, typed, caveat, cmd))
+	require.Equal(t, []string{"a false", "cmd false"}, write(reply, typed, caveat, cmd, out))
+	require.Equal(t, []string{"typed false", "a false"}, write(typed, reply), "a typed line something followed has stayed")
+	require.Equal(t, []string{"a false", "q false"}, write(reply, `{"type":"user","uuid":"q","message":{"content":"the path is /tmp/x"}}`))
+	require.Equal(t, []string{"a false", "multi true"}, write(reply, `{"type":"user","uuid":"multi","message":{"content":"/review the diff\nand the tests"}}`), "a typed command with arguments over lines")
 }

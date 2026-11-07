@@ -467,7 +467,7 @@ func (s *Shift) bootText(r *crew.Role, tagged bool) string {
 		text = strings.TrimSpace(text + "\n\n" + RemoteRule)
 	}
 	if text != "" {
-		text = strings.TrimSpace(text + "\n\n" + AsksRule)
+		text = strings.TrimSpace(text + "\n\n" + OwnerRules)
 	}
 	// A retired crew tells every role; a crew that stood still tells whoever reads its ledger first.
 	if n := s.Standing(); n != "" && (s.Crew.IsRetired() || r.Name == s.Crew.Dispatcher) {
@@ -536,6 +536,17 @@ const AsksRule = "[zmina] Questions for the owner: one only he can answer (a dec
 	"record it at once: zmina todo answer A-n \"<his words>\" (zmina todo yes A-n takes your recommendation, zmina todo " +
 	"done A-n closes a check). An answer he gives on his list or the cockpit reaches the dispatcher by itself. Never " +
 	"leave a question he answered open; zmina todo ls shows what is."
+
+// FilesRule is what zmina tells every role at boot about files for the owner: he reads the role in zmina's Talk too,
+// which shows a file the role sent with SendUserFile, or named from where its node may serve it (D-16), so a role that
+// sent one elsewhere does not say it is in the chat.
+const FilesRule = "[zmina] Files for the owner: he also reads you in zmina's Talk. A PNG, JPEG, GIF, WebP or PDF of " +
+	"at most 8 MiB shows there when you send it with SendUserFile (a Claude role), or when you name its absolute path in your " +
+	"message and it is under your working directory, a worktree of your task or the temp dir (copy it there first). " +
+	"Telegram or any other channel is not Talk: say a file is in the chat only when you sent it one of these ways."
+
+// OwnerRules are the rules every role hears at boot about the owner: his questions, his files.
+const OwnerRules = AsksRule + "\n\n" + FilesRule
 
 const MixedRuntimeRule = "[zmina] This crew includes Codex seats. For inter-role messages use " +
 	"`zmina send <role> --when-idle <text>` with a role key from `zmina ls`; Claude SendMessage cannot reach " +

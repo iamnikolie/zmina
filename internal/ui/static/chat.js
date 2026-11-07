@@ -99,7 +99,8 @@
     }
     const previous = snapshot;
     if (data.cursor && !data.reset && previous?.cursor && previous.session === data.session) {
-      const rows = new Map(previous.messages.map(row => [row.id, row]));
+      // A provisional row (a /compact as typed) is sent again while it stands: the page brings it, or what took its place.
+      const rows = new Map(previous.messages.filter(row => !row.provisional).map(row => [row.id, row]));
       for (const row of data.messages || []) rows.set(row.id, row);
       data.messages = [...rows.values()];
     }
