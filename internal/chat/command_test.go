@@ -29,10 +29,16 @@ func TestParseCommandTakesOnlyTheWholeRecord(t *testing.T) {
 
 func TestParseLocalOutputDropsEscapesAndHooks(t *testing.T) {
 	out, failed, ok := ParseLocalOutput("<local-command-stdout>\x1b[2mCompacted (ctrl+o to see full summary)\x1b[22m\n" +
-		"\x1b[2mPreCompact [command hook 1] completed successfully\x1b[22m\n\x1b[2mPostCompact [command hook 2] failed: exit 1\x1b[22m</local-command-stdout>")
+		"\x1b[2mPreCompact [command hook 1] completed successfully\x1b[22m\n\x1b[2mPostCompact [command hook 2] failed: exit 1\x1b[22m\n" +
+		"\x1b[2mPreCompact [bash \"/home/alex/hooks/save.sh\"] completed successfully\x1b[22m\n" +
+		"\x1b[2mPreCompact [bash \"/home/alex/hooks/note.sh\"] failed with exit code 2\x1b[22m</local-command-stdout>")
 	assert.True(t, ok)
 	assert.False(t, failed)
 	assert.Equal(t, "Compacted (ctrl+o to see full summary)", out)
+
+	// A line of the command's own that only looks bracketed stays.
+	out, _, _ = ParseLocalOutput("<local-command-stdout>Set model to [Opus] for this session</local-command-stdout>")
+	assert.Equal(t, "Set model to [Opus] for this session", out)
 
 	out, failed, ok = ParseLocalOutput("<local-command-stderr>no such model</local-command-stderr>")
 	assert.True(t, ok)

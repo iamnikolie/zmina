@@ -14,8 +14,9 @@ var (
 	// ansi is a terminal escape: CSI (colours, cursor), OSC (titles, links) to BEL or ST, or a two-byte one.
 	ansi = regexp.MustCompile(`\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|[@-Z\\-_])`)
 	// hookLine is Claude Code's report of a hook it ran around the command («PreCompact [command hook 1] completed
-	// successfully»): the machine's plumbing, not the command's answer.
-	hookLine = regexp.MustCompile(`^\w+ \[[^\]]*\bhook\b[^\]]*\]`)
+	// successfully», «PreCompact [bash "/path/to/hook.sh"] failed: …»): the machine's plumbing, not the command's
+	// answer. Known by its result, since the brackets may name the hook's command with its path.
+	hookLine = regexp.MustCompile(`^[A-Z]\w+ \[[^\]]*\] (?:completed successfully|failed\b)`)
 )
 
 // ParseCommand reads a command line Claude Code recorded, the elements in any order and nothing else: its name
