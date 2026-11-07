@@ -103,7 +103,7 @@ html.chat-document { height: 100%; overflow: hidden; }
 /* D-18 l1 · Latest: on the right of the column, 16 px in, its bottom 8 px above the composer's top edge (it rides up as
    the composer grows), 36 px drawn and 44 to hit */
 .chat-composer { --side: 32px; }
-#chat-latest { position: absolute; top: auto; bottom: calc(100% + 8px); left: auto; right: calc(var(--side) + max(0px, (100% - 2 * var(--side) - 46rem) / 2) + 16px);
+#chat-latest { position: absolute; top: auto; bottom: calc(100% + 8px + var(--over, 0px)); left: auto; right: calc(var(--side) + max(0px, (100% - 2 * var(--side) - 46rem) / 2) + 16px);
   z-index: 2; display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box;
   width: 36px; height: 36px; min-height: 0; margin: 0; padding: 0; border: 1px solid var(--line2); border-radius: 50%; background: var(--panel2); color: var(--ink2); }
 #chat-latest::after { content: ""; position: absolute; inset: -4px; }
