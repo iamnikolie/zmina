@@ -395,8 +395,7 @@ html.chat-document { height: 100%; overflow: hidden; }
 .message-body .fgrid.one .fshot img { width: auto; max-width: 100%; max-height: 320px; aspect-ratio: auto; object-fit: contain; }
 .message-body .ftile figcaption { margin-top: 4px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: 11.5px var(--mono); color: var(--muted); }
 /* v1 · the viewer: the phone full screen black, the desktop a lightbox the chat does not read through. */
-.fview { position: fixed; inset: 0; z-index: 60; display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; background: rgb(0 0 0 / .95); color: #eceef0; }
-.fview.small { background: #000; }
+.fview { position: fixed; inset: 0; z-index: 60; display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; background: #000; color: #eceef0; }
 .fview:focus { outline: none; }
 .fv-bar { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; align-items: center; height: 52px; padding: env(safe-area-inset-top) 8px 0; }
 .fview button { min-height: 0; height: auto; margin: 0; border: 0; background: none; color: inherit; cursor: pointer; }
