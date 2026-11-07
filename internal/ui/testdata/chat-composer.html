@@ -106,6 +106,28 @@
     await wait("the row to empty", () => $$("#draft-files .dtile").length === 0);
     await new Promise(r => setTimeout(r, 50));
     assert(Math.round(box($(".composer-box")).top - box(latest).bottom) === 8, cls + ": the arrow keeps 8 px as the composer shrinks");
+    // A picked file opens only re-typed as a pdf or plain text: a blob runs at the page's origin, so an .html or .svg
+    // opened with its own type would run as the cockpit.
+    const opened = [];
+    win.open = (url) => { opened.push(url); return null; };
+    const risky = new win.DataTransfer();
+    risky.items.add(new win.File(["<script>parent.pwned = 1<\/script>"], "page.html", {type: "text/html"}));
+    risky.items.add(new win.File(['<svg xmlns="http://www.w3.org/2000/svg" onload="parent.pwned=1"/>'], "pic.svg", {type: "image/svg+xml"}));
+    risky.items.add(new win.File(["%PDF-1.7\n"], "notes.pdf", {type: ""}));
+    $("#file-input").files = risky.files;
+    $("#file-input").dispatchEvent(new win.Event("change", {bubbles: true}));
+    await wait("the three tiles", () => $$("#draft-files .dtile").length === 3);
+    const [html, svgTile, pdf] = $$("#draft-files .dt-open");
+    assert(html.disabled && svgTile.disabled, cls + ": an .html or .svg tile does not open");
+    html.click(); svgTile.click();
+    assert(opened.length === 0, cls + ": nothing opened for them");
+    pdf.click();
+    assert(opened.length === 1 && opened[0].startsWith("blob:"), cls + ": a pdf opens");
+    assert((await (await fetch(opened[0])).blob()).type === "application/pdf", cls + ": as application/pdf, whatever the picker said");
+    for (let n = 3; n > 0; n--) {
+      $("#draft-files .dtile:last-child .dt-rm").click();
+      await wait("the tile to go", () => $$("#draft-files .dtile").length === n - 1);
+    }
     if (phone) {
       // A frame out of focus gets no focus events from focus(): the page's own listener is fed as a tap would.
       $("#message").focus();

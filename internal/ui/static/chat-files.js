@@ -253,6 +253,13 @@
   // ---- the composer's picked files (D-18 f1–f3) ----
   // An image is a 64 px square of the picked file itself (an object URL: nothing goes up to draw it), another file a
   // 176 × 64 tile with its kind's icon, name and «PDF · 412 KB»; a ✕ on the corner removes it, a tap previews it.
+  const PLAIN = ["txt", "md", "log", "csv", "json"];
+  const safeType = (name) => { const ext = (name.split(".").pop() || "").toLowerCase(); return ext === "pdf" ? "application/pdf" : PLAIN.includes(ext) ? "text/plain" : ""; };
+  const typed = new Map(); // file id → object URL of its bytes under a type that runs nothing
+  function typedURL(f, type) {
+    if (!typed.has(f.id)) typed.set(f.id, URL.createObjectURL(new Blob([f.blob], {type})));
+    return typed.get(f.id);
+  }
   function draft(box, files, remove) {
     box.replaceChildren();
     const images = files.filter((f) => isImage(f.type) && f.blob);
@@ -271,8 +278,11 @@
         const text = el("span", "dt-text");
         text.append(el("span", "dt-name", f.name), el("span", "dt-sub", kindWord(f.name) + " · " + size(f.size)));
         open.append(ic, text);
-        if (f.blob) open.addEventListener("click", () => window.open(ownURL({}, f), "_blank", "noopener"));
-        else open.disabled = true;
+        // A picked file opens only as a pdf or plain text, its bytes re-typed: a blob runs at this page's origin, so a
+        // picked .html or .svg opened with its own type would run as the cockpit. Any other file's tile does nothing.
+        const as = safeType(f.name);
+        if (f.blob && as) open.addEventListener("click", () => window.open(typedURL(f, as), "_blank", "noopener"));
+        else { open.disabled = true; open.removeAttribute("aria-label"); }
       }
       const rm = el("button", "dt-rm");
       rm.type = "button";
