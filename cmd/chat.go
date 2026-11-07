@@ -109,6 +109,9 @@ func chatSnapshot(s *shift.Shift, role string) (chat.Snapshot, error) {
 			out.Messages[i].Text = receipt.Text
 			out.Messages[i].Attachments = receipt.Attachments
 			out.Messages[i].State = "accepted"
+		} else if m.Peer {
+			// Posted to the inbox socket with an ID no browser of the owner's sent: a session's words, not his.
+			out.Messages[i].ID = "peer:" + strings.TrimPrefix(m.ID, "web:")
 		} else if m.Role == "user" && strings.HasPrefix(m.ID, "web:") {
 			out.Messages[i].State = "accepted"
 			if id := chatInboxRef.FindString(m.Text); id != "" {
@@ -453,7 +456,7 @@ func activeDialog(screen, question string) ([]dialogOption, bool) {
 	if len(head) > 20 {
 		head = head[:20]
 	}
-	lines := strings.Split(screen, "\n")
+	lines := dialogLines(screen)
 	at := -1
 	for i := len(lines) - 1; i >= 0; i-- {
 		if strings.Contains(flat(lines[i]), string(head)) {
@@ -487,6 +490,18 @@ func activeDialog(screen, question string) ([]dialogOption, bool) {
 	return out, len(out) > 0 && current == 1
 }
 
+// dialogBar is the rule Claude Code draws down the left of a question's text (and a box's sides): a frame, not words.
+var dialogBar = regexp.MustCompile(`^\s*[│┃▏▎]\s?|\s*[│┃]\s*$`)
+
+// dialogLines are the screen's lines without the dialog's frame, so a question wrapped inside it reads as its words.
+func dialogLines(screen string) []string {
+	lines := strings.Split(screen, "\n")
+	for i, l := range lines {
+		lines[i] = dialogBar.ReplaceAllString(l, "")
+	}
+	return lines
+}
+
 // dialogMatches reports whether the active dialog's rows are the part's options, in order, by number.
 func dialogMatches(rows []dialogOption, labels []string) bool {
 	if len(rows) < len(labels) {
@@ -504,7 +519,7 @@ func dialogMatches(rows []dialogOption, labels []string) bool {
 // of spaces aside: another question that starts alike is not this one.
 func onScreen(screen, want string, options ...string) bool {
 	flat := func(t string) string { return strings.Join(strings.Fields(t), " ") }
-	s, w := flat(screen), flat(want)
+	s, w := flat(strings.Join(dialogLines(screen), "\n")), flat(want)
 	if w == "" || !strings.Contains(s, w) {
 		return false
 	}
@@ -542,6 +557,13 @@ func answerQuestion(s *shift.Shift, role, raw string, snapshot chat.Snapshot) er
 	if n := len(rs.AnsweredQuestions); n > 20 {
 		rs.AnsweredQuestions = rs.AnsweredQuestions[n-20:]
 	}
+	// An answer stopped before its first key reached the dialog is no answer: the owner may try again.
+	pressed := false
+	defer func() {
+		if !pressed {
+			rs.AnsweredQuestions = slices.DeleteFunc(rs.AnsweredQuestions, func(id string) bool { return id == a.ID })
+		}
+	}()
 	for i, step := range steps {
 		if i > 0 {
 			// The dialog redraws between parts; a key sent into the redraw is lost.
@@ -583,6 +605,7 @@ func answerQuestion(s *shift.Shift, role, raw string, snapshot chat.Snapshot) er
 				}
 			}
 		}
+		pressed = true
 		if step.Text != "" {
 			if err := s.Tmux.Type(role, step.Text); err != nil {
 				return err

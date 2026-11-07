@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Chat question regression fixtures</title>
+<style>iframe { width: 390px; height: 760px; border: 1px solid #888; }</style>
+<pre id="result">Checking the question card…</pre>
+<script>
+// The real chat page (static/chat.html with its own scripts) in a frame whose fetch answers for a role with a
+// one-part single-select question on its screen (D-13). The frame is written with document.open, so it shares this
+// page's address; its stub gives that address the crew and role chat.js opens.
+(async () => {
+  const results = [];
+  const assert = (condition, name) => { if (!condition) throw new Error(name); results.push(name); };
+  const wait = async (what, test, ms = 4000) => {
+    const end = Date.now() + ms;
+    while (Date.now() < end) { const value = test(); if (value) return value; await new Promise(r => setTimeout(r, 25)); }
+    throw new Error("timed out: " + what);
+  };
+  const page = await (await fetch("../static/chat.html", {cache: "no-store"})).text();
+  const question = {id: "toolu_1", items: [{question: "Wait for Tuesday or buy credits?", header: "Release", options: [
+    {label: "Wait for Tuesday (Recommended)", description: "The second seat reviews until Tuesday"}, {label: "Buy credits", description: "You buy them, the reviewer comes back"}]}]};
+  const snapshot = (open) => ({presentation_version: 1, attachments_supported: true, retry_window_seconds: 604800, role: "dev", runtime: "claude",
+    state: "up", status: open ? "waiting" : "busy", session: "session-1", needs_input: open, active: !open, question: open ? question : undefined,
+    messages: [{id: "m1", role: "assistant", text: "One question for you.", at: new Date().toISOString()}], pending: []});
+
+  async function open(crew, reply) {
+    const fixture = {open: true, posts: [], reply};
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    const win = frame.contentWindow;
+    win.fixture = fixture;
+    const stub = `<base href="../static/"><script>
+      history.replaceState(null, "", location.pathname + "?crew=${crew}&role=dev");
+      window.fetch = async (url, options = {}) => {
+        const json = (body, status = 200) => new Response(typeof body === "string" ? body : JSON.stringify(body), {status, headers: {"Content-Type": "application/json"}});
+        const path = String(url).split("?")[0];
+        if (path === "/api/terminal/nodes" || path === "/api/terminal/targets") return json([]);
+        if (path === "/api/chat") return json(fixture.snapshot());
+        if (path === "/api/chat/action") { const body = JSON.parse(options.body); fixture.posts.push(body); return fixture.reply(body); }
+        return json("not in this fixture", 404);
+      };
+      fixture.json = (body, status) => new Response(typeof body === "string" ? body : JSON.stringify(body), {status: status || 200, headers: {"Content-Type": "application/json"}});
+    <\/script>`;
+    fixture.snapshot = () => snapshot(fixture.open);
+    const doc = frame.contentDocument;
+    doc.open(); doc.write(page.replace("<head>", "<head>" + stub)); doc.close();
+    const $ = (sel) => frame.contentDocument.querySelector(sel);
+    await wait("the question card", () => $("#chat-question:not([hidden]) .q-opt"));
+    return {frame, fixture, $};
+  }
+
+  try {
+    // Sent: a tap chooses and moves on to the review, which sends; then the card goes and the line says what went.
+    {
+      const {fixture, $} = await open("question-sent", () => fixture.json(snapshot(true)));
+      assert($(".composer-box").hidden, "the card takes the composer's place");
+      assert($("#agent-state").textContent === "Asks you · answer below", "the state line says the role asks");
+      $(".q-opt").click();
+      assert($(".q-opt").getAttribute("aria-checked") === "true", "a tap marks the choice");
+      await wait("the review", () => $(".q-rrow"));
+      assert(fixture.posts.length === 0, "a tap alone sends nothing");
+      assert($(".q-hdr").textContent === "Check and send", "one part too ends on the review");
+      assert($(".q-ra").textContent === "Wait for Tuesday", "the review shows the choice without its tag");
+      assert($(".q-primary").textContent === "Send answers" && !$(".q-primary").disabled, "the review has its Send");
+      $(".q-primary").click();
+      await wait("the answer to go", () => fixture.posts.length === 1 && $("#chat-question").hidden);
+      assert(fixture.posts[0].action === 'answer:{"id":"toolu_1","items":[{"choices":[1],"other":""}]}', "the answer goes as the dialog takes it");
+      assert(!$(".composer-box").hidden, "the composer comes back while the screen still shows the question");
+      assert($("#composer-status").textContent === "Answered · Wait for Tuesday" && !$("#composer-status").hidden, "the line under the field says what went");
+      assert($("#agent-state").textContent === "Answered · the role goes on", "the state line no longer asks");
+      fixture.open = false;
+      frame_read($);
+      await wait("the next read", () => $("#agent-state").textContent !== "Answered · the role goes on");
+      assert($("#chat-question").hidden, "the card stays gone once the question is");
+      assert(fixture.posts.length === 1, "sent once");
+    }
+    // Refused: the card stays with the choice and says why in it, not in a line the phone does not show.
+    {
+      const refusal = "stopped at step 1: the question on its screen is not the one answered; look at Terminal";
+      const {fixture, $} = await open("question-refused", () => fixture.json(refusal, 409));
+      $(".q-opt").click();
+      await wait("the review", () => $(".q-rrow"));
+      $(".q-primary").click();
+      await wait("the refusal", () => $(".q-fail"));
+      assert(!$("#chat-question").hidden, "a refused answer keeps the card");
+      assert($(".q-fail").textContent === "Not answered · " + refusal, "the card says why");
+      assert($(".q-fail").getAttribute("role") === "alert", "and says it aloud");
+      assert($(".q-ra").textContent === "Wait for Tuesday", "the choice stays");
+      assert(!$(".q-primary").disabled, "Send answers works again");
+      assert($("#composer-status").textContent === "", "nothing says it went");
+      $(".q-back").click();
+      assert($(".q-opt").getAttribute("aria-checked") === "true", "Back keeps the choice");
+    }
+    window.chatQuestionResults = {passed: true, results};
+  } catch (e) {
+    window.chatQuestionResults = {passed: false, results, error: e.message};
+  }
+  document.getElementById("result").textContent = JSON.stringify(window.chatQuestionResults, null, 2);
+  // A read now, as when the page becomes visible again: chat.js reads on visibilitychange.
+  function frame_read($) { $("body").ownerDocument.dispatchEvent(new Event("visibilitychange")); }
+})();
+</script>

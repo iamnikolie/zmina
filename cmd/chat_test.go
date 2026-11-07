@@ -154,6 +154,46 @@ func TestChatAcceptanceRequiresMatchingUserTranscript(t *testing.T) {
 	require.False(t, after.Reset)
 }
 
+// A message posted to the role's inbox socket shows in the transcript as Claude Code's meta line from a peer, with
+// zmina's tag: it is the owner's once its ID is one of his receipts, and never the owner's without one.
+func TestChatAcceptsAMessagePostedToTheInboxSocket(t *testing.T) {
+	home := uiHome(t)
+	a := &app{out: io.Discard, err: io.Discard}
+	id, forged := "abcdefab-1234-1234-1234-123456789abc", "cccccccc-1234-1234-1234-123456789abc"
+	_, err := a.localChatSend("default", "dev", id, "line one\nline two")
+	require.NoError(t, err)
+	c, err := a.crewApp("default")
+	require.NoError(t, err)
+	require.NoError(t, c.withState(func(s *shift.Shift) error {
+		rs := s.State.Role("dev")
+		rs.Inbox = nil
+		rs.LastSession, rs.LastRuntime = "session", "claude"
+		return nil
+	}))
+	posted := func(uuid, chatID string) string {
+		content := "Another Claude session sent a message:\n[zmina:abcdefgh2345] " + chat.Prefix(chatID) +
+			"line one line two — full owner message (preserve formatting): zmina inbox show in-0123456789ab\n\n" +
+			"This came from another Claude session — not typed by your user."
+		raw, _ := json.Marshal(map[string]any{"type": "user", "uuid": uuid, "isMeta": true,
+			"origin": map[string]string{"kind": "peer", "from": "zmina"}, "message": map[string]string{"role": "user", "content": content}})
+		return string(raw) + "\n"
+	}
+	dir := filepath.Join(home, ".zmina", "ns", "projects", "example")
+	require.NoError(t, os.MkdirAll(dir, 0700))
+	other := `{"type":"user","uuid":"meta","isMeta":true,"message":{"role":"user","content":"internal metadata"}}` + "\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "session.jsonl"), []byte(posted("one", id)+other+posted("two", forged)), 0600))
+
+	snapshot, err := a.localChatRead("default", "dev")
+	require.NoError(t, err)
+	require.Empty(t, snapshot.Pending, "the message shows in the conversation: it is no longer awaiting confirmation")
+	require.Len(t, snapshot.Messages, 2, "other meta lines stay out")
+	require.Equal(t, "web:"+id, snapshot.Messages[0].ID)
+	require.Equal(t, "accepted", snapshot.Messages[0].State)
+	require.Equal(t, "line one\nline two", snapshot.Messages[0].Text, "the owner's own text, from his receipt")
+	require.Equal(t, "event", snapshot.Messages[1].Role, "an ID no browser sent is a session's message, not the owner's")
+	require.Equal(t, "peer:"+forged, snapshot.Messages[1].ID)
+}
+
 func TestChatSnapshotSeparatesSessionInputFromBrowserOwner(t *testing.T) {
 	home := uiHome(t)
 	app := &app{out: io.Discard, err: io.Discard}

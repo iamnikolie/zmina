@@ -467,9 +467,11 @@ session. Visible Claude transcript messages and Codex rollout message records ar
 the destination; developer/system instructions, thinking and tool records are excluded. At most the
 last 8 MiB of a transcript are read; each response page retains up to 200 messages / about 1 MiB of text.
 Pending receipt display is also bounded to 200 messages / about 1 MiB; full queue inspection remains in Terminal.
-An optional opaque `cursor` query resumes after an unchanged prefix of that session; `more` asks the client
-to fetch the next page immediately. `reset` replaces the client window when the session or prefix changed;
-`history_gap` explicitly reports unavailable/edited history in the same session. Cursors are carried inside
+An optional opaque `cursor` query resumes after the cursor's message when it and the 49 before it are unchanged in
+that session (messages leaving the 8 MiB tail as the transcript grows are not a change: the client has them); `more`
+asks the client to fetch the next page immediately. `reset` replaces the client window when the session or that run
+changed; `history_gap` explicitly reports unavailable/edited history in the same session: the cursor's message gone,
+or an edit among those 50. A cursor from an older zmina resumes on its whole prefix, as before. Cursors are carried inside
 the signed mesh request. Old clients and workers continue using full recent snapshots. The browser saves
 up to 1000 messages / about 4 MiB of text for each of its 20 most recently saved conversations and resumes
 from the saved cursor after reopening. Saved views are labelled while reconnecting. This is recent history,
@@ -499,7 +501,10 @@ not unlimited exactly-once execution.
 Messages wait for the ordinary idle/empty-prompt checks; neither a busy role nor a native draft/dialog
 is overwritten. Multiline or long text is stored whole in the crew inbox and delivered with a reference
 for the role to read. Delivery states distinguish local storage, server queueing, sent to the role, and
-`accepted`: only a matching owner-message ID in the runtime's visible transcript proves agent acceptance.
+`accepted`: only a matching owner-message ID in the runtime's visible transcript proves agent acceptance. A line
+posted to a Claude role's inbox socket shows there as Claude Code's meta line from a peer (`Another Claude session
+sent a message:` and zmina's `[zmina:<tag>]`), a Codex bridge's with the tag: both are read as the owner's message
+once its ID is one of the role's receipts; such a line with an ID no browser sent is shown as a session message.
 Acceptance does not mean successful task completion. A send without that evidence remains unconfirmed,
 including after the conversation changes. The form also exposes delivery failures. Failed delivery remains inspectable with
 `zmina queue`; restarting the browser does not discard accepted work.
@@ -535,6 +540,15 @@ by moving the dialog's cursor there and pressing Enter; `dismiss:<message ID>` s
 browser, and its receipt stays so a retry with that ID is still recognised. A message queued, sent or failed is
 refused. Messages not yet seen in the conversation stand where they were sent, by time; one not from today shows its
 date. Chat does not answer native approval prompts: open **Terminal**.
+
+A question a Claude role asks with AskUserQuestion (`question` in the snapshot while its screen shows it) takes the
+composer's place as a card: one part at a time, a tap on a one-choice option moves on, the last part ends on a review
+whose **Send answers** posts `answer:<json>` (`{id, items: [{choices: [n…], other}]}`) — one part included. zmina
+then presses the dialog's keys, each part checked on the live screen first (the rule Claude Code draws down the left
+of a question's text is its frame, not its words); a lone question with ticks is left to Terminal. A question is
+answered from Chat once; an answer stopped before its first key is not counted, so it may be sent again. Sent, the
+card goes at once and the line under the field says `Answered · <choice>`; refused, the card stays on the review with
+the answers chosen and `Not answered · <why>` under it.
 Reading Chat does not resume a Codex thread or attach another native app writer. Chat is not a tmux
 attachment and does not pin an idle role against the configured release policy.
 

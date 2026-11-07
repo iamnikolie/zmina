@@ -17,6 +17,9 @@ type Message struct {
 	Text        string       `json:"text"`
 	At          time.Time    `json:"at,omitempty"`
 	State       string       `json:"state,omitempty"`
+	// Peer is a message that came through the session's inbox socket (zmina's own channel, but one any session the
+	// inbox is reachable from can write to): it is the owner's only when its ID is one of his receipts.
+	Peer bool `json:"-"`
 }
 type Snapshot struct {
 	PresentationVersion  int         `json:"presentation_version,omitempty"`
@@ -37,7 +40,7 @@ type Snapshot struct {
 	NeedsInput           bool        `json:"needs_input,omitempty"`
 	// Question is the question on the role's screen, when it is one Chat can show and answer (AskUserQuestion).
 	Question *Question `json:"question,omitempty"`
-	Active               bool        `json:"active"`
+	Active   bool      `json:"active"`
 	// Since is when the role's status last changed: how long it has been working.
 	Since    time.Time `json:"since,omitzero"`
 	Context  int       `json:"context,omitempty"`
@@ -64,11 +67,16 @@ var idPattern = regexp.MustCompile(`^[a-f0-9-]{16,64}$`)
 func ValidID(id string) bool  { return idPattern.MatchString(id) }
 func Hash(text string) string { return fmt.Sprintf("%x", sha256.Sum256([]byte(text))) }
 func Prefix(id string) string { return "[zmina chat " + id + "] " }
+
+// tagMark is the tag zmina opens a line it posts to a role's own channel with (a Claude inbox, a Codex bridge's).
+var tagMark = regexp.MustCompile(`^\[zmina:[a-z2-7]{12}\] `)
+
 func Normalize(m Message) Message {
-	if m.Role != "user" || !strings.HasPrefix(m.Text, "[zmina chat ") {
+	text := tagMark.ReplaceAllString(m.Text, "")
+	if m.Role != "user" || !strings.HasPrefix(text, "[zmina chat ") {
 		return m
 	}
-	head, rest, ok := strings.Cut(strings.TrimPrefix(m.Text, "[zmina chat "), "] ")
+	head, rest, ok := strings.Cut(strings.TrimPrefix(text, "[zmina chat "), "] ")
 	if ok && ValidID(head) {
 		m.ID = "web:" + head
 		m.Text = rest

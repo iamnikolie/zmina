@@ -33,3 +33,14 @@ With the same static server, open `http://127.0.0.1:7530/testdata/patch.html`;
 same-title check left after the other goes opens its own item, a group's control acts on the
 group it is drawn for after groups trade places, an unchanged row stays the same element, a
 kept row's panel buttons carry the current handlers, and focus follows a swapped button.
+
+# Chat question test
+
+With the same static server, open `http://127.0.0.1:7530/testdata/chat-question.html`;
+`window.chatQuestionResults.passed` must be true. It runs the real `static/chat.html` in a frame
+whose `fetch` answers for a role with a one-part single-select question (D-13): a tap marks the
+choice and moves on to the review without sending; Send answers posts the answer once, the card
+goes while the screen still shows the question, and the line under the field says what went; a
+refused answer keeps the card on the review with the choice and the reason in it. Headless:
+`"Google Chrome" --headless=new --virtual-time-budget=30000 --dump-dom <url>` prints the result
+in `#result`.

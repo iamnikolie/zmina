@@ -2,15 +2,20 @@ package cmd
 
 import (
 	"encoding/json"
+	"io"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/iamnikolie/zmina/internal/chat"
+	"github.com/iamnikolie/zmina/internal/shift"
+	"github.com/iamnikolie/zmina/internal/tmux"
 )
 
-func question(items ...chat.QuestionItem) *chat.Question { return &chat.Question{ID: "toolu_1", Items: items} }
+func question(items ...chat.QuestionItem) *chat.Question {
+	return &chat.Question{ID: "toolu_1", Items: items}
+}
 
 func item(multi bool, n int) chat.QuestionItem {
 	it := chat.QuestionItem{Question: "q", MultiSelect: multi}
@@ -103,4 +108,71 @@ func TestActiveDialogReadsTheBottomQuestion(t *testing.T) {
 	assert.False(t, ok, "old text above another dialog")
 	_, ok = activeDialog("Which tabs?\n  1. Talk\n  2. Later", "Which tabs?")
 	assert.False(t, ok, "rows without a cursor are not a live dialog")
+}
+
+// A long question as Claude Code 2.1.319 draws it: a rule down the left of its wrapped text, the rows under it, the
+// last one past a rule of its own. Read off a live session with the words changed.
+const barredDialog = `❯ Ask me which day suits the release. It is a real question: the reviewer is out of quota until Tuesday,
+  10 November, 13:15, and the review goes to the second seat meanwhile.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Release
+│ It is a real question: the reviewer is out of quota until Tuesday, 10 November, 13:15, and the review goes to
+│ the second seat meanwhile. Wait for Tuesday or buy more credits?
+❯ 1. Wait for Tuesday (Recommended)
+     The second seat reviews until Tuesday, no extra spend
+  2. Buy credits
+     You buy them on the provider's usage page, then the reviewer comes back
+  3. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+Enter to select · ↑/↓ to navigate · Esc to cancel`
+
+func TestActiveDialogReadsThroughTheQuestionsRule(t *testing.T) {
+	q := "It is a real question: the reviewer is out of quota until Tuesday, 10 November, 13:15, and the review goes to the second seat meanwhile. Wait for Tuesday or buy more credits?"
+	rows, ok := activeDialog(barredDialog, q)
+	require.True(t, ok, "the rule is the dialog's frame, not words of the question")
+	assert.True(t, dialogMatches(rows, []string{"Wait for Tuesday (Recommended)", "Buy credits"}))
+	assert.True(t, rows[0].Current)
+	assert.True(t, onScreen(barredDialog, q, "Buy credits"))
+	assert.Equal(t, []string{"a │ b"}, dialogLines("│ a │ b │"), "a bar inside the words stays")
+}
+
+// dialogScreen is a role's tmux with a question dialog on its screen: no input line, the screen given, keys kept.
+type dialogScreen struct {
+	shift.Tmux
+	screen string
+	keys   []string
+}
+
+func (d *dialogScreen) Probe(string) (tmux.Pane, error)     { return tmux.Pane{State: tmux.Up}, nil }
+func (d *dialogScreen) Prompt(string) (string, bool, error) { return "", false, nil }
+func (d *dialogScreen) Capture(string, int) (string, error) { return d.screen, nil }
+func (d *dialogScreen) Keys(_ string, keys ...string) error {
+	d.keys = append(d.keys, keys...)
+	return nil
+}
+
+// An answer stopped before its first key is no answer: the owner may send it again once the screen reads right.
+func TestAnswerStoppedBeforeItsFirstKeyMayBeSentAgain(t *testing.T) {
+	uiHome(t)
+	a := &app{out: io.Discard, err: io.Discard}
+	c, err := a.crewApp("default")
+	require.NoError(t, err)
+	q := "It is a real question: the reviewer is out of quota until Tuesday, 10 November, 13:15, and the review goes to the second seat meanwhile. Wait for Tuesday or buy more credits?"
+	snapshot := chat.Snapshot{NeedsInput: true, Question: &chat.Question{ID: "toolu_1", Items: []chat.QuestionItem{{Question: q,
+		Options: []chat.QuestionOption{{Label: "Wait for Tuesday (Recommended)"}, {Label: "Buy credits"}}}}}}
+	raw := `{"id":"toolu_1","items":[{"choices":[1],"other":""}]}`
+	screen := &dialogScreen{screen: "Another question?\n❯ 1. Yes\n  2. No"}
+	require.NoError(t, c.withState(func(s *shift.Shift) error {
+		s.Tmux = screen
+		require.ErrorContains(t, answerQuestion(s, "dev", raw, snapshot), "not the one answered")
+		require.Empty(t, screen.keys)
+		require.Empty(t, s.State.Role("dev").AnsweredQuestions, "nothing reached the dialog")
+
+		screen.screen = barredDialog
+		require.NoError(t, answerQuestion(s, "dev", raw, snapshot))
+		require.Equal(t, []string{"1"}, screen.keys)
+		require.ErrorContains(t, answerQuestion(s, "dev", raw, snapshot), "answered from Chat already", "never twice")
+		return nil
+	}))
 }
