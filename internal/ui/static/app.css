@@ -888,3 +888,9 @@ body.fv-on { overflow: hidden; }
 .cgd .cg-m { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: 13px var(--sans); color: var(--muted); }
 .cgd .cg-sum { margin-left: auto; white-space: nowrap; font: 500 12px var(--sans); color: var(--faint); }
 .cgd .cg-sum .x { color: var(--late); } .cgd .cg-sum .n { color: var(--need); } .cgd .cg-sum .b { color: var(--busy); }
+/* d2 · a crew with no busy role is its head line alone; «N idle ›» lays its cards out in place */
+.cg-h.cgd.cg-line { width: 100%; height: auto; min-height: 36px; margin: 0; align-items: center; padding: 0 4px 0 0; border-bottom: 1px solid var(--line);
+  background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.cg-h.cgd.cg-line[aria-expanded="true"] { margin-bottom: 10px; }
+.cgd .chev { color: var(--faint); }
+.cgd-b + .cgd-b:has(> .cg-line[aria-expanded="false"]) { padding-top: 0; }

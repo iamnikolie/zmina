@@ -953,7 +953,8 @@ it works, amber when it needs you), its role, its crew while every crew shows, i
 as a ring once it fills 75 % of its `context_max`, where it compacts (amber, red from 90 %; below that the numbers
 are in the card's tooltip), and what it says it does; a working one is lit, the idle ones lie as one stack after the rest, the last to go idle
 on top, until «+N idle» or «spread» lays them out; with more than one crew shown the cards stand under a head line per
-crew, in the Agents tab's order, each crew's idle cards in a stack of their own), and under them the **task board**:
+crew — the crews with a working role first, each with its idle cards in a stack of their own; a crew with none is its
+head line alone, «N idle ›» laying its cards out), and under them the **task board**:
 every active task in four columns — in progress, waiting on you, waiting on others (a stack
 per person under their name, how many and the oldest; the oldest card on top; one person spread at a time), and parked (each opens to Bring back and Discard;
 «history» in its header) — as cards: the project's dot, the id and the age; the title in two lines; the latest note

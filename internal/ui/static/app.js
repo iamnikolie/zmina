@@ -1325,26 +1325,34 @@ function renderBand(crews) {
     t.setAttribute("aria-pressed", spread ? "false" : "true");
     h.insertBefore(t, counts.nextSibling);
   }
-  // The crew's head line is the phone's block head (g1, g2): its name, its machines, how its roles stand.
+  // The crew's head line is the phone's block head (g1): its name, its machines, how its roles stand. d2: the band is
+  // capped and the down and waiting items lead in Your move already, so the crews with a busy role come first (then
+  // by g2) with their cards; a crew with none is its head line alone, «N idle ›» laying its cards out in place.
   if (groups.length > 1) {
     const out = [h];
-    for (const g of groups) {
+    const working = new Set(up.filter(([, r]) => r.status === "busy").map(([c]) => c.name));
+    const order = [...groups].sort((x, y) => working.has(y.name) - working.has(x.name) || x.rank - y.rank || x.name.localeCompare(y.name));
+    for (const g of order) {
       const mine = ([c]) => c.name === g.name;
       const at = ([c]) => (g.multi ? machineOf(c.key) : "");
       const gl = lit.filter(mine), gi = idle.filter(mine), k = "sessions:" + g.name;
-      const band = el("div", "band");
-      band.append(...gl.map((x) => sessionCard(x[0], x[1], at(x))));
-      if (gi.length < 2 || stacked.has(k)) band.append(...gi.map((x) => sessionCard(x[0], x[1], at(x))));
-      else {
-        const pile = el("div", "sstack");
-        pile.append(...stackOf([sessionCard(gi[0][0], gi[0][1], at(gi[0]))], gi.length - 1, () => { stacked.add(k); keepStacked(); render(); }, W.idleN));
-        band.append(pile);
-      }
-      const head = crewHead(Object.assign({}, g, { rank: Math.min(g.rank, 2) }), false);
-      head.classList.add("cgd");
       const block = el("div", "cgd-b");
       block.dataset.k = "crewband:" + g.name;
-      block.append(head, band);
+      const busy = working.has(g.name), open = busy || idleOpen.has(g.name);
+      const head = crewHead(Object.assign({}, g, { rank: busy ? Math.min(g.rank, 2) : 3 }), open);
+      head.classList.add("cgd");
+      block.append(head);
+      if (open) {
+        const band = el("div", "band");
+        band.append(...gl.map((x) => sessionCard(x[0], x[1], at(x))));
+        if (gi.length < 2 || stacked.has(k) || !busy) band.append(...gi.map((x) => sessionCard(x[0], x[1], at(x))));
+        else {
+          const pile = el("div", "sstack");
+          pile.append(...stackOf([sessionCard(gi[0][0], gi[0][1], at(gi[0]))], gi.length - 1, () => { stacked.add(k); keepStacked(); render(); }, W.idleN));
+          band.append(pile);
+        }
+        block.append(band);
+      }
       out.push(block);
     }
     patch($("crew-col"), out);
