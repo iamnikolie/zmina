@@ -925,12 +925,17 @@ the next time it goes out of sight or comes back (a draft's text and files are k
 
 Below 861 px (a phone, the home-screen app) the page is three tabs at the bottom — **Agents · Talk · Later** — under a
 52 px head with the tab's name and the beat; the phone has no crew switch: it shows every crew, and every row says
-where it is (the crew for this machine's, `crew · node` for a peer's). **Agents** opens with three numerals — waiting
-on you, working, idle — each a way to its section, then one row per role, never per item:
-«Waiting on you» (a role down that holds a task and a crew whose ticker stopped first, in red; then a question on a
-session's screen; then by the oldest item that waits on you — its title, its age, how many on the role's glyph from
-two), «Working» (busy roles with their task), «Idle» folded into one line, then «Yours by hand» and «Alarms» as one line
-each. A tap on a row is Talk with that role; the lists carry no buttons. The Agents tab's badge counts the roles that
+where it is. **Agents** opens with three numerals — waiting on you, working, idle — each a way to the first crew that
+has them (idle to its idle line, opened), then one block per crew (D-19; the crew's name is the key: `ops` on this machine and on a peer is one block):
+its head names the crew, its machines and how its roles stand («1 down · 1 waiting · 2 working · 4 idle»), and the blocks
+come in that order — a crew with a role down, one waiting on you, one working, then idle-only, ties by name. Inside, one
+row per role, never per item: the ones waiting on you (a role down that holds a task and a crew whose ticker stopped
+first, in red; then a question on a session's screen; then by the oldest item — its title, its age, how many on the
+role's glyph from two), then the busy ones with their task; a row names its machine only when the crew lives on more
+than one. The idle roles fold into one line («4 idle · devops, dispatcher, …») that opens them in place; a crew with
+only idle roles is its head alone. «Yours by hand» and «Alarms» close the tab as one line each. A tap on a row is Talk
+with that role, and Talk keeps it (also across a reload); on the phone Talk's head is a title only — the role and «crew
+· machine · state» — so the conversation is chosen on Agents. The Agents tab's badge counts the roles that
 wait on you, red while one is down. **Later** is link rows — Parked, Alarms, Yours by hand, Done today, History, Crews
 and nodes; an item of the first three opens as a bottom sheet: what it is, who raised it, where, its text, one action
 (Bring back, Move to… with +2h / Tonight 20:00 / Tomorrow 09:00 / Mon 09:00 chips, Done) and «Talk to <role>».
@@ -947,7 +952,9 @@ each crew's last tick; per session that is up: its role's glyph as its lamp (fai
 it works, amber when it needs you), its role, its crew while every crew shows, its state and since when with what its role spent today (API-equivalent, once it is a cent), its context
 as a ring once it fills 75 % of its `context_max`, where it compacts (amber, red from 90 %; below that the numbers
 are in the card's tooltip), and what it says it does; a working one is lit, the idle ones lie as one stack after the rest, the last to go idle
-on top, until «+N idle» or «spread» lays them out), and under them the **task board**:
+on top, until «+N idle» or «spread» lays them out; with more than one crew shown the cards stand under a head line per
+crew — the crews with a working role first, each with its idle cards in a stack of their own; a crew with none is its
+head line alone, «N idle ›» laying its cards out), and under them the **task board**:
 every active task in four columns — in progress, waiting on you, waiting on others (a stack
 per person under their name, how many and the oldest; the oldest card on top; one person spread at a time), and parked (each opens to Bring back and Discard;
 «history» in its header) — as cards: the project's dot, the id and the age; the title in two lines; the latest note

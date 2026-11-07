@@ -585,6 +585,14 @@
     try { active.start(); } catch (_) { recognition = null; listening = false; note("Could not start dictation. Check microphone permission, then try again."); controls(); }
   });
   conversation.addEventListener("scroll", () => { $("chat-latest").hidden = atBottom(); });
+  // D-18 l1: the Latest arrow stands 8 px over whatever is on top of the composer — the state line («Working · Stop»)
+  // when it shows, else the composer itself; it never lies on Stop.
+  { const form = $("composer"), state = document.querySelector(".chat-state");
+    const lift = () => { const r = state.getBoundingClientRect(); form.style.setProperty("--over", (r.height ? Math.max(0, form.getBoundingClientRect().top - r.top) : 0) + "px"); };
+    if (state) {
+      if (window.ResizeObserver) new ResizeObserver(lift).observe(state);
+      window.addEventListener("resize", lift);
+    } }
   $("chat-latest").addEventListener("click", () => { conversation.scrollTop = conversation.scrollHeight; $("chat-latest").hidden = true; });
   $("open-chat").addEventListener("click", openChat); $("refresh").addEventListener("click", loadTargets); node.addEventListener("change", loadTargets); target.addEventListener("change", () => { $("open-chat").disabled = target.value === ""; if (target.value !== "") openChat(); });
   document.addEventListener("pointerdown", event => { if (!settings.contains(event.target)) settings.open = false; });
