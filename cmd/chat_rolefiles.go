@@ -17,13 +17,15 @@ import (
 
 	"github.com/iamnikolie/zmina/internal/chat"
 	"github.com/iamnikolie/zmina/internal/mesh"
+	"github.com/iamnikolie/zmina/internal/registry"
 	"github.com/iamnikolie/zmina/internal/shift"
 )
 
 // A role's files in Chat (design D-16 r1): a path a role names in its message shows as a preview or a chip when the
 // file is one zmina may serve — an image (png, jpeg, gif, webp) or a pdf, by its first bytes and its extension, at most
 // chat.MaxFileBytes, under the role's dir, a worktree of one of its tasks, or the system temp dir (where sessions keep
-// their scratchpads). Any other path stays text: the page never learns whether it exists.
+// their scratchpads) — or a file the role's session handed the owner with SendUserFile, wherever it is: Claude Code
+// delivered those very bytes to the owner already. Any other path stays text: the page never learns whether it exists.
 
 // rolePathsMax bounds one lookup; rolePathMax one path.
 const (
@@ -89,6 +91,40 @@ func roleRoots(s *shift.Shift, role string) ([]string, error) {
 	return roots, nil
 }
 
+// roleSent are the paths the role's conversation (its current one, else its last) handed the owner with SendUserFile.
+func roleSent(s *shift.Shift, role string) map[string]bool {
+	r, err := s.Role(role)
+	if err != nil || r.IsCodex() {
+		return nil
+	}
+
+	session := ""
+
+	for _, v := range s.Views() {
+		if v.Role == role {
+			session = v.SessionID
+
+			break
+		}
+	}
+
+	if rs := s.State.Role(role); session == "" && (rs.LastRuntime == "" || rs.LastRuntime == "claude") {
+		session = rs.LastSession
+	}
+
+	paths, err := (&registry.Registry{Namespace: s.Crew.Namespace}).SentFiles(session)
+	if err != nil || len(paths) == 0 {
+		return nil
+	}
+
+	sent := map[string]bool{}
+	for _, p := range paths {
+		sent[filepath.Clean(p)] = true
+	}
+
+	return sent
+}
+
 // within is true when path is root or under it.
 func within(path, root string) bool {
 	if root == string(filepath.Separator) {
@@ -99,9 +135,9 @@ func within(path, root string) bool {
 }
 
 // roleFile opens a path a role named when zmina may serve it: absolute (or ~/…), a regular file under one of roots
-// after its symlinks are resolved, a kind of fileKinds by its extension and its first bytes, at most MaxFileBytes.
-// The caller closes the file.
-func roleFile(path string, roots []string) (*os.File, chat.PathInfo, error) {
+// after its symlinks are resolved or one the role sent (sent, by its path as sent), a kind of fileKinds by its
+// extension and its first bytes, at most MaxFileBytes. The caller closes the file.
+func roleFile(path string, roots []string, sent map[string]bool) (*os.File, chat.PathInfo, error) {
 	refuse := errors.New("not a file this conversation shows")
 
 	if strings.HasPrefix(path, "~/") {
@@ -127,7 +163,7 @@ func roleFile(path string, roots []string) (*os.File, chat.PathInfo, error) {
 		return nil, chat.PathInfo{}, refuse
 	}
 
-	inside := false
+	inside := sent[filepath.Clean(path)]
 
 	for _, root := range roots {
 		if within(real, root) {
@@ -205,12 +241,14 @@ func (a *app) localChatPaths(key, role, list string) (chat.Snapshot, error) {
 			return err
 		}
 
+		sent := roleSent(s, role)
+
 		for _, p := range paths {
 			if p == "" {
 				continue
 			}
 
-			f, info, err := roleFile(p, roots)
+			f, info, err := roleFile(p, roots, sent)
 			if err != nil {
 				continue
 			}
@@ -240,7 +278,7 @@ func (a *app) localChatRoleFile(key, role, path string) (chat.Upload, error) {
 			return err
 		}
 
-		f, info, err := roleFile(path, roots)
+		f, info, err := roleFile(path, roots, roleSent(s, role))
 		if err != nil {
 			return err
 		}

@@ -37,13 +37,13 @@ func TestRoleFileServesOnlyItsRoots(t *testing.T) {
 	}
 
 	ok := write(root, "shots/a.png", pngBytes)
-	f, info, err := roleFile(ok, roots)
+	f, info, err := roleFile(ok, roots, nil)
 	require.NoError(t, err)
 	_ = f.Close()
 	assert.Equal(t, chat.PathInfo{Path: ok, Name: "a.png", Size: len(pngBytes), Type: "image/png"}, info)
 
 	doc := write(root, "report.PDF", pdfBytes)
-	f, info, err = roleFile(doc, roots)
+	f, info, err = roleFile(doc, roots, nil)
 	require.NoError(t, err)
 	_ = f.Close()
 	assert.Equal(t, "application/pdf", info.Type)
@@ -67,9 +67,36 @@ func TestRoleFileServesOnlyItsRoots(t *testing.T) {
 		"gone":                      filepath.Join(root, "none.png"),
 		"dot-dot out":               filepath.Join(root, "..", filepath.Base(outside), "b.png"),
 	} {
-		_, _, err := roleFile(p, roots)
+		_, _, err := roleFile(p, roots, nil)
 		require.Error(t, err, name)
 	}
+}
+
+// A file the role handed the owner with SendUserFile is served wherever it is, by the path it sent, with every other
+// check as before: a regular image or pdf by its first bytes, at most 8 MiB.
+func TestRoleFileServesWhatTheRoleSent(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	roots := []string{mustReal(t, root)}
+	doc := filepath.Join(outside, "out", "report.pdf")
+	require.NoError(t, os.MkdirAll(filepath.Dir(doc), 0o700))
+	require.NoError(t, os.WriteFile(doc, pdfBytes, 0o600))
+	fake := filepath.Join(outside, "fake.pdf")
+	require.NoError(t, os.WriteFile(fake, []byte("<html>"), 0o600))
+	other := filepath.Join(outside, "other.pdf")
+	require.NoError(t, os.WriteFile(other, pdfBytes, 0o600))
+	sent := map[string]bool{doc: true, fake: true}
+
+	f, info, err := roleFile(doc, roots, sent)
+	require.NoError(t, err)
+	_ = f.Close()
+	assert.Equal(t, "report.pdf", info.Name)
+
+	_, _, err = roleFile(fake, roots, sent)
+	require.Error(t, err, "sent, but not a pdf by its bytes")
+	_, _, err = roleFile(other, roots, sent)
+	require.Error(t, err, "next to a sent file, not sent")
+	_, _, err = roleFile(doc, roots, nil)
+	require.Error(t, err, "outside the roots and not sent")
 }
 
 func mustReal(t *testing.T, p string) string {

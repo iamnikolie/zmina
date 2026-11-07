@@ -552,9 +552,11 @@ symlinks. Any other path stays text. A list, paragraph or code block that is onl
 place (one image in its own shape up to 420 px, more as square tiles three a row, six at most, each with its name); a
 path in a sentence becomes its file name, linked, with the preview under that paragraph; a PDF is a chip. A file a
 Claude role sends with Claude Code's `SendUserFile` (made for the claude.ai app) is its message in Talk too: the
-caption, then the delivered paths as a block of their own, shown as above where its node may serve them, as paths where
-not. Nothing widens the roots: a role copies any other file into its dir, its task's worktree or the temp dir first, and
-every role hears so at boot (`shift.FilesRule`), so it never says a file is in the chat when it went only to Telegram.
+caption, then the delivered paths as a block of their own, shown as above. Such a file is served wherever it is (Claude
+Code delivered those bytes to the owner already), by the very path the role's current or last conversation sent, with
+every other check as above; a path a role only names still has to be under the roots, so it copies the file there
+first. Every role hears this at boot (`shift.FilesRule`), so it never says a file is in the chat when it went only to
+Telegram. Images a role reads for itself (Read) are not shown.
 `POST /api/chat/paths` (`node`, `crew`, `role`, up to 64 `paths`) answers which of them the page shows, with name,
 size and type; `GET /api/chat/rolefile?node=&crew=&role=&path=` serves one inline (`&download=1`: as a download).
 A peer's are read on its node with the owner-signed mesh ops `chat/paths` and `chat/rolefile`. A tap on an image opens

@@ -42,8 +42,8 @@ func (r *Registry) History(sessionID string, lines int) (string, error) {
 	return text, nil
 }
 
-// ChatMessages exposes only visible user and assistant text with stable message identities.
-func (r *Registry) ChatMessages(sessionID string) ([]chat.Message, error) {
+// records are the lines of the recent part of a session's transcript that Chat reads (its last 8 MiB).
+func (r *Registry) records(sessionID string) ([][]byte, error) {
 	path := r.transcript(sessionID)
 	if path == "" {
 		return nil, nil
@@ -67,12 +67,42 @@ func (r *Registry) ChatMessages(sessionID string) ([]chat.Message, error) {
 	if offset > 0 {
 		records = records[1:]
 	}
+	return records, nil
+}
+
+// SentFiles are the paths the session handed the owner with SendUserFile, in the part of its transcript Chat reads:
+// the files its Chat messages name as sent.
+func (r *Registry) SentFiles(sessionID string) ([]string, error) {
+	records, err := r.records(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	sends := map[string]sentFiles{}
+	for _, record := range records {
+		var l line
+		if json.Unmarshal(record, &l) != nil || l.Sidechain || (l.Type != "user" && l.Type != "assistant") {
+			continue
+		}
+		if _, paths, ok := sentFile(&l, sends); ok {
+			out = append(out, paths...)
+		}
+	}
+	return out, nil
+}
+
+// ChatMessages exposes only visible user and assistant text with stable message identities.
+func (r *Registry) ChatMessages(sessionID string) ([]chat.Message, error) {
+	records, err := r.records(sessionID)
+	if err != nil || records == nil {
+		return nil, err
+	}
 	out := []chat.Message{}
 	seen := map[string]bool{}
 	// local: Claude Code's note that the next line is a command it ran itself; command: the index in out of the
 	// command line the next output line belongs to, -1 when none.
 	local, command := false, -1
-	var ran [2]string // the name and arguments of that command
+	var ran [2]string               // the name and arguments of that command
 	sends := map[string]sentFiles{} // SendUserFile calls by tool_use id, until their result
 	for _, record := range records {
 		var l line
@@ -82,7 +112,7 @@ func (r *Registry) ChatMessages(sessionID string) ([]chat.Message, error) {
 		if l.UUID != "" && seen[l.UUID] {
 			continue
 		}
-		if m, ok := sentFile(&l, sends); ok {
+		if m, _, ok := sentFile(&l, sends); ok {
 			seen[l.UUID] = true
 			out = append(out, m)
 			local, command = false, -1
@@ -169,10 +199,10 @@ type sentFiles struct {
 }
 
 // sentFile reads a role's SendUserFile (Claude Code's way to hand the owner a file) as the role's message in Chat: its
-// caption, then the files' paths as a block of their own, which Chat shows as the role's files where its node may
-// serve them (D-16) and as paths where it may not. A call is remembered from the role's line (ok false), and becomes
-// a message on the line of its result, unless that result is an error.
-func sentFile(l *line, sends map[string]sentFiles) (chat.Message, bool) {
+// caption, then the files' paths as a block of their own, which Chat shows as the role's files (D-16) — paths are
+// those files. A call is remembered from the role's line (ok false), and becomes a message on the line of its result,
+// unless that result is an error.
+func sentFile(l *line, sends map[string]sentFiles) (chat.Message, []string, bool) {
 	var blocks []struct {
 		Type      string          `json:"type"`
 		ID        string          `json:"id"`
@@ -182,7 +212,7 @@ func sentFile(l *line, sends map[string]sentFiles) (chat.Message, bool) {
 		IsError   bool            `json:"is_error"`
 	}
 	if json.Unmarshal(l.Message.Content, &blocks) != nil {
-		return chat.Message{}, false
+		return chat.Message{}, nil, false
 	}
 	for _, b := range blocks {
 		switch {
@@ -234,10 +264,10 @@ func sentFile(l *line, sends map[string]sentFiles) (chat.Message, bool) {
 			if id == "" {
 				id = chat.Hash(b.ToolUseID)
 			}
-			return chat.Message{ID: id, Role: "assistant", Text: text, At: l.Timestamp}, true
+			return chat.Message{ID: id, Role: "assistant", Text: text, At: l.Timestamp}, paths, true
 		}
 	}
-	return chat.Message{}, false
+	return chat.Message{}, nil, false
 }
 
 // dropTyped takes away the line just before a recorded command when it is that command as typed at the prompt
