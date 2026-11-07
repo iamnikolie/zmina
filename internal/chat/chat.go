@@ -71,7 +71,11 @@ func Prefix(id string) string { return "[zmina chat " + id + "] " }
 // tagMark is the tag zmina opens a line it posts to a role's own channel with (a Claude inbox, a Codex bridge's).
 var tagMark = regexp.MustCompile(`^\[zmina:[a-z2-7]{12}\] `)
 
+// Normalize reads an owner's message from Chat: "[zmina chat <id>] <text>" as typed, or with zmina's tag in front as
+// posted to the role's own channel (a Claude inbox socket, a Codex bridge's inbox). A tagged one is Peer: the channel
+// takes lines from more than zmina, so it is the owner's only when its ID is one of his receipts.
 func Normalize(m Message) Message {
+	tagged := tagMark.MatchString(m.Text)
 	text := tagMark.ReplaceAllString(m.Text, "")
 	if m.Role != "user" || !strings.HasPrefix(text, "[zmina chat ") {
 		return m
@@ -80,6 +84,7 @@ func Normalize(m Message) Message {
 	if ok && ValidID(head) {
 		m.ID = "web:" + head
 		m.Text = rest
+		m.Peer = m.Peer || tagged
 	}
 	return m
 }

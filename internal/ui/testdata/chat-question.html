@@ -68,6 +68,11 @@
       assert(!$(".composer-box").hidden, "the composer comes back while the screen still shows the question");
       assert($("#composer-status").textContent === "Answered · Wait for Tuesday" && !$("#composer-status").hidden, "the line under the field says what went");
       assert($("#agent-state").textContent === "Answered · the role goes on", "the state line no longer asks");
+      // The keys went but the dialog stayed: past 10 s the state line says it needs input again, the card stays gone.
+      await new Promise(r => setTimeout(r, 10200));
+      frame_read($);
+      await wait("the state line to give up", () => $("#agent-state").textContent === "Needs input · open Terminal to respond");
+      assert($("#chat-question").hidden && fixture.posts.length === 1, "a question still on the screen after 10 s points to Terminal, sent once");
       fixture.open = false;
       frame_read($);
       await wait("the next read", () => $("#agent-state").textContent !== "Answered · the role goes on");

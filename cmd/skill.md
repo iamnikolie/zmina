@@ -547,7 +547,8 @@ whose **Send answers** posts `answer:<json>` (`{id, items: [{choices: [n…], ot
 then presses the dialog's keys, each part checked on the live screen first (the rule Claude Code draws down the left
 of a question's text is its frame, not its words); a lone question with ticks is left to Terminal. A question is
 answered from Chat once; an answer stopped before its first key is not counted, so it may be sent again. Sent, the
-card goes at once and the line under the field says `Answered · <choice>`; refused, the card stays on the review with
+card goes at once and the line under the field says `Answered · <choice>` (a question still on the role's screen 10 s
+later: the state line says it needs input and points to Terminal); refused, the card stays on the review with
 the answers chosen and `Not answered · <why>` under it.
 Reading Chat does not resume a Codex thread or attach another native app writer. Chat is not a tmux
 attachment and does not pin an idle role against the configured release policy.

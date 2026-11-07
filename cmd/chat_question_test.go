@@ -135,6 +135,11 @@ func TestActiveDialogReadsThroughTheQuestionsRule(t *testing.T) {
 	assert.True(t, rows[0].Current)
 	assert.True(t, onScreen(barredDialog, q, "Buy credits"))
 	assert.Equal(t, []string{"a │ b"}, dialogLines("│ a │ b │"), "a bar inside the words stays")
+
+	// The rule is the question's frame only: rows inside a box are another dialog's, as they were before.
+	boxed := "⏺ " + q + "\n╭──────────╮\n│ Do you want to proceed? │\n│ ❯ 1. Wait for Tuesday (Recommended) │\n│   2. Buy credits │\n╰──────────╯"
+	_, ok = activeDialog(boxed, q)
+	assert.False(t, ok, "a boxed dialog under the question's text is not the question's")
 }
 
 // dialogScreen is a role's tmux with a question dialog on its screen: no input line, the screen given, keys kept.

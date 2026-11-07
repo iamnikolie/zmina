@@ -456,7 +456,9 @@ func activeDialog(screen, question string) ([]dialogOption, bool) {
 	if len(head) > 20 {
 		head = head[:20]
 	}
-	lines := dialogLines(screen)
+	// The question's text is read without the dialog's frame; its rows are read as drawn: a row inside a box (another
+	// dialog's) is not one of this dialog's.
+	raw, lines := strings.Split(screen, "\n"), dialogLines(screen)
 	at := -1
 	for i := len(lines) - 1; i >= 0; i-- {
 		if strings.Contains(flat(lines[i]), string(head)) {
@@ -469,7 +471,7 @@ func activeDialog(screen, question string) ([]dialogOption, bool) {
 	}
 	var out []dialogOption
 	current := 0
-	for _, l := range lines[at:] {
+	for _, l := range raw[at:] {
 		m := dialogRow.FindStringSubmatch(l)
 		if m == nil {
 			continue
@@ -493,7 +495,8 @@ func activeDialog(screen, question string) ([]dialogOption, bool) {
 // dialogBar is the rule Claude Code draws down the left of a question's text (and a box's sides): a frame, not words.
 var dialogBar = regexp.MustCompile(`^\s*[│┃▏▎]\s?|\s*[│┃]\s*$`)
 
-// dialogLines are the screen's lines without the dialog's frame, so a question wrapped inside it reads as its words.
+// dialogLines are the screen's lines without the dialog's frame, so a question wrapped inside it reads as its words;
+// one line for each of the screen's, in order.
 func dialogLines(screen string) []string {
 	lines := strings.Split(screen, "\n")
 	for i, l := range lines {

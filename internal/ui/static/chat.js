@@ -226,6 +226,10 @@
   const answerable = (q) => (q && !(q.items.length === 1 && q.items[0].multi_select) ? q : null);
   // D-13 q8: once its answer is sent the card goes, though the role's screen may show the question a moment longer.
   const sentAnswer = (q) => Boolean(q && ask && ask.id === q.id && ask.sent);
+  // Keys that went but did not close the dialog leave the question on the screen: past this the state line says it
+  // needs input again (Terminal answers it; Chat answers a question once).
+  const ANSWER_SETTLES = 10000;
+  const answerSettling = (q) => sentAnswer(q) && Date.now() - ask.sent < ANSWER_SETTLES;
   const openQuestion = (q) => (answerable(q) && !sentAnswer(q) ? q : null);
   const REC = /\s*\(Recommended\)\s*$/;
   function renderQuestion() {
@@ -255,7 +259,7 @@
       try {
         const data = await post("/api/chat/action", {...destination, action: "answer:" + JSON.stringify({id: q.id, items: mine.items.map(a => ({choices: a.other !== null ? [] : a.choices, other: a.other || ""}))})});
         if (version !== generation) return;
-        mine.sent = true; error(""); note("Answered · " + summary);
+        mine.sent = Date.now(); error(""); note("Answered · " + summary);
         applySnapshot(data);
       } catch (e) { if (version === generation) mine.failed = e.message || "Could not answer."; }
       finally { posting = false; controls(); if (version === generation) renderQuestion(); }
@@ -429,7 +433,7 @@
     $("empty-chat").hidden = rows.length > 0;
     $("empty-chat").textContent = snapshot.session ? "No saved messages yet. Send a message to this role." : "No conversation yet. Start the role, then send a message.";
     $("runtime-info").textContent = [snapshot.runtime, snapshot.profile, snapshot.context ? new Intl.NumberFormat().format(snapshot.context) + " context tokens" : ""].filter(Boolean).join(" · ");
-    $("agent-state").textContent = !live ? "Connecting… Showing saved conversation" : snapshot.state !== "up" ? "Role stopped · queued messages wait until it starts" : openQuestion(snapshot.question) ? "Asks you · answer below" : sentAnswer(snapshot.question) ? "Answered · the role goes on" : snapshot.needs_input ? "Needs input · open Terminal to respond" : snapshot.active ? "Working…" : snapshot.status === "unknown" || !snapshot.session ? "Status unavailable · open Terminal" : "Idle";
+    $("agent-state").textContent = !live ? "Connecting… Showing saved conversation" : snapshot.state !== "up" ? "Role stopped · queued messages wait until it starts" : openQuestion(snapshot.question) ? "Asks you · answer below" : answerSettling(snapshot.question) ? "Answered · the role goes on" : snapshot.needs_input ? "Needs input · open Terminal to respond" : snapshot.active ? "Working…" : snapshot.status === "unknown" || !snapshot.session ? "Status unavailable · open Terminal" : "Idle";
     // D-08 c6: the state line speaks only when something is off; working and idle are said elsewhere (the working
     // line, the panel's head) and stay for screen readers.
     const quiet = live && snapshot.state === "up" && !snapshot.needs_input && !(snapshot.status === "unknown" || !snapshot.session);
