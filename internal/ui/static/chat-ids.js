@@ -40,10 +40,11 @@
       const frag = document.createDocumentFragment();
       let last = 0;
       n.data.replace(ID, (m, nodeName, crew, id, at) => {
-        // A prefix is a node/crew only when the node is one the mesh knows (this one, or a peer); anything else —
-        // src/acme/T-7, a host's path — stays text, and the id is this conversation's.
+        // A prefix is a node/crew only when the node is one the mesh knows (this one, or a peer). Anything else —
+        // src/acme/T-7, a host's path, a peer's id before the node list is here — stays text: never this
+        // conversation's id, whose card could answer another item. The page links again once the nodes are known.
         const node = nodeName ? hooks?.node(nodeName) : undefined;
-        if (nodeName && node === undefined) { at += m.length - id.length; m = id; nodeName = ""; }
+        if (nodeName && node === undefined) return m;
         frag.append(n.data.slice(last, at));
         const b = el("button", "xid", m);
         b.type = "button";
@@ -146,7 +147,10 @@
   // fill draws the card (Loading… until its data is here) and puts a popover in its place.
   function fill() {
     if (!open) return;
+    // A redraw replaces the card's children: the focus that was in it stays in it.
+    const had = open.box.contains(document.activeElement);
     draw();
+    if (had && !open.box.contains(document.activeElement)) open.box.focus({preventScroll: true});
     if (open && !open.sheet) place();
   }
   function draw() {
@@ -234,7 +238,9 @@
           const words = "Sent · " + clock.format(new Date());
           // The line stays while this card is open, through the redraw the ledger's new state brings.
           if (open) open.sent = words;
+          const focused = button === document.activeElement;
           button.replaceWith(sentLine(words));
+          if (focused && open) open.box.focus({preventScroll: true});
           // What the ledger says now.
           for (const k of [...cache.keys()]) if (k.startsWith((dest.node || "") + "|" + dest.crew + "|")) cache.get(k).at = 0;
           want(dest, open?.id || card.id);

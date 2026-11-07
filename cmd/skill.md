@@ -554,7 +554,8 @@ Reading Chat does not resume a Codex thread or attach another native app writer.
 attachment and does not pin an idle role against the configured release policy.
 
 **Ids as cards.** Every `T-n`, `L-n` and `A-n` in a message (not in code or a link; a `<node>/<crew>/` before it stays
-part of it and names that crew) is a link. In a run of the role's messages (since the owner last spoke) the first
+part of it and names that crew when the mesh knows the node; with any other prefix, a path, the whole stays text) is
+a link. In a run of the role's messages (since the owner last spoke) the first
 mention of a piece of work carries its short title after it; a dot before the id says it waits on the owner or is in
 work. A tap on the phone opens a bottom sheet, hover (350 ms), focus or a click (which pins it) on the desktop a
 popover: the id, what it is (task, parked, ask), its project or who asked, the title, the state in words (Waiting on

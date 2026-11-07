@@ -33,10 +33,10 @@
   const messages = [
     {id: "m1", role: "assistant", text: "T-1 goes on as T-2 (from L-1). `T-3` is code. A-1 waits on you; T-9 is gone. T-10x is not an id.", at: now},
     {id: "m2", role: "user", text: "Re T-1 (Login page — rework): how far?", at: now},
-    {id: "m3", role: "assistant", text: "T-2 is half done. T-5 waits. See src/acme/T-7.", at: now},
+    {id: "m3", role: "assistant", text: "T-2 is half done. T-5 waits. See src/acme/T-7. Ask box/ops/A-2.", at: now},
   ];
 
-  async function open(cls, crew) {
+  async function open(cls, crew, nodes = []) {
     const fixture = {posts: [], sends: [], reads: []};
     const frame = document.createElement("iframe");
     frame.className = cls;
@@ -44,10 +44,13 @@
     frame.contentWindow.fixture = fixture;
     const stub = `<base href="../static/"><script>
       history.replaceState(null, "", location.pathname + "?crew=${crew}&role=dev");
+      window.addEventListener("error", (e) => { fixture.err = e.message; });
       window.fetch = async (url, options = {}) => {
         const json = (body, status = 200) => new Response(typeof body === "string" ? body : JSON.stringify(body), {status, headers: {"Content-Type": "application/json"}});
         const [path, query] = String(url).split("?");
-        if (path === "/api/terminal/nodes" || path === "/api/terminal/targets") return json([]);
+        // The node list comes late, after the first render, as it may on a slow mesh.
+        if (path === "/api/terminal/nodes") { await new Promise(r => setTimeout(r, 300)); return json(fixture.nodes); }
+        if (path === "/api/terminal/targets") return json([]);
         if (path === "/api/chat") return json(fixture.snapshot());
         if (path === "/api/items") { const q = new URLSearchParams(query); fixture.reads.push(q.get("ids")); const out = {}; for (const id of q.get("ids").split(",")) out[id] = fixture.items[id] || {id, found: false}; return json({items: out}); }
         if (path === "/api/todo") { fixture.posts.push(JSON.parse(options.body)); return json({done: "ok"}); }
@@ -56,6 +59,7 @@
       };
     <\/script>`;
     fixture.items = items;
+    fixture.nodes = nodes;
     fixture.snapshot = () => ({presentation_version: 1, attachments_supported: true, retry_window_seconds: 604800, role: "dev", runtime: "claude",
       state: "up", status: "idle", session: "session-1", messages, pending: []});
     const doc = frame.contentDocument;
@@ -69,8 +73,10 @@
     {
       const {fixture, $, $$} = await open("phone", "ids-phone");
       const ids = $$(".chat-message.assistant .xid").map((b) => b.textContent);
-      assert(ids.join(" ") === "T-1 T-2 L-1 A-1 T-9 T-2 T-5 T-7", "every id is a link, not in code, not inside a longer word: " + ids.join(" "));
+      assert(ids.join(" ") === "T-1 T-2 L-1 A-1 T-9 T-2 T-5", "every id is a link, not in code, not inside a longer word: " + ids.join(" "));
       assert(!$$(".xid").some((b) => b.closest("code")), "code stays code");
+      await new Promise(r => setTimeout(r, 500));
+      assert(!$$(".xid").some((b) => /A-2/.test(b.textContent)) && /Ask box\/ops\/A-2\./.test($$(".chat-message.assistant")[1].textContent), "an unknown node's id stays text, never this crew's");
       await wait("the titles", () => $$(".chat-message.assistant .xt").length >= 2);
       const first = $$(".chat-message.assistant")[0];
       const titled = [...first.querySelectorAll(".xid")].filter((b) => b.nextSibling?.classList?.contains("xt")).map((b) => b.textContent);
@@ -155,10 +161,10 @@
     }
     {
       // The desktop: a click pins a popover under the id; Esc closes it and gives the focus back.
-      const {$, $$} = await open("desk", "ids-desk");
-      // A path is not a node: src/acme/T-7 links T-7 of this crew, its prefix stays text.
-      const t7 = $$(".chat-message.assistant .xid").find((x) => x.textContent === "T-7");
-      assert(t7 && t7.dataset.node === "" && t7.dataset.crew === "ids-desk" && t7.previousSibling.textContent.endsWith("src/acme/"), "a path's prefix stays text");
+      const {$, $$} = await open("desk", "ids-desk", [{name: "laptop", local: true}, {name: "box", local: false}]);
+      // A path is not a node: src/acme/T-7 stays text, never this crew's T-7.
+      await wait("the node list", () => $$(".chat-message.assistant .xid").some((x) => x.textContent === "box/ops/A-2"));
+      assert(!$$(".chat-message.assistant .xid").some((x) => /T-7/.test(x.textContent)) && /See src\/acme\/T-7\./.test($$(".chat-message.assistant")[1].textContent), "a path stays text");
       // Opened by hover, then pinned with a click (or Enter): the card takes the focus, so its buttons are next.
       const h = $$(".chat-message.assistant .xid")[0];
       h.dispatchEvent(new PointerEvent("pointerover", {bubbles: true, pointerType: "mouse"}));
@@ -180,10 +186,31 @@
       b.ownerDocument.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape", bubbles: true}));
       assert(!$(".xpop"), "Esc closes it");
       assert(b.ownerDocument.activeElement === b, "and gives the focus back to the id");
+
+      // A known peer's id, named after the node list came: that node's, never this crew's.
+      const peer = await wait("the peer's id", () => $$(".chat-message.assistant .xid").find((x) => x.textContent === "box/ops/A-2"));
+      assert(peer.dataset.node === "box" && peer.dataset.crew === "ops" && peer.dataset.id === "A-2", "box/ops/A-2 is box's A-2");
+
+      // The focus stays in the card when an answer goes and when a step swaps it.
+      const ask = $$(".chat-message.assistant .xid").find((x) => x.textContent === "A-1");
+      ask.click();
+      await wait("the ask's card", () => $(".xpop .xdo"));
+      $(".xpop .xdo").focus();
+      $(".xpop .xdo").click();
+      await wait("sent", () => $(".xpop .xsent"));
+      assert(ask.ownerDocument.activeElement === $(".xpop"), "after the answer the focus is on the card");
+      await new Promise(r => setTimeout(r, 700));
+      assert(ask.ownerDocument.activeElement === $(".xpop"), "and stays there through the redraw");
+      ask.ownerDocument.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape", bubbles: true}));
+      b.click();
+      await wait("the card", () => $(".xpop .xstep"));
+      $$(".xpop .xstep")[1].focus();
+      $$(".xpop .xstep")[1].click();
+      assert($(".xpop").contains(b.ownerDocument.activeElement), "a step keeps the focus in the card");
     }
     window.chatIdsResults = {passed: true, results};
   } catch (e) {
-    window.chatIdsResults = {passed: false, results, error: e.message};
+    window.chatIdsResults = {passed: false, results, error: e.message + [...document.querySelectorAll("iframe")].map((f) => f.contentWindow.fixture?.err ? " · page: " + f.contentWindow.fixture.err : "").join("")};
   }
   document.getElementById("result").textContent = JSON.stringify(window.chatIdsResults, null, 2);
 })();
