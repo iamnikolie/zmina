@@ -45,18 +45,45 @@ func TestChatSendIsDurableIdempotentAndRoleScoped(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestChatPreservesMultilineMessageInInbox(t *testing.T) {
+// A Claude role gets the owner's message whole, line breaks and his files after it, as one queued line the queue types
+// at its prompt (his own turn); nothing goes through the crew's inbox.
+func TestChatQueuesTheWholeMessageForAClaudeRole(t *testing.T) {
 	uiHome(t)
 	a := &app{out: io.Discard, err: io.Discard}
-	text := "Please inspect:\n```go\nfmt.Println(\"hello\")\n```"
+	text := "Please inspect:\n\n```go\nfmt.Println(\"hello\")\n```\n"
 	snapshot, err := a.localChatSend("default", "dev", "abcdefab-1234-1234-1234-123456789abc", text)
 	require.NoError(t, err)
 	require.Equal(t, text, snapshot.Pending[0].Text)
 	c, err := a.crewApp("default")
 	require.NoError(t, err)
 	require.NoError(t, c.readState(func(s *shift.Shift) error {
+		rs := s.State.Role("dev")
+		require.Equal(t, "[zmina chat abcdefab-1234-1234-1234-123456789abc] Please inspect:\n\n```go\nfmt.Println(\"hello\")\n```", rs.Inbox[0])
+		require.Equal(t, rs.Inbox[0], rs.ChatReceipts[0].Line, "its receipt names the very line: the queue types it")
+		entries, err := s.Inbox.List()
+		require.NoError(t, err)
+		require.Empty(t, entries)
+		return nil
+	}))
+}
+
+// A Codex bridge takes one line: a message with line breaks goes to the crew's inbox, and the line says whose words.
+func TestChatPreservesMultilineMessageInInboxForCodex(t *testing.T) {
+	home := uiHome(t)
+	crewFile := filepath.Join(home, ".zmina", "crew.yaml")
+	raw, err := os.ReadFile(crewFile)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(crewFile, []byte(strings.Replace(string(raw), "  dev:\n", "  dev:\n    runtime: codex\n", 1)), 0o600))
+	a := &app{out: io.Discard, err: io.Discard}
+	text := "Please inspect:\n```go\nfmt.Println(\"hello\")\n```"
+	_, err = a.localChatSend("default", "dev", "abcdefab-1234-1234-1234-123456789abc", text)
+	require.NoError(t, err)
+	c, err := a.crewApp("default")
+	require.NoError(t, err)
+	require.NoError(t, c.readState(func(s *shift.Shift) error {
 		line := s.State.Role("dev").Inbox[0]
 		require.NotContains(t, line, "\n")
+		require.Contains(t, line, "the owner's own words")
 		_, id, _ := strings.Cut(line, "zmina inbox show ")
 		entry, err := s.Inbox.Get(id)
 		require.NoError(t, err)

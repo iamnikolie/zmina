@@ -38,12 +38,11 @@ func TestAttachmentOnlySendBindsFilesToRoleAndRetryPayload(t *testing.T) {
 	require.NoError(t, c.readState(func(s *shift.Shift) error {
 		rs := s.State.Role("dev")
 		require.Len(t, rs.Inbox, 1)
-		_, ref, _ := strings.Cut(rs.Inbox[0], "zmina inbox show ")
-		entry, err := s.Inbox.Get(ref)
-		require.NoError(t, err)
-		require.Contains(t, entry.Body, "Attached files from the owner")
-		require.Contains(t, entry.Body, "chat-files")
-		require.Contains(t, entry.Body, "example.txt")
+		// His files follow his (here no) words in the very line typed at the role's prompt.
+		line := rs.Inbox[0]
+		require.True(t, strings.HasPrefix(line, chat.Prefix(id)+"Attached files from the owner"), line)
+		require.Contains(t, line, "chat-files")
+		require.Contains(t, line, "example.txt")
 		return nil
 	}))
 	file, err := a.localChatFile("default", "dev", meta.ID)

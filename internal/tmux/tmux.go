@@ -457,13 +457,52 @@ func (c *Client) Type(name, text string) error {
 		return err
 	}
 
-	if _, err := c.run("send-keys", "-t", id, "-l", "--", escape(Printable(text))); err != nil {
-		return err
+	// Typed as a person types: a burst of more than about 800 characters Claude Code reads as a paste, which it keeps
+	// as a placeholder, wraps as pasted content and, cut into, loses the start of. So the text goes in pieces with a
+	// pause between them, and each line break as Ctrl-J, the key that breaks a line in its input; Enter sends it.
+	for i, line := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
+		if i > 0 {
+			if _, err := c.run("send-keys", "-t", id, "C-j"); err != nil {
+				return err
+			}
+		}
+
+		for _, piece := range pieces(Printable(line), typePiece) {
+			if _, err := c.run("send-keys", "-t", id, "-l", "--", escape(piece)); err != nil {
+				return err
+			}
+
+			time.Sleep(typePause)
+		}
 	}
 
 	_, err = c.run("send-keys", "-t", id, "Enter")
 
 	return err
+}
+
+// typePiece is the most characters typed in one go, typePause the wait after each: well under what Claude Code takes
+// for a paste even when a few pieces reach it in one read.
+const (
+	typePiece = 200
+	typePause = 20 * time.Millisecond
+)
+
+// pieces cuts text into runs of at most n characters, never inside one.
+func pieces(text string, n int) []string {
+	var out []string
+
+	r := []rune(text)
+	for len(r) > n {
+		out = append(out, string(r[:n]))
+		r = r[n:]
+	}
+
+	if len(r) > 0 {
+		out = append(out, string(r))
+	}
+
+	return out
 }
 
 // Printable is text with every control or format character gone; tabs, newlines and other white space become

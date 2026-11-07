@@ -803,7 +803,7 @@ func (s *Shift) postDispatcher(d string, sess *registry.Session, local, remote, 
 
 	if quiet {
 		for _, l := range rs.Inbox {
-			if !postable(l) {
+			if !s.postableFor(d, l) {
 				break
 			}
 
@@ -1223,14 +1223,14 @@ func (s *Shift) deliverInbox(name string, now time.Time) string {
 		switch {
 		case len(rs.Inbox) == 0:
 			return ""
-		case postable(rs.Inbox[0]):
+		case s.postableFor(name, rs.Inbox[0]):
 			if pending || !s.quiet(name, sess) {
 				return ""
 			}
 
 			return s.postInbox(name, sess, now)
 		case pending:
-			// A slash command is typed, below, once the lines posted before it showed.
+			// A slash command or the owner's own message is typed, below, once the lines posted before it showed.
 			return ""
 		}
 	}

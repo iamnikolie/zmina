@@ -181,6 +181,27 @@ func (s *Shift) followPosted(name string, now time.Time) bool {
 // arrives as plain text.
 func postable(line string) bool { return !slashCommand(line) }
 
+// ownerChat reports a queued line that is the owner's own message from Chat: a line its receipt was made for when the
+// owner sent it (only Chat's send writes receipts, so no other sender's text is one, whatever it starts with). It is
+// typed into a Claude role's input line, as the owner types at its prompt, so the role reads it as his own turn — never
+// posted, where Claude Code frames it as another session's message. A Codex bridge takes it as it takes any line.
+func (s *Shift) ownerChat(name, line string) bool {
+	if r, err := s.Role(name); err != nil || r.IsCodex() {
+		return false
+	}
+
+	for _, receipt := range s.State.Role(name).ChatReceipts {
+		if receipt.Line == line {
+			return true
+		}
+	}
+
+	return false
+}
+
+// postableFor is postable for a line queued for a role: never the owner's own message (ownerChat), which is typed.
+func (s *Shift) postableFor(name, line string) bool { return postable(line) && !s.ownerChat(name, line) }
+
 // slashCommand reports a line the session runs as a command (/compact, /clear) rather than reads.
 func slashCommand(line string) bool { return strings.HasPrefix(strings.TrimSpace(line), "/") }
 
@@ -223,8 +244,9 @@ func (s *Shift) TurnEnd(name, sessionID string) []string {
 	// for deliverInbox to type.
 	s.pruneTaskInbox(name)
 
+	// The owner's own message is typed now too, not at the next beat: he waits for the answer.
 	rs := s.State.Role(name)
-	if rs.Sent != nil || len(rs.Inbox) == 0 || !postable(rs.Inbox[0]) {
+	if rs.Sent != nil || len(rs.Inbox) == 0 || (!postable(rs.Inbox[0]) && !s.ownerChat(name, rs.Inbox[0])) {
 		return nil
 	}
 
