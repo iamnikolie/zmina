@@ -36,7 +36,7 @@
     document.body.append(frame);
     frame.contentWindow.fixture = fixture;
     const stub = `<base href="../static/"><script>
-      history.replaceState(null, "", location.pathname + "?crew=${crew}&role=dev");
+      history.replaceState(null, "", location.pathname + "?crew=${crew}&role=dev${cls === "phone" ? "&embed=1" : ""}");
       window.addEventListener("error", (e) => { fixture.err = e.message; });
       window.fetch = async (url) => {
         const json = (body, status = 200) => new Response(typeof body === "string" ? body : JSON.stringify(body), {status, headers: {"Content-Type": "application/json"}});
@@ -66,7 +66,25 @@
     assert(style.textAlign === "center" && style.borderTopWidth === "0px" && parseFloat(style.fontSize) === 12, cls + ": a quiet centred line, no card");
     assert(lines.every(l => l.getBoundingClientRect().height < 40), cls + ": one line each");
     assert(lines.every(l => !l.querySelector(".message-head") || l.querySelector(".message-head").getBoundingClientRect().height === 0), cls + ": no head");
-    assert($(".chat-message.command .command-line").title.includes("Context Usage") || lines[1].querySelector(".command-line").title.includes("Context Usage"), cls + ": the full output in the title");
+    // D-17 a: a line without output stays text; one with output is a button that opens it under it and closes it again.
+    assert(lines[0].querySelector("p.command-line") && !lines[0].querySelector(".message-body button"), cls + ": a line without output is text");
+    const button = lines[1].querySelector("button.command-line"), out = lines[1].querySelector(".command-output");
+    assert(button && button.getAttribute("aria-expanded") === "false" && out.hidden && out.getBoundingClientRect().height === 0, cls + ": a line with output is a closed button");
+    assert(button.querySelector("svg") && button.querySelector("svg").getBoundingClientRect().width === 12, cls + ": a 12 px chevron after the time");
+    const box = button.getBoundingClientRect(), hit = (x, y) => frame.contentDocument.elementFromPoint(x, y)?.closest("button") === button;
+    assert(hit(box.left + 2, box.top + box.height / 2 - 21) && hit(box.left + 2, box.top + box.height / 2 + 21), cls + ": 44 px to hit");
+    button.click();
+    const outStyle = frame.contentWindow.getComputedStyle(out);
+    assert(button.getAttribute("aria-expanded") === "true" && !out.hidden && out.textContent.includes("| a | b |"), cls + ": a tap opens the output");
+    assert(parseFloat(outStyle.fontSize) === 12 && outStyle.maxHeight === "240px" && outStyle.borderTopLeftRadius === "8px" && outStyle.paddingLeft === "12px", cls + ": the output box");
+    frame_read($);
+    await new Promise(r => setTimeout(r, 300));
+    assert(!lines[1].querySelector(".command-output").hidden, cls + ": it stays open through the next read");
+    lines[1].querySelector("button.command-line").click();
+    assert(lines[1].querySelector(".command-output").hidden, cls + ": a second tap closes it");
+    // D-17 b: one rhythm, measured from the text above, not from the hidden meta row it keeps.
+    const gaps = lines.map(l => { const above = l.previousElementSibling.querySelector(".message-body"); return Math.round(l.querySelector(".command-line").getBoundingClientRect().top - above.getBoundingClientRect().bottom); });
+    assert(Math.max(...gaps) - Math.min(...gaps) <= 6 && Math.min(...gaps) >= 16 && Math.max(...gaps) <= 40, cls + ": one rhythm from the text above: " + gaps.join(", "));
     const text = frame.contentDocument.body.innerText;
     assert(!text.includes("\x1b") && !/\[2?2?m|\[1m/.test(text), cls + ": no terminal escape anywhere");
     assert(!/<\/?(?:command|local-command)-/.test(text), cls + ": no command tag anywhere");
@@ -82,5 +100,7 @@
     window.chatCommandsResults = {passed: false, results, error: e.message};
   }
   document.getElementById("result").textContent = JSON.stringify(window.chatCommandsResults, null, 2);
+  // A read now, as when the page becomes visible again: chat.js reads on visibilitychange.
+  function frame_read($) { $("body").ownerDocument.dispatchEvent(new Event("visibilitychange")); }
 })();
 </script>

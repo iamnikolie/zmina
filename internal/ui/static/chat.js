@@ -422,11 +422,20 @@
       article.title = (row.event?.kind === "session" ? "Session message · " : "") + (Number.isNaN(date.getTime()) ? "" : date.toLocaleString());
       if (article._text !== row.text || article._presentation!==presentation) { const body = article.querySelector(".message-body"); if (row.event?.kind === "command") {
         // a command run at the role's prompt (/compact, /model) is one quiet line with its time, not a bubble.
-        const line = document.createElement("p");
-        line.className = "command-line";
-        line.textContent = row.event.summary + (shown ? " · " + shown : "");
-        if (row.event.detail) line.title = row.event.detail;
-        body.replaceChildren(line);
+        const words = row.event.summary + (shown ? " · " + shown : "");
+        if (!row.event.detail) { const line = document.createElement("p"); line.className = "command-line"; line.textContent = words; body.replaceChildren(line); }
+        else {
+          // D-17 a: a line with output is a button; a tap opens the output under it, a second tap closes it.
+          const own = article, line = document.createElement("button"), out = document.createElement("pre");
+          line.type = "button"; line.className = "command-line";
+          line.innerHTML = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5"/></svg>';
+          line.prepend(document.createTextNode(words));
+          out.className = "command-output"; out.textContent = row.event.detail;
+          const show = () => { out.hidden = !own._open; line.setAttribute("aria-expanded", String(Boolean(own._open))); };
+          line.addEventListener("click", () => { own._open = !own._open; show(); });
+          show();
+          body.replaceChildren(line, out);
+        }
       } else if (row.event) {
         const title = document.createElement("p"), summary = document.createElement("p");
         title.className = "event-status";

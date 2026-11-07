@@ -84,8 +84,11 @@ here; the layout checks do not depend on them. `chat-send.html` also checks the 
 
 In a real browser as above, open `http://127.0.0.1:7530/testdata/chat-commands.html`;
 `window.chatCommandsResults.passed` must be true. At 390 and 1280 px, with a `fetch` that answers a
-conversation in which the role's prompt ran /compact, /context and /model: each is one quiet
-centred 12 px line with its time, no card, no head, never the owner's; a command's answer joins its line,
-its full output in the line's title; no terminal escape and no `<command-*>` / `<local-command-*>` tag shows
+conversation in which the role's prompt ran /compact, /context and /model (D-17): each is one quiet
+centred 12 px line with its time, no card, no head, never the owner's; a command's answer joins its line;
+a line with more output is a button (44 px to hit, a 12 px chevron) that opens it under the line in a mono
+box and closes it again, open through the next read; every line sits one distance under the text above
+(18 px phone, 24 px desktop; the phone frame has `embed=1`, so it is a phone when the page is 860 px or
+narrower, e.g. inside a 390 px frame); no terminal escape and no `<command-*>` / `<local-command-*>` tag shows
 anywhere, also in a reply an older node sends with escapes. The transcript side (folding the typed line, the
 recorded command and its output, dropping hook lines) is `TestChatMessagesFoldsLocalCommands`.

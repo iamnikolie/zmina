@@ -119,7 +119,18 @@ html.chat-document { height: 100%; overflow: hidden; }
 .chat-message.event.command { padding: 0; border: 0; border-radius: 0; background: none; text-align: center; font: 12px/1.5 var(--sans); color: var(--faint); }
 .chat-message.event.command .message-head, .chat-message.event.command .message-meta, .chat-message.event.command .message-files { display: none; }
 .chat-message.event.command .message-body > p { margin: 0; overflow-wrap: anywhere; }
+/* D-17 b: 24 px from the text above, not from the meta row the message above keeps (28 px + 4, hidden until hover). */
 #messages > .event.command, #messages > .event.command + .chat-message { margin-top: 24px; }
+#messages > .run-end:not(.event) + .event.command { margin-top: -8px; }
+/* D-17 a: a line with output is a button, 44 px to hit, a 12 px chevron after the time; its output opens under it. */
+.chat-message.event.command button.command-line { position: relative; display: inline-flex; align-items: center; gap: 4px; min-height: 0; height: auto; margin: 0;
+  padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; overflow-wrap: anywhere; }
+.chat-message.event.command button.command-line::after { content: ""; position: absolute; inset: -13px -8px; }
+.chat-message.event.command button.command-line svg { flex: none; width: 12px; height: 12px; fill: none; stroke: var(--faint); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; transition: transform 120ms var(--ease); }
+.chat-message.event.command button.command-line[aria-expanded="true"] svg { transform: rotate(180deg); }
+.chat-message.event.command .command-output { max-height: 240px; overflow: auto; margin: 8px 0 0; padding: 10px 12px; border-radius: 8px; background: var(--panel2);
+  text-align: left; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 var(--mono); color: var(--muted); }
+.chat-message.event.command .command-output[hidden] { display: none; }
 
 /* Intrinsic table/code width belongs to its own scroller, never the message or page. */
 .message-body { min-width: 0; max-width: 100%; }
@@ -197,6 +208,9 @@ html.chat-document { height: 100%; overflow: hidden; }
 .chat-page.phone #messages > .chat-message.user { margin-top: 6px; }
 .chat-page.phone #messages > .run-start { margin-top: 18px; }
 .chat-page.phone #messages > .event, .chat-page.phone #messages > .event + .chat-message { margin-top: 18px; }
+/* D-17 b on the phone: an older reply folds its meta row away, so a command line keeps the 18 px of events. */
+.chat-page.phone #messages > .run-end:not(.event) + .event.command { margin-top: 18px; }
+.chat-page.phone #messages > .assistant:has(+ .event.command) .message-body > :last-child { margin-bottom: 0; }
 .chat-page.phone #messages > .chat-message:first-child { margin-top: 0; }
 /* m1 · under a reply: Copy only, no time; none under the owner's bubble */
 .chat-page.phone .message-meta { height: 32px; margin: -6px 0 0 -10px; }
