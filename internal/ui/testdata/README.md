@@ -57,3 +57,25 @@ a dot; a tap opens the sheet (title, state, Left, Latest, Path; a step swaps the
 answer goes once as a todo answer and turns into Sent; an unknown id says so; «Talk to» puts the
 item on the field and the message goes with it; on the desktop a click pins a 360 px popover and Esc
 closes it, the focus back on the id.
+
+# Chat send state test
+
+Open `http://127.0.0.1:7530/testdata/chat-send.html` in a real browser (e.g. `oko open …`, then read
+`#result` after a few seconds); `window.chatSendResults.passed` must be true. Headless
+`--virtual-time-budget` does not work here: draft files are Blobs in IndexedDB, which take real time
+that virtual time runs ahead of. The page attaches an image and sends it through a `fetch` that is
+slow to take the upload and the message: the owner's bubble says «Uploading shot.png…», then
+«Sending…», never «waiting to send» while the network is there, and no line under the field says
+delivery waits for a connection.
+
+# Chat attachments test
+
+In a real browser as above, open `http://127.0.0.1:7530/testdata/chat-files.html`;
+`window.chatFilesResults.passed` must be true. At 390 and 1280 px, with a `fetch` that answers
+`/api/chat/paths` (D-16): a list of a role's image paths becomes a gallery in its place, each tile
+named; a path in a sentence becomes its file name with its preview (or a PDF chip) under the
+paragraph; a path the node does not show stays text; the owner's image and PDF sit above his bubble
+(sizes in KB, never bytes) and an image-only message has no bubble; a tap opens the viewer over the
+message's images (its name, «1 of 4», the path), the arrow key goes on, Esc gives the focus back. The
+images themselves load from `/api/chat/...`, which the static server does not have: they draw broken
+here; the layout checks do not depend on them. `chat-send.html` also checks the tile's upload bar.

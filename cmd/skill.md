@@ -500,8 +500,9 @@ network send attempt; expired entries require inspection before a new send. This
 not unlimited exactly-once execution.
 Messages wait for the ordinary idle/empty-prompt checks; neither a busy role nor a native draft/dialog
 is overwritten. Multiline or long text is stored whole in the crew inbox and delivered with a reference
-for the role to read. Delivery states distinguish local storage, server queueing, sent to the role, and
-`accepted`: only a matching owner-message ID in the runtime's visible transcript proves agent acceptance. A line
+for the role to read. Delivery states distinguish local storage, a send in flight (`Uploading <file>…`, then `Sending…`; a fresh
+message reads so at once while the network is there and nothing before it to that role is stuck), server queueing,
+sent to the role, and `accepted`; the line under the field speaks only when the device is offline: only a matching owner-message ID in the runtime's visible transcript proves agent acceptance. A line
 posted to a Claude role's inbox socket shows there as Claude Code's meta line from a peer (`Another Claude session
 sent a message:` and zmina's `[zmina:<tag>]`), a Codex bridge's with the tag: both are read as the owner's message
 once its ID is one of the role's receipts; such a line with an ID no browser sent is shown as a session message.
@@ -526,9 +527,24 @@ only the text. Upgrade remote workers before attaching files to them; a laptop i
 `POST /api/chat/send` additionally accepts `files: [attachment ID, ...]`. Every ID is resolved inside that
 role's storage; content metadata participates in request deduplication. Agent input includes quoted local
 paths and names, using the existing full-message inbox; the agent opens them with its own file-reading
-tools (including images/PDFs where supported). Browser bubbles expose download links via
-`GET /api/chat/file?node=&crew=&role=&id=`. Downloads are attachment-only, octet-stream, no-sniff and
-uncached; uploaded HTML/SVG is never executed or embedded. Files are never executed automatically.
+tools (including images/PDFs where supported). The owner's files sit above his bubble (an image-only message has
+none): images as thumbnails (one in its own shape, two to four as squares, «+N» past four), other files as chips with
+their kind and size in KB or MB; while they go up each shows its progress, and a failed one a «!». They come from
+`GET /api/chat/file?node=&crew=&role=&id=`, a download (octet-stream, no-sniff, uncached); `&inline=1` serves it
+inline only when its first bytes are a PNG, JPEG, GIF, WebP or PDF — uploaded HTML/SVG is never executed or embedded.
+Files are never executed automatically.
+
+**A role's files.** A path a role names in its message (absolute or `~/…`, in code or not) shows as its file when the
+role's node may serve it: a PNG, JPEG, GIF, WebP or PDF by its extension and its first bytes, a regular file of at
+most 8 MiB under the role's dir, a worktree of one of its tasks, or the system temp dir (`$TMPDIR`, `/tmp`) after
+symlinks. Any other path stays text. A list, paragraph or code block that is only such paths becomes a gallery in its
+place (one image in its own shape up to 420 px, more as square tiles three a row, six at most, each with its name); a
+path in a sentence becomes its file name, linked, with the preview under that paragraph; a PDF is a chip.
+`POST /api/chat/paths` (`node`, `crew`, `role`, up to 64 `paths`) answers which of them the page shows, with name,
+size and type; `GET /api/chat/rolefile?node=&crew=&role=&path=` serves one inline (`&download=1`: as a download).
+A peer's are read on its node with the owner-signed mesh ops `chat/paths` and `chat/rolefile`. A tap on an image opens
+the viewer over the message's images: full screen on the phone (swipe between them, down to close, Share), a
+lightbox on the desktop (arrows, Esc), the role's full path with Copy and Open original under it.
 
 `POST /api/chat/action` accepts the same destination plus `action`: `start` explicitly starts a down
 role with its configured settings; `stop` sends one Ctrl+C only when the observed role is actively

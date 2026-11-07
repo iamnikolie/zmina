@@ -34,6 +34,9 @@ import (
 type rule struct {
 	what string
 	re   *regexp.Regexp
+	// lower: a short word (three letters at most) with no capital, so its all-caps spelling is another word, an
+	// abbreviation (host "gb", the unit "GB"); a longer name in capitals is still the name.
+	lower bool
 }
 
 var (
@@ -174,7 +177,8 @@ func banned(home, base string) ([]rule, error) {
 	slices.Sort(keys)
 
 	for _, w := range keys {
-		rules = append(rules, rule{words[w] + " " + w, regexp.MustCompile(`(?i)(^|[^A-Za-z0-9_-])` + regexp.QuoteMeta(w) + `($|[^A-Za-z0-9_])`)})
+		re := regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9_-])(` + regexp.QuoteMeta(w) + `)(?:$|[^A-Za-z0-9_])`)
+		rules = append(rules, rule{words[w] + " " + w, re, len(w) <= 3 && w == strings.ToLower(w) && w != strings.ToUpper(w)})
 	}
 
 	deny := os.Getenv("ZMINA_PUBLIC_DENYLIST")
@@ -194,7 +198,7 @@ func banned(home, base string) ([]rule, error) {
 				return nil, fmt.Errorf("%s: %q: %w", deny, line, err)
 			}
 
-			rules = append(rules, rule{"denylist pattern", re})
+			rules = append(rules, rule{what: "denylist pattern", re: re})
 		}
 	}
 
@@ -296,6 +300,29 @@ func sshWord(in []rune, i int) (string, int, bool) {
 var neutral = map[string]bool{"alex": true, "acme": true, "box": true, "box-ops": true, "ops": true, "laptop": true,
 	"dev": true, "web": true, "localhost": true, "github.com": true, "gitlab.com": true}
 
+// matches says whether line names the rule's word; for a short lowercase word its all-caps spelling does not count.
+func (r rule) matches(line string) bool {
+	if !r.lower {
+		return r.re.MatchString(line)
+	}
+
+	// Each search starts after the last word, not after the separator the match took ("GB gb").
+	for pos := 0; pos < len(line); {
+		m := r.re.FindStringSubmatchIndex(line[pos:])
+		if m == nil {
+			return false
+		}
+
+		if w := line[pos+m[2] : pos+m[3]]; w != strings.ToUpper(w) {
+			return true
+		}
+
+		pos += m[3]
+	}
+
+	return false
+}
+
 // scan checks each unpushed commit's message and added lines.
 func scan(base string, rules []rule) ([]string, error) {
 	revs, err := git("rev-list", "--reverse", base+"..HEAD")
@@ -344,7 +371,7 @@ func check(rules []rule, where, line string) []string {
 	var out []string
 
 	for _, r := range rules {
-		if r.re.MatchString(line) {
+		if r.matches(line) {
 			out = append(out, where+": "+r.what)
 		}
 	}

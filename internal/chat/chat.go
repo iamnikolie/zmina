@@ -26,6 +26,8 @@ type Snapshot struct {
 	AttachmentsSupported bool        `json:"attachments_supported,omitempty"`
 	Uploaded             *Attachment `json:"uploaded,omitempty"`
 	File                 *Upload     `json:"file,omitempty"`
+	// Paths are the files a role named that Chat shows (chat/paths).
+	Paths []PathInfo `json:"paths,omitempty"`
 	RetryWindowSeconds   int         `json:"retry_window_seconds,omitempty"`
 	Cursor               string      `json:"cursor,omitempty"`
 	Reset                bool        `json:"reset,omitempty"`

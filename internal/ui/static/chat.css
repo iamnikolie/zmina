@@ -354,3 +354,72 @@ html.chat-document { height: 100%; overflow: hidden; }
 .reply-to .reply-x::after { content: ""; position: absolute; inset: -8px; }
 .reply-to .reply-x svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
 .chat-page.phone .reply-to { grid-column: 1 / -1; grid-row: 1; margin: 0 0 6px; }
+
+/* D-16 · attachments, both ways. o1–o3: the owner's files are one block above his bubble, the bubble last. */
+.chat-message.user > .message-files { order: -1; margin-bottom: 4px; }
+.chat-message.user .message-body:empty { display: none; }
+.message-files[hidden] { display: none; }
+.fimgs { display: grid; grid-template-columns: repeat(2, 118px); gap: 4px; }
+.fimgs.one { display: block; }
+.fimg { position: relative; display: block; margin: 0; padding: 0; min-height: 0; height: auto; border: 0; border-radius: 12px; overflow: hidden;
+  background: var(--panel2); cursor: zoom-in; }
+.fimgs.one .fimg { border-radius: 16px; }
+.fimg img { display: block; width: 118px; height: 118px; object-fit: cover; border: 1px solid var(--line); border-radius: inherit; box-sizing: border-box; }
+.fimgs.one .fimg img { width: auto; height: auto; max-width: 240px; max-height: 300px; }
+.fimg .fbar, .fchip .fbar { display: none; }
+.fimg.going img { opacity: .6; }
+.fimg.going .fbar { display: block; position: absolute; left: 0; bottom: 0; height: 2px; width: calc(var(--p, 0) * 100%); background: var(--ink2); }
+.fmore { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; border-radius: inherit;
+  background: rgb(0 0 0 / .5); color: #fff; font: 600 17px var(--sans); }
+.fbad { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--late); font: 700 20px var(--sans); }
+.fchip { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 10px; align-items: center; width: 248px; max-width: 100%; height: 56px;
+  box-sizing: border-box; padding: 0 12px 0 10px; border: 1px solid var(--line2); border-radius: 14px; background: var(--panel2);
+  color: inherit; text-decoration: none; text-align: left; }
+.fchip.going { opacity: .8; }
+.fchip-icon { display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 8px; background: var(--line); }
+.fchip-icon svg { width: 20px; height: 20px; fill: none; stroke: var(--ink2); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.fchip-text { display: flex; flex-direction: column; min-width: 0; }
+.fchip-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: 500 14px/1.3 var(--sans); color: var(--ink); }
+.fchip-sub { font: 12px/1.3 var(--sans); color: var(--muted); }
+/* r2–r3: a role's files — a gallery in place of a part that is only paths, its file name for a path in a sentence. */
+.message-body .flink { font-weight: 500; color: var(--ink); text-decoration: underline var(--line2); text-underline-offset: 3px; overflow-wrap: anywhere; }
+.message-body .fgal { display: flex; flex-direction: column; gap: 6px; margin: 0 0 14px; }
+.message-body .fgrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; max-width: 560px; }
+.message-body .fgrid.one { display: block; max-width: 420px; }
+.message-body .ftile { margin: 0; min-width: 0; }
+.message-body .fshot { position: relative; display: block; width: 100%; margin: 0; padding: 0; min-height: 0; height: auto; border: 0; border-radius: 12px;
+  background: var(--panel2); cursor: zoom-in; overflow: hidden; }
+.message-body .fshot img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; object-position: top; border: 1px solid var(--line2);
+  border-radius: inherit; box-sizing: border-box; }
+.message-body .fgrid.one .fshot { width: auto; max-width: 100%; }
+.message-body .fgrid.one .fshot img { width: auto; max-width: 100%; max-height: 320px; aspect-ratio: auto; object-fit: contain; }
+.message-body .ftile figcaption { margin-top: 4px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: 11.5px var(--mono); color: var(--muted); }
+/* v1 · the viewer: the phone full screen black, the desktop a lightbox the chat does not read through. */
+.fview { position: fixed; inset: 0; z-index: 60; display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; background: #000; color: #eceef0; }
+.fview:focus { outline: none; }
+.fv-bar { display: grid; grid-template-columns: 44px minmax(0, 1fr) 44px; align-items: center; height: 52px; padding: env(safe-area-inset-top) 8px 0; }
+.fview button { min-height: 0; height: auto; margin: 0; border: 0; background: none; color: inherit; cursor: pointer; }
+.fv-x, .fv-share { width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; padding: 0; }
+.fv-share { grid-column: 3; }
+.fview svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.fv-title { min-width: 0; text-align: center; }
+.fv-title b { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font: 600 15px var(--sans); }
+.fv-title span { display: block; font: 12px var(--sans); color: #a1a8af; }
+.fv-stage { display: flex; align-items: center; justify-content: center; min-height: 0; overflow: hidden; }
+.fv-img { max-width: 92vw; max-height: 85vh; border-radius: 6px; object-fit: contain; transition: transform 160ms var(--ease); }
+.fview.small .fv-img { max-width: 100vw; max-height: 100%; border-radius: 0; }
+.fv-img.zoom { transform: scale(2); cursor: zoom-out; }
+.fv-prev, .fv-next { position: absolute; top: 50%; width: 44px !important; height: 44px !important; margin-top: -22px !important; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center; padding: 0; background: rgb(255 255 255 / .12) !important; }
+.fv-prev { left: 16px; } .fv-next { right: 16px; }
+.fv-dots { display: flex; justify-content: center; gap: 6px; padding: 10px 0 4px; }
+.fv-dots i { width: 6px; height: 6px; border-radius: 50%; background: #4a5158; }
+.fv-dots i.on { background: #eceef0; }
+.fv-foot { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 16px calc(12px + env(safe-area-inset-bottom)); }
+.fv-pathrow { display: flex; align-items: center; gap: 2px; max-width: 100%; }
+.fv-pathrow[hidden] { display: none; }
+.fv-path { min-width: 0; overflow-wrap: anywhere; background: none; font: 12px/1.4 var(--mono); color: #a1a8af; }
+.fv-copy { position: relative; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; padding: 0; color: #a1a8af !important; }
+.fv-copy::after { content: ""; position: absolute; inset: -6px; }
+.fv-copy svg { width: 15px; height: 15px; }
+.fv-open { font: 500 13px var(--sans); color: #c3c8cd; }

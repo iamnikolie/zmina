@@ -27,6 +27,14 @@ type Attachment struct {
 	SHA256 string `json:"sha256"`
 }
 
+// PathInfo is a file a role named in its message that Chat shows: its path as named, name, size and type.
+type PathInfo struct {
+	Path string `json:"path"`
+	Name string `json:"name"`
+	Size int    `json:"size"`
+	Type string `json:"type"`
+}
+
 type Upload struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
