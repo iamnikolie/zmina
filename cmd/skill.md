@@ -857,6 +857,18 @@ One screen, top to bottom by what a delay costs:
 Below 1400 px that is one centred column. From 860 px an empty «you hold», «answer» or «going» is not drawn: one
 muted line names the empty ones in their place; empty «parked» and «waiting on others» are not drawn at any width.
 
+Below 861 px (a phone, the home-screen app) the page is three tabs at the bottom — **Agents · Talk · Later** — under a
+52 px head with the tab's name and the beat; the phone has no crew switch: it shows every crew, and every row says
+where it is (the crew for this machine's, `crew · node` for a peer's). **Agents** opens with three numerals — waiting
+on you, working, idle — each a way to its section, then one row per role, never per item:
+«Waiting on you» (a role down that holds a task and a crew whose ticker stopped first, in red; then a question on a
+session's screen; then by the oldest item that waits on you — its title, its age, how many on the role's glyph from
+two), «Working» (busy roles with their task), «Idle» folded into one line, then «Yours by hand» and «Alarms» as one line
+each. A tap on a row is Talk with that role; the lists carry no buttons. The Agents tab's badge counts the roles that
+wait on you, red while one is down. **Later** is link rows — Parked, Alarms, Yours by hand, Done today, History, Crews
+and nodes; an item of the first three opens as a bottom sheet: what it is, who raised it, where, its text, one action
+(Bring back, Move to… with +2h / Tonight 20:00 / Tomorrow 09:00 / Mon 09:00 chips, Done) and «Talk to <role>».
+
 From 1400 px the page is a cockpit on one screen, without page scroll: the header carries the z mark, which redraws
 on every tick (faded while the page has lost the stream, red while a shift is stopped or its ticker silent), and the
 newest event; seven

@@ -57,8 +57,12 @@ const W = {
   elsewhere: (h, q) => "Elsewhere: " + h + " hold · " + q + " answer → All", downHolds: (r, ts) => r + ": down, holds " + ts,
   answerOn: (n) => "answer on " + n, detailsOn: (n) => "details on " + n,
   talk: "Talk", talkTo: (r) => "Talk to " + r,
-  byHand: "by hand", down: "Down", tabMove: "Your move", tabGoing: "Going", tabCrews: "Crews", allCrews: "All crews",
-  roDown: "down", roHold: "hold", roAnswer: "answer", roGoing: "going", overMesh: " · over the mesh", upW: "up",
+  tabAgents: "Agents", tabLater: "Later", overMesh: " · over the mesh", upW: "up",
+  waitingOn: "Waiting on you", workingW: "Working", idleW: "Idle", yoursByHand: "Yours by hand", crewsNodes: "Crews and nodes",
+  nothingWaits: "Nothing waits on you", readout: "Roles", roWaiting: "waiting on you", roWorking: "working", roIdle: "idle", downHoldsP: (ts) => "Down · holds " + ts,
+  tickerNoWake: "Ticker stopped · the crew does not wake", asksQ: (q) => "Asks: " + q, nWaiting: (n) => n + " waiting",
+  oldestW: (d) => "oldest " + d, nextAt: (w) => "next " + w, raisedBy: (r) => "raised by " + r, moveTo: "Move to…", alarmW: "Alarm",
+  whenChips: [["+2h", "+2h"], ["Tonight 20:00", "today 20:00"], ["Tomorrow 09:00", "tomorrow 09:00"], ["Mon 09:00", "mon 09:00"]],
   nDown: (n) => n + " down", roleDown: (r) => r + " down", nWorking: (n) => n + " working", tickerStopped: "ticker stopped",
   stoppedW: "stopped", doneTodayN: "Done today", parkedN: (n, old) => n + (old ? " · oldest " + old : ""),
   ev: {
@@ -197,7 +201,8 @@ function render() {
   const focused = focusMark();
   // The saved choice holds while it matches something: a peer's crews may come after the first snapshot.
   const saved = localStorage.getItem("zmina.crew") || "all";
-  filter = validFilter(saved) ? saved : "all";
+  // The phone has no switch (D-12 h1): it shows every crew, each row saying where it is.
+  filter = phone.matches || !validFilter(saved) ? "all" : saved;
 
   // Keys the server took leave once its snapshot no longer has them.
   const held = new Set([...snap.todo, ...snap.later].map((it) => key(it.crew, it.id)));
@@ -224,7 +229,7 @@ function render() {
   renderQuiet();
   renderFoot();
   renderCockpit(hold, asks, others, parked);
-  renderPhone(hold, asks, going, parked);
+  renderPhone();
   for (const k of seenNow) seen.add(k);
   seenNow.clear();
   if (!$("history").hidden) renderFeed();
@@ -728,7 +733,7 @@ function renderHold(hold) {
 
 // ---- L2 · answer (b2): one chip with the recommendation; open: the field, «Later», «No»
 
-function askRow(it, hand) {
+function askRow(it) {
   const k = key(it.crew, it.id);
   const hov = el("div");
   if (it.kind === "later") hov.append(button("q", W.back, () => act(it, "back", "", W.broughtBack)));
@@ -737,7 +742,6 @@ function askRow(it, hand) {
   hov.append(button("q", W.park, () => act(it, "park", "", W.parkedTo)));
   if (it.kind !== "check") hov.append(button("q", W.no, () => act(it, "answer", W.noText, W.sentTo)));
   const words = itemWords(it, false);
-  if (hand) words.append(el("span", "cl", W.byHand));
   const row = rowShell(k, stl(it.crew), words, ageOf(it), chip(it), ownHov(it.crew, hov), itemPanel(it, false));
   row.title = ids(idOf(it.crew, it.id), it.task && idOf(it.crew, it.task));
   if (it.task) row.dataset.w = key(it.crew, it.task);
@@ -757,14 +761,11 @@ function renderAsks(asks) {
   }
   $("ask").classList.toggle("empty", !live.length);
   if (!live.length) rows.push(el("p", "none", W.noAsk));
-  // D-09 r2: on the phone the by-hand answers are rows too, «by hand» in their mono line.
-  if (phone.matches) rows.push(...checks.map((it) => askRow(it, true)));
   patch($("ask-rows"), [...rows]);
 
   // The checks: one line; a tap on one opens its row under the line.
   const hands = $("hands");
-  hands.hidden = !checks.length || phone.matches;
-  if (phone.matches) return;
+  hands.hidden = !checks.length;
   if (!checks.some((it) => key(it.crew, it.id) === openHand) || openRow !== openHand) openHand = "";
   const kids = [el("span", "hl", W.hands)];
   checks.forEach((it, i) => {
@@ -1020,7 +1021,6 @@ function renderAlarms() {
   const head = alarmHead();
   patch($("alarms-h"), [...head]);
   const rows = alarmRows("");
-  $("alarms").classList.toggle("noal", !rows.length);
   if (!rows.length) rows.push(el("p", "none", W.alNone));
   patch($("alarms-rows"), [...rows]);
 }
@@ -2046,7 +2046,8 @@ $("talk-open").addEventListener("click", (e) => {
 globalThis.addEventListener?.("resize", () => { if (side) placeSide(); });
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
-  if (side) closeTalk();
+  if (sheet && !$("psheet").hidden) closeSheet();
+  else if (side) closeTalk();
   else if (full) closeFull();
   else if (!$("history").hidden) { $("history").hidden = true; render(); } else if (openRow) {
     const k = openRow;
@@ -2057,15 +2058,23 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-// ---- the phone (D-09): four tabs at the bottom — Move · Going · Talk · Crews — in place of the header stack. Below
-// 860 px only; the page above draws the rows, the CSS shows the open tab's sections.
+// ---- the phone (D-12): three tabs at the bottom — Agents · Talk · Later — in place of the header stack. Below 860 px
+// only. Agents is a row per role that waits on you, works or idles; a tap is Talk with that role. Later is what is not
+// «now», as link rows; an item there opens as a bottom sheet with one action.
 
 const phone = matchMedia("(max-width: 860px)");
-const TABS = ["move", "going", "talk", "crews"];
+const TABS = ["agents", "talk", "later"];
+// D-09's tabs, kept in a browser or a bookmark, open where their content went: Move and Going on Agents, Crews on Later.
+const OLD_TABS = { move: "agents", going: "agents", crews: "later" };
+const tabOf = (t) => (TABS.includes(t) ? t : OLD_TABS[t] || "");
 const tabSaved = () => { try { return localStorage.getItem("zmina.tab"); } catch (_) { return null; } };
-let tab = [location.hash.slice(1), tabSaved()].find((t) => TABS.includes(t)) || "move";
+let tab = [location.hash.slice(1), tabSaved()].map(tabOf).find(Boolean) || "agents";
 const tab0 = tab; // the tab of the history entry the page opened on, which may have no hash
-let tabFrom = "move"; // where Crews and a closed Talk return to
+let tabFrom = "agents"; // where a closed Talk returns to
+let laterSub = ""; // the Later list open: "" (the links), parked, alarms, hand, crews
+let idleOpen = false; // a3: the idle roles laid out in place of their one line
+let sheet = null; // l1: the item opened in the bottom sheet: {kind, crew, id, moving}
+let sheetFrom = null; // the row that opened it
 const tabScroll = {};
 const badges = {};
 document.body.dataset.tab = tab;
@@ -2074,17 +2083,17 @@ document.body.dataset.tab = tab;
 function goTab(t, push = true) {
   if (t === tab) return;
   tabScroll[tab] = scrollY;
-  if (tab !== "crews") tabFrom = tab;
+  if (tab !== "talk") tabFrom = tab;
   tab = t;
   try { localStorage.setItem("zmina.tab", t); } catch (_) { /* the tab is kept for this visit only */ }
   if (push && location.hash !== "#" + t) history.pushState(null, "", "#" + t);
   document.body.dataset.tab = t;
+  sheet = null;
   if (typeof pinPanel === "function") pinPanel();
   requestAnimationFrame(() => scrollTo(0, tabScroll[t] || 0));
 }
 
-// setTab is a tap on the bar: Talk opens the last conversation, else the scoped crew's dispatcher; another tab
-// puts the panel away.
+// setTab is a tap on the bar: Talk opens the last conversation, else the dispatcher; another tab puts the panel away.
 function setTab(t, push = true) {
   goTab(t, push);
   if (t === "talk") {
@@ -2099,12 +2108,22 @@ function setTab(t, push = true) {
   render();
 }
 
-for (const b of document.querySelectorAll("#tabbar [data-tab]")) b.addEventListener("click", () => setTab(b.dataset.tab));
+// openLater opens one of Later's lists (Agents' by-hand and alarms lines lead there).
+function openLater(sub) {
+  laterSub = sub;
+  tabScroll.later = 0;
+  if (tab === "later") { scrollTo(0, 0); render(); } else setTab("later");
+}
+
+// The Later tab always opens on its links.
+for (const b of document.querySelectorAll("#tabbar [data-tab]")) {
+  b.addEventListener("click", () => { if (b.dataset.tab === "later") laterSub = ""; setTab(b.dataset.tab); });
+}
 globalThis.addEventListener?.("popstate", () => {
-  const h = TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : tab0;
+  const h = tabOf(location.hash.slice(1)) || tab0;
   if (h !== tab) setTab(h, false);
 });
-$("scope").addEventListener("click", () => setTab("crews"));
+$("pback").addEventListener("click", () => { laterSub = ""; render(); });
 phone.addEventListener?.("change", () => { render(); kbCheck(); });
 
 // k2: while a field has the keyboard up the bar steps aside; it never rides up on the keyboard.
@@ -2140,78 +2159,245 @@ document.addEventListener("focusout", () => setTimeout(kbCheck, 0));
 globalThis.addEventListener?.("blur", () => setTimeout(kbCheck, 0));
 
 // phoneTalk is whom the Talk tab opens (k1): the last conversation while the scope is the one it was opened under, else the scoped
-// crew's dispatcher — a crew picked in Crews never talks to the one before.
+// crew's dispatcher. The phone has no scope of its own (D-12 h1): it shows every crew.
 function phoneTalk() {
   return lastTalk && lastTalk.scope === filter ? lastTalk : scopeDispatcher();
 }
 
-// scopeLabel is the crew the Move and Going tabs show: «All», a node, or node/crew.
-function scopeLabel() {
-  if (filter === "all") return W.all;
-  if (filter.startsWith("node:")) return filter.slice(5);
-  return shownLabel(filter, true) || crewLabel(filter) || filter;
+// phoneWhere is a row's crew tag (D-12 a1): the crew alone for this machine's crews, «crew · node» for a peer's.
+function phoneWhere(crew) {
+  const c = crewOf(crew);
+  if (!c) return crew;
+  return c.remote ? c.name + " · " + nodeOf(crew) : c.name;
 }
 
-function renderPhone(hold, asks, going, parked) {
-  if (!phone.matches) return;
-  const red = redList();
-  setText($("phead-h"), tab === "going" ? W.tabGoing : tab === "crews" ? W.tabCrews : W.tabMove);
-  setText($("scope-n"), scopeLabel());
-
-  // m0 · the readout: four numbers, each a way to its section.
-  const live = (xs) => xs.filter((it) => !gone(key(it.crew, it.id)));
-  const cells = [[red.length, W.roDown, "x", () => $("down").scrollIntoView({ block: "start" })],
-    [live(hold).length, W.roHold, "n", () => $("hold").scrollIntoView({ block: "start" })],
-    [live(asks).length, W.roAnswer, "n", () => $("ask").scrollIntoView({ block: "start" })],
-    [going.length, W.roGoing, "b", () => setTab("going")]];
-  patch($("pro"), cells.map(([n, label, cls, fn]) => {
-    const b = button("", "", fn);
-    b.append(el("b", n ? cls : "", String(n)), el("span", "", label));
-    return b;
-  }));
-
-  // m1 · Down: every red item as a row; it opens what the header's red line opens.
-  $("down").hidden = !red.length;
-  heading("down-h", W.down, red.length, "x");
-  patch($("down-rows"), red.map((d) => {
-    const b = button("row red prow", "", () => openTalk(d.crew, d.role, b), d.fix);
-    const words = el("div", "words");
-    words.append(el("span", "tt", d.text), el("span", "cl", crewLabel(d.crew) || crewName(d.crew)));
-    b.append(words, el("span"), el("span"), el("span", "chev", "›"));
-    return b;
-  }));
-  $("pnone").hidden = !!(red.length || hold.length || asks.length || (snap.alarms || []).length);
-
-  // g1 · Going ends with «Done today N ›», a line like Parked.
-  const done = snap.crews.filter((c) => shows(c.key)).reduce((n, c) => n + (c.done_today || 0), 0);
-  patch($("pdone"), [button("parked-line", W.doneTodayN + " " + done + " ›", () => openList("done"))]);
-
-  renderCrews(parked);
-  renderTabs(hold, asks, red);
-  // Opened on #talk (or kept there): the conversation comes with the first snapshot.
-  if (tab === "talk" && !side) setTimeout(() => { const x = !side && tab === "talk" && phoneTalk(); if (x) openTalk(x.crew, x.role, null); }, 0);
+// dispatcherOf is a crew's dispatcher role, where an item with no role of the crew is talked about.
+function dispatcherOf(crew) {
+  const c = crewOf(crew);
+  if (!c) return "dispatcher";
+  const d = c.roles.find((r) => r.role === c.dispatcher) || c.roles.find((r) => /dispatcher/.test(r.role));
+  return d ? d.role : c.dispatcher || "dispatcher";
 }
 
-// c1 · Crews: what the other tabs show. «All crews», then a group per node, a row per crew with its lamp and state;
-// a tap sets the scope and returns to the tab the owner came from. Parked, Done today and History under the list.
-function renderCrews(parked) {
-  const pick = (k) => { filter = k; menuNode = ""; localStorage.setItem("zmina.crew", k); setTab(tabFrom === "talk" ? "move" : tabFrom); };
-  const row = (k, name, lamp, state, stCls) => {
-    const b = button("cr" + (filter === k ? " on" : ""), "", () => pick(k));
-    b.setAttribute("aria-pressed", filter === k ? "true" : "false");
-    if (filter === k) {
-      const ck = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-      ck.setAttribute("viewBox", "0 0 24 24");
-      ck.setAttribute("class", "ck");
-      ck.innerHTML = '<path d="M5 12.5l4.5 4.5L19 7.5"/>';
-      b.append(ck);
-    } else b.append(el("span", "lamp " + lamp));
-    b.append(el("span", "n", name), el("span", "s " + stCls, state));
-    return b;
+// firstLine is a question's first line.
+const firstLine = (s) => (s || "").split("\n").map((x) => x.trim()).find(Boolean) || "";
+
+// phoneLists is what the phone's tabs read, over every crew shown (All: the phone has no switch).
+function phoneLists() {
+  const live = (it) => shows(it.crew) && !gone(key(it.crew, it.id));
+  const old = (a, b) => T(a.created) - T(b.created);
+  const todo = snap.todo.filter(live);
+  return {
+    waiting: todo.filter((it) => it.kind !== "check" && it.kind !== "later"),
+    // Yours by hand: the checks, and a parked item its alarm brought back.
+    hand: todo.filter((it) => it.kind === "check" || it.kind === "later").sort(old),
+    parked: snap.later.filter(live).sort(old),
+    alarms: (snap.alarms || []).filter((a) => shows(a.crew) && !gone(alarmKey(a))).sort((a, b) => T(a.at) - T(b.at)),
+    crews: snap.crews.filter((c) => shows(c.key) && !away(c.key) && !c.spare),
   };
+}
+
+// agents (D-12 a1–a3) is one row per role (node/crew/role), never per item, in three groups. Waiting on you: a role
+// down that holds a task or a crew whose ticker stopped (red, first), a question on a session's screen, then by the
+// oldest item that waits on the owner. Working: the busy roles. Idle: the rest of the roles that are up. Down roles that
+// hold nothing and spare crews never show.
+function agents(lists) {
+  const rows = new Map();
+  const get = (crew, role) => {
+    const k = crew + "/" + role;
+    if (!rows.has(k)) {
+      const r = roleOf(crew, role);
+      rows.set(k, { crew, role, icon: r ? r.icon : "generic", items: [], red: "", q: null });
+    }
+    return rows.get(k);
+  };
+  // A crew's dispatcher both down with a task and over a stopped ticker says both, the ticker first.
+  for (const d of redList()) {
+    const tasks = (roleOf(d.crew, d.role)?.tasks || []).join(", ");
+    const row = get(d.crew, d.role);
+    const text = d.kind === "down" ? W.downHoldsP(tasks) : W.tickerNoWake;
+    row.red = !row.red ? text : d.kind === "down" ? row.red + " · " + text : text + " · " + row.red;
+  }
+  for (const c of lists.crews) {
+    for (const r of c.roles || []) if (r.state === "up" && r.prompt) get(c.key, r.role).q = firstLine(r.dialog && r.dialog.question);
+  }
+  // An item is the role's it holds up, else the role's that asked; one with no role of its crew is its dispatcher's.
+  for (const it of lists.waiting) {
+    const c = crewOf(it.crew);
+    const known = (n) => n && (!c || c.roles.some((r) => r.role === n));
+    get(it.crew, [it.blocks, it.role].find(known) || dispatcherOf(it.crew)).items.push(it);
+  }
+  const waiting = [...rows.values()].map((a) => {
+    a.items.sort((x, y) => T(x.created) - T(y.created));
+    const top = a.items[0];
+    const wait = top ? nowMs() - T(top.created) : 0;
+    return Object.assign(a, {
+      kind: a.red ? "x" : "n", n: a.items.length, wait,
+      line: a.red || (a.q !== null ? W.asksQ(a.q || W.onScreen) : top.title || top.text),
+      age: a.red || !top ? "" : dur(wait), late: wait > 3 * 24 * HOUR,
+    });
+  }).sort((a, b) => !!b.red - !!a.red || (b.q !== null) - (a.q !== null) || b.wait - a.wait);
+  const ts = (a) => (zero(a.r.since) ? 0 : T(a.r.since));
+  const since = (a, b) => ts(b) - ts(a);
+  const up = lists.crews.flatMap((c) => (c.roles || []).filter((r) => r.state === "up" && !rows.has(c.key + "/" + r.role))
+    .map((r) => ({ crew: c.key, role: r.role, icon: r.icon, r, age: ago(r.since) })));
+  const working = up.filter((a) => a.r.status === "busy").sort(since).map((a) => Object.assign(a, { kind: "busy", line: taskOf(a.crew, a.r) }));
+  const idle = up.filter((a) => a.r.status !== "busy").sort(since).map((a) => Object.assign(a, { kind: "idle", line: "" }));
+  return { waiting, working, idle };
+}
+
+// taskOf is the title of the task a role works on: its open work, else the first task it holds.
+function taskOf(crew, r) {
+  const w = snap.work.find((x) => x.crew === crew && x.role === r.role && x.state === "open");
+  if (w) return w.title;
+  const id = (r.tasks || [])[0];
+  const t = id && (snap.tasks || []).find((x) => x.crew === crew && x.id === id);
+  return t ? t.title || t.asked : "";
+}
+
+// agentRow (a1, a2, a4) is a role: its glyph in a circle coloured by its state, with how many items wait on the
+// owner as a pill once there are two; who and where; what it waits on you for; the oldest wait. A working role (b) is
+// two lines, its task under it — one line without a task; an idle role one line. A tap is Talk with that role. No
+// buttons, chips or fields inside it.
+function agentRow(a) {
+  const one = a.kind === "idle" || (a.kind === "busy" && !a.line);
+  const two = a.kind === "busy" && !!a.line;
+  const b = button("ag " + a.kind + (one ? " one" : two ? " two" : "") + stl(a.crew), "", () => openTalk(a.crew, a.role, b));
+  b.dataset.k = "agent:" + a.crew + "/" + a.role;
+  const av = el("span", "av " + a.kind);
+  av.append(glyph(a.icon));
+  if (a.n >= 2) av.append(el("span", "cnt", String(a.n)));
+  const w = el("span", "w");
+  const rn = el("span", "rn");
+  const where = phoneWhere(a.crew);
+  rn.append(el("span", "r", a.role), el("small", "", where));
+  w.append(rn);
+  if (two) w.append(el("span", "tk", a.line));
+  else if (!one) w.append(el("span", "ask", a.line));
+  const quiet = a.kind === "busy" || a.kind === "idle";
+  b.append(av, w, el("span", "age" + (quiet ? " m" : a.late ? " x" : ""), a.age || ""), el("span", "chev", "›"));
+  b.setAttribute("aria-label", [W.talkTo(a.role), where, a.line, a.n >= 2 ? W.nWaiting(a.n) : "", a.age].filter(Boolean).join(" · "));
+  if (a.items && a.items.length) b.title = a.items.map((it) => idOf(it.crew, it.id)).join(" · ");
+  return b;
+}
+
+// agentSection is a group of rows under its heading (its count is the readout's, a); fold makes the heading the way
+// to fold it back.
+function agentSection(id, label, rows, fold) {
+  const s = el("section", "ags");
+  s.id = id;
+  const h = fold ? button("lab fold", label, fold) : el("h2", "lab", label);
+  if (fold) h.setAttribute("aria-expanded", "true");
+  const list = el("div", "rows2");
+  list.append(...rows.map(agentRow));
+  s.append(h, list);
+  return s;
+}
+
+// lineTo is a one-line opener: a name and its count, «›» (a3, l1).
+function lineTo(name, value, fn, cls) {
+  const b = button("ln" + (cls ? " " + cls : ""), "", fn);
+  b.append(el("span", "n", name), el("span", "v", (value ? value + " " : "") + "›"));
+  return b;
+}
+
+const oldestOf = (xs) => (xs.length ? dur(nowMs() - T(xs[0].created)) : "");
+
+// readout (D-12 a) is three numerals under the head — waiting on you, working, idle — each a way to its section (idle
+// opens its fold). A count that changed rolls once.
+const roShown = {};
+function readout(a) {
+  const ro = el("div", "pro3");
+  ro.setAttribute("role", "group");
+  ro.setAttribute("aria-label", W.readout);
+  const go = (id) => () => $(id)?.scrollIntoView({ block: "start", behavior: "smooth" });
+  const cells = [["w" + (a.waiting.some((x) => x.red) ? " x" : ""), a.waiting.length, W.roWaiting, go("ag-wait")],
+    ["b", a.working.length, W.roWorking, go("ag-work")],
+    ["i", a.idle.length, W.roIdle, () => { idleOpen = true; render(); requestAnimationFrame(go("ag-idle")); }]];
+  for (const [cls, n, label, fn] of cells) {
+    const k = cls[0];
+    const b = button(cls, "", fn);
+    b.append(el("span", "v" + (roShown[k] !== undefined && roShown[k] !== n ? " roll" : ""), String(n)), el("span", "k", label));
+    b.setAttribute("aria-label", n + " " + label);
+    roShown[k] = n;
+    ro.append(b);
+  }
+  return ro;
+}
+
+function renderAgents(lists, a) {
+  const out = [readout(a)];
+  if (a.waiting.length) out.push(agentSection("ag-wait", W.waitingOn, a.waiting));
+  else out.push(el("p", "pnone", W.nothingWaits));
+  if (a.working.length) out.push(agentSection("ag-work", W.workingW, a.working));
+  if (a.idle.length) {
+    if (idleOpen) out.push(agentSection("ag-idle", W.idleW, a.idle, () => { idleOpen = false; render(); }));
+    else {
+      const l = lineTo(W.idleW, String(a.idle.length), () => { idleOpen = true; render(); }, "fold");
+      l.setAttribute("aria-expanded", "false");
+      out.push(l);
+    }
+  }
+  const tail = [];
+  if (lists.hand.length) tail.push(lineTo(W.yoursByHand, lists.hand.length + " · " + W.oldestW(oldestOf(lists.hand)), () => openLater("hand")));
+  if (lists.alarms.length) tail.push(lineTo(W.alarms, lists.alarms.length + " · " + W.nextAt(alarmWhen(lists.alarms[0])), () => openLater("alarms")));
+  if (tail.length) {
+    const t = el("div", "lns");
+    t.append(...tail);
+    out.push(t);
+  }
+  patch($("pagents"), out);
+}
+
+// ---- Later (D-12 l1): 48 px link rows; Parked, Alarms and Yours by hand open their lists, whose items open as a
+// bottom sheet; Done today and History open the panel's lists; Crews and nodes lists every crew.
+
+const SUBS = { parked: () => W.later, alarms: () => W.alarms, hand: () => W.yoursByHand, crews: () => W.crewsNodes };
+
+function renderLaterTab(lists) {
+  if (laterSub && !SUBS[laterSub]) laterSub = "";
+  if (laterSub) { patch($("plater"), laterList(lists)); return; }
+  const done = lists.crews.reduce((n, c) => n + (c.done_today || 0), 0);
+  const red = redList();
+  const al = lists.alarms;
+  patch($("plater"), [
+    lineTo(W.later, lists.parked.length ? W.parkedN(lists.parked.length, oldestOf(lists.parked)) : "0", () => openLater("parked")),
+    lineTo(W.alarms, al.length ? al.length + " · " + W.nextAt(alarmWhen(al[0])) : "0", () => openLater("alarms")),
+    lineTo(W.yoursByHand, lists.hand.length ? lists.hand.length + " · " + W.oldestW(oldestOf(lists.hand)) : "0", () => openLater("hand")),
+    lineTo(W.doneTodayN, String(done), () => openList("done")),
+    lineTo(W.historyTab, "", openHistory),
+    lineTo(W.crewsNodes, lists.crews.length + (red.length ? " · " + W.nDown(red.length) : ""), () => openLater("crews")),
+  ]);
+}
+
+// laterItem is an item of a Later list: its title in two lines at most, where and how old, «›»; a tap opens its sheet.
+function laterItem(k, title, meta, open) {
+  const b = button("li", "", () => open(b));
+  b.dataset.k = k;
+  const w = el("span", "w");
+  w.append(el("span", "t", title), el("span", "m", meta));
+  b.append(w, el("span", "chev", "›"));
+  return b;
+}
+
+function laterList(lists) {
+  const sheetOf = (s) => (from) => openSheet(s, from);
+  if (laterSub === "parked") {
+    return lists.parked.map((it) => laterItem(key(it.crew, it.id), it.text, phoneWhere(it.crew) + " · " + dur(nowMs() - T(it.created)),
+      sheetOf({ kind: "parked", crew: it.crew, id: it.id })));
+  }
+  if (laterSub === "alarms") {
+    return lists.alarms.map((a) => laterItem(alarmKey(a), alarmText(a), phoneWhere(a.crew) + " · " + alarmWhen(a),
+      sheetOf({ kind: "alarm", crew: a.crew, id: a.id })));
+  }
+  if (laterSub === "hand") {
+    return lists.hand.map((it) => laterItem(key(it.crew, it.id), it.title || it.text, phoneWhere(it.crew) + " · " + dur(nowMs() - T(it.created)),
+      sheetOf({ kind: "hand", crew: it.crew, id: it.id })));
+  }
+  // Crews and nodes (D-09 c1's list): a group per node, a row per crew with its lamp and state; a tap is Talk with
+  // its dispatcher.
   const out = [];
-  const allRed = redList(true);
-  out.push(row("all", W.allCrews, allRed.length ? "x" : "", allRed.length ? W.nDown(allRed.length) : W.upW, allRed.length ? "x" : ""));
+  const red = redList(true);
   const nodes = new Map();
   for (const c of snap.crews.filter((c) => !away(c.key))) {
     const n = c.node || snap.self || "";
@@ -2219,23 +2405,16 @@ function renderCrews(parked) {
     nodes.get(n).push(c);
   }
   for (const [n, crews] of nodes) {
-    const remoteNode = crews.some((c) => c.remote);
-    out.push(el("p", "grp", (n || W.all) + (remoteNode ? W.overMesh : "")));
-    for (const c of crews) out.push(row(c.key, c.key.split("/").pop(), ...crewState(c, allRed)));
+    if (n) out.push(el("p", "grp", n + (crews.some((c) => c.remote) ? W.overMesh : "")));
+    for (const c of crews) {
+      const [lamp, state, stCls] = crewState(c, red);
+      const b = button("cr", "", () => openTalk(c.key, dispatcherOf(c.key), b));
+      b.append(el("span", "lamp " + lamp), el("span", "n", c.name), el("span", "s " + stCls, state));
+      b.setAttribute("aria-label", W.talkTo(dispatcherOf(c.key)) + " · " + c.name + " · " + state);
+      out.push(b);
+    }
   }
-  const live = parked.filter((it) => !gone(key(it.crew, it.id)));
-  const oldest = live.length ? dur(Math.max(...live.map((it) => nowMs() - T(it.created)))) : "";
-  const done = snap.crews.filter((c) => shows(c.key)).reduce((n, c) => n + (c.done_today || 0), 0);
-  const link = (name, value, fn) => {
-    const b = button("lk", "", fn);
-    b.append(el("span", "n", name), el("span", "", value + " ›"));
-    return b;
-  };
-  const links = el("div", "lks");
-  links.append(link(W.later, W.parkedN(live.length, oldest), () => openList("parked")),
-    link(W.doneTodayN, String(done), () => openList("done")), link(W.historyTab, "", openHistory));
-  out.push(links);
-  patch($("pcrews"), out);
+  return out;
 }
 
 // crewState is a crew's lamp, its words and their colour: down first, then working, stale, spare, stopped.
@@ -2257,11 +2436,180 @@ function crewState(c, red) {
   return ["", W.upW, ""];
 }
 
-// t3 · the badges: Move counts what waits on you (red while anything is down), Talk dots while its role waits on
-// you, Crews dots while a crew or a role is down. A badge that changes pops once.
-function renderTabs(hold, asks, red) {
+// ---- the sheet (l1): what the item is, who raised it, where and how old; its title and its real text; ONE neutral
+// primary (by hand: Done; an alarm: Move to…, which opens the when-field in the sheet; parked: Bring back) and
+// «Talk to <role>». Swipe down, the shade or Esc closes it.
+
+function openSheet(s, from) {
+  sheet = s;
+  sheetFrom = from || null;
+  $("psheet").dataset.k = "";
+  render();
+  $("psheet").focus();
+}
+
+function closeSheet() {
+  if (!sheet) return;
+  sheet = null;
+  render();
+  backToRow();
+}
+
+// backToRow gives the focus back to the row that opened the sheet, as the list has it now; the first row of the list
+// once that one is gone (dealt with in the sheet, or by the snapshot); the way back once the list is empty.
+function backToRow() {
+  const k = sheetFrom?.dataset.k;
+  const t = (sheetFrom?.isConnected && sheetFrom) || (k && document.querySelector(`#plater [data-k="${CSS.escape(k)}"]`))
+    || document.querySelector("#plater .li, #plater .ln") || (!$("pback").hidden && $("pback"));
+  t?.focus();
+}
+
+// sheetItem is what the sheet shows, as the snapshot has it now; gone once it was dealt with.
+function sheetItem(s) {
+  if (s.kind === "alarm") {
+    const a = (snap.alarms || []).find((x) => x.crew === s.crew && x.id === s.id);
+    return a && !gone(alarmKey(a)) ? a : null;
+  }
+  const it = (s.kind === "parked" ? snap.later : snap.todo).find((x) => x.crew === s.crew && x.id === s.id);
+  return it && !gone(key(it.crew, it.id)) ? it : null;
+}
+
+// The sheet is drawn once per item (and once more when Move to… opens its field): a snapshot never redraws a field
+// being typed in.
+function renderSheet() {
+  const sh = $("psheet");
+  const it = phone.matches && sheet && tab === "later" ? sheetItem(sheet) : null;
+  // aria-modal: while the sheet is open the page behind it is inert, so Tab stays in the sheet.
+  for (const n of [$("phead"), document.querySelector("main.page"), $("tabbar"), $("toasts")]) {
+    if (!n) continue;
+    if (it) n.setAttribute("inert", "");
+    else n.removeAttribute("inert");
+  }
+  if (!it) {
+    // The item went while its sheet was open (the snapshot dropped it): the focus goes back to the list.
+    const lost = !!sheet && phone.matches && sh.contains(document.activeElement);
+    if (sheet && phone.matches) sheet = null;
+    sh.hidden = $("pshade").hidden = true;
+    sh.dataset.k = "";
+    if (lost) backToRow();
+    return;
+  }
+  sh.hidden = $("pshade").hidden = false;
+  const k = sheet.kind + ":" + key(sheet.crew, sheet.id) + (sheet.moving ? ":moving" : "");
+  if (sh.dataset.k === k) return;
+  sh.dataset.k = k;
+  const s = sheet;
+  const where = phoneWhere(s.crew);
+  let kind, by, age, title, text, primary, talkRole;
+  if (s.kind === "alarm") {
+    const left = T(it.at) - nowMs();
+    kind = W.alarmW;
+    by = it.by || "";
+    age = left > 0 ? W.alIn(dur(left)) : W.alDue;
+    title = alarmText(it);
+    text = [it.note, it.for && it.for !== "you" ? W.alFor(it.for) : ""].filter(Boolean).join(" · ");
+    talkRole = it.kind === "sleep" && it.role ? it.role : by && roleOf(s.crew, by) ? by : dispatcherOf(s.crew);
+  } else {
+    kind = s.kind === "parked" ? W.later : W.yoursByHand;
+    by = it.role || "";
+    age = dur(nowMs() - T(it.created));
+    title = s.kind === "parked" ? it.text : it.title || it.text;
+    text = s.kind === "parked" ? it.note : says(it.text, title) ? it.text : it.note;
+    talkRole = by && roleOf(s.crew, by) ? by : dispatcherOf(s.crew);
+  }
+  const kids = [el("span", "grab")];
+  kids.push(el("p", "sk", [kind, by ? W.raisedBy(by) : "", where, age].filter(Boolean).join(" · ")));
+  const h = el("h3", "", title);
+  h.id = "psheet-h";
+  kids.push(h);
+  if (text) kids.push(el("p", "sn", text));
+  const shut = () => { sheet = null; };
+  // An action closes the sheet; the focus goes back to the list, not to the body under a hidden button.
+  if (s.kind === "hand") primary = button("pri", W.done, () => { shut(); doneHand(it); backToRow(); });
+  else if (s.kind === "parked") primary = button("pri", W.back, () => { shut(); act(it, "back", "", W.broughtBack); backToRow(); });
+  else if (!s.moving) primary = button("pri", W.moveTo, () => { sheet.moving = true; render(); $("psheet").querySelector(".wc")?.focus(); });
+  else {
+    const f = el("textarea", "field when");
+    f.rows = 1;
+    f.placeholder = W.alWhen;
+    f.setAttribute("aria-label", W.alWhenLabel);
+    primary = button("pri", W.alMove, () => {
+      const v = f.value.trim();
+      if (!v) return;
+      shut();
+      alarmAct(it, "move", v, "", W.alMoved, alarmKey(it));
+      backToRow();
+    });
+    const sync = () => { primary.disabled = !f.value.trim(); };
+    sync();
+    // D-12 e: four chips above the field; a chip fills it and enables Move, typing clears the chip. Tonight goes once
+    // 20:00 has passed (the time would be refused as past).
+    const chips = el("div", "whens");
+    const pick = (c) => {
+      for (const x of chips.children) { x.classList.toggle("on", x === c); x.setAttribute("aria-pressed", x === c ? "true" : "false"); }
+    };
+    for (const [label, when] of W.whenChips) {
+      if (when === "today 20:00" && new Date(nowMs()).getHours() >= 20) continue;
+      const c = button("wc", label, () => { f.value = when; pick(c); sync(); });
+      c.setAttribute("aria-pressed", "false");
+      chips.append(c);
+    }
+    f.addEventListener("input", () => { pick(null); sync(); });
+    f.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && f.value.trim()) { e.preventDefault(); primary.click(); }
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); sheet.moving = false; render(); $("psheet").querySelector(".pri")?.focus(); }
+    });
+    kids.push(chips, f);
+  }
+  kids.push(primary, button("sec", W.talkTo(talkRole), () => { const c = s.crew; shut(); openTalk(c, talkRole, null); }));
+  patch(sh, kids);
+}
+
+// doneHand closes a by-hand item: a check is done, a parked item its alarm brought back is done with.
+function doneHand(it) {
+  return it.kind === "later" ? act(it, "done", "", W.sentTo) : done(it);
+}
+
+$("pshade").addEventListener("click", closeSheet);
+// Swipe down closes it: the sheet follows the finger, and a pull past 60 px lets it go.
+{
+  let y0 = null;
+  const sh = $("psheet");
+  sh.addEventListener("touchstart", (e) => { y0 = e.target.closest?.("textarea") ? null : e.touches[0].clientY; }, { passive: true });
+  sh.addEventListener("touchmove", (e) => {
+    if (y0 === null) return;
+    sh.style.transform = "translateY(" + Math.max(0, e.touches[0].clientY - y0) + "px)";
+  }, { passive: true });
+  sh.addEventListener("touchend", (e) => {
+    if (y0 === null) return;
+    const dy = e.changedTouches[0].clientY - y0;
+    y0 = null;
+    sh.style.transform = "";
+    if (dy > 60) closeSheet();
+  });
+}
+
+function renderPhone() {
+  if (!phone.matches) { renderSheet(); return; }
+  const lists = phoneLists();
+  const a = agents(lists);
+  const sub = tab === "later" && laterSub && SUBS[laterSub];
+  setText($("phead-h"), sub ? sub() : tab === "later" ? W.tabLater : tab === "talk" ? W.talk : W.tabAgents);
+  $("pback").hidden = !sub;
+  renderAgents(lists, a);
+  renderLaterTab(lists);
+  renderSheet();
+  renderTabs(a.waiting);
+  // Opened on #talk (or kept there): the conversation comes with the first snapshot.
+  if (tab === "talk" && !side) setTimeout(() => { const x = !side && tab === "talk" && phoneTalk(); if (x) openTalk(x.crew, x.role, null); }, 0);
+}
+
+// t1 · the badges: Agents counts the roles that wait on you (red while any of them is down), Talk dots while its role
+// waits on you; Later carries none. A badge that changes pops once.
+function renderTabs(waiting) {
   const set = (t, on, text, cls) => {
     const b = document.querySelector(`#tabbar [data-tab="${t}"]`);
+    if (!b) return;
     if (tab === t) b.setAttribute("aria-current", "page");
     else b.removeAttribute("aria-current");
     const mark = b.querySelector(".bd, .dot");
@@ -2273,13 +2621,11 @@ function renderTabs(hold, asks, red) {
     if (badges[t] !== undefined && badges[t] !== v && on) { mark.classList.remove("pop"); void mark.offsetWidth; mark.classList.add("pop"); }
     badges[t] = v;
   };
-  const n = hold.length + asks.length + red.length;
-  set("move", n > 0, String(n), red.length > 0);
-  set("going", false);
+  set("agents", waiting.length > 0, String(waiting.length), waiting.some((a) => a.red));
   const t = side && side.kind === "talk" ? side : phoneTalk();
   const r = t && roleOf(t.crew, t.role);
   set("talk", !!(r && (r.prompt || r.stuck)));
-  set("crews", redList(true).length > 0);
+  set("later");
 }
 
 // ---- hover: a tinted row raises its project everywhere

@@ -14,7 +14,16 @@
     });
     // D-11: on the phone the Talk tab reads like the Claude iOS app; the cockpit's width says which it is (this frame
     // may be narrow on the desktop too).
-    const phone = () => { try { document.body.classList.toggle("phone", window.parent.matchMedia("(max-width: 860px)").matches); } catch (_) { /* a frame of another page */ } };
+    // D-14 a: on the phone the working line leaves the conversation for the state line, beside Stop.
+    const phone = () => {
+      let on = false;
+      try { on = window.parent.matchMedia("(max-width: 860px)").matches; } catch (_) { /* a frame of another page */ }
+      // The phone's field has its own font and padding: a switch sizes it again.
+      if (document.body.classList.contains("phone") !== on) { document.body.classList.toggle("phone", on); fitField(); }
+      const w = $("chat-working");
+      if (on && w.parentElement !== $("stop-turn").parentElement) $("start-role").before(w);
+      else if (!on && w.parentElement !== $("conversation")) $("empty-chat").before(w);
+    };
     phone();
     try { window.parent.addEventListener("resize", phone); } catch (_) { /* as above */ }
     // A field here with the keyboard up: the cockpit's tab bar steps aside (D-09 k2). The parent cannot see a focus
@@ -180,7 +189,8 @@
   }
   // fitField grows the field with its text, one line at rest (D-08 k2); its CSS max-height caps it.
   function setLabel(el, text) { if (el.textContent !== text) el.textContent = text; }
-  function fitField() { input.style.height = "auto"; input.style.height = input.scrollHeight + "px"; }
+  // capped: the field reached its max-height and scrolls from there (D-14 b: on the phone it scrolls only then).
+  function fitField() { input.style.height = "auto"; input.style.height = input.scrollHeight + "px"; input.classList.toggle("capped", input.scrollHeight > input.clientHeight + 1); }
   const clock = new Intl.DateTimeFormat(undefined, {hour: "2-digit", minute: "2-digit"}), dated = new Intl.DateTimeFormat("en-GB", {day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"});
   const dayName = new Intl.DateTimeFormat("en-GB", {weekday: "short", day: "numeric", month: "short"});
   const dayOf = (at) => { const d = new Date(at); return Number.isNaN(d.getTime()) ? "" : d.toDateString(); };
@@ -351,11 +361,12 @@
         const title = document.createElement("p"), summary = document.createElement("p");
         title.className = "event-status";
         title.textContent = eventWord[row.event.status] || "Update";
-        summary.textContent = row.event.summary;
+        // The owner's own message from a session is shown whole, line breaks kept: it is his, not a log line to fold.
+        summary.textContent = row.event.kind === "session" && row.event.detail ? row.event.detail : row.event.summary;
         body.replaceChildren(title, summary);
         if (row.event.result) { const result = document.createElement("p"); result.className = "event-result"; result.textContent = row.event.result; body.append(result); }
         // D-11 amendment b: an owner's session message offers its full text only when the line shown was clipped.
-        if (row.event.detail && (row.event.kind !== "session" || row.event.detail.trim() !== (row.event.summary || "").trim())) { const details = document.createElement("details"), label = document.createElement("summary"), text = document.createElement("pre"); label.textContent = row.event.kind==="session"?"Full message":"Technical details"; text.textContent = row.event.detail; details.append(label, text); body.append(details); }
+        if (row.event.detail && row.event.kind !== "session") { const details = document.createElement("details"), label = document.createElement("summary"), text = document.createElement("pre"); label.textContent = row.event.kind==="session"?"Full message":"Technical details"; text.textContent = row.event.detail; details.append(label, text); body.append(details); }
       } else if (row.role === "assistant") window.zminaChatContent.render(row.text, body); else body.textContent = row.text; article._text = row.text; article._presentation=presentation; }
       const fileRows=article.querySelector(".message-files"), signature=fileSignature(row.attachments)+Boolean(row.outboxKey);
       if(article._files!==signature){fileRows.replaceChildren();for(const file of row.attachments||[]){const item=document.createElement(row.outboxKey?"span":"a");item.textContent=file.name+" · "+new Intl.NumberFormat().format(file.size)+" bytes";if(!row.outboxKey){item.href="/api/chat/file?"+new URLSearchParams({...destination,id:file.id});item.download=file.name;}fileRows.append(item);}article._files=signature;}

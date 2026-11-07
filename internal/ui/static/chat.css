@@ -167,39 +167,73 @@ html.chat-document { height: 100%; overflow: hidden; }
 
 /* D-11 · the Talk tab on the phone reads like the Claude iOS app. .phone is set by chat.js from the cockpit's width;
    the desktop keeps D-08. */
-.chat-page.phone #conversation { padding-top: 84px; -webkit-mask-image: none; mask-image: none; }
-/* c1 · the role's text in the system sans, full ink */
-.chat-page.phone .chat-message.assistant { font: 17px/1.55 var(--sans); color: var(--ink); }
-.chat-page.phone .assistant .message-body p { margin: 0 0 14px; }
-.chat-page.phone .assistant .message-body code { font-size: .82em; }
+/* D-14 · compact, so more of the conversation is on the first screen (24 lines against 17); D-11's structure stays. */
+.chat-page.phone #conversation { padding-top: 64px; padding-bottom: 12px; -webkit-mask-image: none; mask-image: none; }
+/* c1 · the role's text in the system sans, full ink; paragraphs 10, lists 20 (nested 16), items 2 apart */
+.chat-page.phone .chat-message.assistant { font: 16px/1.45 var(--sans); color: var(--ink); }
+.chat-page.phone .assistant .message-body p { margin: 0 0 10px; }
+.chat-page.phone .message-body ul, .chat-page.phone .message-body ol { margin: 0 0 10px; padding-left: 20px; }
+.chat-page.phone .message-body li { margin: 2px 0; }
+.chat-page.phone .message-body li > ul, .chat-page.phone .message-body li > ol { margin: 2px 0; padding-left: 16px; }
+.chat-page.phone .assistant .message-body code { font-size: .85em; padding: .05em .3em; }
 /* b1 · the owner's bubble lighter than the page; 18 px to the next turn */
-.chat-page.phone .chat-message.user .message-body { background: var(--line2); }
+.chat-page.phone .chat-message.user .message-body { padding: 8px 14px; border-radius: 16px; background: var(--line2); font: 15px/1.4 var(--sans); }
 .chat-page.phone #messages > .chat-message.user.run-end { margin-bottom: 10px; }
 @media (prefers-color-scheme: light) { .chat-page.phone .chat-message.user .message-body { background: var(--panel2); } }
 /* s1 · a session message from the owner is his bubble: no card, no caption (origin and time in its title) */
-.chat-page.phone .chat-message.event.session { align-self: flex-end; max-width: min(80%, 36rem); padding: 10px 16px; border: 0; border-radius: 18px;
-  background: var(--line2); color: var(--ink); font: 15px/1.55 var(--sans); }
+.chat-page.phone .chat-message.event.session { align-self: flex-end; max-width: min(80%, 36rem); padding: 8px 14px; border: 0; border-radius: 16px;
+  background: var(--line2); color: var(--ink); font: 15px/1.4 var(--sans); }
 @media (prefers-color-scheme: light) { .chat-page.phone .chat-message.event.session { background: var(--panel2); } }
 .chat-page.phone .event.session .message-head { display: none; }
 .chat-page.phone .event.session .message-body > p { margin: 0; }
 .chat-page.phone .event.session details > summary { min-height: 32px; padding: 6px 0 0; }
-.chat-page.phone #messages > .event.session, .chat-page.phone #messages > .event.session + .chat-message { margin-top: 16px; }
+/* D-14 s1 · the rhythm: a message 12 after the one before, the owner's next bubble 6, a new run 18, events 18 */
+.chat-page.phone #messages > .chat-message { margin-top: 12px; }
+.chat-page.phone #messages > .chat-message.user { margin-top: 6px; }
+.chat-page.phone #messages > .run-start { margin-top: 18px; }
+.chat-page.phone #messages > .event, .chat-page.phone #messages > .event + .chat-message { margin-top: 18px; }
+.chat-page.phone #messages > .chat-message:first-child { margin-top: 0; }
 /* m1 · under a reply: Copy only, no time; none under the owner's bubble */
-.chat-page.phone .message-meta { height: 44px; margin: -6px 0 0 -10px; }
+.chat-page.phone .message-meta { height: 32px; margin: -6px 0 0 -10px; }
 .chat-page.phone .message-meta time, .chat-page.phone .chat-message.user > .message-meta { display: none; }
 /* D-11 amendment c: an older reply keeps no empty row; its Copy shows when it is tapped */
 /* Folded, not removed: its Copy stays in the tab order (a focus unfolds it) and a tap on the reply unfolds it too. */
 .chat-page.phone .chat-message.assistant:not(.newest):not(:focus-within):not(.meta-on) > .message-meta { height: 0; margin: 0; overflow: hidden; opacity: 0; }
-.chat-page.phone .message-meta .ib { width: 44px; height: 44px; color: var(--muted); }
-.chat-page.phone .message-meta .ib svg { width: 19px; height: 19px; }
-/* k1 · the composer: r 24; plus, dictate and send as 40 px circles; send is ink once there is text, no brand colour */
-.chat-page.phone .composer-box { border-radius: 24px; padding: 14px 8px 8px 16px; }
-.chat-page.phone #message { font-size: 17px; }
-.chat-page.phone .composer-row { gap: 6px; }
-.chat-page.phone .composer-row .ib, .chat-page.phone .composer-row .send { position: relative; width: 40px; height: 40px; margin: 2px; border: 0; border-radius: 50%;
+/* D-14 m1 · Copy a 36 × 32 button in a 32 px row, its hit 44 */
+.chat-page.phone .message-meta .ib { position: relative; width: 36px; height: 32px; color: var(--muted); }
+.chat-page.phone .message-meta .ib::after { content: ""; position: absolute; inset: -6px -4px; }
+.chat-page.phone .message-meta .ib svg { width: 17px; height: 17px; }
+/* D-14 k1–k2 · the composer is one row at rest: attach · field · dictate · send in a grid, r 22, min-height 48; the
+   field grows upward to 15rem with the buttons on the bottom line; 36 px circles, every hit 44; send is ink once there
+   is text, no brand colour. Attachments, when there are any, take a row above. */
+.chat-page.phone .composer-box { display: grid; grid-template-columns: 36px minmax(0, 1fr) 36px 36px; align-items: end; gap: 0 4px; min-height: 48px;
+  box-sizing: border-box; padding: 6px; border-radius: 22px; }
+.chat-page.phone .chat-attachments { grid-column: 1 / -1; margin: 0 0 6px; }
+.chat-page.phone .composer-field { grid-column: 2; grid-row: 2; align-self: center; }
+.chat-page.phone .composer-row { display: contents; }
+.chat-page.phone .composer-row .sp { display: none; }
+.chat-page.phone #attach-file { grid-column: 1; grid-row: 2; }
+.chat-page.phone #dictate { grid-column: 3; grid-row: 2; }
+.chat-page.phone .composer-row .send { grid-column: 4; grid-row: 2; }
+.chat-page.phone #message { box-sizing: border-box; min-height: 36px; margin: 0; padding: 7px 4px; font: 16px/1.4 var(--sans); }
+.chat-page.phone .composer-field.has-draft #message { padding-right: 32px; }
+/* D-14 b · no scrollbar between the field and Dictate: none drawn on the phone, and the field scrolls only once it is
+   at its 15rem cap */
+.chat-page.phone #message { overflow-y: hidden; scrollbar-width: none; }
+.chat-page.phone #message.capped { overflow-y: auto; }
+.chat-page.phone #message::-webkit-scrollbar { display: none; }
+.chat-page.phone .composer-field .clear { top: 4px; }
+.chat-page.phone .composer-row .ib, .chat-page.phone .composer-row .send { position: relative; width: 36px; height: 36px; margin: 0; border: 0; border-radius: 50%;
   background: var(--line2); color: var(--ink2); }
-.chat-page.phone .composer-row .ib::after, .chat-page.phone .composer-row .send::after { content: ""; position: absolute; inset: -2px; }
-.chat-page.phone .composer-row svg { width: 20px; height: 20px; }
+.chat-page.phone .composer-row .ib::after, .chat-page.phone .composer-row .send::after { content: ""; position: absolute; inset: -4px; }
+.chat-page.phone .composer-row svg { width: 18px; height: 18px; }
+/* D-14 a · while a turn runs, «Working · N min» and Stop share one line 8 px above the composer: the state left, Stop a
+   text button at the right (44 px hit); a state line with nothing to show takes no room. */
+.chat-page.phone .chat-state { flex-wrap: nowrap; justify-content: flex-start; width: 100%; max-width: 46rem; box-sizing: border-box; margin: 4px auto 8px; padding: 0 4px 0 16px;
+  font-size: 12px; text-align: left; }
+.chat-page.phone .chat-state.quiet:not(:has(> .chat-working:not([hidden]), > button:not([hidden]))) { margin: 0; }
+.chat-page.phone .chat-state .chat-working { margin: 0; }
+.chat-page.phone #stop-turn { margin-left: auto; height: 44px; padding: 0 12px; font: 500 14px var(--sans); color: var(--ink2); text-decoration: none; }
 .chat-page.phone .composer-row .send:disabled { background: var(--line2); color: var(--faint); }
 .chat-page.phone .composer-row .send:not(:disabled) { background: var(--ink); color: var(--bg); }
 .chat-page.phone .composer-row .send svg { stroke-width: 2.2; }
@@ -245,3 +279,5 @@ html.chat-document { height: 100%; overflow: hidden; }
 .q-rrow { display: grid; grid-template-columns: 76px 1fr auto; gap: 12px; align-items: baseline; width: 100%; min-height: 44px; padding: 10px 16px; border: 0; border-bottom: 1px solid var(--line); background: none; color: var(--ink); text-align: left; font: inherit; cursor: pointer; }
 .q-rh { font: 13px var(--sans); color: var(--muted); } .q-ra { font: 500 15px/1.4 var(--sans); } .q-rc { font: 15px var(--sans); color: var(--faint); }
 .q-foot:empty { display: none; }
+/* An owner's session message keeps its own line breaks. */
+.chat-message.event.session .message-body > p { white-space: pre-wrap; overflow-wrap: anywhere; }
