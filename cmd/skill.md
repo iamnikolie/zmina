@@ -917,6 +917,9 @@ One screen, top to bottom by what a delay costs:
 Below 1400 px that is one centred column. From 860 px an empty «you hold», «answer» or «going» is not drawn: one
 muted line names the empty ones in their place; empty «parked» and «waiting on others» are not drawn at any width.
 
+A page left open picks up a new zmina by itself: once the stream says another build serves it, the page loads again
+the next time it goes out of sight or comes back (a draft's text and files are kept), never while it is in use.
+
 Below 861 px (a phone, the home-screen app) the page is three tabs at the bottom — **Agents · Talk · Later** — under a
 52 px head with the tab's name and the beat; the phone has no crew switch: it shows every crew, and every row says
 where it is (the crew for this machine's, `crew · node` for a peer's). **Agents** opens with three numerals — waiting
