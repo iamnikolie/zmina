@@ -43,13 +43,6 @@ func TaskNotification(m Message) Message {
 		detail += "\nOutput: " + task.Output
 	}
 	m.Role = "event"
-	clip := func(text string, limit int) string {
-		r := []rune(text)
-		if len(r) > limit {
-			return string(r[:limit]) + "…"
-		}
-		return text
-	}
 	m.Event = &Event{Status: strings.TrimSpace(task.Status), Summary: clip(strings.TrimSpace(task.Summary), 1000), Result: clip(result, 240), Detail: clip(strings.TrimSpace(detail), 16000)}
 	return m
 }

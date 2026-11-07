@@ -25,7 +25,9 @@ func (r *Registry) History(sessionID string, lines int) (string, error) {
 			label = "Assistant"
 		}
 		text := m.Text
-		if m.Event != nil {
+		if m.Event != nil && m.Event.Kind == "command" {
+			label, text = "Session", m.Event.Summary
+		} else if m.Event != nil {
 			label = "Background task"
 			text = m.Event.Summary + "\n" + m.Event.Detail
 		}
@@ -66,6 +68,10 @@ func (r *Registry) ChatMessages(sessionID string) ([]chat.Message, error) {
 	}
 	out := []chat.Message{}
 	seen := map[string]bool{}
+	// local: Claude Code's note that the next line is a command it ran itself; command: the index in out of the
+	// command line the next output line belongs to, -1 when none.
+	local, command := false, -1
+	var ran [2]string // the name and arguments of that command
 	for _, record := range records {
 		var l line
 		if json.Unmarshal(record, &l) != nil || l.Sidechain || l.Compact || (l.Type != "user" && l.Type != "assistant") {
@@ -80,6 +86,9 @@ func (r *Registry) ChatMessages(sessionID string) ([]chat.Message, error) {
 			if m, ok := peerChat(l); ok {
 				seen[l.UUID] = true
 				out = append(out, m)
+				local, command = false, -1
+			} else if localCaveat(&l) {
+				local = true
 			}
 			continue
 		}
@@ -92,9 +101,52 @@ func (r *Registry) ChatMessages(sessionID string) ([]chat.Message, error) {
 		if id == "" {
 			id = chat.Hash(string(record))
 		}
-		out = append(out, chat.TaskNotification(chat.Normalize(chat.Message{ID: id, Role: l.Type, Text: text, At: l.Timestamp})))
+		m := chat.Message{ID: id, Role: l.Type, Text: text, At: l.Timestamp}
+		if l.Type == "user" && l.Origin == nil {
+			if name, args, ok := chat.ParseCommand(text); ok {
+				out = dropTyped(out, name, args)
+				if local {
+					// A command Claude Code ran itself (/compact, /model): one quiet line, its output joins it.
+					m.Role, m.Text, m.Event = "event", "", chat.CommandEvent(name, args, "", false)
+					out = append(out, m)
+					local, command, ran = false, len(out)-1, [2]string{name, args}
+					continue
+				}
+				// A command that is a prompt (a skill): the owner's words as he typed them.
+				m.Text = strings.TrimSpace(name + " " + args)
+				out = append(out, chat.Normalize(m))
+				local, command = false, -1
+				continue
+			}
+			if output, failed, ok := chat.ParseLocalOutput(text); ok {
+				if command >= 0 {
+					out[command].Event = chat.CommandEvent(ran[0], ran[1], output, failed)
+				} else if output != "" {
+					m.Role, m.Text, m.Event = "event", "", chat.CommandEvent("", "", output, failed)
+					out = append(out, m)
+				}
+				local, command = false, -1
+				continue
+			}
+		}
+		local, command = false, -1
+		out = append(out, chat.TaskNotification(chat.Normalize(m)))
 	}
 	return out, nil
+}
+
+// dropTyped takes away the line just before a recorded command when it is that command as typed at the prompt
+// ("/compact"): the command is shown once.
+func dropTyped(out []chat.Message, name, args string) []chat.Message {
+	if len(out) == 0 {
+		return out
+	}
+	last := out[len(out)-1]
+	text := strings.TrimSpace(last.Text)
+	if last.Role != "user" || last.Event != nil || strings.HasPrefix(last.ID, "web:") || (text != name && text != strings.TrimSpace(name+" "+args)) {
+		return out
+	}
+	return out[:len(out)-1]
 }
 
 // Claude Code's words around a message another session posted to this one's inbox socket.
