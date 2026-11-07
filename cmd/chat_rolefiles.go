@@ -92,26 +92,32 @@ func roleRoots(s *shift.Shift, role string) ([]string, error) {
 	return roots, nil
 }
 
-// roleSent are the files the role's conversation (its current one, else its last) handed the owner with SendUserFile,
-// by their path as sent; the latest send of a path stands.
-func roleSent(s *shift.Shift, role string) map[string]registry.SentFile {
+// claudeSession is the Claude conversation Chat reads for a role: its current one, else its last; "" for a Codex role.
+func claudeSession(s *shift.Shift, role string) string {
 	r, err := s.Role(role)
 	if err != nil || r.IsCodex() {
-		return nil
+		return ""
 	}
 
-	session := ""
-
 	for _, v := range s.Views() {
-		if v.Role == role {
-			session = v.SessionID
-
-			break
+		if v.Role == role && v.SessionID != "" {
+			return v.SessionID
 		}
 	}
 
-	if rs := s.State.Role(role); session == "" && (rs.LastRuntime == "" || rs.LastRuntime == "claude") {
-		session = rs.LastSession
+	if rs := s.State.Role(role); rs.LastRuntime == "" || rs.LastRuntime == "claude" {
+		return rs.LastSession
+	}
+
+	return ""
+}
+
+// roleSent are the files the role's conversation (its current one, else its last) handed the owner with SendUserFile,
+// by their path as sent; the latest send of a path stands.
+func roleSent(s *shift.Shift, role string) map[string]registry.SentFile {
+	session := claudeSession(s, role)
+	if session == "" {
+		return nil
 	}
 
 	paths, err := (&registry.Registry{Namespace: s.Crew.Namespace}).SentFiles(session)
@@ -322,6 +328,44 @@ func (a *app) localChatRoleFile(key, role, path string) (chat.Upload, error) {
 	return file, err
 }
 
+// localChatLooked reads an image the role opened for itself (D-20), as its conversation keeps it: whole, or as a
+// thumbnail for its tile. No file on disk is read: the bytes are the ones the role saw.
+func (a *app) localChatLooked(key, role, image string, thumb bool) (chat.Upload, error) {
+	c, err := a.crewApp(key)
+	if err != nil {
+		return chat.Upload{}, err
+	}
+
+	var file chat.Upload
+
+	err = c.readState(func(s *shift.Shift) error {
+		session := claudeSession(s, role)
+		if session == "" {
+			return errors.New("no such image")
+		}
+
+		data, kind, err := (&registry.Registry{Namespace: s.Crew.Namespace}).LookedImage(session, image)
+		if err != nil {
+			return err
+		}
+
+		name := "image" + map[string]string{"image/png": ".png", "image/jpeg": ".jpg", "image/gif": ".gif", "image/webp": ".webp"}[kind]
+		if thumb {
+			if data, err = chat.Thumb(data, chat.ThumbSide); err != nil {
+				return err
+			}
+
+			name = "thumb.jpg"
+		}
+
+		file = chat.Upload{Name: name, Data: data}
+
+		return nil
+	})
+
+	return file, err
+}
+
 // serveFile writes a file Chat shows: inline when its first bytes are an image or a pdf (never HTML, SVG or anything a
 // browser would run), else as a download.
 func serveFile(w http.ResponseWriter, file *chat.Upload, inline bool) {
@@ -399,6 +443,27 @@ func (a *app) uiChatRoleFiles(mux *http.ServeMux) {
 			Text: q.Get("path")})
 		if err != nil || snapshot.File == nil {
 			http.Error(w, "not a file this conversation shows", http.StatusNotFound)
+
+			return
+		}
+
+		serveFile(w, snapshot.File, q.Get("download") == "")
+	})
+	// An image a role opened for itself (D-20): &thumb=1 its tile's thumbnail.
+	mux.HandleFunc("GET /api/chat/looked", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+		defer cancel()
+
+		action := ""
+		if q.Get("thumb") != "" {
+			action = "thumb"
+		}
+
+		snapshot, err := a.chatCall(ctx, q.Get("node"), "chat/looked", mesh.TerminalRequest{Crew: q.Get("crew"), Role: q.Get("role"),
+			Text: q.Get("key"), Action: action})
+		if err != nil || snapshot.File == nil {
+			http.Error(w, "not an image this conversation shows", http.StatusNotFound)
 
 			return
 		}

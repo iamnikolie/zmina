@@ -557,7 +557,19 @@ Code delivered those bytes to the owner already), by the very path the role's cu
 it is that file — no link anywhere on the path, the size Claude Code recorded, neither written nor its inode changed
 since the send (mtime and ctime), one link only — with every other check as above; a path a role only names still has to be under the roots, so it copies the file there
 first. Every role hears this at boot (`shift.FilesRule`), so it never says a file is in the chat when it went only to
-Telegram. Images a role reads for itself (Read) are not shown.
+Telegram.
+
+**What a role looked at** (D-20). The images a Claude role opens for itself with Read (screenshots of its own checks,
+page renders) are one quiet strip per turn: «Looked at N images», then 56 px tiles in the order read, five at most — the
+fifth «+N» — all of them when opened; a tap opens the viewer over that strip (`Looked at · 3 of 14` under the name).
+The strip stands over the reply that closes its turn; while the turn is in work it stands last, over the working line,
+and grows there (it and every message since the turn's first image are `provisional` until the turn is over, so it
+moves over the reply without a history gap). A file read twice is one tile, its newest picture; a file the role also
+sent that turn shows only in the sent gallery; the owner's own attachments, PDFs, errors and bytes that are not the
+image they claim are left out; no image, no strip. Claude Code keeps each such image in the transcript, so Chat serves
+those bytes — the picture of that moment, whatever the file became since — and reads no file on disk for it:
+`GET /api/chat/looked?node=&crew=&role=&key=` (`&thumb=1`: a JPEG thumbnail, its long side 168 px), the owner-signed
+mesh op `chat/looked` for a peer's role. An image that left the transcript's last 8 MiB is no longer served.
 `POST /api/chat/paths` (`node`, `crew`, `role`, up to 64 `paths`) answers which of them the page shows, with name,
 size and type; `GET /api/chat/rolefile?node=&crew=&role=&path=` serves one inline (`&download=1`: as a download).
 A peer's are read on its node with the owner-signed mesh ops `chat/paths` and `chat/rolefile`. A tap on an image opens

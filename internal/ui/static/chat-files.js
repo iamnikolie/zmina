@@ -250,6 +250,57 @@
     return box;
   }
 
+  // ---- the images a role looked at (D-20) ----
+  // One strip per turn: «Looked at N images» (a button: it opens the strip), then 56 px tiles in read order, five at
+  // most closed — the fifth «+N» — all of them wrapped open. Tiles are thumbnails of the image as the role saw it; a
+  // tile keeps its element while the strip grows, and one that comes after the first draw fades in.
+  const EYE = '<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>';
+  const lookedURL = (dest, key, thumb) => "/api/chat/looked?" + new URLSearchParams({node: dest.node || "", crew: dest.crew, role: dest.role, key, ...(thumb ? {thumb: "1"} : {})});
+  function looked(body, row, dest, owner) {
+    let s = body._looked;
+    if (!s) {
+      s = {label: el("button", "lk-label"), words: el("span", "lk-words"), tiles: el("div", "lk-tiles"), map: new Map(), drawn: false, list: []};
+      s.label.type = "button";
+      const eye = el("span", "lk-eye"), chev = el("span", "lk-chev");
+      eye.innerHTML = svg(EYE);
+      chev.innerHTML = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5"/></svg>';
+      s.label.append(eye, s.words, chev);
+      s.label.addEventListener("click", () => { owner._lookOpen = !owner._lookOpen; looked(body, owner._lookRow, dest, owner); });
+      body.replaceChildren(s.label, s.tiles);
+      body._looked = s;
+    }
+    owner._lookRow = row;
+    const imgs = row.looked || [], n = imgs.length, open = Boolean(owner._lookOpen);
+    s.label.setAttribute("aria-expanded", String(open));
+    s.words.textContent = "Looked at " + (n === 1 ? "1 image" : n + " images");
+    s.tiles.classList.toggle("open", open);
+    s.list = imgs.map((im) => ({name: im.name, src: lookedURL(dest, im.key, false), open: lookedURL(dest, im.key, false), path: im.path, looked: true}));
+    const shown = open ? imgs : imgs.slice(0, 5), order = [];
+    shown.forEach((im, i) => {
+      let t = s.map.get(im.key);
+      if (!t) {
+        t = el("button", "lk-tile" + (s.drawn ? " lk-new" : ""));
+        t.type = "button";
+        t.dataset.key = im.key;
+        const img = el("img"); img.alt = ""; img.decoding = "async"; img.loading = "lazy"; img.src = lookedURL(dest, im.key, true);
+        t.append(img);
+        t.addEventListener("click", () => {
+          if (t.querySelector(".fmore")) { owner._lookOpen = true; looked(body, owner._lookRow, dest, owner); return; }
+          view(s.list, s.list.findIndex((x, j) => (owner._lookRow.looked || [])[j]?.key === t.dataset.key), t);
+        });
+        s.map.set(im.key, t);
+      }
+      t.setAttribute("aria-label", "Looked at " + im.name + ", " + (i + 1) + " of " + n);
+      let more = t.querySelector(".fmore");
+      if (!open && i === 4 && n > 5) { if (!more) { more = el("b", "fmore"); t.append(more); } more.textContent = "+" + (n - 4); t.setAttribute("aria-label", (n - 4) + " more images: show all"); }
+      else if (more) more.remove();
+      order.push(t);
+    });
+    for (const [key, t] of s.map) if (!order.includes(t)) { t.remove(); if (!imgs.some((im) => im.key === key)) s.map.delete(key); }
+    order.forEach((t, i) => { if (s.tiles.children[i] !== t) s.tiles.insertBefore(t, s.tiles.children[i] || null); });
+    s.drawn = true;
+  }
+
   // ---- the composer's picked files (D-18 f1–f3) ----
   // An image is a 64 px square of the picked file itself (an object URL: nothing goes up to draw it), another file a
   // 176 × 64 tile with its kind's icon, name and «PDF · 412 KB»; a ✕ on the corner removes it, a tap previews it.
@@ -337,7 +388,9 @@
       viewer.index = (i + list.length) % list.length;
       const it = list[viewer.index];
       img.src = it.src; img.alt = it.name; img.classList.remove("zoom");
-      name.textContent = it.name; count.textContent = list.length > 1 ? (viewer.index + 1) + " of " + list.length : "";
+      name.textContent = it.name;
+      // D-20 v1: an image a role looked at says so under its name.
+      count.textContent = it.looked ? "Looked at · " + (viewer.index + 1) + " of " + list.length : list.length > 1 ? (viewer.index + 1) + " of " + list.length : "";
       path.textContent = it.path || ""; pathRow.hidden = !it.path;
       open.href = it.open;
       dots.replaceChildren(...list.map((_, j) => el("i", j === viewer.index ? "on" : "")));
@@ -395,5 +448,5 @@
     }
   }, true);
 
-  window.zminaFiles = Object.freeze({init: (h) => { hooks = h; }, ownerBlock, progress, decorate, size, draft});
+  window.zminaFiles = Object.freeze({init: (h) => { hooks = h; }, ownerBlock, progress, decorate, size, draft, looked});
 })();

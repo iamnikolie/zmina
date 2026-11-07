@@ -27,6 +27,15 @@ type Attachment struct {
 	SHA256 string `json:"sha256"`
 }
 
+// Looked is an image a role opened for itself (Claude Code's Read): Key finds its bytes as the role saw them, Path and
+// Name are the file it read.
+type Looked struct {
+	Key  string `json:"key"`
+	Path string `json:"path"`
+	Name string `json:"name"`
+	Type string `json:"type"`
+}
+
 // PathInfo is a file a role named in its message that Chat shows: its path as named, name, size and type.
 type PathInfo struct {
 	Path string `json:"path"`
