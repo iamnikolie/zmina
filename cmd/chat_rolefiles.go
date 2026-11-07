@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/iamnikolie/zmina/internal/chat"
@@ -140,13 +141,27 @@ func roleFile(path string, roots []string) (*os.File, chat.PathInfo, error) {
 		return nil, chat.PathInfo{}, refuse
 	}
 
-	f, err := os.Open(real)
+	// A regular file before it is opened: open(2) on a FIFO named a.png would wait for a writer forever. Opened
+	// without blocking and without following a last link, then the same file again, so a swap since is refused.
+	before, err := os.Lstat(real)
+	if err != nil || !before.Mode().IsRegular() || before.Size() > chat.MaxFileBytes {
+		return nil, chat.PathInfo{}, refuse
+	}
+
+	f, err := os.OpenFile(real, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, chat.PathInfo{}, refuse
 	}
 
 	st, err := f.Stat()
-	if err != nil || !st.Mode().IsRegular() || st.Size() > chat.MaxFileBytes {
+	if err != nil || !st.Mode().IsRegular() || st.Size() > chat.MaxFileBytes || !os.SameFile(before, st) {
+		_ = f.Close()
+
+		return nil, chat.PathInfo{}, refuse
+	}
+
+	// A directory above swapped for a link between the resolve and the open leads somewhere else: resolve again.
+	if again, err := filepath.EvalSymlinks(real); err != nil || again != real {
 		_ = f.Close()
 
 		return nil, chat.PathInfo{}, refuse

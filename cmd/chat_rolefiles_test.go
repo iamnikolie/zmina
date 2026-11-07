@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -49,6 +50,8 @@ func TestRoleFileServesOnlyItsRoots(t *testing.T) {
 
 	link := filepath.Join(root, "escape.png")
 	require.NoError(t, os.Symlink(write(outside, "secret.png", pngBytes), link))
+	fifo := filepath.Join(root, "pipe.png")
+	require.NoError(t, syscall.Mkfifo(fifo, 0o600))
 	big := write(root, "big.png", append(append([]byte{}, pngBytes...), make([]byte, chat.MaxFileBytes)...))
 
 	for name, p := range map[string]string{
@@ -58,6 +61,7 @@ func TestRoleFileServesOnlyItsRoots(t *testing.T) {
 		"a png named .pdf":          write(root, "fake.pdf", pngBytes),
 		"svg":                       write(root, "pic.svg", []byte("<svg onload=x()></svg>")),
 		"over 8 MiB":                big,
+		"a fifo named .png":         fifo,
 		"relative":                  "shots/a.png",
 		"a directory":               filepath.Join(root, "shots"),
 		"gone":                      filepath.Join(root, "none.png"),
