@@ -55,6 +55,8 @@
   let selectedFiles=[], filesRevision=0;
   // D-15 h1: the item a message is about, shown as a chip above the field; it goes as «Re <id> (<title>):».
   let replyTo = null;
+  // The mesh's nodes by name (this node's is ""): an id's node/crew prefix names one of them, else it is text (D-15 i1).
+  let knownNodes = new Map();
   const fileSignature=files=>JSON.stringify((files||[]).map(file=>[file.id,file.name,file.size]));
   const matches=(entry,row)=>row && row.text===entry.text && fileSignature(entry.files)===fileSignature(row.attachments);
   function renderSelected() {
@@ -552,7 +554,7 @@
   window.addEventListener("pagehide", () => { saveDraft(); endSpeech(true); clearTimeout(pollTimer); clearTimeout(retryTimer); readRequest?.abort(); });
   // D-15 h1: «Talk to <role>» on a card — here when it is this conversation, else the role's own, the item on its field
   // (embedded, the cockpit opens it, so its panel and tabs follow).
-  window.zminaIds.init({post, redraw: () => { if (destination) window.zminaIds.decorate(messages, destination); }, talk(dest, item) {
+  window.zminaIds.init({post, node: (name) => knownNodes.get(name), redraw: () => { if (destination) window.zminaIds.decorate(messages, destination); }, talk(dest, item) {
     if (destination && dest.node === (destination.node || "") && dest.crew === destination.crew && dest.role === destination.role) { replyTo = {id: item.id, title: item.title}; saveDraft(); renderReply(); input.focus(); return; }
     const to = {node: dest.node, crew: dest.crew, role: dest.role};
     let saved = {}; try { saved = JSON.parse(localStorage.getItem(storageKey(to)) || "{}"); } catch (_) { /* optional */ }
@@ -562,5 +564,5 @@
   }}, messages, conversation);
   if (params.get("crew") && params.get("role")) showDestination({node: params.get("node") || "", crew: params.get("crew"), role: params.get("role")});
   drainOutbox();
-  (async () => { try { const response = await fetch("/api/terminal/nodes"); if (!response.ok) throw new Error("Nodes unavailable. Reload this page."); const nodes = await response.json(); node.replaceChildren(); nodes.forEach(row => node.add(new Option(row.local ? `${row.name || "This node"} · local` : row.name, row.local ? "" : row.name))); if ([...node.options].some(option => option.value === params.get("node"))) node.value = params.get("node"); await loadTargets(); } catch (e) { error(e.message); } })();
+  (async () => { try { const response = await fetch("/api/terminal/nodes"); if (!response.ok) throw new Error("Nodes unavailable. Reload this page."); const nodes = await response.json(); node.replaceChildren(); knownNodes = new Map(nodes.filter(row => row.name).map(row => [row.name, row.local ? "" : row.name])); nodes.forEach(row => node.add(new Option(row.local ? `${row.name || "This node"} · local` : row.name, row.local ? "" : row.name))); if ([...node.options].some(option => option.value === params.get("node"))) node.value = params.get("node"); await loadTargets(); } catch (e) { error(e.message); } })();
 })();

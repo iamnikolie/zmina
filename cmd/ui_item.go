@@ -405,12 +405,12 @@ func itemIDs(list string) ([]string, error) {
 func (a *app) localItems(key, list string) ([]byte, error) {
 	ids, err := itemIDs(list)
 	if err != nil {
-		return nil, err
+		return nil, &itemsError{http.StatusBadRequest, err}
 	}
 
 	c, err := a.crewApp(key)
 	if err != nil {
-		return nil, err
+		return nil, &itemsError{http.StatusNotFound, err}
 	}
 
 	out := map[string]itemCard{}
@@ -430,6 +430,15 @@ func (a *app) localItems(key, list string) ([]byte, error) {
 	return json.Marshal(map[string]any{"items": out})
 }
 
+// itemsError carries the HTTP status a local lookup's failure answers with.
+type itemsError struct {
+	code int
+	err  error
+}
+
+func (e *itemsError) Error() string { return e.err.Error() }
+func (e *itemsError) Unwrap() error { return e.err }
+
 func (a *app) uiItems(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/items", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
@@ -440,6 +449,13 @@ func (a *app) uiItems(mux *http.ServeMux) {
 		)
 
 		if node := q.Get("node"); node != "" && !a.isSelf(node) {
+			// Bad ids are refused here, before a session to the peer.
+			if _, err := itemIDs(q.Get("ids")); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+
+				return
+			}
+
 			ctx, cancel := context.WithTimeout(r.Context(), peerActTimeout)
 			defer cancel()
 
@@ -452,7 +468,15 @@ func (a *app) uiItems(mux *http.ServeMux) {
 		}
 
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
+			// Bad ids 400, a crew this node does not have 404; a peer that failed or refused 502.
+			code := http.StatusBadGateway
+
+			var ie *itemsError
+			if errors.As(err, &ie) {
+				code = ie.code
+			}
+
+			http.Error(w, err.Error(), code)
 
 			return
 		}

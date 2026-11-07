@@ -100,9 +100,11 @@ func TestItemsResolveAChain(t *testing.T) {
 	assert.False(t, items["T-8"].Found)
 
 	_, code = getItems(t, srv.URL, "", "default", "T-1,rm -rf")
-	assert.Equal(t, http.StatusBadGateway, code)
+	assert.Equal(t, http.StatusBadRequest, code)
+	_, code = getItems(t, srv.URL, "box", "ops", "../T-1")
+	assert.Equal(t, http.StatusBadRequest, code, "refused before a session to the peer")
 	_, code = getItems(t, srv.URL, "", "nope", "T-1")
-	assert.Equal(t, http.StatusBadGateway, code)
+	assert.Equal(t, http.StatusNotFound, code)
 }
 
 // An open task's state: queued until its role takes it, then in work.

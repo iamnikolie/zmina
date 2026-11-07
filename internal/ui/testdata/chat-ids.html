@@ -33,7 +33,7 @@
   const messages = [
     {id: "m1", role: "assistant", text: "T-1 goes on as T-2 (from L-1). `T-3` is code. A-1 waits on you; T-9 is gone. T-10x is not an id.", at: now},
     {id: "m2", role: "user", text: "Re T-1 (Login page — rework): how far?", at: now},
-    {id: "m3", role: "assistant", text: "T-2 is half done. T-5 waits.", at: now},
+    {id: "m3", role: "assistant", text: "T-2 is half done. T-5 waits. See src/acme/T-7.", at: now},
   ];
 
   async function open(cls, crew) {
@@ -69,7 +69,7 @@
     {
       const {fixture, $, $$} = await open("phone", "ids-phone");
       const ids = $$(".chat-message.assistant .xid").map((b) => b.textContent);
-      assert(ids.join(" ") === "T-1 T-2 L-1 A-1 T-9 T-2 T-5", "every id is a link, not in code, not inside a longer word: " + ids.join(" "));
+      assert(ids.join(" ") === "T-1 T-2 L-1 A-1 T-9 T-2 T-5 T-7", "every id is a link, not in code, not inside a longer word: " + ids.join(" "));
       assert(!$$(".xid").some((b) => b.closest("code")), "code stays code");
       await wait("the titles", () => $$(".chat-message.assistant .xt").length >= 2);
       const first = $$(".chat-message.assistant")[0];
@@ -113,6 +113,8 @@
       await wait("sent", () => $(".xsheet .xsent"));
       assert(fixture.posts.length === 1 && fixture.posts[0].id === "A-1" && fixture.posts[0].action === "yes" && fixture.posts[0].crew === "ids-phone", "the answer goes once as todo yes");
       assert(/^Sent · /.test($(".xsheet .xsent").textContent), "the button turns into Sent");
+      await new Promise(r => setTimeout(r, 700));
+      assert($(".xsheet .xsent") && !$(".xsheet .xdo"), "Sent stays through the redraw the ledger's read brings");
       $(".xshade").click();
 
       // Not found.
@@ -140,10 +142,13 @@
       assert($("body").ownerDocument.activeElement === $("#message"), "the field has the focus");
       $("#message").value = "how far?";
       $("#message").dispatchEvent(new Event("input", {bubbles: true}));
+      await wait("Send to be ready", () => !$("#send-message").disabled);
       $("#send-message").click();
       // Saved to the outbox first (delivery follows when the page is visible): its bubble says what it is about.
       const sent = await wait("the message saved: " + $("#chat-error").textContent + " " + $("#composer-status").textContent,
-        () => $$(".chat-message.user").find((m) => m.querySelector(".xre")?.textContent === "↳ T-1 · the page is reworked from scratch"));
+        () => $$(".chat-message.user").find((m) => m.querySelector(".xre")?.textContent === "↳ T-1 · the page is reworked from scratch"),
+        // The outbox is IndexedDB, real time: headless virtual time runs ahead of it.
+        20000);
       assert(sent.querySelector(".message-body").lastChild.textContent === "how far?", "the owner's words under it, the prefix read off");
       if (fixture.sends.length) assert(fixture.sends[0].text === "Re T-1 (Login: the page is reworked from scratch): how far?", "the message says what it is about: " + fixture.sends[0].text);
       assert($("#reply-to").hidden, "the chip goes with the message");
@@ -151,6 +156,17 @@
     {
       // The desktop: a click pins a popover under the id; Esc closes it and gives the focus back.
       const {$, $$} = await open("desk", "ids-desk");
+      // A path is not a node: src/acme/T-7 links T-7 of this crew, its prefix stays text.
+      const t7 = $$(".chat-message.assistant .xid").find((x) => x.textContent === "T-7");
+      assert(t7 && t7.dataset.node === "" && t7.dataset.crew === "ids-desk" && t7.previousSibling.textContent.endsWith("src/acme/"), "a path's prefix stays text");
+      // Opened by hover, then pinned with a click (or Enter): the card takes the focus, so its buttons are next.
+      const h = $$(".chat-message.assistant .xid")[0];
+      h.dispatchEvent(new PointerEvent("pointerover", {bubbles: true, pointerType: "mouse"}));
+      await wait("the hover card", () => $(".xpop .xstate"));
+      assert(h.ownerDocument.activeElement !== $(".xpop"), "hover leaves the focus where it was");
+      h.click();
+      assert(h.ownerDocument.activeElement === $(".xpop"), "pinned, the card has the focus");
+      h.ownerDocument.dispatchEvent(new KeyboardEvent("keydown", {key: "Escape", bubbles: true}));
       const b = $$(".chat-message.assistant .xid")[0];
       // Opened before its data is here, it stands in its place all the same.
       b.click();

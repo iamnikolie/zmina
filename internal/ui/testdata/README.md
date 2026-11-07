@@ -49,7 +49,8 @@ in `#result`.
 # Chat ids test
 
 With the same static server, open `http://127.0.0.1:7530/testdata/chat-ids.html`;
-`window.chatIdsResults.passed` must be true (headless as above). It runs the real `static/chat.html`
+`window.chatIdsResults.passed` must be true (headless as above, with `--virtual-time-budget=60000`:
+the outbox write is real time, which virtual time runs ahead of). It runs the real `static/chat.html`
 at 390 and 1280 px with a `fetch` that answers `/api/items` (D-15): ids become links (not in code,
 not inside a longer word), the first mention of a piece of work in a run carries its short title and
 a dot; a tap opens the sheet (title, state, Left, Latest, Path; a step swaps the card); an ask's

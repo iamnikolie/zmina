@@ -40,11 +40,15 @@
       const frag = document.createDocumentFragment();
       let last = 0;
       n.data.replace(ID, (m, nodeName, crew, id, at) => {
+        // A prefix is a node/crew only when the node is one the mesh knows (this one, or a peer); anything else —
+        // src/acme/T-7, a host's path — stays text, and the id is this conversation's.
+        const node = nodeName ? hooks?.node(nodeName) : undefined;
+        if (nodeName && node === undefined) { at += m.length - id.length; m = id; nodeName = ""; }
         frag.append(n.data.slice(last, at));
         const b = el("button", "xid", m);
         b.type = "button";
         b.dataset.id = id;
-        b.dataset.node = nodeName ? nodeName : dest.node || "";
+        b.dataset.node = nodeName ? node : dest.node || "";
         b.dataset.crew = nodeName ? crew : dest.crew;
         b.setAttribute("aria-haspopup", "dialog");
         frag.append(b);
@@ -219,6 +223,7 @@
     const bar = el("div", "xacts");
     const talkRole = card.talk;
     let main = null;
+    const sentLine = (text) => { const p = el("p", "xsent"); p.append(el("i"), text); return p; };
     const act = (button, body) => {
       button.addEventListener("click", async () => {
         if (button.disabled) return;
@@ -226,9 +231,10 @@
         bar.querySelector(".xfail")?.remove();
         try {
           await hooks.post("/api/todo", {crew: dest.node ? dest.node + "/" + dest.crew : dest.crew, ...body});
-          const sent = el("p", "xsent");
-          sent.append(el("i"), "Sent · " + clock.format(new Date()));
-          button.replaceWith(sent);
+          const words = "Sent · " + clock.format(new Date());
+          // The line stays while this card is open, through the redraw the ledger's new state brings.
+          if (open) open.sent = words;
+          button.replaceWith(sentLine(words));
           // What the ledger says now.
           for (const k of [...cache.keys()]) if (k.startsWith((dest.node || "") + "|" + dest.crew + "|")) cache.get(k).at = 0;
           want(dest, open?.id || card.id);
@@ -240,7 +246,8 @@
         }
       });
     };
-    if (card.state === "need" && card.decision) {
+    if (open.sent) main = sentLine(open.sent);
+    else if (card.state === "need" && card.decision) {
       // D-15 amendment b: the word starts with a capital.
       const d = card.decision, cap = d.word.charAt(0).toUpperCase() + d.word.slice(1), word = cap.length > 28 ? cap.slice(0, 27).trimEnd() + "…" : cap;
       main = el("button", "xdo", word);
@@ -283,7 +290,8 @@
   function show(b, pinned) {
     clearTimeout(showTimer); clearTimeout(hideTimer);
     const dest = destOf(b), id = b.dataset.id;
-    if (open && open.b === b) { if (pinned) open.pinned = true; return; }
+    // A card open from hover or focus that gets pinned (Enter, a click) takes the focus, so its buttons are next.
+    if (open && open.b === b) { if (pinned && !open.pinned) { open.pinned = true; open.box.focus({preventScroll: true}); } return; }
     close(false);
     const sheet = phone();
     const box = el("section", sheet ? "xsheet" : "xpop");
