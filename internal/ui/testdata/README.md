@@ -92,3 +92,14 @@ box and closes it again, open through the next read; every line sits one distanc
 narrower, e.g. inside a 390 px frame); no terminal escape and no `<command-*>` / `<local-command-*>` tag shows
 anywhere, also in a reply an older node sends with escapes. The transcript side (folding the typed line, the
 recorded command and its output, dropping hook lines) is `TestChatMessagesFoldsLocalCommands`.
+
+# Chat composer test
+
+In a real browser (draft files are Blobs in IndexedDB: headless virtual time runs ahead of them), open
+`http://127.0.0.1:7530/testdata/chat-composer.html`; `window.chatComposerResults.passed` must be true. With a long
+conversation scrolled up and two images and a pdf picked (D-18): one row of tiles above the field, 64 px images of
+themselves, a 176 × 64 tile with «PDF · 412 KB», no byte count; a 22 px ✕ on each tile's corner, 44 px to hit, not cut
+by the row; the phone's field has no clear-draft ✕, the desktop keeps it; the Latest arrow 36 px, 8 px over the
+composer's top edge and 16 px in from its right, keeping that as files go; on the phone it hides while the field has
+the focus. The phone frame has `embed=1`: open the page inside a 390 px frame for the phone case (at full width
+both frames are desktops).

@@ -2667,11 +2667,22 @@ document.addEventListener("focusout", (e) => { if (e.target.classList?.contains(
 document.addEventListener("pointerdown", () => { pointerDown = true; }, true);
 document.addEventListener("pointerup", () => { pointerDown = false; setTimeout(settle, 0); }, true);
 
+// A rollout reaches a page left open (the phone's home-screen app stays alive for days): the build it was loaded
+// with is the first snapshot's; once a snapshot says another build serves it, the page loads again the next time it
+// goes out of sight or comes back, never under the owner's hands. A draft survives it (its text in localStorage, its
+// files in IndexedDB).
+let built = "", rebuilt = false;
+const reloadIfRebuilt = () => { if (rebuilt) location.reload(); };
+document.addEventListener("visibilitychange", reloadIfRebuilt);
+addEventListener("pageshow", (e) => { if (e.persisted) reloadIfRebuilt(); });
+
 function connect() {
   const es = new EventSource("api/stream");
   es.addEventListener("state", (e) => {
     snap = JSON.parse(e.data);
     got = Date.now();
+    if (!built) built = snap.version || "";
+    else if (snap.version && snap.version !== built && !rebuilt) { rebuilt = true; if (document.hidden) location.reload(); }
     snap.tints = snap.tints || {};
     $("mark").classList.remove("lost");
     document.body.classList.remove("lost");

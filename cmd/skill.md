@@ -517,7 +517,10 @@ including after the conversation changes. The form also exposes delivery failure
 `zmina queue`; restarting the browser does not discard accepted work.
 
 **File attachments.** Attach file opens the native file/photo picker; up to four files, each at most 8 MiB.
-The draft keeps filename/size and Remove; file-only messages are allowed. Draft files and accepted sends
+The draft shows them in one row above the field (D-18): an image as a 64 px tile of itself, another file as a tile
+with its kind and size («PDF · 412 KB»), each with a ✕ on its corner; a tap previews it. The phone's field has no
+clear-draft ✕; the Latest arrow sits right of the column just above the composer, and hides on the phone while the
+field has the focus. File-only messages are allowed. Draft files and accepted sends
 retain their immutable Blob bytes in IndexedDB, scoped to the original destination; queued file bytes are
 bounded to 64 MiB in total. A failed upload keeps the message and its files for an explicit retry.
 
@@ -916,6 +919,9 @@ One screen, top to bottom by what a delay costs:
 
 Below 1400 px that is one centred column. From 860 px an empty «you hold», «answer» or «going» is not drawn: one
 muted line names the empty ones in their place; empty «parked» and «waiting on others» are not drawn at any width.
+
+A page left open picks up a new zmina by itself: once the stream says another build serves it, the page loads again
+the next time it goes out of sight or comes back (a draft's text and files are kept), never while it is in use.
 
 Below 861 px (a phone, the home-screen app) the page is three tabs at the bottom — **Agents · Talk · Later** — under a
 52 px head with the tab's name and the beat; the phone has no crew switch: it shows every crew, and every row says

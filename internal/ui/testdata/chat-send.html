@@ -57,7 +57,7 @@
     files.items.add(new win.File([new Uint8Array([1, 2, 3])], "shot.png", {type: "image/png"}));
     $("#file-input").files = files.files;
     $("#file-input").dispatchEvent(new win.Event("change", {bubbles: true}));
-    await wait("the file on the draft", () => $("#draft-files").textContent.includes("shot.png"), 10000);
+    await wait("the file on the draft", () => $('#draft-files [aria-label="Remove shot.png"]'), 10000);
     $("#message").value = "here it is";
     $("#message").dispatchEvent(new win.Event("input", {bubbles: true}));
     await wait("Send to be ready", () => !$("#send-message").disabled);

@@ -250,6 +250,51 @@
     return box;
   }
 
+  // ---- the composer's picked files (D-18 f1–f3) ----
+  // An image is a 64 px square of the picked file itself (an object URL: nothing goes up to draw it), another file a
+  // 176 × 64 tile with its kind's icon, name and «PDF · 412 KB»; a ✕ on the corner removes it, a tap previews it.
+  const PLAIN = ["txt", "md", "log", "csv", "json"];
+  const safeType = (name) => { const ext = (name.split(".").pop() || "").toLowerCase(); return ext === "pdf" ? "application/pdf" : PLAIN.includes(ext) ? "text/plain" : ""; };
+  const typed = new Map(); // file id → object URL of its bytes under a type that runs nothing
+  function typedURL(f, type) {
+    if (!typed.has(f.id)) typed.set(f.id, URL.createObjectURL(new Blob([f.blob], {type})));
+    return typed.get(f.id);
+  }
+  function draft(box, files, remove) {
+    box.replaceChildren();
+    const images = files.filter((f) => isImage(f.type) && f.blob);
+    const list = images.map((f) => ({name: f.name, src: ownURL({}, f), open: ownURL({}, f)}));
+    for (const f of files) {
+      const image = isImage(f.type) && f.blob, tile = el("div", "dtile" + (image ? "" : " file"));
+      const open = el("button", "dt-open");
+      open.type = "button";
+      open.setAttribute("aria-label", "Preview " + f.name);
+      if (image) {
+        const img = el("img"); img.src = ownURL({}, f); img.alt = ""; img.decoding = "async";
+        open.append(img);
+        open.addEventListener("click", () => view(list, images.indexOf(f), open));
+      } else {
+        const ic = el("span", "dt-icon"); ic.innerHTML = icon(f.name);
+        const text = el("span", "dt-text");
+        text.append(el("span", "dt-name", f.name), el("span", "dt-sub", kindWord(f.name) + " · " + size(f.size)));
+        open.append(ic, text);
+        // A picked file opens only as a pdf or plain text, its bytes re-typed: a blob runs at this page's origin, so a
+        // picked .html or .svg opened with its own type would run as the cockpit. Any other file's tile does nothing.
+        const as = safeType(f.name);
+        if (f.blob && as) open.addEventListener("click", () => window.open(typedURL(f, as), "_blank", "noopener"));
+        else { open.disabled = true; open.removeAttribute("aria-label"); }
+      }
+      const rm = el("button", "dt-rm");
+      rm.type = "button";
+      rm.setAttribute("aria-label", "Remove " + f.name);
+      rm.title = "Remove";
+      rm.innerHTML = '<svg viewBox="0 0 10 10" aria-hidden="true"><path d="M2 2l6 6M8 2 2 8"/></svg>';
+      rm.addEventListener("click", () => remove(f));
+      tile.append(open, rm);
+      box.append(tile);
+    }
+  }
+
   // ---- the viewer (v1) ----
   let viewer = null;
   function view(list, index, from) {
@@ -350,5 +395,5 @@
     }
   }, true);
 
-  window.zminaFiles = Object.freeze({init: (h) => { hooks = h; }, ownerBlock, progress, decorate, size});
+  window.zminaFiles = Object.freeze({init: (h) => { hooks = h; }, ownerBlock, progress, decorate, size, draft});
 })();
