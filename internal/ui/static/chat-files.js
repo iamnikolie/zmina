@@ -87,15 +87,16 @@
     if (img.complete && img.naturalWidth) ready();
     else img.decode().then(ready, () => { if (img.naturalWidth) ready(); else tile.classList.add("broken"); });
     const ring = el("span", "fring");
-    ring.innerHTML = `<svg viewBox="0 0 32 32" aria-hidden="true"><circle class="fring-track" cx="16" cy="16" r="14"/><circle class="fring-bar" cx="16" cy="16" r="14" stroke-dasharray="${RING.toFixed(2)}"/></svg>` +
-      svg(RETRY).replace("<svg", '<svg class="fring-retry"');
+    ring.innerHTML = `<svg viewBox="0 0 32 32" aria-hidden="true"><circle class="fring-track" cx="16" cy="16" r="14"/><circle class="fring-bar" cx="16" cy="16" r="14" stroke-dasharray="${RING.toFixed(2)}"/></svg>`;
     tile.append(img, ring);
     tiles.set(f.id, tile);
     return tile;
   }
 
-  // ownerBlock draws a message's files: images first (one in its own shape, two to four as squares, the fourth
-  // «+N»), then chips. Progress is applied apart (progress()), so a redraw while bytes go up keeps the same images.
+  // ownerBlock draws a message's files: images first, then chips. Images (D-21 s7): one in its own shape; two side by
+  // side 118 squares; three one 240 block, the first 158 × 240 on the left, the others 78 × 118 stacked right; four
+  // (or more, the fourth «+N») 2 × 2 — the block's outer corners round, the inner ones near square. Progress is applied
+  // apart (progress()), so a redraw while bytes go up keeps the same images.
   function ownerBlock(box, row, dest) {
     const files = row.attachments || [];
     box.replaceChildren();
@@ -104,15 +105,22 @@
     const images = files.filter((f) => isImage(f.type)), others = files.filter((f) => !isImage(f.type));
     const list = images.map((f) => ({name: f.name, src: ownURL(dest, f), open: ownURL(dest, f)}));
     if (images.length) {
-      const grid = el("div", "fimgs" + (images.length === 1 ? " one" : ""));
+      const grid = el("div", "fimgs " + (["", "one", "two", "three"][images.length] || "four"));
+      // s6: a failed message has one retry disc over its block, and the whole block retries.
+      const disc = el("span", "fring fretry"); disc.innerHTML = svg(RETRY);
+      grid.append(disc);
+      grid.addEventListener("click", (e) => {
+        if (!grid.classList.contains("failed") || !grid.dataset.outbox || !hooks?.retry) return;
+        e.stopPropagation(); hooks.retry(grid.dataset.outbox);
+      });
       images.slice(0, 4).forEach((f, i) => {
         const tile = imageTile(dest, f);
         if (images.length === 1) { const box = fit(f); tile.style.width = box.w + "px"; tile.style.height = box.h + "px"; }
         else { tile.style.width = ""; tile.style.height = ""; }
         tile.querySelector(".fmore")?.remove();
         if (i === 3 && images.length > 4) tile.append(el("b", "fmore", "+" + (images.length - 4)));
-        // A failed tile is the retry; any other opens the viewer.
-        tile.onclick = () => { if (tile.classList.contains("failed") && tile.dataset.outbox && hooks?.retry) hooks.retry(tile.dataset.outbox); else view(list, i, tile); };
+        // A tile of a failed message retries it (the block's click); any other opens the viewer.
+        tile.onclick = () => { if (!grid.classList.contains("failed")) view(list, i, tile); };
         grid.append(tile);
       });
       box.append(grid);
@@ -123,10 +131,17 @@
       box.append(c);
     }
   }
-  // progress marks what is going up (o3, D-21 s4–s5): an image's tile a ring that fills as its bytes go, a chip
-  // «Uploading · 40 %»; a failed tile a retry arrow (a tap retries, never opens the viewer), a failed chip says so.
+  // progress marks what is going up (o3, D-21 s4–s6): an image's tile a ring that fills as its bytes go, a chip
+  // «Uploading · 40 %»; a failed message's images one retry disc over their block under a scrim (a tap anywhere on it
+  // retries, never opens the viewer), a failed chip says so.
   function progress(box, row) {
     const up = row.state === "uploading" || row.state === "transmitting" || row.state === "local", failed = row.state === "failed" || (row.state === "local" && row.failure);
+    const grid = box.querySelector(".fimgs");
+    if (grid) {
+      const off = Boolean(row.outboxKey) && failed;
+      grid.classList.toggle("failed", off);
+      if (off) grid.dataset.outbox = row.outboxKey; else delete grid.dataset.outbox;
+    }
     for (const t of box.querySelectorAll("[data-file]")) {
       const id = t.dataset.file, done = !row.outboxKey || (row.uploaded || []).includes(id);
       const frac = done ? 1 : row.uploadFile === id ? row.uploadProgress || 0 : 0;
@@ -138,7 +153,7 @@
       const bar = t.querySelector(".fring-bar");
       if (bar && t.classList.contains("going")) bar.style.strokeDashoffset = (RING * (1 - arc)).toFixed(2);
       if (t.classList.contains("fimg")) {
-        const label = t.classList.contains("failed") ? "Retry sending " + t._name : "Photo " + t._name + (t.classList.contains("going") ? ", uploading " + Math.round(frac * 100) + " %" : "");
+        const label = grid?.classList.contains("failed") ? "Retry sending " + t._name : "Photo " + t._name + (t.classList.contains("going") ? ", uploading " + Math.round(frac * 100) + " %" : "");
         if (t.getAttribute("aria-label") !== label) t.setAttribute("aria-label", label);
       }
       if (t.classList.contains("fchip")) {

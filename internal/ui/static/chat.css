@@ -405,32 +405,43 @@ html.chat-document { height: 100%; overflow: hidden; }
 .chat-message.user > .message-files { order: -1; margin-bottom: 4px; }
 .chat-message.user .message-body:empty { display: none; }
 .message-files[hidden] { display: none; }
-.fimgs { display: grid; grid-template-columns: repeat(2, 118px); gap: 4px; }
-.fimgs.one { display: block; }
-/* D-21: a tile has its final size from the first frame (one image its own shape, set inline; a grid's 118 squares),
-   filled while its picture decodes, which then fades in; no alt text, no border-only box, no jump. The box carries
-   the line and the radius. #messages: the page's own button padding and border (.term-page button) never frame it. */
-#messages .fimg { position: relative; display: block; width: 118px; height: 118px; margin: 0; padding: 0; min-height: 0; border: 0; border-radius: 12px;
+/* D-21: a tile has its final size from the first frame (one image its own shape, set inline; s7: two 118 squares side by
+   side, three a 240 block — 158 × 240 left, 78 × 118 twice stacked right — four 2 × 2), filled while its picture
+   decodes, which then fades in; no alt text, no border-only box, no jump. The block's outer corners are 16, its
+   inner ones 4. #messages: the page's own button padding and border (.term-page button) never frame a tile. */
+.fimgs { position: relative; display: grid; width: max-content; gap: 4px; grid-template-columns: repeat(2, 118px); }
+.fimgs.one { grid-template-columns: auto; }
+.fimgs.three { grid-template-columns: 158px 78px; grid-template-rows: 118px 118px; }
+#messages .fimg { position: relative; display: block; width: 118px; height: 118px; margin: 0; padding: 0; min-height: 0; border: 0; border-radius: 4px;
   overflow: hidden; background: var(--panel2); cursor: zoom-in; }
-.fimg::after { content: ""; position: absolute; inset: 0; border: 1px solid var(--line); border-radius: inherit; pointer-events: none; }
 #messages .fimgs.one .fimg { border-radius: 16px; }
+#messages .fimgs.two .fimg:nth-of-type(1), #messages .fimgs.three .fimg:nth-of-type(1) { border-radius: 16px 4px 4px 16px; }
+#messages .fimgs.two .fimg:nth-of-type(2) { border-radius: 4px 16px 16px 4px; }
+#messages .fimgs.three .fimg:nth-of-type(1) { grid-row: span 2; width: 158px; height: 240px; }
+#messages .fimgs.three .fimg:nth-of-type(2), #messages .fimgs.three .fimg:nth-of-type(3) { width: 78px; }
+#messages .fimgs.three .fimg:nth-of-type(2), #messages .fimgs.four .fimg:nth-of-type(2) { border-top-right-radius: 16px; }
+#messages .fimgs.three .fimg:nth-of-type(3), #messages .fimgs.four .fimg:nth-of-type(4) { border-bottom-right-radius: 16px; }
+#messages .fimgs.four .fimg:nth-of-type(1) { border-top-left-radius: 16px; }
+#messages .fimgs.four .fimg:nth-of-type(3) { border-bottom-left-radius: 16px; }
+.fimg::after { content: ""; position: absolute; inset: 0; border: 1px solid var(--line); border-radius: inherit; pointer-events: none; }
 .fimg img { display: block; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 180ms ease-out; }
 .fimg.ready img { opacity: 1; }
-.fimg.failed img { opacity: .5; }
-/* s4: going up, a ring that fills with the bytes on a disc over the picture, the same in light and dark; the disc fades
-   out once they are up. s5: failed, the disc holds a retry arrow and the whole tile retries. */
+/* s4: going up, a ring that fills with the bytes on a disc over the picture, the same in light and dark; the disc
+   fades out once they are up. s6: a failed message, its images at full strength under a .4 black scrim (a 0.6
+   brightness is that scrim), one disc with a retry arrow centred on the block, and the whole block retries. */
 .fring { display: flex; position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; margin: -22px 0 0 -22px; border-radius: 50%;
   background: rgb(0 0 0 / .45); align-items: center; justify-content: center; pointer-events: none;
   opacity: 0; visibility: hidden; transition: opacity 160ms ease-out, visibility 0s linear 160ms; }
-.fimg.going .fring, .fimg.failed .fring { opacity: 1; visibility: visible; transition: none; }
+.fimg.going .fring, .fimgs.failed .fretry { opacity: 1; visibility: visible; transition: none; }
 .fring svg { width: 32px; height: 32px; transform: rotate(-90deg); fill: none; }
 .fring circle { stroke-width: 2.5; }
 .fring .fring-track { stroke: rgb(255 255 255 / .3); }
 .fring .fring-bar { stroke: #fff; stroke-linecap: round; transition: stroke-dashoffset 120ms linear; }
-.fring .fring-retry { display: none; width: 20px; height: 20px; transform: none; stroke: #fff; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.fimg.failed { cursor: pointer; }
-.fimg.failed .fring svg:not(.fring-retry) { display: none; }
-.fimg.failed .fring .fring-retry { display: block; }
+.fretry { z-index: 1; }
+.fretry svg { width: 20px; height: 20px; transform: none; stroke: #fff; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+#messages .fimgs.failed, #messages .fimgs.failed .fimg { cursor: pointer; }
+.fimgs.failed .fimg img { filter: brightness(.6); }
+.fimgs.failed .fimg .fring { display: none; }
 @media (prefers-reduced-motion: reduce) { .fimg img, .fring, .fring .fring-bar { transition: none; } }
 .fmore { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; border-radius: inherit;
   background: rgb(0 0 0 / .5); color: #fff; font: 600 17px var(--sans); }

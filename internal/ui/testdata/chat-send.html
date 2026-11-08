@@ -83,9 +83,10 @@
     }, 10);
     $("#send-message").click();
     // The refused upload: the tile shows the retry, and a tap on it sends again.
-    const failed = await wait("the failed tile", () => $(".chat-message.user .fimg.failed"), 10000);
-    assert(getComputedStyle(failed.querySelector(".fring-retry")).display !== "none", "a failed tile shows the retry arrow");
-    assert(/^Retry sending shot\.png$/.test(failed.getAttribute("aria-label")), "and says so: " + failed.getAttribute("aria-label"));
+    const failed = await wait("the failed block", () => $(".chat-message.user .fimgs.failed"), 10000);
+    assert(getComputedStyle(failed.querySelector(".fretry")).visibility === "visible", "a failed message's images show the retry disc");
+    const label = failed.querySelector(".fimg").getAttribute("aria-label");
+    assert(/^Retry sending shot\.png$/.test(label), "and say so: " + label);
     failed.click();
     await wait("the role to have it", () => fixture.sends.length === 1, 20000);
     await wait("the outbox to let it go", () => !$(".chat-message.user .message-state") || !/Uploading|Sending|waiting/.test($(".chat-message.user .message-state").textContent), 20000);
