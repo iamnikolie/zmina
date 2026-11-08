@@ -68,7 +68,10 @@
     if(!destination||!chosen.length)return;
     const dest={...destination}, version=generation;
     if(selectedFiles.length+chosen.length>4||chosen.some(file=>file.size>8*1024*1024)){error("Attach up to four files, each at most 8 MiB.");return;}
-    const next=[...selectedFiles,...chosen.map(file=>({id:uid(),name:file.name,size:file.size,type:file.type,blob:file}))];
+    // D-21 s1: an image's size as shown goes with it, so its tile in the bubble has its final size from the first frame.
+    const sizes=await Promise.all(chosen.map(file=>/^image\/(png|jpeg|gif|webp)$/.test(file.type)?window.zminaFiles.measure(file):null));
+    if(version!==generation)return;
+    const next=[...selectedFiles,...chosen.map((file,i)=>({id:uid(),name:file.name,size:file.size,type:file.type,blob:file,...(sizes[i]||{})}))];
     try{await store.saveFiles(dest,next);if(version!==generation)return;selectedFiles=next;filesRevision++;cleared=null;draftID="";renderSelected();controls();error("");}catch(e){error("Could not save these files. Choose them again. "+e.message);}
   });
   function fileData(blob) {return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result.split(",")[1]);reader.onerror=()=>reject(reader.error);reader.onabort=()=>reject(new Error("File reading stopped."));reader.readAsDataURL(blob);});}
@@ -81,7 +84,8 @@
   // the network is there and nothing before it to the same role is stuck (else it waits, and says so).
   function outboxState(entry) {
     if (inflight?.key === entry.key) return inflight.name ? "uploading" : "transmitting";
-    if (entry.state !== "local" || entry.attempts || navigator.onLine === false) return entry.state;
+    // A retry that waits out its backoff waits; one retried by hand (its wait cleared) goes now.
+    if (entry.state !== "local" || (entry.attempts && entry.next > Date.now()) || navigator.onLine === false) return entry.state;
     const scope = store.destinationKey(entry.dest);
     const stuck = outbox.some((other) => other !== entry && store.destinationKey(other.dest) === scope && other.at <= entry.at && (other.state !== "local" || other.attempts));
     return stuck ? entry.state : "transmitting";
@@ -622,7 +626,7 @@
   window.addEventListener("pagehide", () => { saveDraft(); endSpeech(true); clearTimeout(pollTimer); clearTimeout(retryTimer); readRequest?.abort(); });
   // D-15 h1: «Talk to <role>» on a card — here when it is this conversation, else the role's own, the item on its field
   // (embedded, the cockpit opens it, so its panel and tabs follow).
-  window.zminaFiles.init({post, redraw: () => render()});
+  window.zminaFiles.init({post, redraw: () => render(), retry: (key) => retryEntry(key)});
   window.zminaIds.init({post, node: (name) => knownNodes.get(name), redraw: () => { if (destination) window.zminaIds.decorate(messages, destination); }, talk(dest, item) {
     if (destination && dest.node === (destination.node || "") && dest.crew === destination.crew && dest.role === destination.role) { replyTo = {id: item.id, title: item.title}; saveDraft(); renderReply(); input.focus(); return; }
     const to = {node: dest.node, crew: dest.crew, role: dest.role};

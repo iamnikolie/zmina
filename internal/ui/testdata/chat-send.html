@@ -18,7 +18,7 @@
     throw new Error("timed out: " + what);
   };
   const page = await (await fetch("../static/chat.html", {cache: "no-store"})).text();
-  const fixture = {sends: [], uploads: [], messages: []};
+  const fixture = {sends: [], uploads: [], messages: [], refuse: 1};
   const frame = document.createElement("iframe");
   document.body.append(frame);
   frame.contentWindow.fixture = fixture;
@@ -30,7 +30,7 @@
       const path = String(url).split("?")[0];
       if (path === "/api/terminal/nodes" || path === "/api/terminal/targets") return json([]);
       if (path === "/api/chat") return json(fixture.snapshot());
-      if (path === "/api/chat/send") { const b = JSON.parse(options.body); await later(600); fixture.sends.push(b); fixture.messages.push({id: "web:" + b.id, role: "user", text: b.text, at: new Date().toISOString(), attachments: [{id: b.files[0], name: "shot.png", size: 3}]}); return json(fixture.snapshot()); }
+      if (path === "/api/chat/send") { const b = JSON.parse(options.body); await later(600); fixture.sends.push(b); fixture.messages.push({id: "web:" + b.id, role: "user", text: b.text, at: new Date().toISOString(), attachments: [{id: b.files[0], name: "shot.png", size: 3, type: "image/png", width: 600, height: 400}]}); return json(fixture.snapshot()); }
       return json("not in this fixture", 404);
     };
     // The upload goes by XMLHttpRequest (for its progress): 40 % at 300 ms, all at 700 ms, taken at 900 ms.
@@ -40,6 +40,8 @@
       setRequestHeader() {}
       send(body) {
         const b = JSON.parse(body), ev = (loaded) => ({lengthComputable: true, loaded, total: 10});
+        // D-21 s5: the first upload is refused, so the tile shows its failure and a tap on it retries.
+        if (fixture.refuse) { fixture.refuse--; setTimeout(() => { this.status = 400; this.responseText = "refused by this fixture"; this.onload(); }, 200); return; }
         setTimeout(() => this.upload.onprogress?.(ev(4)), 300);
         setTimeout(() => this.upload.onprogress?.(ev(10)), 700);
         setTimeout(() => { fixture.uploads.push(b.upload.name); this.status = 200; this.responseText = JSON.stringify({uploaded: {id: b.upload.id, name: b.upload.name, size: 3}}); this.onload(); }, 900);
@@ -54,7 +56,11 @@
   try {
     await wait("the conversation", () => $(".chat-message.assistant"));
     const win = frame.contentWindow, files = new win.DataTransfer();
-    files.items.add(new win.File([new Uint8Array([1, 2, 3])], "shot.png", {type: "image/png"}));
+    // A real 600 × 400 picture: its tile is sized from the size measured at the pick (D-21).
+    const canvas = document.createElement("canvas"); canvas.width = 600; canvas.height = 400;
+    const ctx = canvas.getContext("2d"); ctx.fillStyle = "#4a7"; ctx.fillRect(0, 0, 600, 400);
+    const png = await new Promise((r) => canvas.toBlob(r, "image/png"));
+    files.items.add(new win.File([png], "shot.png", {type: "image/png"}));
     $("#file-input").files = files.files;
     $("#file-input").dispatchEvent(new win.Event("change", {bubbles: true}));
     await wait("the file on the draft", () => $('#draft-files [aria-label="Remove shot.png"]'), 10000);
@@ -63,12 +69,24 @@
     await wait("Send to be ready", () => !$("#send-message").disabled);
     // Every state the owner's bubble says, in order, until the role has the message.
     const said = [];
-    const bars = [];
+    const bars = [], tiles = new Set(), srcs = new Set(), sizes = new Set();
+    let unsized = 0, alt = "";
     const watch = setInterval(() => {
       const t = $(".chat-message.user .message-state")?.textContent || ""; if (t && said[said.length - 1] !== t) said.push(t);
       const tile = $(".chat-message.user .fimg.going"); if (tile) { const p = tile.style.getPropertyValue("--p"); if (bars[bars.length - 1] !== p) bars.push(p); }
+      const any = $(".chat-message.user .fimg");
+      if (any) {
+        tiles.add(any); srcs.add(any.querySelector("img").getAttribute("src"));
+        const r = any.getBoundingClientRect(); sizes.add(Math.round(r.width) + "x" + Math.round(r.height)); if (!r.width || !r.height) unsized++;
+        alt += any.querySelector("img").alt;
+      }
     }, 10);
     $("#send-message").click();
+    // The refused upload: the tile shows the retry, and a tap on it sends again.
+    const failed = await wait("the failed tile", () => $(".chat-message.user .fimg.failed"), 10000);
+    assert(getComputedStyle(failed.querySelector(".fring-retry")).display !== "none", "a failed tile shows the retry arrow");
+    assert(/^Retry sending shot\.png$/.test(failed.getAttribute("aria-label")), "and says so: " + failed.getAttribute("aria-label"));
+    failed.click();
     await wait("the role to have it", () => fixture.sends.length === 1, 20000);
     await wait("the outbox to let it go", () => !$(".chat-message.user .message-state") || !/Uploading|Sending|waiting/.test($(".chat-message.user .message-state").textContent), 20000);
     clearInterval(watch);
@@ -79,6 +97,11 @@
     assert(said.indexOf("Uploading shot.png…") < said.lastIndexOf("Sending…"), "in that order");
     assert(bars.includes("0.4"), "the tile's bar shows the upload's progress: " + bars.join(" / "));
     assert(!$(".chat-message.user .fimg.going"), "the tile is whole once the role has it");
+    assert(tiles.size === 1, "one tile from the send to the role's copy, never redrawn: " + tiles.size);
+    assert(srcs.size === 1 && [...srcs][0].startsWith("blob:"), "it shows the picked bytes throughout, never swapped for the node's copy: " + [...srcs].join(" "));
+    assert(!unsized && sizes.size === 1 && sizes.has("240x160"), "its box is 240 × 160 from the first frame: " + [...sizes].join(" "));
+    assert(!alt, "no alt text to flash");
+    assert($(".chat-message.user .fimg").classList.contains("ready"), "the picture is in");
     assert(!/bytes/.test($(".chat-message.user").textContent), "no bytes under the message");
     assert(!$("#composer-status").textContent, "no line says delivery waits for a connection: " + $("#composer-status").textContent);
     window.chatSendResults = {passed: true, results};

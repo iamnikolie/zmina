@@ -546,8 +546,14 @@ only the text. Upgrade remote workers before attaching files to them; a laptop i
 role's storage; content metadata participates in request deduplication. Agent input includes quoted local
 paths and names, using the existing full-message inbox; the agent opens them with its own file-reading
 tools (including images/PDFs where supported). The owner's files sit above his bubble (an image-only message has
-none): images as thumbnails (one in its own shape, two to four as squares, «+N» past four), other files as chips with
-their kind and size in KB or MB; while they go up each shows its progress, and a failed one a «!». They come from
+none): images as thumbnails (one in its own shape up to 240 × 300, two to four as 118 px squares, «+N» past four),
+other files as chips with their kind and size in KB or MB. An image's tile has its final size from the first frame —
+the size measured when it was picked, or the one its node keeps (`width`/`height` in the upload's metadata, as shown,
+its EXIF orientation applied; for a file stored before, read once from the file's head; a 240 × 180 box when neither
+works) — filled until its picture decodes, which then fades in; no alt text paints. The picked bytes draw it for as
+long as the page lives, so sent and then seen it never loads again. While they go up an image's tile shows a ring that
+fills with its bytes, a chip «Uploading · 40 %»; a failed tile holds a retry arrow, and a tap on it retries the
+message, as Retry delivery does (never the viewer). They come from
 `GET /api/chat/file?node=&crew=&role=&id=`, a download (octet-stream, no-sniff, uncached); `&inline=1` serves it
 inline only when its first bytes are a PNG, JPEG, GIF, WebP or PDF — uploaded HTML/SVG is never executed or embedded.
 Files are never executed automatically.

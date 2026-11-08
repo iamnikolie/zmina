@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"unicode"
 )
 
@@ -25,6 +28,10 @@ type Attachment struct {
 	Size   int    `json:"size"`
 	Type   string `json:"type"`
 	SHA256 string `json:"sha256"`
+	// Width and Height are an image's size as shown (its EXIF orientation applied), so its tile has its final size
+	// before the bytes arrive; absent for other files and for files stored before they were kept.
+	Width  int `json:"width,omitempty"`
+	Height int `json:"height,omitempty"`
 }
 
 // Looked is an image a role opened for itself (Claude Code's Read): Key finds its bytes as the role saw them, Path and
@@ -87,12 +94,19 @@ func (s FileStore) Put(upload Upload) (Attachment, error) {
 	sum := sha256.Sum256(upload.Data)
 	meta := Attachment{ID: upload.ID, Name: upload.Name, Size: len(upload.Data), Type: http.DetectContentType(upload.Data), SHA256: hex.EncodeToString(sum[:])}
 	if existing, _, err := s.Get(upload.ID); err == nil {
-		if existing != meta {
+		// The size is derived from the bytes, which the hash already pins: a file stored before sizes were kept is the
+		// same file, and keeps its metadata as stored (a message's hash is made from it).
+		same := existing
+		same.Width, same.Height = 0, 0
+		if same != meta {
 			return Attachment{}, errors.New("attachment ID already has different content")
 		}
 		return existing, nil
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return Attachment{}, err
+	}
+	if strings.HasPrefix(meta.Type, "image/") {
+		meta.Width, meta.Height = imageSize(upload.Data)
 	}
 	var size int64
 	count := 0
@@ -144,6 +158,59 @@ func (s FileStore) Put(upload Upload) (Attachment, error) {
 		return Attachment{}, err
 	}
 	return meta, nil
+}
+
+// Sized fills in the size of the images among attachments stored before sizes were kept (D-21 s1): read once from the
+// head of the stored file and remembered, since a file never changes under its ID. Others are returned as they are;
+// the attachments given are not changed.
+func (s FileStore) Sized(attachments []Attachment) []Attachment {
+	var out []Attachment
+	for i, a := range attachments {
+		if a.Width > 0 || !strings.HasPrefix(a.Type, "image/") {
+			continue
+		}
+		w, h := s.size(a.ID)
+		if w == 0 {
+			continue
+		}
+		if out == nil {
+			out = slices.Clone(attachments)
+		}
+		out[i].Width, out[i].Height = w, h
+	}
+	if out == nil {
+		return attachments
+	}
+	return out
+}
+
+// sizeHead is how much of a stored image is read for its size: a phone photo's EXIF (its orientation, a thumbnail)
+// and the frame header after it.
+const sizeHead = 256 << 10
+
+var sizes sync.Map // stored file path → [2]int
+
+func (s FileStore) size(id string) (int, int) {
+	_, path, err := s.Get(id)
+	if err != nil {
+		return 0, 0
+	}
+	if v, ok := sizes.Load(path); ok {
+		wh := v.([2]int)
+		return wh[0], wh[1]
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, 0
+	}
+	defer func() { _ = f.Close() }()
+	head, err := io.ReadAll(io.LimitReader(f, sizeHead))
+	if err != nil {
+		return 0, 0
+	}
+	w, h := imageSize(head)
+	sizes.Store(path, [2]int{w, h})
+	return w, h
 }
 
 func MessageHash(text string, attachments []Attachment) string {
