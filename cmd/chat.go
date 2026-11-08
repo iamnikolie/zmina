@@ -100,6 +100,8 @@ func chatSnapshot(s *shift.Shift, role string) (chat.Snapshot, error) {
 	}
 	seen := map[string]bool{}
 	receipts := map[string]chat.Receipt{}
+	// An image stored before sizes were kept gets its size here, so its tile has its final box too (D-21 s1).
+	files := chat.FileStore{Dir: filepath.Join(s.Crew.StateDir(), "chat-files"), Role: role}
 	for _, receipt := range rs.ChatReceipts {
 		receipts["web:"+receipt.ID] = receipt
 	}
@@ -107,7 +109,7 @@ func chatSnapshot(s *shift.Shift, role string) (chat.Snapshot, error) {
 		seen[m.ID] = true
 		if receipt, ok := receipts[m.ID]; ok {
 			out.Messages[i].Text = receipt.Text
-			out.Messages[i].Attachments = receipt.Attachments
+			out.Messages[i].Attachments = files.Sized(receipt.Attachments)
 			out.Messages[i].State = "accepted"
 		} else if m.Peer {
 			// Posted to the inbox socket with an ID no browser of the owner's sent: a session's words, not his.
@@ -143,7 +145,7 @@ func chatSnapshot(s *shift.Shift, role string) (chat.Snapshot, error) {
 				state = "unconfirmed"
 			}
 		}
-		out.Pending = append(out.Pending, chat.Message{ID: id, Role: "user", Text: receipt.Text, At: receipt.At, State: state, Attachments: receipt.Attachments})
+		out.Pending = append(out.Pending, chat.Message{ID: id, Role: "user", Text: receipt.Text, At: receipt.At, State: state, Attachments: files.Sized(receipt.Attachments)})
 	}
 	out.Pending = chat.Limit(out.Pending)
 	return out, nil

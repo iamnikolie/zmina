@@ -78,7 +78,9 @@ paragraph; a path the node does not show stays text; the owner's image and PDF s
 (sizes in KB, never bytes) and an image-only message has no bubble; a tap opens the viewer over the
 message's images (its name, «1 of 4», the path), the arrow key goes on, Esc gives the focus back. The
 images themselves load from `/api/chat/...`, which the static server does not have: they draw broken
-here; the layout checks do not depend on them. `chat-send.html` also checks the tile's upload bar.
+here; the layout checks do not depend on them. `chat-send.html` also checks the tile's upload ring, its failure
+and the tap that retries, and that a real picked image keeps one tile at its final size, drawn from the picked bytes,
+from the send to the role's copy (D-21).
 
 # Chat command lines test
 

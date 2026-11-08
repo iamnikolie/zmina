@@ -41,6 +41,9 @@
       {id: "22222222-2222-2222-2222-222222222222", name: "sheet.pdf", size: 412000, type: "application/pdf"}]},
     {id: "web:2", role: "user", text: "", at: now, state: "accepted", attachments: [
       {id: "33333333-3333-3333-3333-333333333333", name: "IMG_2.png", size: 1200000, type: "image/png"}]},
+    // D-21 s7: two, three and five of his images, each block in its own shape.
+    ...[2, 3, 5].map((n) => ({id: "web:n" + n, role: "user", text: "", at: now, state: "accepted", attachments: Array.from({length: n}, (_, k) =>
+      ({id: "4444444" + n + "-4444-4444-4444-44444444444" + k, name: "IMG_" + n + k + ".png", size: 1000, type: "image/png", width: 600, height: 400}))})),
   ];
 
   async function open(cls, crew) {
@@ -90,7 +93,14 @@
       assert(body.textContent.includes(dir + "/none.png"), cls + ": a path the node does not show stays text");
       assert(fixture.asked.includes(dir + "/none.png"), cls + ": and was asked about");
       // o1–o2: the owner's files above his bubble; an image-only message has no bubble.
-      const [mine, onlyImage] = $$(".chat-message.user");
+      const [mine, onlyImage, two, three, five] = $$(".chat-message.user");
+      const boxes = (m) => [...m.querySelectorAll(".fimg")].map((t) => { const b = t.getBoundingClientRect(); return Math.round(b.width) + "x" + Math.round(b.height); }).join(" ");
+      const corners = (m) => [...m.querySelectorAll(".fimg")].map((t) => { const c = getComputedStyle(t); return [c.borderTopLeftRadius, c.borderTopRightRadius, c.borderBottomRightRadius, c.borderBottomLeftRadius].join(" ").replace(/px/g, ""); }).join(" / ");
+      assert(boxes(two) === "118x118 118x118" && corners(two) === "16 4 4 16 / 4 16 16 4", cls + ": two side by side, outer corners round: " + boxes(two) + " · " + corners(two));
+      assert(boxes(three) === "158x240 78x118 78x118" && corners(three) === "16 4 4 16 / 4 16 4 4 / 4 4 16 4", cls + ": three one 240 block: " + boxes(three) + " · " + corners(three));
+      const t3 = [...three.querySelectorAll(".fimg")].map((t) => t.getBoundingClientRect());
+      assert(Math.round(t3[1].left - t3[0].right) === 4 && Math.round(t3[2].top - t3[1].bottom) === 4 && Math.round(t3[2].bottom - t3[0].top) === 240, cls + ": with 4 px gaps");
+      assert(boxes(five) === "118x118 118x118 118x118 118x118" && five.querySelector(".fmore").textContent === "+1" && corners(five) === "16 4 4 4 / 4 16 4 4 / 4 4 4 16 / 4 4 16 4", cls + ": four and more a 2 × 2 block: " + corners(five));
       const filesBox = mine.querySelector(".message-files"), bubble = mine.querySelector(".message-body");
       assert(filesBox.getBoundingClientRect().bottom <= bubble.getBoundingClientRect().top + 1, cls + ": his files sit above his bubble");
       assert(filesBox.querySelector(".fimgs.one img") && filesBox.querySelector(".fchip .fchip-sub").textContent === "PDF · 412 KB", cls + ": one image, then the pdf chip, never bytes");

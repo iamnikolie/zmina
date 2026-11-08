@@ -41,33 +41,89 @@
   }
 
   // ---- the owner's files (o1–o3) ----
-  const blobs = new Map(); // file id → object URL of the bytes this device still holds
+  const blobs = new Map(); // file id → object URL of the bytes this device held (kept while the page lives)
   const fileURL = (dest, id, inline) => "/api/chat/file?" + new URLSearchParams({node: dest.node || "", crew: dest.crew, role: dest.role, id, ...(inline ? {inline: "1"} : {})});
+  // ownURL is the picture of a file: the bytes picked on this device for as long as the page lives (the composer's
+  // tile, the sending bubble and the sent one draw the same decoded image), else the stored copy.
   function ownURL(dest, file) {
-    if (file.blob) { if (!blobs.has(file.id)) blobs.set(file.id, URL.createObjectURL(file.blob)); return blobs.get(file.id); }
-    return fileURL(dest, file.id, true);
+    if (file.blob && !blobs.has(file.id)) blobs.set(file.id, URL.createObjectURL(file.blob));
+    return blobs.get(file.id) || fileURL(dest, file.id, true);
+  }
+  // D-21 s1: an image's tile has its final size from the first frame — the size the picker measured, or the one the
+  // node stored — fit into 240 × 300 alone, a 118 square in a grid; with no size known, the fallback box.
+  const ONE = {w: 240, h: 300}, FALLBACK = {w: 240, h: 180};
+  function fit(f) {
+    if (!(f.width > 0 && f.height > 0)) return FALLBACK;
+    const k = Math.min(1, ONE.w / f.width, ONE.h / f.height);
+    return {w: Math.max(48, Math.round(f.width * k)), h: Math.max(48, Math.round(f.height * k))};
+  }
+  // measure is a picked image's size as shown (browsers apply its EXIF orientation); null when it does not decode.
+  function measure(blob) {
+    return new Promise((resolve) => {
+      const url = URL.createObjectURL(blob), img = new Image();
+      const done = (v) => { URL.revokeObjectURL(url); resolve(v); };
+      img.onload = () => done(img.naturalWidth > 0 && img.naturalHeight > 0 ? {width: img.naturalWidth, height: img.naturalHeight} : null);
+      img.onerror = () => done(null);
+      img.src = url;
+    });
+  }
+  const RING = 2 * Math.PI * 14;
+  const RETRY = '<path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>'; // Lucide rotate-cw (D-21 s5)
+  const tiles = new Map(); // file id → its tile: a redraw (sent, then seen) moves the same decoded image, never reloads it
+  function imageTile(dest, f) {
+    const src = ownURL(dest, f);
+    let tile = tiles.get(f.id);
+    if (tile && tile._src === src) return tile;
+    tile = el("button", "fimg");
+    tile.type = "button";
+    tile.dataset.file = f.id;
+    tile._src = src; tile._name = f.name;
+    // The tile names the file for a reader; the image paints nothing until it is decoded, so no alt text flashes
+    // (D-21 s2): it fades in once decoded, at once when it already is (the picked bytes the composer drew).
+    tile.setAttribute("aria-label", "Photo " + f.name);
+    const img = el("img"); img.alt = ""; img.decoding = "async";
+    const ready = () => tile.classList.add("ready");
+    img.src = src;
+    if (img.complete && img.naturalWidth) ready();
+    else img.decode().then(ready, () => { if (img.naturalWidth) ready(); else tile.classList.add("broken"); });
+    const ring = el("span", "fring");
+    ring.innerHTML = `<svg viewBox="0 0 32 32" aria-hidden="true"><circle class="fring-track" cx="16" cy="16" r="14"/><circle class="fring-bar" cx="16" cy="16" r="14" stroke-dasharray="${RING.toFixed(2)}"/></svg>`;
+    tile.append(img, ring);
+    tiles.set(f.id, tile);
+    return tile;
   }
 
-  // ownerBlock draws a message's files: images first (one natural, two to four as squares, the fourth «+N»), then
-  // chips. Progress is applied apart (progress()), so a redraw while bytes go up keeps the same images.
+  // ownerBlock draws a message's files: images first, then chips. Images (D-21 s7): one in its own shape; two side by
+  // side 118 squares; three one 240 block, the first 158 × 240 on the left, the others 78 × 118 stacked right; four
+  // (or more, the fourth «+N») 2 × 2 — the block's outer corners round, the inner ones near square. Progress is applied
+  // apart (progress()), so a redraw while bytes go up keeps the same images.
   function ownerBlock(box, row, dest) {
     const files = row.attachments || [];
+    // Tiles no message on the page shows any more are let go, so the map stays about as big as what is drawn; this
+    // box's own are still on the page here, so a redraw keeps them.
+    if (tiles.size >= 64) for (const [id, t] of tiles) if (!t.isConnected) tiles.delete(id);
     box.replaceChildren();
     box.hidden = !files.length;
     if (!files.length) return;
     const images = files.filter((f) => isImage(f.type)), others = files.filter((f) => !isImage(f.type));
-    const list = images.map((f) => ({name: f.name, src: ownURL(dest, f), open: f.blob ? ownURL(dest, f) : fileURL(dest, f.id, true)}));
+    const list = images.map((f) => ({name: f.name, src: ownURL(dest, f), open: ownURL(dest, f)}));
     if (images.length) {
-      const grid = el("div", "fimgs" + (images.length === 1 ? " one" : ""));
+      const grid = el("div", "fimgs " + (["", "one", "two", "three"][images.length] || "four"));
+      // s6: a failed message has one retry disc over its block, and the whole block retries.
+      const disc = el("span", "fring fretry"); disc.innerHTML = svg(RETRY);
+      grid.append(disc);
+      grid.addEventListener("click", (e) => {
+        if (!grid.classList.contains("failed") || !grid.dataset.outbox || !hooks?.retry) return;
+        e.stopPropagation(); hooks.retry(grid.dataset.outbox);
+      });
       images.slice(0, 4).forEach((f, i) => {
-        const tile = el("button", "fimg");
-        tile.type = "button";
-        tile.dataset.file = f.id;
-        tile.setAttribute("aria-label", "Open " + f.name);
-        const img = el("img"); img.src = list[i].src; img.alt = f.name; img.loading = "lazy"; img.decoding = "async";
-        tile.append(img, el("i", "fbar"));
+        const tile = imageTile(dest, f);
+        if (images.length === 1) { const box = fit(f); tile.style.width = box.w + "px"; tile.style.height = box.h + "px"; }
+        else { tile.style.width = ""; tile.style.height = ""; }
+        tile.querySelector(".fmore")?.remove();
         if (i === 3 && images.length > 4) tile.append(el("b", "fmore", "+" + (images.length - 4)));
-        tile.addEventListener("click", () => view(list, i, tile));
+        // A tile of a failed message retries it (the block's click); any other opens the viewer.
+        tile.onclick = () => { if (!grid.classList.contains("failed")) view(list, i, tile); };
         grid.append(tile);
       });
       box.append(grid);
@@ -78,24 +134,37 @@
       box.append(c);
     }
   }
-  // progress marks what is going up (o3): a tile at 60 % with a bar, a chip «Uploading · 40 %»; a failed one «!».
+  // progress marks what is going up (o3, D-21 s4–s6): an image's tile a ring that fills as its bytes go, a chip
+  // «Uploading · 40 %»; a failed message's images one retry disc over their block under a scrim (a tap anywhere on it
+  // retries, never opens the viewer), a failed chip says so.
   function progress(box, row) {
     const up = row.state === "uploading" || row.state === "transmitting" || row.state === "local", failed = row.state === "failed" || (row.state === "local" && row.failure);
+    const grid = box.querySelector(".fimgs");
+    if (grid) {
+      const off = Boolean(row.outboxKey) && failed;
+      grid.classList.toggle("failed", off);
+      if (off) grid.dataset.outbox = row.outboxKey; else delete grid.dataset.outbox;
+    }
     for (const t of box.querySelectorAll("[data-file]")) {
       const id = t.dataset.file, done = !row.outboxKey || (row.uploaded || []).includes(id);
       const frac = done ? 1 : row.uploadFile === id ? row.uploadProgress || 0 : 0;
-      t.classList.toggle("going", Boolean(row.outboxKey) && up && !failed && (!done || row.state !== "transmitting"));
+      const arc = Math.max(.04, frac); // a ring that has not moved yet still shows it has started (D-21 s4)
+      t.classList.toggle("going", Boolean(row.outboxKey) && up && !failed && !done);
       t.classList.toggle("failed", Boolean(row.outboxKey) && failed && !done);
+      if (row.outboxKey) t.dataset.outbox = row.outboxKey; else delete t.dataset.outbox;
       t.style.setProperty("--p", String(frac));
+      const bar = t.querySelector(".fring-bar");
+      if (bar && t.classList.contains("going")) bar.style.strokeDashoffset = (RING * (1 - arc)).toFixed(2);
+      if (t.classList.contains("fimg")) {
+        const label = grid?.classList.contains("failed") ? "Retry sending " + t._name : "Photo " + t._name + (t.classList.contains("going") ? ", uploading " + Math.round(frac * 100) + " %" : "");
+        if (t.getAttribute("aria-label") !== label) t.setAttribute("aria-label", label);
+      }
       if (t.classList.contains("fchip")) {
         const sub = t.querySelector(".fchip-sub"), file = (row.attachments || []).find((f) => f.id === id);
-        const going = t.classList.contains("going") && !done;
-        const words = going ? "Uploading · " + Math.round(frac * 100) + " %" : kindWord(file.name) + " · " + size(file.size);
+        const going = t.classList.contains("going");
+        const words = going ? "Uploading · " + Math.round(frac * 100) + " %" : t.classList.contains("failed") ? "Upload failed" : kindWord(file.name) + " · " + size(file.size);
         if (sub.textContent !== words) sub.textContent = words;
       }
-      let mark = t.querySelector(".fbad");
-      if (t.classList.contains("failed") && !mark && !t.classList.contains("fchip")) { mark = el("b", "fbad", "!"); t.append(mark); }
-      if (!t.classList.contains("failed") && mark) mark.remove();
     }
   }
 
@@ -459,5 +528,5 @@
     }
   }, true);
 
-  window.zminaFiles = Object.freeze({init: (h) => { hooks = h; }, ownerBlock, progress, decorate, size, draft, looked});
+  window.zminaFiles = Object.freeze({init: (h) => { hooks = h; }, ownerBlock, progress, decorate, size, draft, looked, measure});
 })();
