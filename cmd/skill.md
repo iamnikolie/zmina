@@ -239,7 +239,8 @@ gone (…): its lines wait for the next beat after each turn …; restart it …
 also works from the dispatcher's own session): zmina records the hooks each start
 gets, and asks the process (`ps`) of a role an earlier zmina started.
 
-Typed into the input line as before: a slash command (a posted one is plain text), a role whose `args`
+Typed into the input line as before: a slash command (a posted one is plain text), the owner's own message from Chat
+(below: his own turn, never another session's message), a role whose `args`
 pass their own `--settings` (zmina's are not passed: a warning), a role with `delivery: tmux`, a role started by an
 earlier zmina (no settings: until its next start), and a session with no inbox socket or another `peerProtocol`.
 A post that never started is tried three beats, then kept as failed; one whose write broke after it started is
@@ -507,11 +508,17 @@ an uncertain send to an older worker without that guarantee. Automatic retries s
 network send attempt; expired entries require inspection before a new send. This protects bounded retries,
 not unlimited exactly-once execution.
 Messages wait for the ordinary idle/empty-prompt checks; neither a busy role nor a native draft/dialog
-is overwritten. Multiline or long text is stored whole in the crew inbox and delivered with a reference
-for the role to read. Delivery states distinguish local storage, a send in flight (`Uploading <file>…`, then `Sending…`; a fresh
+is overwritten. A Claude role gets the owner's message as he would type it at its prompt: typed into its input line,
+whole, line breaks kept (each as Ctrl-J, the text in pieces of 200 characters so Claude Code never takes it for a
+paste), his files listed after it, `[zmina chat <id>]` in front — his own turn, not another session's message and no
+inbox to read; also at once when the role's turn ends, not at the next beat. Only a line Chat made a receipt for is
+typed so: text that merely starts with `[zmina chat` (a peer's `zmina send`) is posted as any line, so no other
+session's words read as his, and every other typed line (a queued line, an answer typed into a question) still goes as
+one line, its breaks as spaces. A Codex bridge takes one line: a message with line breaks or over 1000 characters is
+stored whole in the crew inbox, and the line says they are the owner's own words and where they are. Delivery states distinguish local storage, a send in flight (`Uploading <file>…`, then `Sending…`; a fresh
 message reads so at once while the network is there and nothing before it to that role is stuck), server queueing,
 sent to the role, and `accepted`; the line under the field speaks only when the device is offline: only a matching owner-message ID in the runtime's visible transcript proves agent acceptance. A line
-posted to a Claude role's inbox socket shows there as Claude Code's meta line from a peer (`Another Claude session
+posted to a Claude role's inbox socket (an earlier zmina posted the owner's messages too) shows there as Claude Code's meta line from a peer (`Another Claude session
 sent a message:` and zmina's `[zmina:<tag>]`), a Codex bridge's with the tag: both are read as the owner's message
 once its ID is one of the role's receipts; such a line with an ID no browser sent is shown as a session message.
 Acceptance does not mean successful task completion. A send without that evidence remains unconfirmed,

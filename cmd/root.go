@@ -340,6 +340,15 @@ func (l *lazyTmux) Type(name, text string) error {
 	return c.Type(name, text)
 }
 
+func (l *lazyTmux) TypeLines(name, text string) error {
+	c, err := l.client()
+	if err != nil {
+		return err
+	}
+
+	return c.TypeLines(name, text)
+}
+
 func (l *lazyTmux) Keys(name string, keys ...string) error {
 	c, err := l.client()
 	if err != nil {

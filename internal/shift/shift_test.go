@@ -22,9 +22,11 @@ import (
 )
 
 type fakeTmux struct {
-	up     map[string]int // role -> pane pid
-	dead   map[string]bool
-	typed  map[string][]string
+	up    map[string]int // role -> pane pid
+	dead  map[string]bool
+	typed map[string][]string
+	// kept is what of typed went with its line breaks kept (TypeLines).
+	kept   map[string][]string
 	keys   map[string][]string
 	starts []string
 	argv   map[string][]string
@@ -159,6 +161,16 @@ func (f *fakeTmux) Start(n, dir string, _ []string, argv []string) error {
 }
 
 func (f *fakeTmux) Kill(n string) error { delete(f.up, n); delete(f.dead, n); return nil }
+
+func (f *fakeTmux) TypeLines(n, text string) error {
+	if f.kept == nil {
+		f.kept = map[string][]string{}
+	}
+
+	f.kept[n] = append(f.kept[n], text)
+
+	return f.Type(n, text)
+}
 
 func (f *fakeTmux) Type(n, text string) error {
 	if f.typeErr != nil && text != "/exit" {

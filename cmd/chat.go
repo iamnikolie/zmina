@@ -235,8 +235,14 @@ func (a *app) localChatSendFiles(key, role, id, text string, files []string) (ch
 				delivered += fmt.Sprintf("\n- %q (%d bytes): %q", meta.Name, meta.Size, paths[i])
 			}
 		}
+		// A Claude role gets the owner's words whole, line breaks kept, typed at its prompt as he types there (the queue
+		// types a line Chat made a receipt for): his own turn, no inbox to read. A Codex bridge takes one line, so a long
+		// or broken message goes to the crew's inbox and the line says whose words they are and where.
+		r, _ := s.Role(role)
 		line := strings.Join(strings.Fields(delivered), " ")
-		if strings.ContainsAny(delivered, "\r\n") || len(line) > 1000 {
+		if !r.IsCodex() {
+			line = strings.Trim(strings.ReplaceAll(delivered, "\r\n", "\n"), "\n")
+		} else if strings.ContainsAny(delivered, "\r\n") || len(line) > 1000 {
 			entry, err := inbox.NewID()
 			if err != nil {
 				return err
@@ -248,7 +254,7 @@ func (a *app) localChatSendFiles(key, role, id, text string, files []string) (ch
 			if len(head) > 400 {
 				head = head[:400]
 			}
-			line = fmt.Sprintf("%s — full owner message (preserve formatting): zmina inbox show %s", string(head), entry)
+			line = fmt.Sprintf("%s — the owner's own words, whole with their formatting: zmina inbox show %s", string(head), entry)
 		}
 		line = chat.Prefix(id) + line
 		if err = s.Queue(role, line); err != nil {
