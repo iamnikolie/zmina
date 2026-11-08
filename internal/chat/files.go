@@ -188,16 +188,17 @@ func (s FileStore) Sized(attachments []Attachment) []Attachment {
 // and the frame header after it.
 const sizeHead = 256 << 10
 
-var sizes sync.Map // stored file path → [2]int
+var sizes sync.Map // stored file root (crew dir, role, ID) → [2]int, looked up before its metadata is read
 
 func (s FileStore) size(id string) (int, int) {
+	key := s.root(id)
+	if v, ok := sizes.Load(key); ok {
+		wh := v.([2]int)
+		return wh[0], wh[1]
+	}
 	_, path, err := s.Get(id)
 	if err != nil {
 		return 0, 0
-	}
-	if v, ok := sizes.Load(path); ok {
-		wh := v.([2]int)
-		return wh[0], wh[1]
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -209,7 +210,7 @@ func (s FileStore) size(id string) (int, int) {
 		return 0, 0
 	}
 	w, h := imageSize(head)
-	sizes.Store(path, [2]int{w, h})
+	sizes.Store(key, [2]int{w, h})
 	return w, h
 }
 

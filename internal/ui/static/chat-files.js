@@ -99,6 +99,9 @@
   // apart (progress()), so a redraw while bytes go up keeps the same images.
   function ownerBlock(box, row, dest) {
     const files = row.attachments || [];
+    // Tiles no message on the page shows any more are let go, so the map stays about as big as what is drawn; this
+    // box's own are still on the page here, so a redraw keeps them.
+    if (tiles.size >= 64) for (const [id, t] of tiles) if (!t.isConnected) tiles.delete(id);
     box.replaceChildren();
     box.hidden = !files.length;
     if (!files.length) return;
