@@ -538,9 +538,23 @@ func TestNativeOwnersChatMessageIsTyped(t *testing.T) {
 	f.tm.drafts["designer"] = ""
 
 	assert.Equal(t, "typed into designer: "+owner, f.s.deliverInbox("designer", *f.now))
-	assert.Equal(t, []string{owner}, f.tm.typed["designer"], "typed whole, line breaks kept")
+	assert.Equal(t, []string{owner}, f.tm.typed["designer"], "typed whole")
+	assert.Equal(t, []string{owner}, f.tm.kept["designer"], "its line breaks kept")
 	assert.Equal(t, []string{forged}, p.posted["sid-designer"], "only the other line was posted")
 	assert.Equal(t, owner, rs.Sent.Line, "followed until it lands")
+}
+
+// Any other line typed into a role goes as one line: only the owner's own message keeps its breaks.
+func TestTypedLineOtherThanTheOwnersKeepsNoLineBreaks(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	require.NoError(t, f.s.Up("designer"))
+
+	line := "first\nsecond"
+	require.NoError(t, f.s.Queue("designer", line))
+	typeQueued(f, "designer")
+
+	assert.Equal(t, []string{line}, f.tm.typed["designer"])
+	assert.Empty(t, f.tm.kept["designer"], "typed with Type, which flattens it")
 }
 
 // The dispatcher's post carries its own queued lines up to the owner's message, which is typed apart.

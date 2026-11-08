@@ -224,7 +224,8 @@ func (s *Shift) TurnOver(name, sessionID string) bool {
 
 // TurnEnd posts what waits for a role whose turn just ended (its Stop hook), the way a beat would post it: only to
 // its own channel, only past its boot and between turns, each line once the one before it showed, the dispatcher's
-// signals before its queue. Nothing is typed: a slash command, or a role whose lines are typed, waits for the beat.
+// signals before its queue. The only line it types is the owner's own message from Chat (ownerChat), which he waits
+// on; a slash command, or a role whose lines are typed, waits for the beat.
 // It returns the lines for the log.
 func (s *Shift) TurnEnd(name, sessionID string) []string {
 	now := s.Now()

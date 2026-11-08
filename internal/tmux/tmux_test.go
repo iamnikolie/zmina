@@ -70,12 +70,12 @@ func TestTypeSendsNoControlBytes(t *testing.T) {
 
 // A line break goes as Ctrl-J (the key that breaks a line in Claude Code's input) and long text in pieces, every
 // character of it arriving in order: cat shows each line as it comes.
-func TestTypeBreaksLinesAndTypesLongTextInPieces(t *testing.T) {
+func TestTypeLinesBreaksLinesAndTypesLongTextInPieces(t *testing.T) {
 	c := server(t)
 	require.NoError(t, c.Start("r", t.TempDir(), nil, []string{"cat", "-v"}))
 
 	long := strings.Repeat("слово ", 70) + "end"
-	require.NoError(t, c.Type("r", "first line\r\nsecond line\n"+long))
+	require.NoError(t, c.TypeLines("r", "first line\r\nsecond line\n"+long))
 
 	eventually(t, func() bool {
 		out, _ := c.Capture("r", 40)
@@ -85,6 +85,19 @@ func TestTypeBreaksLinesAndTypesLongTextInPieces(t *testing.T) {
 	out, _ := c.Capture("r", 40)
 	assert.NotContains(t, out, "^M", "no carriage return typed")
 	assert.Len(t, pieces(long, typePiece), 3, "423 characters: three pieces")
+}
+
+// Type keeps to one line: a break in its text is a space, for an input where Ctrl-J would submit part of it.
+func TestTypeFlattensLineBreaks(t *testing.T) {
+	c := server(t)
+	require.NoError(t, c.Start("r", t.TempDir(), nil, []string{"cat", "-v"}))
+
+	require.NoError(t, c.Type("r", "first\nsecond"))
+
+	eventually(t, func() bool {
+		out, _ := c.Capture("r", 40)
+		return strings.Count(out, "first second") == 2
+	})
 }
 
 func TestOnlyTheRolePaneCounts(t *testing.T) {

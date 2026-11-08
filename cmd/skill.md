@@ -513,7 +513,8 @@ whole, line breaks kept (each as Ctrl-J, the text in pieces of 200 characters so
 paste), his files listed after it, `[zmina chat <id>]` in front — his own turn, not another session's message and no
 inbox to read; also at once when the role's turn ends, not at the next beat. Only a line Chat made a receipt for is
 typed so: text that merely starts with `[zmina chat` (a peer's `zmina send`) is posted as any line, so no other
-session's words read as his. A Codex bridge takes one line: a message with line breaks or over 1000 characters is
+session's words read as his, and every other typed line (a queued line, an answer typed into a question) still goes as
+one line, its breaks as spaces. A Codex bridge takes one line: a message with line breaks or over 1000 characters is
 stored whole in the crew inbox, and the line says they are the owner's own words and where they are. Delivery states distinguish local storage, a send in flight (`Uploading <file>…`, then `Sending…`; a fresh
 message reads so at once while the network is there and nothing before it to that role is stuck), server queueing,
 sent to the role, and `accepted`; the line under the field speaks only when the device is offline: only a matching owner-message ID in the runtime's visible transcript proves agent acceptance. A line

@@ -335,7 +335,14 @@ var errUnsent = errors.New("typed, Enter did not send it; cleared from the input
 // one that stays is cleared and errUnsent returned — a line zmina typed is sent, or not left typed. An input line
 // that cannot be read (a dialog, a screen being drawn) is left to landed.
 func (s *Shift) typeLine(name, line string) error {
-	if err := s.Tmux.Type(name, line); err != nil {
+	// Only the owner's own message keeps its line breaks: it goes to a Claude role's prompt, where Ctrl-J breaks a
+	// line. Any other line is typed as one, as a Codex bridge or a role typed into takes it.
+	typ := s.Tmux.Type
+	if s.ownerChat(name, line) {
+		typ = s.Tmux.TypeLines
+	}
+
+	if err := typ(name, line); err != nil {
 		return err
 	}
 

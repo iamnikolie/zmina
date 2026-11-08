@@ -52,7 +52,10 @@ type Tmux interface {
 	Probe(name string) (tmux.Pane, error)
 	Start(name, dir string, env []string, argv []string) error
 	Kill(name string) error
+	// Type types one line and Enter; a line break in the text becomes a space.
 	Type(name, text string) error
+	// TypeLines is Type keeping line breaks (Ctrl-J): only for Claude Code's prompt.
+	TypeLines(name, text string) error
 	Keys(name string, keys ...string) error
 	Capture(name string, lines int) (string, error)
 	// KeepScreens tags a role's pane and makes its window stay after the process ends.
