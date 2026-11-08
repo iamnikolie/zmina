@@ -11,6 +11,8 @@ import (
 
 type Message struct {
 	Attachments []Attachment `json:"attachments,omitempty"`
+	// Looked are the images the role opened for itself in a turn (D-20): a message of role "looked" is their strip.
+	Looked []Looked `json:"looked,omitempty"`
 	Event       *Event       `json:"event,omitempty"`
 	ID          string       `json:"id"`
 	Role        string       `json:"role"`

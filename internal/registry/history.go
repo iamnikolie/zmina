@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,7 +28,9 @@ func (r *Registry) History(sessionID string, lines int) (string, error) {
 			label = "Assistant"
 		}
 		text := m.Text
-		if m.Event != nil && m.Event.Kind == "command" {
+		if m.Role == "looked" {
+			label, text = "Session", "Looked at "+lookedCount(len(m.Looked))
+		} else if m.Event != nil && m.Event.Kind == "command" {
 			label, text = "Session", m.Event.Summary
 		} else if m.Event != nil {
 			label = "Background task"
@@ -133,6 +136,14 @@ func (r *Registry) SentFiles(sessionID string) ([]SentFile, error) {
 	return out, nil
 }
 
+// lookedCount is "1 image" or "N images".
+func lookedCount(n int) string {
+	if n == 1 {
+		return "1 image"
+	}
+	return strconv.Itoa(n) + " images"
+}
+
 // ChatMessages exposes only visible user and assistant text with stable message identities.
 func (r *Registry) ChatMessages(sessionID string) ([]chat.Message, error) {
 	records, err := r.records(sessionID)
@@ -146,17 +157,35 @@ func (r *Registry) ChatMessages(sessionID string) ([]chat.Message, error) {
 	local, command := false, -1
 	var ran [2]string               // the name and arguments of that command
 	sends := map[string]sentFiles{} // SendUserFile calls by tool_use id, until their result
+	reads := map[string]string{}    // Read calls by tool_use id → the path read, until their result
+	var turn lookTurn               // the images the role opened in the turn in work
 	for _, record := range records {
 		var l line
-		if json.Unmarshal(record, &l) != nil || l.Sidechain || l.Compact || (l.Type != "user" && l.Type != "assistant") {
+		if json.Unmarshal(record, &l) != nil || l.Sidechain {
+			continue
+		}
+		if closesTurn(&l) {
+			out = turn.close(out, true)
+			continue
+		}
+		if l.Compact || (l.Type != "user" && l.Type != "assistant") {
 			continue
 		}
 		if l.UUID != "" && seen[l.UUID] {
 			continue
 		}
-		if m, _, ok := sentFile(&l, sends); ok {
+		result := l.Type == "user" && toolResult(&l)
+		// A prompt (the owner's, a line zmina posted) starts the next turn: the last one is over.
+		if l.Type == "user" && !result && (!l.Meta || (l.Origin != nil && l.Origin.Kind == "peer")) {
+			out = turn.close(out, true)
+		}
+		if l.Type == "assistant" || result {
+			turn.add(len(out), readImages(&l, reads))
+		}
+		if m, files, ok := sentFile(&l, sends); ok {
 			seen[l.UUID] = true
 			out = append(out, m)
+			turn.send(files)
 			local, command = false, -1
 			continue
 		}
@@ -213,7 +242,7 @@ func (r *Registry) ChatMessages(sessionID string) ([]chat.Message, error) {
 		out = append(out, chat.TaskNotification(chat.Normalize(m)))
 	}
 	provisional(out, command)
-	return out, nil
+	return turn.close(out, false), nil
 }
 
 // provisional marks the end of the conversation that Claude Code may still replace or complete: a command's line

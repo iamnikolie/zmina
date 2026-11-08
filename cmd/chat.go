@@ -680,6 +680,9 @@ func (a *app) chatCall(ctx context.Context, node, op string, req mesh.TerminalRe
 	case "chat/rolefile":
 		file, err := a.localChatRoleFile(req.Crew, req.Role, req.Text)
 		return chat.Snapshot{File: &file}, err
+	case "chat/looked":
+		file, err := a.localChatLooked(req.Crew, req.Role, req.Text, req.Action == "thumb")
+		return chat.Snapshot{File: &file}, err
 	}
 	return chat.Snapshot{}, errors.New("unknown chat operation")
 }

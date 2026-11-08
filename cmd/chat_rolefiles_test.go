@@ -2,7 +2,11 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"image"
+	"image/jpeg"
+	"image/png"
 	"io"
 	"net/http"
 	"net/url"
@@ -18,6 +22,7 @@ import (
 
 	"github.com/iamnikolie/zmina/internal/chat"
 	"github.com/iamnikolie/zmina/internal/registry"
+	"github.com/iamnikolie/zmina/internal/shift"
 )
 
 var (
@@ -114,6 +119,14 @@ func TestRoleFileServesWhatTheRoleSent(t *testing.T) {
 	require.NoError(t, os.Symlink(filepath.Join(elsewhere, "dir"), parent))
 	fake := write(filepath.Join(outside, "fake.pdf"), []byte("<html>"))
 	rewritten := write(filepath.Join(outside, "rewritten.pdf"), pdfBytes)
+	// A hard link swapped in at a sent path to another file of that size, its mtime from before the send.
+	hardlinked := filepath.Join(outside, "hardlinked.pdf")
+	require.NoError(t, os.Link(write(filepath.Join(elsewhere, "secret.pdf"), pdfBytes), hardlinked))
+	// Written after the send with its mtime set back: the inode's change time says so.
+	backdatedAt := time.Now()
+	time.Sleep(20 * time.Millisecond)
+	backdated := write(filepath.Join(outside, "backdated.pdf"), pdfBytes)
+	require.NoError(t, os.Chtimes(backdated, time.Now().Add(-time.Hour), time.Now().Add(-time.Hour)))
 	resized := write(filepath.Join(outside, "resized.pdf"), pdfBytes)
 
 	for name, c := range map[string]struct {
@@ -128,6 +141,8 @@ func TestRoleFileServesWhatTheRoleSent(t *testing.T) {
 		"written since the send":           {rewritten, map[string]registry.SentFile{rewritten: {Path: rewritten, Size: int64(len(pdfBytes)), At: time.Now().Add(-time.Hour)}}},
 		"another size than sent":           {resized, map[string]registry.SentFile{resized: {Path: resized, Size: 1, At: sentAt}}},
 		"sent with no size recorded":       {doc, map[string]registry.SentFile{doc: {Path: doc, At: sentAt}}},
+		"a hard link swapped in":           {hardlinked, send(hardlinked)},
+		"written since, mtime set back":    {backdated, map[string]registry.SentFile{backdated: {Path: backdated, Size: int64(len(pdfBytes)), At: backdatedAt}}},
 	} {
 		_, _, err := roleFile(c.path, roots, c.sent)
 		require.Error(t, err, name)
@@ -224,4 +239,58 @@ func TestChatRoleFilesOverHTTP(t *testing.T) {
 			assert.True(t, strings.HasPrefix(r.Header.Get("Content-Disposition"), "attachment"))
 		}
 	}
+}
+
+// D-20: an image a role looked at is served from its conversation, as the role saw it — whole, or as its tile's
+// thumbnail — through the page's own API; a key that names no image is refused.
+func TestChatLookedOverHTTP(t *testing.T) {
+	home := uiHome(t)
+	srv, a := uiServer(t, true, "")
+	c, err := a.crewApp("default")
+	require.NoError(t, err)
+	require.NoError(t, c.withState(func(s *shift.Shift) error {
+		s.State.Role("dev").LastSession = "session"
+		s.State.Role("dev").LastRuntime = "claude"
+		return nil
+	}))
+	var img bytes.Buffer
+	require.NoError(t, png.Encode(&img, image.NewNRGBA(image.Rect(0, 0, 400, 800))))
+	dir := filepath.Join(home, ".zmina", "ns", "projects", "example")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	body := `{"type":"assistant","uuid":"c1","message":{"content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/elsewhere/page.png"}}]}}
+{"type":"user","uuid":"r1","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":[{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + base64.StdEncoding.EncodeToString(img.Bytes()) + `"}}]}]}}
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "session.jsonl"), []byte(body), 0o600))
+
+	snapshot, err := a.localChatRead("default", "dev")
+	require.NoError(t, err)
+	require.Len(t, snapshot.Messages, 1)
+	require.Equal(t, "looked", snapshot.Messages[0].Role)
+	key := snapshot.Messages[0].Looked[0].Key
+
+	get := func(key, extra string) *http.Response {
+		r, err := http.Get(srv.URL + "/api/chat/looked?" + url.Values{"crew": {"default"}, "role": {"dev"}, "key": {key}}.Encode() + extra)
+		require.NoError(t, err)
+
+		return r
+	}
+	whole := get(key, "")
+	data, _ := io.ReadAll(whole.Body)
+	_ = whole.Body.Close()
+	require.Equal(t, http.StatusOK, whole.StatusCode)
+	assert.Equal(t, "image/png", whole.Header.Get("Content-Type"))
+	assert.Equal(t, img.Bytes(), data, "the picture the role saw, though no such file is on disk")
+
+	thumb := get(key, "&thumb=1")
+	data, _ = io.ReadAll(thumb.Body)
+	_ = thumb.Body.Close()
+	require.Equal(t, http.StatusOK, thumb.StatusCode)
+	assert.Equal(t, "image/jpeg", thumb.Header.Get("Content-Type"))
+	cfg, err := jpeg.DecodeConfig(bytes.NewReader(data))
+	require.NoError(t, err)
+	assert.Equal(t, [2]int{84, 168}, [2]int{cfg.Width, cfg.Height}, "its long side 168")
+
+	missing := get("c1:0:0", "")
+	_ = missing.Body.Close()
+	assert.Equal(t, http.StatusNotFound, missing.StatusCode)
 }

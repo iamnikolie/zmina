@@ -219,7 +219,7 @@ func (n *Node) ServeTerminals(ctx context.Context, rw io.ReadWriter, deliver Del
 		}
 
 		switch w.Op {
-		case "terminal/list", "terminal/open", "terminal/history", "chat/read", "chat/send", "chat/action", "chat/upload", "chat/file", "chat/paths", "chat/rolefile",
+		case "terminal/list", "terminal/open", "terminal/history", "chat/read", "chat/send", "chat/action", "chat/upload", "chat/file", "chat/paths", "chat/rolefile", "chat/looked",
 			"crew/status", "todo/act", "alarm/act", "item/read":
 			return n.serveTerminal(ctx, c, w, services)
 		case "terminal/tunnel":

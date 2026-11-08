@@ -387,8 +387,8 @@
     }
   }, true);
   const eventWord = {completed: "Completed", failed: "Failed", stopped: "Stopped", running: "Running", received: "Received"};
-  const rowClass = (row) => row.event ? (row.event.kind === "session" ? "event session" : row.event.kind === "command" ? "event command" : "event") : row.role === "user" ? "user" : "assistant";
-  const kindOf = (row) => row.event ? "event" : row.role === "user" ? "user" : "assistant";
+  const rowClass = (row) => row.role === "looked" ? "looked" : row.event ? (row.event.kind === "session" ? "event session" : row.event.kind === "command" ? "event command" : "event") : row.role === "user" ? "user" : "assistant";
+  const kindOf = (row) => row.role === "looked" ? "looked" : row.event ? "event" : row.role === "user" ? "user" : "assistant";
   function render() {
     if (!destination) return;
     snapshot ||= {state: "unknown", messages: [], pending: []};
@@ -406,7 +406,7 @@
       if (!article) { article = document.createElement("article"); article.className = "chat-message " + rowClass(row); const head = document.createElement("div"); head.className = "message-head"; const who = document.createElement("span"), time = document.createElement("time"); head.append(who, time); const body = document.createElement("div"); body.className = "message-body"; const state = document.createElement("div"); state.className = "message-state"; const files=document.createElement("div");files.className="message-files";const meta=document.createElement("div");meta.className="message-meta";const metaTime=document.createElement("time");const copy=document.createElement("button");copy.type="button";copy.className="ib copy";copy.setAttribute("aria-label","Copy");copy.title="Copy";copy.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>';copy.addEventListener("click",()=>{navigator.clipboard?.writeText(article._text||"").then(()=>{copy.title="Copied";setTimeout(()=>{copy.title="Copy";},1500);},()=>error("Could not copy this message."));});meta.append(metaTime,copy);article.append(head, body, files, state, meta); articles.set(row.id, article); }
       const date = new Date(row.at), shown = Number.isNaN(date.getTime()) ? "" : (date.toDateString() === new Date().toDateString() ? clock : dated).format(date);
       // A command's line carries its time, so a new day's format redraws it.
-      const presentation=JSON.stringify({role:row.role,event:row.event||null,shown:row.event?.kind==="command"?shown:""});
+      const presentation=JSON.stringify({role:row.role,event:row.event||null,shown:row.event?.kind==="command"?shown:"",looked:(row.looked||[]).map(l=>l.key)});
       article.className="chat-message "+rowClass(row);
       // A reply unfolded by a tap stays unfolded through the next render (D-11 m1).
       if (article._metaOn) article.classList.add("meta-on");
@@ -415,7 +415,10 @@
       for (const time of article.querySelectorAll("time")) time.textContent = shown;
       // D-08 c3: every message keeps its full time in its title; the meta row shows it under a run's last one.
       article.title = (row.event?.kind === "session" ? "Session message · " : "") + (Number.isNaN(date.getTime()) ? "" : date.toLocaleString());
-      if (article._text !== row.text || article._presentation!==presentation) { const body = article.querySelector(".message-body"); if (row.event?.kind === "command") {
+      if (article._text !== row.text || article._presentation!==presentation) { const body = article.querySelector(".message-body"); if (row.role === "looked") {
+        // D-20: the images the role looked at this turn, one quiet strip.
+        window.zminaFiles.looked(body, row, destination, article);
+      } else if (row.event?.kind === "command") {
         // a command run at the role's prompt (/compact, /model) is one quiet line with its time, not a bubble.
         const words = row.event.summary + (shown ? " · " + shown : "");
         if (!row.event.detail) { const line = document.createElement("p"); line.className = "command-line"; line.textContent = words; body.replaceChildren(line); }
