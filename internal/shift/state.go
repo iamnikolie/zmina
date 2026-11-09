@@ -173,6 +173,8 @@ type RoleState struct {
 	RestartWhy     string    `json:"restart_why,omitempty"`
 	RestartOff     time.Time `json:"restart_off,omitzero"`
 	RestartGaveUp  string    `json:"restart_gave_up,omitempty"`
+	// RestartHeld is the background work (its ids) the log last said holds a restart off, so it is said once.
+	RestartHeld string `json:"restart_held,omitempty"`
 	// Sent is the last line typed into the role, until the role shows it took it.
 	Sent *Sent `json:"sent,omitempty"`
 	// Posted are lines posted to its inbox socket not yet seen in its conversation; Inbound that it was started

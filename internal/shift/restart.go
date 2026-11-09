@@ -107,7 +107,7 @@ func (s *Shift) restart(name string, r *crew.Role, now time.Time, tasks []string
 
 	act, ok := s.plainIdle(name, now, sess)
 	if !ok {
-		return ""
+		return s.restartHeld(name, act.Background, tasks)
 	}
 
 	mine := s.heldTasks(name)
@@ -156,8 +156,13 @@ func (s *Shift) restartAsked(name string, now time.Time, tasks []string, sess *r
 
 	mine := s.heldTasks(name)
 	if s.notesLanded(mine, rs.RestartAsked) {
-		if _, ok := s.plainIdle(name, now, sess); ok {
+		act, ok := s.plainIdle(name, now, sess)
+		if ok {
 			return s.beginRestart(name, mine, rs.RestartWhy)
+		}
+
+		if line := s.restartHeld(name, act.Background, tasks); line != "" {
+			return line
 		}
 	}
 
@@ -171,6 +176,22 @@ func (s *Shift) restartAsked(name string, now time.Time, tasks []string, sess *r
 		"restarted in this conversation (context_max trims it)"})
 
 	return line
+}
+
+// restartHeld says once, in the log, which background work holds a role's restart off: a launch whose end was never
+// reported holds it for good, and the role would sit at its context with nothing said.
+func (s *Shift) restartHeld(name string, background, tasks []string) string {
+	rs := s.State.Role(name)
+	ids := strings.Join(background, ",")
+
+	if ids == "" || ids == rs.RestartHeld {
+		return ""
+	}
+
+	rs.RestartHeld = ids
+	s.log(name, "restart-held", strings.Join(tasks, ","), "background "+ids+" running")
+
+	return name + ": restart held: background " + ids + " running"
 }
 
 // restartOff ends an ask for the note; another may come after the usual pause.
@@ -321,6 +342,7 @@ func (s *Shift) beginRestart(name string, tasks []task.Task, why string) string 
 	}
 
 	rs.RestartAsked, rs.RestartSession, rs.RestartTasks, rs.RestartWhy = time.Time{}, "", nil, ""
+	rs.RestartHeld = ""
 
 	if _, err := s.BeginDown(name, DownOptions{}); err != nil {
 		rs.RestartOff = s.Now()

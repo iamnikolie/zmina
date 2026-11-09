@@ -1295,8 +1295,11 @@ alone for the beat — never taken as ended; a role being put down is left alone
    whole conversation again. Both keys are the role's own, else the crew's, else the default; `off` turns either off.
    Only between turns, plainly idle: booted, idle (no dialog), nothing queued or posted and unseen, its input line on
    screen and empty, no terminal attached, no background work it started still running (a `run_in_background`
-   shell, a Monitor, a background agent: launched in its transcript's last 4 MiB and not yet reported ended), and
-   no line of the owner's to it (Chat, its terminal, Remote Control) in the last 15 min. The note is each task's
+   shell, a Monitor, a background agent: launched anywhere in its transcript and neither reported ended nor stopped with `TaskStop`; the log
+   says once which ones hold it, `restart-held … background b1 running`, since a launch whose end was never
+   reported holds it for good), and no line of the owner's to it (Chat, its terminal, Remote Control; read in the
+   transcript's last 4 MiB; zmina's boot line and any session's message, mid-turn too, are not his) in the last
+   15 min. The note is each task's
    checkpoint: one saved since the role's last turn began is the note already, and the role is restarted at once.
    Else it gets `[zmina] restart: …`, a short locator to a file of role-shaped checkpoint requests: save each with
    `zmina task checkpoint <id> --file <json-file>`, do not park, then stop. Once every note is saved and the role is
@@ -1309,7 +1312,8 @@ alone for the beat — never taken as ended; a role being put down is left alone
    within 10m0s …`), and `context_max` trims it as before. The log has `restart-asked`, `restarted` (with why and
    the notes' revisions), `restart-off` and `restart-failed` (the dispatcher hears the `up --task … --fresh` that
    starts it by hand); `zmina usage` counts the restarts. A role asked for its note is not trimmed or released
-   meanwhile.
+   meanwhile. A peer's `SendMessage` that reaches the old session in the seconds between its `/exit` and its end
+   is lost with it: the fresh session never sees it (zmina's own lines wait in its queue).
 8. Context: a role with `context_max` (its own, else the crew's; `off` opts out) whose
    conversation fills more than that (the last turn's tokens in its transcript,
    `<namespace>/projects/*/<session id>.jsonl`), idle for 5 min, its input line on screen and empty

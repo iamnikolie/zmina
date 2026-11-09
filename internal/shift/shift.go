@@ -561,7 +561,7 @@ func (s *Shift) ackRule() string {
 // MixedRuntimeRule gives both engines a transport they can use to reach every seat.
 // AsksRule is what zmina tells every role at boot about questions for the owner: they go on his list, and his answers
 // in chat are recorded there, so nothing he answered stays open and nothing he was asked is lost in a conversation.
-const AsksRule = "[zmina] Questions for the owner: one only he can answer (a decision, a check only he can do) goes on " +
+const AsksRule = registry.BootMark + " one only he can answer (a decision, a check only he can do) goes on " +
 	"his list, not only into chat: zmina todo add \"<question>\" --title \"<few words>\" [--rec \"<your answer>\" " +
 	"--reason \"<why>\"] [--task T-n]; it prints A-n: name A-n when you ask in chat. When he answers it in chat, " +
 	"record it at once: zmina todo answer A-n \"<his words>\" (zmina todo yes A-n takes your recommendation, zmina todo " +
