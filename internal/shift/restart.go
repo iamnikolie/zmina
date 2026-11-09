@@ -25,10 +25,14 @@ const (
 	restartSettle = trimIdle
 	// restartOwnerQuiet is how long after the owner's last line to a role it is left alone: he may be mid-talk.
 	restartOwnerQuiet = 15 * time.Minute
+	// restartDoneGrace is how long a role whose task is done sits before restart_done restarts it, so a quick
+	// follow-up on the task still lands in the conversation that did it.
+	restartDoneGrace = 10 * time.Minute
 )
 
 // Restart is a restart the tick began: the role's down is under way (Claim is its Downing), and FinishRestart starts
-// it again fresh with Opts, its Talk line and each task's packet.
+// it again fresh with Opts, its Talk line and each task's packet. Done is the task whose end it follows
+// (restart_done), when the role holds none.
 type Restart struct {
 	Name  string
 	Claim time.Time
@@ -36,6 +40,7 @@ type Restart struct {
 	Tasks []string
 	Why   string
 	Notes string
+	Done  string
 }
 
 // activityReader is a registry that reads a conversation's background work and the owner's last line (Claude's;
@@ -44,10 +49,10 @@ type activityReader interface {
 	Activity(sessionID string) (registry.Activity, error)
 }
 
-// restarts reports whether the ticker restarts the role for its context: restart_at or restart_idle is on for it
-// and it is not the dispatcher (its recovery pack and context_max do that job).
+// restarts reports whether the ticker restarts the role for its context: restart_at, restart_idle or restart_done is
+// on for it and it is not the dispatcher (its recovery pack and context_max do that job).
 func (s *Shift) restarts(r *crew.Role) bool {
-	return (r.RestartContext() > 0 || r.RestartAfter() > 0) && r.Name != s.Crew.Dispatcher
+	return (r.RestartContext() > 0 || r.RestartAfter() > 0 || r.RestartDoneAt() > 0) && r.Name != s.Crew.Dispatcher
 }
 
 // restart restarts fresh a role that holds a task and whose conversation grew past restart_at, or that has sat idle
@@ -77,7 +82,11 @@ func (s *Shift) restart(name string, r *crew.Role, now time.Time, tasks []string
 		return s.restartAsked(name, now, tasks, sess)
 	}
 
-	if len(tasks) == 0 || rs.RestartGaveUp == sess.SessionID || now.Sub(rs.RestartOff) < trimPause {
+	if len(tasks) == 0 {
+		return s.restartDone(name, r, now, sess)
+	}
+
+	if rs.RestartGaveUp == sess.SessionID || now.Sub(rs.RestartOff) < trimPause {
 		return ""
 	}
 
@@ -112,7 +121,7 @@ func (s *Shift) restart(name string, r *crew.Role, now time.Time, tasks []string
 
 	mine := s.heldTasks(name)
 	if s.notesLanded(mine, act.Prompt) {
-		return s.beginRestart(name, mine, why)
+		return s.beginRestart(name, mine, why, "")
 	}
 
 	request, err := s.restartRequest(name, mine)
@@ -158,7 +167,7 @@ func (s *Shift) restartAsked(name string, now time.Time, tasks []string, sess *r
 	if s.notesLanded(mine, rs.RestartAsked) {
 		act, ok := s.plainIdle(name, now, sess)
 		if ok {
-			return s.beginRestart(name, mine, rs.RestartWhy)
+			return s.beginRestart(name, mine, rs.RestartWhy, "")
 		}
 
 		if line := s.restartHeld(name, act.Background, tasks); line != "" {
@@ -176,6 +185,103 @@ func (s *Shift) restartAsked(name string, now time.Time, tasks []string, sess *r
 		"restarted in this conversation (context_max trims it)"})
 
 	return line
+}
+
+// restartDone restarts fresh a role that holds no task, whose own task was closed done during its current run and
+// whose conversation is at restart_done or past it, once it has sat restartDoneGrace since that close and since its
+// last turn, plainly idle. No note is asked for: the task's result is in the ledger. Only the ledger tells: a role
+// that closed no task of its own in this run (one the owner talks to directly) is never restarted by it, whatever
+// its conversation says. A task reopened or handed meanwhile makes it hold one again, and this no longer applies;
+// after the restart its start is later than the close, so it restarts once a task. It returns a line for the log.
+func (s *Shift) restartDone(name string, r *crew.Role, now time.Time, sess *registry.Session) string {
+	rs := s.State.Role(name)
+	if r.RestartDoneAt() == 0 || rs.Started.IsZero() || now.Sub(rs.RestartOff) < trimPause {
+		return ""
+	}
+
+	// The context first: the ledger is read only for a role that has grown past restart_done.
+	turn, err := s.registryFor(name).Last(sess.SessionID)
+	if err != nil || turn.Context < r.RestartDoneAt() {
+		return ""
+	}
+
+	done, closed, ok := s.lastDone(name, rs.Started, now)
+	if !ok {
+		return ""
+	}
+
+	since := closed
+	for _, at := range []time.Time{sess.StatusSince(), turn.At} {
+		if at.After(since) {
+			since = at
+		}
+	}
+
+	if now.Sub(since) < restartDoneGrace {
+		return ""
+	}
+
+	act, ok := s.plainIdle(name, now, sess)
+	if !ok {
+		return s.restartHeld(name, act.Background, []string{done})
+	}
+
+	// Any line the role got after the close (a peer's message, the owner's line or Chat, zmina's line, a background
+	// report: each begins a turn; one still queued or unseen fails plainIdle) means it went on with other work, a
+	// review loop paused mid-way perhaps: its conversation is that work's now, and context_max bounds it.
+	if act.Prompt.After(closed) || act.Owner.After(closed) || s.lastOwnerChat(name).After(closed) {
+		return ""
+	}
+
+	why := fmt.Sprintf("task done: %s, context %s over restart_done %s", done, Tokens(turn.Context),
+		Tokens(r.RestartDoneAt()))
+
+	return s.beginRestart(name, nil, why, done)
+}
+
+// lastDone is the role's task closed done most recently, and when, if it was closed after a time (the role's start).
+// The ledger is read once a beat (now), for every role at once.
+func (s *Shift) lastDone(name string, after, now time.Time) (string, time.Time, bool) {
+	if s.Tasks == nil {
+		return "", time.Time{}, false
+	}
+
+	if s.dones == nil || !s.doneAt.Equal(now) {
+		all, err := s.Tasks.All()
+		if err != nil {
+			return "", time.Time{}, false
+		}
+
+		s.dones, s.doneAt = map[string]task.Task{}, now
+
+		for _, t := range all {
+			if t.State != task.Done {
+				continue
+			}
+
+			if prev, ok := s.dones[t.Role]; !ok || closedAt(t).After(closedAt(prev)) {
+				s.dones[t.Role] = t
+			}
+		}
+	}
+
+	t, ok := s.dones[name]
+	if !ok {
+		return "", time.Time{}, false
+	}
+
+	at := closedAt(t)
+
+	return t.ID, at, at.After(after)
+}
+
+// closedAt is when a task was closed: its closure's time, else its last update (a zmina that kept no closure).
+func closedAt(t task.Task) time.Time {
+	if t.Closed != nil && !t.Closed.At.IsZero() {
+		return t.Closed.At
+	}
+
+	return t.Updated
 }
 
 // restartHeld says once, in the log, which background work holds a role's restart off: a launch whose end was never
@@ -322,10 +428,15 @@ func (s *Shift) restartRequest(name string, tasks []task.Task) (string, error) {
 }
 
 // beginRestart puts the role down to start it again fresh (FinishRestart, once it ended): in the worktree of its
-// first task that has one, else where it runs now.
-func (s *Shift) beginRestart(name string, tasks []task.Task, why string) string {
+// first task that has one, else where it runs now. A role restarted after its task is done (done names it) starts
+// in its own dir: the task's worktree may be removed once it is merged.
+func (s *Shift) beginRestart(name string, tasks []task.Task, why, done string) string {
 	rs := s.State.Role(name)
+
 	dir := rs.Dir
+	if done != "" {
+		dir = ""
+	}
 
 	ids := make([]string, 0, len(tasks))
 	notes := make([]string, 0, len(tasks))
@@ -344,15 +455,24 @@ func (s *Shift) beginRestart(name string, tasks []task.Task, why string) string 
 	rs.RestartAsked, rs.RestartSession, rs.RestartTasks, rs.RestartWhy = time.Time{}, "", nil, ""
 	rs.RestartHeld = ""
 
+	logTask := strings.Join(ids, ",")
+	if done != "" {
+		logTask = done
+	}
+
 	if _, err := s.BeginDown(name, DownOptions{}); err != nil {
 		rs.RestartOff = s.Now()
-		s.log(name, "restart-failed", strings.Join(ids, ","), err.Error())
+		s.log(name, "restart-failed", logTask, err.Error())
 
 		return name + ": restart: " + err.Error()
 	}
 
 	s.Restarts = append(s.Restarts, Restart{Name: name, Claim: rs.Downing, Opts: UpOptions{Fresh: true, Dir: dir},
-		Tasks: ids, Why: why, Notes: strings.Join(notes, ", ")})
+		Tasks: ids, Why: why, Notes: strings.Join(notes, ", "), Done: done})
+
+	if done != "" {
+		return fmt.Sprintf("%s: %s; restarting fresh", name, why)
+	}
 
 	return fmt.Sprintf("%s: %s; restarting fresh with its note (%s)", name, why, strings.Join(notes, ", "))
 }
@@ -363,7 +483,7 @@ func (s *Shift) beginRestart(name string, tasks []task.Task, why string) string 
 func (s *Shift) FinishRestart(job Restart) string {
 	rs := s.State.Role(job.Name)
 	if !rs.Downing.Equal(job.Claim) {
-		s.log(job.Name, "restart-failed", strings.Join(job.Tasks, ","), "another command took it over meanwhile")
+		s.log(job.Name, "restart-failed", job.logTask(), "another command took it over meanwhile")
 
 		return job.Name + ": restart: another command took it over meanwhile"
 	}
@@ -378,6 +498,11 @@ func (s *Shift) FinishRestart(job Restart) string {
 
 	line := fmt.Sprintf("[zmina] restarted fresh: %s. Your note: %s, in each task's packet that follows.", job.Why,
 		job.Notes)
+	if job.Done != "" {
+		line = fmt.Sprintf("[zmina] restarted fresh: %s. You hold no task; what it ended with: zmina task show %s.",
+			job.Why, job.Done)
+	}
+
 	if err := s.Queue(job.Name, line); err != nil {
 		return s.restartFailed(job, err)
 	}
@@ -393,13 +518,35 @@ func (s *Shift) FinishRestart(job Restart) string {
 		}
 	}
 
+	if job.Done != "" {
+		s.log(job.Name, "restarted", job.Done, job.Why)
+
+		return fmt.Sprintf("%s: restarted fresh (%s)", job.Name, job.Why)
+	}
+
 	s.log(job.Name, "restarted", strings.Join(job.Tasks, ","), job.Why+"; note "+job.Notes)
 
 	return fmt.Sprintf("%s: restarted fresh (%s); note %s", job.Name, job.Why, job.Notes)
 }
 
+// logTask is the task the log names for the restart: the tasks it holds, else the one whose end it follows.
+func (job Restart) logTask() string {
+	if job.Done != "" {
+		return job.Done
+	}
+
+	return strings.Join(job.Tasks, ",")
+}
+
 func (s *Shift) restartFailed(job Restart, err error) string {
-	s.log(job.Name, "restart-failed", strings.Join(job.Tasks, ","), err.Error())
+	s.log(job.Name, "restart-failed", job.logTask(), err.Error())
+
+	if job.Done != "" {
+		s.addNotes([]string{fmt.Sprintf("%s: restart after %s was done failed: %v — zmina --crew %s up %s --fresh",
+			job.Name, job.Done, err, shellWord(s.Crew.Path), shellWord(job.Name))})
+
+		return job.Name + ": restart: " + err.Error()
+	}
 
 	tasks := strings.Join(job.Tasks, ", ")
 	first, _, _ := strings.Cut(tasks, ",")

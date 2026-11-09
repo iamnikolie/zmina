@@ -23,6 +23,7 @@ func TestUsageShowsRestarts(t *testing.T) {
 		{TS: now.Add(-time.Hour), Role: "dev", Event: "restarted", Task: "T-1", Detail: "context 262k over restart_at 250k; note T-1 7b2b6944f4c7"},
 		{TS: now.Add(-50 * time.Minute), Role: "dev#2", Event: "restarted", Task: "T-2", Detail: "idle 51m at 140k, near restart_idle 1h; note T-2 aa"},
 		{TS: now.Add(-40 * time.Minute), Role: "backend", Event: "restarted", Task: "T-3", Detail: "context 300k over restart_at 250k; note T-3 bb"},
+		{TS: now.Add(-35 * time.Minute), Role: "backend", Event: "restarted", Task: "T-4", Detail: "task done: T-4, context 180k over restart_done 150k"},
 		{TS: now.Add(-30 * time.Minute), Role: "backend", Event: "restart-asked", Task: "T-3", Detail: "context 300k over restart_at 250k"},
 		{TS: now.Add(-48 * time.Hour), Role: "backend", Event: "restarted", Task: "T-0", Detail: "context 300k over restart_at 250k; note T-0 cc"},
 	} {
@@ -31,18 +32,18 @@ func TestUsageShowsRestarts(t *testing.T) {
 
 	out, _, err := zm(t, crewFile, "usage")
 	require.NoError(t, err)
-	assert.Contains(t, out, "Restarted fresh with their note 3 times: dev 2 (context 1, idle 1), backend 1 (context 1, idle 0).",
+	assert.Contains(t, out, "Restarted fresh 4 times: backend 2 (context 1, idle 0, task done 1), dev 2 (context 1, idle 1).",
 		"a copy's with its role's; only the window's")
 
 	out, _, err = zm(t, crewFile, "usage", "--role", "backend")
 	require.NoError(t, err)
-	assert.Contains(t, out, "Restarted fresh with their note once: backend 1")
+	assert.Contains(t, out, "Restarted fresh twice: backend 2")
 
 	out, _, err = zm(t, crewFile, "usage", "--json")
 	require.NoError(t, err)
 	var report usageReport
 	require.NoError(t, json.Unmarshal([]byte(out), &report))
-	require.Len(t, report.Restarts, 3)
+	require.Len(t, report.Restarts, 4)
 	assert.Equal(t, "context 262k over restart_at 250k", report.Restarts[0].Why)
 	assert.Equal(t, "T-1", report.Restarts[0].Task)
 
@@ -50,5 +51,5 @@ func TestUsageShowsRestarts(t *testing.T) {
 	require.NoError(t, err)
 	var pc peerCells
 	require.NoError(t, json.Unmarshal([]byte(out), &pc))
-	assert.Len(t, pc.Restarts, 3, "a peer answers --all with its restarts too")
+	assert.Len(t, pc.Restarts, 4, "a peer answers --all with its restarts too")
 }

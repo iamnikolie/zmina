@@ -110,9 +110,11 @@ type Role struct {
 	ContextAction string `yaml:"context_action"`
 	// ReleaseIdleMinutes overrides the crew's release_idle_minutes for this role: minutes, or off.
 	ReleaseIdleMinutes string `yaml:"release_idle_minutes"`
-	// RestartAt and RestartIdle override the crew's restart_at and restart_idle for this role.
+	// RestartAt, RestartIdle and RestartDone override the crew's restart_at, restart_idle and restart_done for
+	// this role.
 	RestartAt   string `yaml:"restart_at"`
 	RestartIdle string `yaml:"restart_idle"`
+	RestartDone string `yaml:"restart_done"`
 	// Budget is what the role (its copies with it) may spend a day, in API-equivalent dollars, before the ticker
 	// tells the dispatcher; 0: no budget.
 	Budget float64 `yaml:"budget"`
@@ -123,6 +125,7 @@ type Role struct {
 	releaseIdle time.Duration
 	restartAt   int
 	restartIdle time.Duration
+	restartDone int
 	dirErr      error
 }
 
@@ -156,7 +159,7 @@ func (r *Role) ReleaseAfter() time.Duration { return r.releaseIdle }
 // with such a role, so one stale seat never stops the ticker; the role itself does not start.
 func (r *Role) DirErr() error { return r.dirErr }
 
-// RestartOff is the restart_at and restart_idle value that turns the restart off.
+// RestartOff is the restart_at, restart_idle and restart_done value that turns the restart off.
 const RestartOff = "off"
 
 // The defaults of restart_at and restart_idle, and the least restart_idle: the note is asked for restartNoteAhead
@@ -165,6 +168,8 @@ const (
 	DefaultRestartAt   = 250_000
 	DefaultRestartIdle = time.Hour
 	restartIdleFloor   = 20 * time.Minute
+	// DefaultRestartDone is restart_done's default: a role whose task is done is restarted fresh past it.
+	DefaultRestartDone = 150_000
 )
 
 // RestartContext is the context, in tokens, past which a role holding a task is restarted fresh with its note once it
@@ -174,6 +179,10 @@ func (r *Role) RestartContext() int { return r.restartAt }
 // RestartAfter is how long a role holding a task and a conversation over 100k may sit idle before it is restarted
 // fresh rather than woken on a cold cache (restart_idle); 0: never.
 func (r *Role) RestartAfter() time.Duration { return r.restartIdle }
+
+// RestartDoneAt is the context, in tokens, past which a role whose last task is done, and that holds none, is restarted
+// fresh once it has sat idle a while (restart_done); 0: never.
+func (r *Role) RestartDoneAt() int { return r.restartDone }
 
 // ResumeAlways is the Resume value that resumes the role's last conversation on every start.
 const ResumeAlways = "always"
@@ -261,10 +270,11 @@ type Crew struct {
 	// ContextMax and ContextAction are every role's context_max and context_action unless it sets its own.
 	ContextMax    string `yaml:"context_max"`
 	ContextAction string `yaml:"context_action"`
-	// RestartAt (tokens, default 250k) and RestartIdle (a duration, default 1h) are every role's restart_at and
-	// restart_idle unless it sets its own; off turns either off.
+	// RestartAt (tokens, default 250k), RestartIdle (a duration, default 1h) and RestartDone (tokens, default
+	// 150k) are every role's restart_at, restart_idle and restart_done unless it sets its own; off turns each off.
 	RestartAt   string `yaml:"restart_at"`
 	RestartIdle string `yaml:"restart_idle"`
+	RestartDone string `yaml:"restart_done"`
 	// DropTools are Claude Code tools (Artifact, mcp__server) every role starts without (claude --disallowedTools):
 	// each tool's description fills the context of every turn.
 	DropTools []string `yaml:"drop_tools"`
@@ -602,9 +612,9 @@ func (c *Crew) complete() {
 		if name == c.Dispatcher {
 			r.Keep = KeepAlways
 
-			if r.RestartAt != "" || r.RestartIdle != "" {
+			if r.RestartAt != "" || r.RestartIdle != "" || r.RestartDone != "" {
 				c.Warnings = append(c.Warnings, fmt.Sprintf("role %s is the dispatcher: it is never restarted for "+
-					"its context (restart_at, restart_idle); context_max compacts it", name))
+					"its context (restart_at, restart_idle, restart_done); context_max compacts it", name))
 			}
 		}
 
@@ -640,7 +650,10 @@ func parseRelease(v string) (time.Duration, error) {
 
 // parseRestartAt reads restart_at: empty is the default given, off is never, else a token count as context_max
 // takes it.
-func parseRestartAt(v string, def int) (int, error) {
+func parseRestartAt(v string, def int) (int, error) { return parseRestartTokens("restart_at", v, def) }
+
+// parseRestartTokens reads a token threshold of the restart (restart_at, restart_done) named key.
+func parseRestartTokens(key, v string, def int) (int, error) {
 	switch strings.TrimSpace(v) {
 	case "":
 		return def, nil
@@ -650,7 +663,7 @@ func parseRestartAt(v string, def int) (int, error) {
 
 	n, err := ParseTokens(v)
 	if err != nil {
-		return 0, fmt.Errorf("restart_at %q: %w, or %s", v, err, RestartOff)
+		return 0, fmt.Errorf("%s %q: %w, or %s", key, v, err, RestartOff)
 	}
 
 	return n, nil
@@ -874,6 +887,11 @@ func (c *Crew) resolve(strict bool) error {
 		return err
 	}
 
+	crewRestartDone, err := parseRestartTokens("restart_done", c.RestartDone, DefaultRestartDone)
+	if err != nil {
+		return err
+	}
+
 	for _, name := range c.Names() {
 		r := c.Roles[name]
 
@@ -916,6 +934,10 @@ func (c *Crew) resolve(strict bool) error {
 		}
 
 		if r.restartIdle, err = parseRestartIdle(r.RestartIdle, crewRestartIdle); err != nil {
+			return fmt.Errorf("role %s: %w", name, err)
+		}
+
+		if r.restartDone, err = parseRestartTokens("restart_done", r.RestartDone, crewRestartDone); err != nil {
 			return fmt.Errorf("role %s: %w", name, err)
 		}
 
