@@ -46,6 +46,11 @@ var patterns = []pattern{
 		accept: func(match string) bool { return !strings.HasPrefix(match, "sk-ant-") },
 	},
 	{name: "slack token", re: regexp.MustCompile(`xox[abprs]-[A-Za-z0-9-]{10,}`)},
+	{name: "stripe key", re: regexp.MustCompile(`\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}`)},
+	{name: "telegram bot token", re: regexp.MustCompile(`\b\d{8,10}:[A-Za-z0-9_-]{35}\b`)},
+	// A git hash is 40 hex characters at most (a short one far fewer); a longer run is a key, an HMAC or a sha256 of
+	// something, none of which a rule needs.
+	{name: "long hex", re: regexp.MustCompile(`\b[0-9a-fA-F]{48,}\b`)},
 	{name: "google key", re: regexp.MustCompile(`AIza[0-9A-Za-z_-]{35}`)},
 	{name: "private key", re: regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`)},
 	{name: "jwt", re: regexp.MustCompile(`eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}`)},

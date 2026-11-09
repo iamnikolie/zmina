@@ -3,6 +3,8 @@ package lesson
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -178,6 +180,13 @@ func TestApplyChecks(t *testing.T) {
 
 	require.NoError(t, os.Symlink(filepath.Join(checkout, "CLAUDE.md"), filepath.Join(checkout, "agents", "dev", "AGENTS.md")))
 
+	// A directory on the way that is a link out of the worktree: the write would land outside it.
+	outside := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(outside, "deploy"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "deploy", "SKILL.md"), []byte("# deploy\n"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(checkout, ".claude"), 0o755))
+	require.NoError(t, os.Symlink(outside, filepath.Join(checkout, ".claude", "skills")))
+
 	key := "AKIA" + strings.Repeat("Q", 16)
 	for name, c := range map[string]struct {
 		it   Item
@@ -187,20 +196,37 @@ func TestApplyChecks(t *testing.T) {
 		"up and out":            {Item{File: "../os/CLAUDE.md", New: "x"}, "not an instruction file"},
 		"absolute":              {Item{File: filepath.Join(checkout, "CLAUDE.md"), New: "x"}, "not an instruction file"},
 		"a link":                {Item{File: "agents/dev/AGENTS.md", New: "x"}, "not a file"},
+		"a linked directory":    {Item{File: ".claude/skills/deploy/SKILL.md", New: "x"}, "not a file"},
 		"missing":               {Item{File: "agents/ops/AGENT.md", New: "x"}, "not a file"},
 		"old not found":         {Item{File: "CLAUDE.md", Old: "- Nope.", New: "x"}, "found 0 times"},
 		"empty":                 {Item{File: "CLAUDE.md", New: " "}, "empty"},
 		"too long":              {Item{File: "CLAUDE.md", New: strings.Repeat("line\n", 41)}, "more than 40"},
 		"a secret":              {Item{File: "CLAUDE.md", New: "- key " + key}, "carries aws key"},
 	} {
-		_, why := apply(checkout, c.it, l, allowed, nil)
+		_, _, why := apply(checkout, c.it, l, allowed, nil)
 		assert.Contains(t, why, c.want, name)
 	}
 
+	got, err := os.ReadFile(filepath.Join(outside, "deploy", "SKILL.md"))
+	require.NoError(t, err)
+	assert.Equal(t, "# deploy\n", string(got), "nothing written outside the worktree")
+
 	assert.Equal(t, "", gitT(t, checkout, "status", "--porcelain", "--untracked-files=no"), "nothing changed")
 
-	_, why := apply(checkout, Item{File: "CLAUDE.md", New: "- About acme: x"}, l, allowed, []string{"acme"})
+	_, _, why := apply(checkout, Item{File: "CLAUDE.md", New: "- About acme: x"}, l, allowed, []string{"acme"})
 	assert.Contains(t, why, "crew word")
+
+	// The rule and why go out in the commit message: scanned against today's deny list too.
+	_, _, why = apply(checkout, Item{File: "CLAUDE.md", New: "- Ask first."}, Lesson{ID: "LS-2", Rule: "Ask acme first", Why: "w"},
+		allowed, []string{"acme"})
+	assert.Contains(t, why, "commit message carries crew word")
+
+	// A path the seat wrote as ./CLAUDE.md is stored clean, as the commit has it.
+	sha, file, why := apply(checkout, Item{File: "./CLAUDE.md", New: "- Ask first."}, Lesson{ID: "LS-3", Rule: "Ask first", Why: "w"},
+		allowed, nil)
+	require.Empty(t, why)
+	assert.Equal(t, "CLAUDE.md", file)
+	assert.True(t, lessonCommits(checkout, []Applied{{ID: "LS-3", File: file, Commit: sha}}))
 }
 
 func TestFinishedAndCatchup(t *testing.T) {
@@ -209,6 +235,7 @@ func TestFinishedAndCatchup(t *testing.T) {
 	// The owner's push of his local work first, so the checkout is clean and not ahead.
 	gitT(t, checkout, "push", "-q", "origin", "main")
 
+	base := gitT(t, checkout, "rev-parse", "origin/main")
 	gitT(t, checkout, "checkout", "-q", "-b", "lessons/m", "origin/main")
 	require.NoError(t, os.WriteFile(filepath.Join(checkout, "CLAUDE.md"), []byte("# Rules\n\n- New.\n"), 0o644))
 	gitT(t, checkout, "commit", "-q", "-am", "a lesson")
@@ -216,7 +243,7 @@ func TestFinishedAndCatchup(t *testing.T) {
 	gitT(t, checkout, "push", "-q", "origin", "lessons/m")
 	gitT(t, checkout, "checkout", "-q", "main")
 
-	done, _, err := Finished(checkout, "origin", "lessons/m", "main", tip)
+	done, _, err := Finished(checkout, "origin", "lessons/m", "main", base, tip, []string{"LS-1"})
 	require.NoError(t, err)
 	assert.False(t, done, "open: the branch is there, not merged")
 
@@ -226,7 +253,7 @@ func TestFinishedAndCatchup(t *testing.T) {
 	gitT(t, other, "merge", "-q", "--no-ff", "-m", "Merge lessons", "origin/lessons/m")
 	gitT(t, other, "push", "-q", "origin", "main", ":lessons/m")
 
-	done, merged, err := Finished(checkout, "origin", "lessons/m", "main", tip)
+	done, merged, err := Finished(checkout, "origin", "lessons/m", "main", base, tip, []string{"LS-1"})
 	require.NoError(t, err)
 	assert.True(t, done)
 	assert.True(t, merged)
@@ -246,7 +273,7 @@ func TestFinishedAndCatchup(t *testing.T) {
 	// A branch closed without a merge and deleted: done, not merged.
 	gitT(t, checkout, "push", "-q", "origin", "main:lessons/c")
 	gitT(t, checkout, "push", "-q", "origin", ":lessons/c")
-	done, merged, err = Finished(checkout, "origin", "lessons/c", "main", "")
+	done, merged, err = Finished(checkout, "origin", "lessons/c", "main", "", "", nil)
 	require.NoError(t, err)
 	assert.True(t, done)
 	assert.False(t, merged)
@@ -265,4 +292,62 @@ func TestFindRepoAndDefaultBranch(t *testing.T) {
 
 	_, err = FindRepo(t.TempDir())
 	assert.Error(t, err)
+}
+
+// A squash or rebase merge leaves the tip out of the target: the lessons count as merged when the target names
+// them or carries their lines, not as closed.
+func TestFinishedSquashMerge(t *testing.T) {
+	origin, checkout := repoFixture(t)
+	gitT(t, checkout, "push", "-q", "origin", "main")
+
+	base := gitT(t, checkout, "rev-parse", "origin/main")
+	gitT(t, checkout, "checkout", "-q", "-b", "lessons/s", "origin/main")
+	require.NoError(t, os.WriteFile(filepath.Join(checkout, "CLAUDE.md"), []byte("# Rules\n\n- Squashed.\n"), 0o644))
+	gitT(t, checkout, "commit", "-q", "-am", "Squashed\n\nLesson: LS-7")
+	tip := gitT(t, checkout, "rev-parse", "HEAD")
+	gitT(t, checkout, "push", "-q", "origin", "lessons/s")
+	gitT(t, checkout, "checkout", "-q", "main")
+
+	other := filepath.Join(t.TempDir(), "other")
+	gitT(t, filepath.Dir(other), "clone", "-q", origin, other)
+	gitT(t, other, "merge", "-q", "--squash", "origin/lessons/s")
+	gitT(t, other, "commit", "-q", "-m", "Lessons 2026-11-09 (squashed by the forge)")
+	gitT(t, other, "push", "-q", "origin", "main", ":lessons/s")
+
+	done, merged, err := Finished(checkout, "origin", "lessons/s", "main", base, tip, []string{"LS-7"})
+	require.NoError(t, err)
+	assert.True(t, done)
+	assert.True(t, merged, "its lines are in the target")
+}
+
+// The seat runs restricted: no settings file of the user's, only Read, Grep and Glob, nothing asked.
+func TestSeatArgs(t *testing.T) {
+	args := strings.Join(SeatArgs("opus", "{}", 4.8), " ")
+	assert.Contains(t, args, "--restricted --tools Read,Grep,Glob --permission-mode dontAsk --strict-mcp-config --no-session-persistence")
+	assert.Contains(t, args, "--max-budget-usd 4.80")
+	assert.NotContains(t, args, "--allowedTools")
+	assert.NotContains(t, args, "bypass")
+}
+
+// A seat that ran and failed, or answered no JSON, costs its whole budget for the week's cap; one never started
+// costs nothing.
+func TestAskCountsTheBudgetWhenTheCostIsUnknown(t *testing.T) {
+	var out Plan
+
+	failed := func(context.Context, string, string, string, float64) ([]byte, error) {
+		return nil, errors.New("killed")
+	}
+	cost, err := ask(context.Background(), failed, "", "", "", 3, &out)
+	require.Error(t, err)
+	assert.InDelta(t, 3.0, cost, 0.001)
+
+	garbled := func(context.Context, string, string, string, float64) ([]byte, error) { return []byte("oops"), nil }
+	cost, _ = ask(context.Background(), garbled, "", "", "", 2, &out)
+	assert.InDelta(t, 2.0, cost, 0.001)
+
+	missing := func(context.Context, string, string, string, float64) ([]byte, error) {
+		return nil, fmt.Errorf("claude: %w", exec.ErrNotFound)
+	}
+	cost, _ = ask(context.Background(), missing, "", "", "", 2, &out)
+	assert.Zero(t, cost)
 }

@@ -152,7 +152,10 @@ func readAllStdin() ([]byte, error) {
 // addLessons scans and stores lessons. One that carries a secret or a customer's data is refused whole — the scan
 // names the rule and the line, never the text — and nothing of it is kept. The rest are stored.
 func addLessons(s *shift.Shift, items []lesson.Lesson, role, taskID string) ([]lesson.Lesson, error) {
-	deny := lessonDeny(s.Crew)
+	deny, err := lessonDeny(s.Crew)
+	if err != nil {
+		return nil, err
+	}
 
 	var (
 		added   []lesson.Lesson
@@ -186,15 +189,16 @@ func addLessons(s *shift.Shift, items []lesson.Lesson, role, taskID string) ([]l
 	return added, nil
 }
 
-// lessonDeny is the crew's own words no lesson may carry (lessons.deny).
-func lessonDeny(c *crew.Crew) []string {
+// lessonDeny is the crew's own words no lesson may carry (lessons.deny). A deny file named but unreadable is an
+// error: lessons are refused rather than let through unchecked.
+func lessonDeny(c *crew.Crew) ([]string, error) {
 	if c.Lessons.Deny == "" {
-		return nil
+		return nil, nil
 	}
 
 	raw, err := os.ReadFile(c.Lessons.Deny)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("lessons.deny %s cannot be read (%w): no lesson is taken or offered unchecked", c.Lessons.Deny, err)
 	}
 
 	var out []string
@@ -205,7 +209,7 @@ func lessonDeny(c *crew.Crew) []string {
 		}
 	}
 
-	return out
+	return out, nil
 }
 
 // lessonsFromCheckpoint stores the lessons a checkpoint or result carries in a section named lessons, in the
@@ -513,6 +517,13 @@ func lessonStart(s *shift.Shift, dry, scheduled bool) (lessonRun, error) {
 			c.Lessons.RunWeekBudget()))
 	}
 
+	deny, err := lessonDeny(c)
+	if err != nil {
+		s.Log("ticker", "triage-failed", "", err.Error())
+
+		return lessonRun{}, err
+	}
+
 	st.Running = s.Now()
 	if err := lesson.SaveState(dir, st); err != nil {
 		return lessonRun{}, err
@@ -522,7 +533,7 @@ func lessonStart(s *shift.Shift, dry, scheduled bool) (lessonRun, error) {
 
 	return lessonRun{
 		cfg: lesson.Config{Repo: repo, Branch: branch, Agents: c.Agents, Roles: c.Names(), Work: filepath.Join(dir, "work"),
-			Deny: lessonDeny(c), Budget: budget, Now: s.Now()},
+			Deny: deny, Budget: budget, Now: s.Now()},
 		lessons: fresh, model: c.Lessons.RunModel(), budget: budget, dir: dir, crew: c,
 	}, nil
 }
@@ -827,15 +838,16 @@ func (a *app) lessonsFollow(c *crew.Crew, st lesson.RunState, waiting int, now t
 
 	done, merged := ownerDone, false
 
-	if !ownerDone && now.Sub(st.Checked) >= lessonsCheckEvery {
+	// The owner's tick on the todo ends it, but whether it was merged is the forge's to say: checked then too.
+	if ownerDone || now.Sub(st.Checked) >= lessonsCheckEvery {
 		repo := c.Lessons.Repo
 		if repo == "" {
 			repo, _ = lesson.FindRepo(c.Agents)
 		}
 
 		if repo != "" {
-			if d, m, err := lesson.Finished(repo, "origin", open.Branch, open.Target, open.Tip); err == nil {
-				done, merged = d, m
+			if d, m, err := lesson.Finished(repo, "origin", open.Branch, open.Target, open.Base, open.Tip, open.IDs); err == nil {
+				done, merged = d || ownerDone, m
 			}
 		}
 
@@ -993,6 +1005,10 @@ func lessonsDoctor(c *crew.Crew) [][2]string {
 
 	if _, err := exec.LookPath("claude"); err != nil {
 		out = append(out, [2]string{"fail", "claude is not on PATH: the sorting seat cannot run"})
+	}
+
+	if _, err := lessonDeny(c); err != nil {
+		out = append(out, [2]string{"fail", err.Error()})
 	}
 
 	if ahead, err := lesson.Git(repo, "rev-list", "--count", "origin/"+branch+"..HEAD"); err == nil && ahead != "0" {

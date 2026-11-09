@@ -63,6 +63,10 @@ func TestScanTokens(t *testing.T) {
 		{"jwt", "ey" + "J" + strings.Repeat("a", 12) + "." + "ey" + "J" + strings.Repeat("b", 12) + "." + strings.Repeat("c", 12)},
 		{"url credentials", "postgres://alex:" + "pw" + strings.Repeat("9", 4) + "@db.acme.test:5432/app"},
 		{"url credentials", "https://alex:" + "pw@acme.test"},
+		{"stripe key", "sk" + "_live_" + strings.Repeat("a1", 12)},
+		{"stripe key", "rk" + "_test_" + strings.Repeat("b2", 12)},
+		{"telegram bot token", "123456789:" + "AA" + strings.Repeat("x1", 16) + "z"},
+		{"long hex", strings.Repeat("ab12", 16)},
 	} {
 		for _, text := range []string{
 			tc.secret,
@@ -143,20 +147,16 @@ func TestScanHighEntropy(t *testing.T) {
 
 func TestScanHighEntropyNeedsAllOfItsParts(t *testing.T) {
 	for name, text := range map[string]string{
-		"31 characters":         randomRun(31),
-		"no capital":            strings.ToLower(randomRun(40)),
-		"no small letter":       strings.ToUpper(randomRun(40)),
-		"no digit":              strings.Map(noDigit, randomRun(40)),
-		"repeats, low entropy":  strings.Repeat("aB3", 12),
-		"git sha-1":             strings.Repeat("0123456789abcdef", 3)[:40],
-		"sha256":                strings.Repeat("0123456789abcdef", 4),
-		"sha256 in capitals":    strings.Repeat("0123456789ABCDEF", 4),
-		"hex in both cases":     strings.Repeat("0123456789abcdefABCDEF", 3),
-		"a sha in a sentence":   "fixed in commit " + strings.Repeat("9f8e7d6c5b4a3210", 2) + " on main",
-		"a sha with its prefix": "sha256:" + strings.Repeat("0123456789abcdef", 4),
-		"lowercase slug":        "feature-add-new-user-authentication-flow-for-the-admin-panel",
-		"uuid":                  "123e4567-e89b-12d3-a456-426614174000",
-		"dots split a run":      randomRun(20) + "." + randomRun(20),
+		"31 characters":        randomRun(31),
+		"no capital":           strings.ToLower(randomRun(40)),
+		"no small letter":      strings.ToUpper(randomRun(40)),
+		"no digit":             strings.Map(noDigit, randomRun(40)),
+		"repeats, low entropy": strings.Repeat("aB3", 12),
+		"git sha-1":            strings.Repeat("0123456789abcdef", 3)[:40],
+		"a sha in a sentence":  "fixed in commit " + strings.Repeat("9f8e7d6c5b4a3210", 2) + " on main",
+		"lowercase slug":       "feature-add-new-user-authentication-flow-for-the-admin-panel",
+		"uuid":                 "123e4567-e89b-12d3-a456-426614174000",
+		"dots split a run":     randomRun(20) + "." + randomRun(20),
 	} {
 		assert.Empty(t, Scan(text, nil), name)
 	}
@@ -370,5 +370,16 @@ func TestScanWordyNamesAreNoSecret(t *testing.T) {
 	key := "Q7v" + "Zp2Lk9" + "Xw4Rb8Nc1" + "Tm6Hs3Jd5Fg0Ye7a"
 	if f := Scan("key "+key, nil); len(f) != 1 {
 		t.Errorf("random key not found: %v", f)
+	}
+}
+
+// A git hash, full or short, is no secret; a longer hex run (a sha256, an HMAC key) is taken for one: a rule needs
+// neither.
+func TestScanGitHashIsNoSecretLongerHexIs(t *testing.T) {
+	assert.Empty(t, Scan("fixed in "+strings.Repeat("ab12", 10)+" and 8c14e7d", nil))
+
+	for _, text := range []string{strings.Repeat("0123456789ABCDEF", 4), "sha256:" + strings.Repeat("0123456789abcdef", 4),
+		strings.Repeat("0123456789abcdefABCDEF", 3)} {
+		assert.Equal(t, []string{"long hex"}, ruleNames(Scan(text, nil)), text)
 	}
 }

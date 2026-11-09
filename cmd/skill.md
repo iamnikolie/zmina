@@ -1083,7 +1083,7 @@ costs money and pushes a branch.
 
 | Command | Does |
 |---|---|
-| `zmina lesson add "<rule>" --why "<why>" --applies every\|role\|task\|unsure [--in-file p] [--task T-n]` | file a lesson (role from `$ZMINA_ROLE`, `--from` to name another); prints `LS-<n>`. `--file <md>` (or `-`) takes several in the format `### rule` / `Why:` / `Applies to: every seat \| this role \| one task \| not sure` / `In a file already: <path> \| no`. A lesson that carries a secret or a customer's data is refused whole, naming the rule and line, never the text: provider tokens, private keys, JWTs, URLs with a password, long random strings (not hashes, not names made of words), IPv4 outside the documentation ranges, mail other than example.* and no-reply, and the crew's own words (`lessons.deny`). |
+| `zmina lesson add "<rule>" --why "<why>" --applies every\|role\|task\|unsure [--in-file p] [--task T-n]` | file a lesson (role from `$ZMINA_ROLE`, `--from` to name another); prints `LS-<n>`. `--file <md>` (or `-`) takes several in the format `### rule` / `Why:` / `Applies to: every seat \| this role \| one task \| not sure` / `In a file already: <path> \| no`. A lesson that carries a secret or a customer's data is refused whole, naming the rule and line, never the text: provider tokens, private keys, JWTs, URLs with a password, Stripe keys, Telegram bot tokens, long random strings (not a git hash, not names made of words), hex runs of 48 or more, IPv4 outside the documentation ranges, mail other than example.* and no-reply, and the crew's own words (`lessons.deny`). |
 | a checkpoint or result with a `lessons` section | the section (same markdown) is filed as lessons and leaves the record; a refused one is said on stderr, the record is saved. Add `lessons` to the crew's handoff shape to ask for it. |
 | `zmina lesson ls [--all]` / `show <id>` / `drop <id...> [--reason]` | the waiting lessons (all: also in an MR, merged, dropped) and the line ls shows; one whole; drop waiting ones. |
 | `zmina lesson triage [--dry-run]` | run now (the ticker runs it daily); `--dry-run` runs both passes and prints the plan, pushes nothing, works with lessons off. |
@@ -1091,20 +1091,24 @@ costs money and pushes a branch.
 The crew file: `lessons: on`, or a block — `repo` (default: the git toplevel of the crew's `agents:` dir, i.e. its own
 agentic-os), `branch` (default: origin's default branch), `at` (HH:MM, default 06:00, the crew's clock), `model`
 (default opus), `budget` (dollars a run, default 8), `week_budget` (dollars a week from Monday, default 50), `deny` (a
-file of the crew's own words), `enabled: false` (keep the block, off). Its roles hear a boot line: lessons go to
+file of the crew's own words; named but unreadable, every lesson is refused and no run starts), `enabled: false` (keep the block, off). Its roles hear a boot line: lessons go to
 `zmina lesson add` or the checkpoint's lessons section.
 
 The run (once a day after `at`, only when lessons wait, no lessons MR is open and the week's budget has room; the
 ticker starts it as a process of its own, output in `<state>/lessons/run.log`): fetch origin, cut `lessons/<date>`
 from `origin/<branch>` in a worktree of zmina's own (the checkout's unpushed commits are not in it), then two
-read-only passes of `claude -p` (Read, Grep, Glob only; no MCP; `--max-budget-usd`; answers held to a JSON schema):
+read-only passes of `claude -p` (`--restricted --tools Read,Grep,Glob --permission-mode dontAsk`: no settings file of
+the user's — no hooks, no bypass mode —, file tools confined to the worktree, no other tool, no MCP; `--max-budget-usd`,
+a pass that fails without a cost counted at its whole budget; answers held to a JSON schema):
 the sorting seat (60% of the run's budget) gives every lesson a verdict — every seat -> CLAUDE.md/AGENTS.md, one role
 -> its AGENT.md, skill -> its SKILL.md, written already, stale, drop (models, budgets, permissions, hooks, credentials
 are the owner's), conflict -> a question, never an edit — and the smallest edit; the checker (40%) reads each
 proposed edit again on its own and holds back a duplicate, a conflict, a wrong file or an unclear text as a question.
 zmina applies what passed: only CLAUDE.md, AGENTS.md, `<agents>/<role>/AGENT*.md` and `skills/*/SKILL.md`, existing
-regular files, the old text found exactly once, at most 40 lines, scanned again; one commit per lesson (the rule,
-`Why:`, `From:`, `Lesson: LS-n`). It pushes that one branch and nothing else (refused unless its commits over origin
+regular files with no symlink on their path, the old text found exactly once, at most 40 lines, the edit and the
+commit message scanned again; one commit per lesson (the rule,
+`Why:`, `From:`, `Lesson: LS-n`). It pushes that one branch and nothing else, through the repository's own
+pre-push hooks (a refusal fails the run; the lessons stay new) (refused unless its commits over origin
 are exactly the run's, each naming its lesson and changing only its file) with GitLab push options that open a draft
 MR into the branch and remove the source branch on merge; its title starts with `Draft: `, which GitLab takes as a draft
 on every version, option or not. Then it reads the MR back with `glab`, or `gl` with a profile for the forge's host
@@ -1115,8 +1119,9 @@ spent week skips the run (`triage-skipped`). Each run's cost is logged (`lessons
 
 The owner gets one todo per MR: its url, each lesson and its file, what was dropped and why, the questions, and how
 many new lessons wait for it (new ones wait while it is open; `zmina ls` shows `lessons: 4 waiting · MR open <url>`).
-Hourly the ticker looks at the MR: merged (its tip on origin's branch) or its branch gone, or the owner marked the todo
-done — then the lessons are merged or dropped, the todo is done, and the checkout the roles read is fast-forwarded
+Hourly, and when the owner marks the todo done, the ticker looks at the MR: merged (its tip on origin's branch, or —
+a squash or rebase merge — origin's commits since the base naming every lesson, or its files carrying every line the
+lessons added) or its branch gone (closed) — then the lessons are merged or dropped, the todo is done, and the checkout the roles read is fast-forwarded
 when it is on that branch, clean and not ahead; otherwise zmina leaves it alone and adds a check with the one command,
 `git -C <checkout> pull --no-rebase origin <branch>` (a merge: the owner's unpushed commits stay as they are). doctor,
 for a crew with lessons on: the repo found, a dry-run push that would go, claude on PATH, a checkout ahead of origin,

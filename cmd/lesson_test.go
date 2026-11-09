@@ -217,12 +217,9 @@ func TestLessonTriageEndToEnd(t *testing.T) {
 	gitOut(t, other, "merge", "-q", "--no-ff", "-m", "Merge lessons", "origin/"+branch)
 	gitOut(t, other, "push", "-q", "origin", "main", ":"+branch)
 
-	require.NoError(t, a.withState(func(s *shift.Shift) error {
-		st, _ := lesson.LoadState(lessonDir(s.Crew))
-		st.Checked = time.Time{}
-
-		return lesson.SaveState(lessonDir(s.Crew), st)
-	}))
+	// He ticks the todo before the hourly check: the forge still says it was merged, and the checkout catches up.
+	_, _, err = zm(t, file, "todo", "done", st.Open.Todo)
+	require.NoError(t, err)
 	a.lessonsBeat(time.Now())
 
 	out, _, err = zm(t, file, "lesson", "ls", "--all")
@@ -261,4 +258,15 @@ func TestLessonDraftLine(t *testing.T) {
 
 	r.Draft = "no"
 	assert.Contains(t, lessonDraftLine(r, "origin"), "NOT A DRAFT")
+}
+
+// A deny file that is named but cannot be read refuses lessons instead of letting them through unchecked.
+func TestLessonDenyFailsClosed(t *testing.T) {
+	file := testCrew(t, "  dev:\n")
+	withTop(t, file, "lessons:\n  enabled: false\n  deny: "+filepath.Join(t.TempDir(), "missing")+"\n")
+	t.Setenv("ZMINA_ROLE", "dev")
+
+	_, _, err := zm(t, file, "lesson", "add", "Reply short", "--why", "asked")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot be read")
 }

@@ -84,11 +84,7 @@ type Seat func(ctx context.Context, dir, prompt, schema string, budget float64) 
 // stopped at the budget by the CLI itself, its answer held to the schema.
 func ClaudeSeat(model string) Seat {
 	return func(ctx context.Context, dir, prompt, schema string, budget float64) ([]byte, error) {
-		cmd := exec.CommandContext(ctx, "claude", "-p", "--model", model,
-			"--max-budget-usd", fmt.Sprintf("%.2f", budget), "--output-format", "json", "--json-schema", schema,
-			"--allowedTools", "Read,Grep,Glob",
-			"--disallowedTools", "Bash,Edit,Write,NotebookEdit,WebFetch,WebSearch,Agent,Task",
-			"--strict-mcp-config", "--no-session-persistence")
+		cmd := exec.CommandContext(ctx, "claude", SeatArgs(model, schema, budget)...)
 		cmd.Dir = dir
 		cmd.Stdin = strings.NewReader(prompt)
 
@@ -103,6 +99,17 @@ func ClaudeSeat(model string) Seat {
 
 		return out, nil
 	}
+}
+
+// SeatArgs is the seat's claude command line. --restricted reads no user, project or local settings file (no hooks,
+// no bypass mode, no plugins of the user's) and confines the file tools to the working directory; --tools leaves
+// exactly Read, Grep and Glob (and the structured answer); dontAsk refuses anything else instead of asking; no MCP
+// server, no session written. Checked on claude 2.1.319: the seat sees Glob, Grep, Read and StructuredOutput.
+func SeatArgs(model, schema string, budget float64) []string {
+	return []string{"-p", "--model", model, "--max-budget-usd", fmt.Sprintf("%.2f", budget),
+		"--output-format", "json", "--json-schema", schema,
+		"--restricted", "--tools", "Read,Grep,Glob", "--permission-mode", "dontAsk",
+		"--strict-mcp-config", "--no-session-persistence"}
 }
 
 // Answer is the part of claude -p's JSON result the triage reads.
@@ -277,14 +284,14 @@ func Triage(ctx context.Context, cfg Config, lessons []Lesson, seat Seat) (Resul
 		case VerdictWritten, VerdictStale, VerdictDrop:
 			res.Dropped = append(res.Dropped, it)
 		case VerdictEvery, VerdictRole, VerdictSkill:
-			sha, why := apply(wt, it, l, allowed, cfg.Deny)
+			sha, file, why := apply(wt, it, l, allowed, cfg.Deny)
 			if why != "" {
 				res.Questions = append(res.Questions, fmt.Sprintf("%s (%s): not applied, %s", it.ID, l.Rule, why))
 
 				continue
 			}
 
-			res.Applied = append(res.Applied, Applied{ID: it.ID, File: it.File, Commit: sha})
+			res.Applied = append(res.Applied, Applied{ID: it.ID, File: file, Commit: sha})
 		default: // conflict, or a verdict the schema does not know: never applied
 			q := it.Question
 			if q == "" {
@@ -310,14 +317,19 @@ func Triage(ctx context.Context, cfg Config, lessons []Lesson, seat Seat) (Resul
 
 // ask runs a seat and reads its structured answer into out; it returns the run's cost even when it fails.
 func ask(ctx context.Context, seat Seat, dir, prompt, schema string, budget float64, out any) (float64, error) {
+	// A seat that ran and gave no readable cost is counted at its whole budget: the week's cap must not miss it.
 	raw, err := seat(ctx, dir, prompt, schema, budget)
 	if err != nil {
-		return 0, err
+		if errors.Is(err, exec.ErrNotFound) {
+			return 0, err
+		}
+
+		return budget, err
 	}
 
 	var ans Answer
 	if err := json.Unmarshal(raw, &ans); err != nil {
-		return 0, fmt.Errorf("its answer is not JSON: %w", err)
+		return budget, fmt.Errorf("its answer is not JSON: %w", err)
 	}
 
 	if ans.IsError || len(ans.Plan) == 0 {
@@ -418,22 +430,24 @@ func allowed(file string, patterns []string) bool {
 }
 
 // apply makes one lesson's edit in the worktree and commits it; why says what stopped it.
-func apply(wt string, it Item, l Lesson, patterns, deny []string) (string, string) {
-	file := path.Clean(filepath.ToSlash(it.File))
+func apply(wt string, it Item, l Lesson, patterns, deny []string) (sha, file, why string) {
+	file = path.Clean(filepath.ToSlash(it.File))
 	if !allowed(file, patterns) {
-		return "", fmt.Sprintf("%q is not an instruction file it may change", it.File)
+		return "", "", fmt.Sprintf("%q is not an instruction file it may change", it.File)
 	}
 
 	full := filepath.Join(wt, filepath.FromSlash(file))
 
+	// The file itself and every directory on its way are the worktree's own: a symlink anywhere on the path would
+	// let the write land outside it.
 	info, err := os.Lstat(full)
-	if err != nil || !info.Mode().IsRegular() {
-		return "", fmt.Sprintf("%s is not a file in the repository", file)
+	if err != nil || !info.Mode().IsRegular() || !inside(wt, full) {
+		return "", "", fmt.Sprintf("%s is not a file in the repository", file)
 	}
 
 	raw, err := os.ReadFile(full)
 	if err != nil {
-		return "", err.Error()
+		return "", "", err.Error()
 	}
 
 	text := string(raw)
@@ -442,41 +456,66 @@ func apply(wt string, it Item, l Lesson, patterns, deny []string) (string, strin
 
 	switch {
 	case strings.TrimSpace(it.New) == "":
-		return "", "the edit is empty"
+		return "", "", "the edit is empty"
 	case it.Old == "":
 		next = strings.TrimRight(text, "\n") + "\n\n" + strings.TrimRight(it.New, "\n") + "\n"
 	case strings.Count(text, it.Old) != 1:
-		return "", fmt.Sprintf("the text to replace is found %d times in %s, not once", strings.Count(text, it.Old), file)
+		return "", "", fmt.Sprintf("the text to replace is found %d times in %s, not once", strings.Count(text, it.Old), file)
 	default:
 		next = strings.Replace(text, it.Old, it.New, 1)
 	}
 
 	if n := changedLines(it.Old, it.New); n > maxChanged {
-		return "", fmt.Sprintf("the edit changes %d lines, more than %d", n, maxChanged)
+		return "", "", fmt.Sprintf("the edit changes %d lines, more than %d", n, maxChanged)
 	}
 
 	if f := Scan(it.New, deny); len(f) > 0 {
-		return "", "the edit carries " + f[0].Rule
+		return "", "", "the edit carries " + f[0].Rule
+	}
+
+	// The commit message leaves the machine too: the rule and why, scanned again against today's deny list.
+	msg := commitMessage(l)
+	if f := Scan(msg, deny); len(f) > 0 {
+		return "", "", "its commit message carries " + f[0].Rule
 	}
 
 	if err := os.WriteFile(full, []byte(next), info.Mode().Perm()); err != nil {
-		return "", err.Error()
+		return "", "", err.Error()
 	}
 
-	msg := commitMessage(l)
 	if _, err := Git(wt, "add", "--", file); err != nil {
-		return "", err.Error()
+		_, _ = Git(wt, "checkout", "--", file)
+
+		return "", "", err.Error()
 	}
 
 	if _, err := Git(wt, "commit", "-q", "-m", msg); err != nil {
+		_, _ = Git(wt, "reset", "-q", "--", file)
 		_, _ = Git(wt, "checkout", "--", file)
 
-		return "", err.Error()
+		return "", "", err.Error()
 	}
 
-	sha, _ := Git(wt, "rev-parse", "HEAD")
+	sha, _ = Git(wt, "rev-parse", "HEAD")
 
-	return sha, ""
+	return sha, file, ""
+}
+
+// inside reports whether full, with every symlink on its path resolved, is still under the worktree wt.
+func inside(wt, full string) bool {
+	root, err := filepath.EvalSymlinks(wt)
+	if err != nil {
+		return false
+	}
+
+	real, err := filepath.EvalSymlinks(full)
+	if err != nil {
+		return false
+	}
+
+	rel, err := filepath.Rel(root, real)
+
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel)
 }
 
 func changedLines(old, next string) int {
@@ -545,7 +584,8 @@ func Push(cfg Config, res *Result, title, description string) error {
 		"merge_request.title=" + oneLine(DraftTitle(title)), "merge_request.description=" + oneLine(description),
 		"merge_request.remove_source_branch"}
 
-	args := []string{"push", "--no-verify"}
+	// The repository's own pre-push hook runs: model-written text leaving the machine passes the owner's guards.
+	args := []string{"push"}
 	for _, o := range opts {
 		args = append(args, "-o", o)
 	}
@@ -553,7 +593,7 @@ func Push(cfg Config, res *Result, title, description string) error {
 	out, err := gitCombined(cfg.Repo, append(args, cfg.Remote, ref)...)
 	if err != nil && strings.Contains(out, "push options") {
 		res.PushNote = "the remote takes no push options: the branch is pushed, open the merge request by hand"
-		out, err = gitCombined(cfg.Repo, "push", "--no-verify", cfg.Remote, ref)
+		out, err = gitCombined(cfg.Repo, "push", cfg.Remote, ref)
 	}
 
 	if err != nil {
@@ -590,9 +630,11 @@ func gitCombined(dir string, args ...string) (string, error) {
 	return string(out), err
 }
 
-// Finished reports whether a pushed lessons branch is done with: merged into <remote>/<branch> (its tip is there),
-// or gone from the remote (merged with its source branch removed, or closed and deleted). merged tells which.
-func Finished(repo, remote, branch, target, tip string) (done, merged bool, err error) {
+// Finished reports whether a pushed lessons branch is done with: merged into <remote>/<branch>, or gone from the
+// remote (merged with its source branch removed, or closed and deleted). merged tells which: the tip is in the
+// target (a merge commit or a fast-forward), or the lessons landed another way — a squash or rebase merge — which
+// the target's messages since base naming every lesson, or the target carrying every line the lessons added, shows.
+func Finished(repo, remote, branch, target, base, tip string, ids []string) (done, merged bool, err error) {
 	if remote == "" {
 		remote = "origin"
 	}
@@ -601,14 +643,77 @@ func Finished(repo, remote, branch, target, tip string) (done, merged bool, err 
 		return false, false, err
 	}
 
-	merged = tip != "" && isAncestor(repo, tip, remote+"/"+target)
+	into := remote + "/" + target
+	merged = tip != "" && isAncestor(repo, tip, into)
 
 	heads, err := Git(repo, "ls-remote", "--heads", remote, branch)
 	if err != nil {
 		return false, false, err
 	}
 
+	if !merged && (heads == "" || tip != "") {
+		merged = landed(repo, into, base, tip, ids)
+	}
+
 	return merged || heads == "", merged, nil
+}
+
+// landed: the lessons are in the target though the tip is not — every lesson named in a message since base, or
+// every line each lesson commit added found in the target's copy of its file.
+func landed(repo, into, base, tip string, ids []string) bool {
+	if base == "" || len(ids) == 0 {
+		return false
+	}
+
+	if msgs, err := Git(repo, "log", "--format=%B", base+".."+into); err == nil {
+		all := true
+
+		for _, id := range ids {
+			if !strings.Contains(msgs+"\n", "Lesson: "+id+"\n") {
+				all = false
+				break
+			}
+		}
+
+		if all {
+			return true
+		}
+	}
+
+	if tip == "" {
+		return false
+	}
+
+	commits, err := Git(repo, "rev-list", base+".."+tip)
+	if err != nil || commits == "" {
+		return false
+	}
+
+	for _, c := range strings.Fields(commits) {
+		file, err := Git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", c)
+		if err != nil || file == "" || strings.Contains(file, "\n") {
+			return false
+		}
+
+		now, err := Git(repo, "show", into+":"+file)
+		if err != nil {
+			return false
+		}
+
+		diff, err := Git(repo, "show", "--format=", "-U0", c)
+		if err != nil {
+			return false
+		}
+
+		for _, l := range strings.Split(diff, "\n") {
+			if strings.HasPrefix(l, "+") && !strings.HasPrefix(l, "+++") && strings.TrimSpace(l[1:]) != "" &&
+				!strings.Contains(now, l[1:]) {
+				return false
+			}
+		}
+	}
+
+	return true
 }
 
 func isAncestor(repo, a, b string) bool {
