@@ -1518,7 +1518,8 @@ func (s *Shift) Start() error {
 		return nil
 	}
 
-	return s.Up(s.Crew.Dispatcher)
+	// The stop is lifted whether or not the dispatcher starts: the ticker tries again every beat (keep: always).
+	return Partial(s.Up(s.Crew.Dispatcher))
 }
 
 // held maps each role to the ids of the active tasks it holds.
