@@ -427,8 +427,8 @@ func (a *app) todoAnswerCommand(action string) *cobra.Command {
 }
 
 // answerTodo closes an ask (yes, done, answer, park) or answers a waiting task (answer, park), and queues the
-// answer for the dispatcher as a note from `from` — "A-3 · yes: <rec>", "T-62 · <words>", "A-4 · later". The
-// caller holds the state lock. It returns the line to print.
+// answer for the dispatcher as a note from `from` — "A-3 · yes: <rec>", "T-62 · <words>", "A-4 · later" — unless
+// `from` is the dispatcher itself. The caller holds the state lock. It returns the line to print.
 func answerTodo(s *shift.Shift, from, action, id, words string) (string, error) {
 	id = asks.Normalize(id)
 	if action == "answer" && strings.TrimSpace(words) == "" {
@@ -559,8 +559,14 @@ func answerTodo(s *shift.Shift, from, action, id, words string) (string, error) 
 		note += " (the owner's answer in chat, recorded by " + from + ")"
 	}
 
-	if _, err := s.Note(from, note, false); err != nil {
-		return "", err
+	// The note is how the dispatcher hears an answer given elsewhere; one it records itself it has already.
+	role, _, _ := strings.Cut(from, "#")
+	self := role == s.Crew.Dispatcher
+
+	if !self {
+		if _, err := s.Note(from, note, false); err != nil {
+			return "", err
+		}
 	}
 
 	// The task's turn is the dispatcher's now: it leaves the todo until the task changes.
@@ -575,6 +581,10 @@ func answerTodo(s *shift.Shift, from, action, id, words string) (string, error) 
 	}
 
 	s.Log(from, "answered", taskOf(s, id), note)
+
+	if self {
+		return id + " · " + action + " · recorded", nil
+	}
 
 	return id + " · " + action + " · queued for the dispatcher", nil
 }
