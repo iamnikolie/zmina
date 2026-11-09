@@ -631,6 +631,12 @@ const turnEndTimeout = 5
 func (s *Shift) roleSettings(name string) string {
 	settings := map[string]any{"crossSessionInbound": "accept"}
 
+	// skills: the skill list trimmed (description cap, skills by name only or left out)
+	role, _, _ := strings.Cut(name, "#")
+	if r, ok := s.Crew.Roles[role]; ok && !r.IsCodex() {
+		maps.Copy(settings, r.SkillList().Settings())
+	}
+
 	if s.Self != "" {
 		base := shellWord(s.Self) + " --crew " + shellWord(s.Crew.Path)
 		start := []any{map[string]any{"type": "command", "command": base + " pending --role " + shellWord(name) + " --brief"}}

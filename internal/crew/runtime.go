@@ -44,8 +44,8 @@ func (r *Role) CheckRuntime() error {
 			return fmt.Errorf("invalid %s %q", key, pair.value)
 		}
 	}
-	if len(r.DropTools)+len(r.KeepTools) > 0 || (r.RemoteControl != nil && *r.RemoteControl) {
-		return fmt.Errorf("drop_tools, keep_tools and remote_control: true are Claude-only settings")
+	if len(r.DropTools)+len(r.KeepTools) > 0 || (r.RemoteControl != nil && *r.RemoteControl) || r.Skills != nil {
+		return fmt.Errorf("drop_tools, keep_tools, skills and remote_control: true are Claude-only settings")
 	}
 	return nil
 }

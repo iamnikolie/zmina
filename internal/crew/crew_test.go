@@ -601,3 +601,48 @@ func TestReadGuard(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, c.ReadGuardFor(c.Roles["dispatcher"]), "off unless asked")
 }
+
+func TestSkills(t *testing.T) {
+	dir := t.TempDir()
+	c, err := Load(write(t, "dir: "+dir+"\nskills:\n  listing: 9k\n  off: [kreida, anthropic-skills:docx]\nroles:\n"+
+		"  dispatcher:\n  dev:\n    skills:\n      desc_max: 250\n      name_only: [oko]\n  ops:\n    skills:\n      off: []\n      listing: 12_000\n"))
+	require.NoError(t, err)
+
+	assert.Equal(t, SkillList{Listing: 9000, Off: []string{"kreida", "anthropic-skills:docx"}}, c.Roles["dispatcher"].SkillList(),
+		"the crew's")
+	assert.Equal(t, SkillList{Listing: 9000, DescMax: 250, Off: []string{"kreida", "anthropic-skills:docx"}, NameOnly: []string{"oko"}},
+		c.Roles["dev"].SkillList(), "the role's fields over the crew's")
+	assert.Equal(t, SkillList{Listing: 12000, Off: []string{}}, c.Roles["ops"].SkillList(), "off: [] clears the crew's list")
+
+	dev := c.Roles["dev"].SkillList()
+	assert.Equal(t, map[string]any{"skillListingMaxDescChars": 250, "skillOverrides": map[string]any{
+		"kreida": "off", "anthropic-skills:docx": "off", "oko": "name-only"}}, dev.Settings())
+	assert.Equal(t, []string{"SLASH_COMMAND_TOOL_CHAR_BUDGET=9000"}, dev.Env())
+
+	c, err = Load(write(t, "dir: "+dir+"\nroles:\n  dispatcher:\n"))
+	require.NoError(t, err)
+	assert.True(t, c.Roles["dispatcher"].SkillList().Empty(), "Claude Code's own list unless asked")
+	assert.Empty(t, c.Roles["dispatcher"].SkillList().Settings())
+	assert.Empty(t, c.Roles["dispatcher"].SkillList().Env())
+
+	c, err = Load(write(t, "dir: "+dir+"\nskills:\n  listing: 9k\n  off: [kreida]\nroles:\n  dispatcher:\n"+
+		"  own:\n    delivery: tmux\n    args: [--settings, '{}']\n  cx:\n    runtime: codex\n"))
+	require.NoError(t, err)
+	assert.Equal(t, SkillList{Listing: 9000}, c.Roles["own"].SkillList(), "its own --settings: the listing only")
+	assert.Contains(t, c.Warnings, "role own: args has --settings, so skills desc_max, off and name_only are not passed to it (listing is)")
+	assert.True(t, c.Roles["cx"].SkillList().Empty(), "a Codex role has no skill list of Claude's")
+
+	_, err = Load(write(t, "dir: "+dir+"\nroles:\n  dispatcher:\n  cx:\n    runtime: codex\n    skills: {listing: 9k}\n"))
+	require.ErrorContains(t, err, "skills")
+
+	for body, want := range map[string]string{
+		"skills:\n  listing: 500\nroles:\n  dispatcher:\n":                   "skills.listing \"500\": a number of characters from 1k",
+		"skills:\n  off: ['anthropic-skills:*']\nroles:\n  dispatcher:\n":    "exact names only",
+		"skills:\n  off: [oko]\n  name_only: [oko]\nroles:\n  dispatcher:\n": "oko is in off and name_only",
+		"roles:\n  dispatcher:\n    skills:\n      desc_max: -1\n":           "role dispatcher: skills.desc_max -1",
+		"roles:\n  dispatcher:\n    skills:\n      listing: lots\n":          "role dispatcher: skills.listing",
+	} {
+		_, err := Load(write(t, "dir: "+dir+"\n"+body))
+		require.ErrorContains(t, err, want, body)
+	}
+}

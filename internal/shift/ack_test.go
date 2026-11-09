@@ -382,3 +382,27 @@ func TestReadGuardHookInSettings(t *testing.T) {
 	assert.Contains(t, boot, ReadRule+" "+ReadGuardRule)
 	assert.NotContains(t, f.s.BootText(f.s.Crew.Roles["harvester"]), ReadRule)
 }
+
+// skills: a role starts with its skill list trimmed — the overrides and description cap in its settings, the
+// listing's budget in its environment — whether it takes lines natively or not.
+func TestSkillsAtStart(t *testing.T) {
+	body := strings.Replace(crewYAML, "roles:\n", "skills:\n  listing: 9k\n  off: [kreida]\nroles:\n", 1)
+	body = strings.Replace(body, "  designer:\n", "  designer:\n    skills:\n      desc_max: 250\n", 1)
+	f, _ := nativeFixture(t, body)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal([]byte(f.s.roleSettings("designer")), &got))
+	assert.Equal(t, "accept", got["crossSessionInbound"])
+	assert.Equal(t, map[string]any{"kreida": "off"}, got["skillOverrides"])
+	assert.InDelta(t, 250, got["skillListingMaxDescChars"], 0)
+	assert.Contains(t, f.s.Env(f.s.Crew.Roles["designer"]), "SLASH_COMMAND_TOOL_CHAR_BUDGET=9000")
+
+	plain := fixtureWith(t, body) // no channel: lines are typed, no inbound settings
+	argv := strings.Join(plain.s.Command(plain.s.Crew.Roles["harvester"], ""), " ")
+	assert.Contains(t, argv, `--settings {"skillOverrides":{"kreida":"off"}}`)
+	assert.NotContains(t, argv, "crossSessionInbound")
+
+	none := fixtureWith(t, crewYAML)
+	assert.NotContains(t, strings.Join(none.s.Command(none.s.Crew.Roles["harvester"], ""), " "), "--settings")
+	assert.NotContains(t, strings.Join(none.s.Env(none.s.Crew.Roles["harvester"]), " "), "SLASH_COMMAND")
+}
