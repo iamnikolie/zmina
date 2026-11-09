@@ -434,3 +434,17 @@ func TestSkillsAtStart(t *testing.T) {
 	assert.NotContains(t, strings.Join(none.s.Command(none.s.Crew.Roles["harvester"], ""), " "), "--settings")
 	assert.NotContains(t, strings.Join(none.s.Env(none.s.Crew.Roles["harvester"]), " "), "SLASH_COMMAND")
 }
+
+func TestOutputCapAtStart(t *testing.T) {
+	body := strings.Replace(crewYAML, "roles:\n", "output_cap:\n  bash: 12k\n  read_tokens: 6k\nroles:\n", 1)
+	f, _ := nativeFixture(t, body)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal([]byte(f.s.roleSettings("designer")), &got))
+	assert.InDelta(t, 12000, got["bashOutputMaxChars"], 0)
+	assert.Contains(t, f.s.Env(f.s.Crew.Roles["designer"]), "CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS=6000")
+
+	plain := fixtureWith(t, body)
+	argv := strings.Join(plain.s.Command(plain.s.Crew.Roles["harvester"], ""), " ")
+	assert.Contains(t, argv, `--settings {"bashOutputMaxChars":12000}`)
+}

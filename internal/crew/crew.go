@@ -89,6 +89,8 @@ type Role struct {
 	ReadGuard *bool `yaml:"read_guard"`
 	// Skills overrides the crew's skills for this role, field by field.
 	Skills *Skills `yaml:"skills"`
+	// OutputCap overrides the crew's output_cap for this role, field by field.
+	OutputCap *OutputCap `yaml:"output_cap"`
 	// Delivery overrides the crew's delivery for this role.
 	Delivery string `yaml:"delivery"`
 	// Resume "always" starts the role on its last conversation (claude --resume) whenever one is known.
@@ -127,6 +129,7 @@ type Role struct {
 	releaseIdle time.Duration
 	restartAt   int
 	skills      SkillList
+	outputCap   OutputCaps
 	restartIdle time.Duration
 	restartDone int
 	dirErr      error
@@ -181,6 +184,22 @@ func (r *Role) RestartContext() int { return r.restartAt }
 
 // SkillList is the role's skills setting, its own over the crew's.
 func (r *Role) SkillList() SkillList { return r.skills }
+
+// OutputCaps is the role's output_cap, its own over the crew's.
+func (r *Role) OutputCaps() OutputCaps { return r.outputCap }
+
+// Settings are the Claude Code settings zmina passes the role for its skills and output caps; empty for none.
+func (r *Role) Settings() map[string]any {
+	out := r.skills.Settings()
+	for k, v := range r.outputCap.Settings() {
+		out[k] = v
+	}
+
+	return out
+}
+
+// Env is the environment zmina sets for the role's skills and output caps.
+func (r *Role) Env() []string { return append(r.skills.Env(), r.outputCap.Env()...) }
 
 // RestartAfter is how long a role holding a task and a conversation over 100k may sit idle before it is restarted
 // fresh rather than woken on a cold cache (restart_idle); 0: never.
@@ -262,6 +281,9 @@ type Crew struct {
 	// Skills trims the skill list every Claude role is sent with each request (listing budget, desc_max, off,
 	// name_only, user_only); a role's own skills override it field by field.
 	Skills *Skills `yaml:"skills"`
+	// OutputCap caps what one Bash, Read or MCP result puts into every Claude role's context; a role's own
+	// output_cap overrides it field by field. Default: Claude Code's own caps.
+	OutputCap *OutputCap `yaml:"output_cap"`
 	// Renotify is how long a delivered line waits for its reader's ack before it is said again (default 30m; off).
 	Renotify string `yaml:"renotify"`
 	// Morning is when the ticker tells the dispatcher yesterday's cost in one line (HH:MM in the crew's time zone;
@@ -943,6 +965,10 @@ func (c *Crew) resolve(strict bool) error {
 		return err
 	}
 
+	if _, err := resolveOutputCap(c.OutputCap, nil); err != nil {
+		return err
+	}
+
 	if _, err := resolveSkills(c.Skills, nil); err != nil {
 		return err
 	}
@@ -992,13 +1018,18 @@ func (c *Crew) resolve(strict bool) error {
 			return fmt.Errorf("role %s: %w", name, err)
 		}
 
+		if r.outputCap, err = resolveOutputCap(c.OutputCap, r.OutputCap); err != nil {
+			return fmt.Errorf("role %s: %w", name, err)
+		}
+
 		switch {
 		case r.IsCodex():
-			r.skills = SkillList{}
-		case r.ownsSettings() && len(r.skills.Settings()) > 0:
+			r.skills, r.outputCap = SkillList{}, OutputCaps{}
+		case r.ownsSettings() && len(r.Settings()) > 0:
 			c.Warnings = append(c.Warnings, fmt.Sprintf("role %s: args has --settings, so skills desc_max, off, "+
-				"name_only and user_only are not passed to it (listing is)", name))
+				"name_only, user_only and output_cap.bash are not passed to it (listing, read_tokens and mcp_tokens are)", name))
 			r.skills = SkillList{Listing: r.skills.Listing}
+			r.outputCap.Bash = 0
 		}
 
 		if r.restartIdle, err = parseRestartIdle(r.RestartIdle, crewRestartIdle); err != nil {

@@ -418,8 +418,8 @@ func (s *Shift) Command(r *crew.Role, resume string) []string {
 	argv = append(argv, r.Args...)
 	if s.inbound(r) {
 		argv = append(argv, "--settings", s.roleSettings(r.Name))
-	} else if sk := r.SkillList(); !sk.Empty() && len(sk.Settings()) > 0 {
-		raw, _ := json.Marshal(sk.Settings())
+	} else if set := r.Settings(); len(set) > 0 {
+		raw, _ := json.Marshal(set)
 		argv = append(argv, "--settings", string(raw))
 	}
 
@@ -668,7 +668,7 @@ func (s *Shift) Env(r *crew.Role) []string {
 		env = append(env, "CODEX_HOME="+home)
 	} else {
 		env = append([]string{"CLAUDE_CONFIG_DIR=" + s.Crew.Namespace}, env...)
-		env = append(env, r.SkillList().Env()...)
+		env = append(env, r.Env()...)
 	}
 	return env
 }

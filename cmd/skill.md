@@ -49,6 +49,10 @@ skills:                                  # the skill list Claude roles are sent 
   off: [anthropic-skills:docx]           # skills left out; exact names as the list shows them, no patterns
   name_only: [kreida]                    # skills listed by name, without a description
   user_only: [harvest]                   # hidden from the model; /harvest still runs it
+output_cap:                              # what one tool result puts into a Claude role's context (default: Claude Code's own)
+  bash: 12k                              # characters of a Bash output given inline (4k-128k; Claude Code's default 30k)
+  read_tokens: 6k                        # tokens one Read returns (1k-200k)
+  mcp_tokens: 8k                         # tokens one MCP tool result takes (1k-200k)
 context_max: 400k                        # every role's, unless it sets its own (default: none)
 context_action: compact                  # every role's, unless it sets its own (default compact)
 restart_at: 250k                         # a role holding a task this full restarts fresh from its note (default 250k; off)
@@ -78,6 +82,7 @@ roles:
     drop_tools: [Agent]                  # this role also starts without these
     keep_tools: [Workflow]               # ... and keeps these of the crew's list
     skills: {desc_max: 500, off: []}     # its own, field by field over the crew's; a list it sets replaces the crew's
+    output_cap: {bash: 40k, read_tokens: 'off'}  # its own, field by field; off: Claude Code's own for that one
     resume: always                       # start on the role's last conversation (claude --resume)
     expires: 2026-11-01                  # a temporary seat: past it, reported for removal once down
     context_max: 200k                    # conversation fuller than this -> trimmed once idle (150k, 1m; 50k at least; off)
@@ -176,8 +181,8 @@ The bridge prints this startup/resume diagnostic in its console (`peek` / `attac
 The cockpit Terminals page remains the existing text/bridge view; it does not launch the native TUI or
 create another thread writer. Native shared TUI attach is the local CLI command described above.
 
-Claude Remote Control, Claude tool names (`drop_tools` / `keep_tools`) and `skills` do not apply to Codex.
-Per-role Claude-only settings are rejected; crew `drop_tools` and `skills` apply only to Claude
+Claude Remote Control, Claude tool names (`drop_tools` / `keep_tools`), `skills` and `output_cap` do not apply to Codex.
+Per-role Claude-only settings are rejected; crew `drop_tools`, `skills` and `output_cap` apply only to Claude
 (doctor does not warn of them).
 Configure Codex tools/permissions in its configuration. Codex token accounting feeds the same `usage`, task cost, UI totals and budget notifications as Claude.
 Snapshots live under the crew's `codex/usage/` directory and survive `down`, role removal and runtime changes.
@@ -325,6 +330,16 @@ A short description can make a role miss a skill: watch which skills a role call
 `skills` go over the crew's field by field (a list it sets replaces the crew's; `off: []` clears it). A change
 applies at the role's next start. A role whose `args` pass `--settings` gets the `listing` only, with a warning.
 `listing` wins over a `SLASH_COMMAND_TOOL_CHAR_BUDGET` set in the environment the roles start from.
+
+A tool result stays in the context and is paid again on every later turn. `output_cap` caps one result for the
+Claude roles: `bash` is how many characters of a Bash output come inline (the setting `bashOutputMaxChars`; past it
+Claude Code saves the output to a file and gives a preview and the path — a role reads a part of it then);
+`read_tokens` is the most one Read returns (`CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS`; a bigger file is refused with a
+hint to read a part), `mcp_tokens` one MCP tool result (`MAX_MCP_OUTPUT_TOKENS`). Numbers as `12k` or `12000`. Unlike
+the read guard it covers every command and every file. A cap low for a role that reads build logs or long ssh output
+costs it an extra turn per read: give that role its own (`output_cap: {bash: 40k}`) or `off`. A role's `output_cap`
+goes over the crew's field by field; a change applies at the role's next start. A role whose `args` pass
+`--settings` does not get `bash`, with a warning. Codex roles take none.
 
 ## Roles
 
