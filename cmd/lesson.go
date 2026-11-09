@@ -719,8 +719,13 @@ func lessonTodoText(res lesson.Result, run lessonRun, waiting int) string {
 	}
 
 	if res.Pushed {
-		fmt.Fprintf(&b, "Draft MR %s on %s: %d lessons, one commit each. Review and merge it in GitLab (zmina never "+
-			"merges); mark this done if you close it instead.", or(res.MRURL, res.Branch), filepath.Base(run.cfg.Repo),
+		kind := "Draft MR"
+		if res.Draft == "no" {
+			kind = "MR"
+		}
+
+		fmt.Fprintf(&b, "%s %s on %s: %d lessons, one commit each. Review and merge it in GitLab (zmina never "+
+			"merges); mark this done if you close it instead.", kind, or(res.MRURL, res.Branch), filepath.Base(run.cfg.Repo),
 			len(res.Applied))
 
 		if res.PushNote != "" {
