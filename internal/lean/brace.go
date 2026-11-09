@@ -401,7 +401,7 @@ var (
 
 func braceEnds(bl []braceLine, j, to int, list bool) bool {
 	t := bl[j].code
-	if t == "" {
+	if t == "" || t == "where" {
 		return false
 	}
 

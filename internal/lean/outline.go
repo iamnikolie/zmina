@@ -63,6 +63,8 @@ var outliners = []outliner{
 		hint: ":Name (function, Class.method, a test's title)"},
 	{lang: "javascript", exts: []string{".js", ".jsx", ".mjs", ".cjs"}, parse: whole(jsOutline), sure: jsSure,
 		hint: ":Name (function, Class.method, a test's title)"},
+	{lang: "rust", exts: []string{".rs"}, parse: whole(rustOutline), sure: rustSure,
+		hint: ":Name (fn, Type.method, a struct, trait or mod)"},
 	{lang: "csv", exts: []string{".csv"}, summary: writeCSVSummary},
 	{lang: "tsv", exts: []string{".tsv", ".tab"}, summary: writeCSVSummary},
 	{lang: "jsonl", exts: []string{".jsonl", ".ndjson"}, summary: writeJSONLSummary},
@@ -79,8 +81,8 @@ func outlinerFor(path string) *outliner {
 	return nil
 }
 
-// Lang names the outliner for a path: go, markdown, yaml, json, foxpro, sql, typescript, javascript, csv, tsv, jsonl,
-// or "" (outlined by indentation).
+// Lang names the outliner for a path: go, markdown, yaml, json, foxpro, sql, typescript, javascript, rust, csv, tsv,
+// jsonl, or "" (outlined by indentation).
 func Lang(path string) string {
 	if o := outlinerFor(path); o != nil {
 		return o.lang
