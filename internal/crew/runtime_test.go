@@ -20,12 +20,13 @@ func TestRuntimeSettings(t *testing.T) {
 	assert.True(t, r.Instance(2).IsCodex())
 	e, err := Open(p)
 	require.NoError(t, err)
-	require.NoError(t, e.Set("dev", map[string]string{"reasoning_effort": "medium", "sandbox": "read-only"}))
+	require.NoError(t, e.Set("dev", map[string]string{"reasoning_effort": "medium", "sandbox": "read-only", "service_tier": "priority"}))
 	require.NoError(t, e.Save())
 	c, err = Load(p)
 	require.NoError(t, err)
 	assert.Equal(t, "medium", c.Roles["dev"].ReasoningEffort)
-	for _, body := range []string{"runtime: invalid", "runtime: codex\n    codex_transport: invalid", "runtime: codex\n    codex_transport: shared\n    args: [--stdio]", "sandbox: read-only", "runtime: codex\n    sandbox: invalid", "runtime: codex\n    remote_control: true", "runtime: codex\n    drop_tools: [Bash]"} {
+	assert.Equal(t, "priority", c.Roles["dev"].ServiceTier)
+	for _, body := range []string{"runtime: invalid", "runtime: codex\n    codex_transport: invalid", "runtime: codex\n    codex_transport: shared\n    args: [--stdio]", "sandbox: read-only", "runtime: codex\n    sandbox: invalid", "runtime: codex\n    remote_control: true", "runtime: codex\n    drop_tools: [Bash]", "service_tier: priority", "runtime: codex\n    service_tier: fast"} {
 		_, err := Load(write(t, "roles:\n  dispatcher: {}\n  dev:\n    "+body+"\n"))
 		assert.Error(t, err, body)
 	}

@@ -19,6 +19,8 @@ import (
 // Options configure a standalone or shared App Server connection and its persistent role thread.
 type Options struct {
 	Bin, Name, Dir, Resume, Boot, Model, Effort, Sandbox, Approval string
+	// ServiceTier is the role's service_tier; empty takes the profile's, else DefaultServiceTier.
+	ServiceTier string
 	Role                                                           string
 	Transport                                                      string
 	Profile                                                        string

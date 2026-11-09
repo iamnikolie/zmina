@@ -17,8 +17,8 @@ func (r *Role) CheckRuntime() error {
 		return fmt.Errorf("runtime is claude or codex, not %q", r.Runtime)
 	}
 	if !r.IsCodex() {
-		if r.CodexTransport+r.Profile+r.CodexHome+r.ReasoningEffort+r.Sandbox+r.ApprovalPolicy != "" {
-			return fmt.Errorf("codex_transport, profile, codex_home, reasoning_effort, sandbox and approval_policy require runtime: codex")
+		if r.CodexTransport+r.Profile+r.CodexHome+r.ReasoningEffort+r.Sandbox+r.ApprovalPolicy+r.ServiceTier != "" {
+			return fmt.Errorf("codex_transport, profile, codex_home, reasoning_effort, sandbox, approval_policy and service_tier require runtime: codex")
 		}
 		return nil
 	}
@@ -38,6 +38,7 @@ func (r *Role) CheckRuntime() error {
 	}{
 		"sandbox":         {r.Sandbox, []string{"", "read-only", "workspace-write", "danger-full-access"}},
 		"approval_policy": {r.ApprovalPolicy, []string{"", "on-request", "never", "untrusted", "on-failure"}},
+		"service_tier":    {r.ServiceTier, []string{"", "default", "priority"}},
 	} {
 		if !slices.Contains(pair.allowed, pair.value) {
 			return fmt.Errorf("invalid %s %q", key, pair.value)

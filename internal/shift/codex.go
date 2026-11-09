@@ -23,7 +23,7 @@ func (s *Shift) codexCommand(r *crew.Role, resume string) []string {
 		bin = "zmina"
 	}
 	argv := []string{bin, "_codex", "--bin", s.Crew.Codex, "--session", r.Session, "--role", r.Name, "--state-dir", filepath.Join(s.Crew.StateDir(), "codex")}
-	for _, p := range [][2]string{{"--transport", r.CodexTransport}, {"--profile", r.Profile}, {"--resume", resume}, {"--boot", s.BootText(r)}, {"--model", r.Model}, {"--effort", r.ReasoningEffort}, {"--sandbox", r.Sandbox}, {"--approval", r.ApprovalPolicy}} {
+	for _, p := range [][2]string{{"--transport", r.CodexTransport}, {"--profile", r.Profile}, {"--resume", resume}, {"--boot", s.BootText(r)}, {"--model", r.Model}, {"--effort", r.ReasoningEffort}, {"--service-tier", r.ServiceTier}, {"--sandbox", r.Sandbox}, {"--approval", r.ApprovalPolicy}} {
 		if p[1] != "" {
 			argv = append(argv, p[0], p[1])
 		}

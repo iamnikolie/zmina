@@ -25,6 +25,10 @@ func TestCodexCommandAndQueue(t *testing.T) {
 	assert.Contains(t, argv, "_codex")
 	assert.Contains(t, argv, "saved-thread")
 	assert.Contains(t, argv, "high")
+	assert.NotContains(t, argv, "--service-tier", "no tier of its own: the adapter's default")
+	r.ServiceTier = "priority"
+	assert.Subset(t, s.Command(r, ""), []string{"--service-tier", "priority"})
+	r.ServiceTier = ""
 	assert.NotContains(t, argv, "--remote-control")
 	assert.NotContains(t, argv, "--name")
 	env := s.Env(r)

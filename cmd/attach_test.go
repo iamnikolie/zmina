@@ -72,6 +72,7 @@ func TestSharedCodexAttachRunsNativeTUIOnCurrentThreadWithRoleSettings(t *testin
 			assert.Contains(t, text, "arg=--model\narg=test-model\n")
 			assert.Contains(t, text, "arg=--profile\narg=test-profile\n")
 			assert.Contains(t, text, "arg=model_reasoning_effort=\"high\"\n")
+			assert.Contains(t, text, "arg=-c\narg=service_tier=\"default\"\n", "the normal tier, not the owner's global one")
 			assert.Contains(t, text, "arg=--sandbox\narg=read-only\narg=-c\narg=approval_policy=\"on-request\"\n")
 			assert.NotContains(t, text, "stale-thread")
 			assert.NotContains(t, text, "app-server")

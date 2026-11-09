@@ -28,6 +28,7 @@ args = ["--stdio"]
 	assert.Equal(t, "high", got["model_reasoning_effort"])
 	assert.Equal(t, "workspace-write", got["sandbox_mode"])
 	assert.Equal(t, "on-request", got["approval_policy"])
+	assert.Equal(t, "default", got["service_tier"], "neither role nor profile names a tier: the normal one, never the global one")
 	assert.Equal(t, cfg["mcp_servers"], got["mcp_servers"])
 	assert.Equal(t, "profile-model", cfg["model"], "overrides cannot mutate the parsed profile")
 	for _, name := range []string{"../review", "review.toml", "missing", "/tmp/other"} {
@@ -41,4 +42,13 @@ args = ["--stdio"]
 	cfg, err = LoadProfile(home, "")
 	require.NoError(t, err)
 	assert.Nil(t, cfg)
+}
+
+func TestServiceTier(t *testing.T) {
+	assert.Equal(t, "default", Options{}.threadConfig()["service_tier"], "no profile, no role tier")
+	fast := map[string]any{"service_tier": "priority"}
+	assert.Equal(t, "priority", Options{Config: fast}.threadConfig()["service_tier"], "a profile may opt in")
+	assert.Equal(t, "default", Options{Config: fast, ServiceTier: "default"}.threadConfig()["service_tier"], "the role wins over its profile")
+	assert.Equal(t, "priority", Options{ServiceTier: "priority"}.threadConfig()["service_tier"])
+	assert.Equal(t, "priority", fast["service_tier"], "the parsed profile is not changed")
 }

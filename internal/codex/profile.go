@@ -45,11 +45,29 @@ func LoadProfile(home, name string) (map[string]any, error) {
 	return cfg, nil
 }
 
+// DefaultServiceTier is the tier a Codex seat runs on unless its role or its profile names one. App Server takes
+// "default" as the normal tier; without it the seat would inherit the owner's global service_tier (priority is
+// Codex's fast mode, twice the price).
+const DefaultServiceTier = "default"
+
+// ServiceTier is the tier a seat's thread is started and resumed with: the role's, else its profile's, else the
+// default.
+func ServiceTier(role string, profile map[string]any) string {
+	if role != "" {
+		return role
+	}
+	if t, ok := profile["service_tier"].(string); ok && t != "" {
+		return t
+	}
+	return DefaultServiceTier
+}
+
 func (o Options) threadConfig() map[string]any {
-	cfg := make(map[string]any, len(o.Config)+5)
+	cfg := make(map[string]any, len(o.Config)+6)
 	for k, v := range o.Config {
 		cfg[k] = v
 	}
+	cfg["service_tier"] = ServiceTier(o.ServiceTier, o.Config)
 	// Explicit role settings win over the selected profile, also when resuming a thread.
 	for _, p := range [][2]string{{"model", o.Model}, {"model_reasoning_effort", o.Effort}, {"sandbox_mode", o.Sandbox}, {"approval_policy", o.Approval}} {
 		if p[1] != "" {

@@ -61,6 +61,9 @@ type Role struct {
 	// CodexHome selects Codex configuration and authentication; empty uses ~/.codex.
 	CodexHome       string `yaml:"codex_home"`
 	ReasoningEffort string `yaml:"reasoning_effort"`
+	// ServiceTier is the Codex service tier of the seat's thread: default (zmina's choice when neither the role nor
+	// its profile sets one, so a global service_tier never leaks into a crew) or priority (Codex's fast mode, 2× the price).
+	ServiceTier string `yaml:"service_tier"`
 	Sandbox         string `yaml:"sandbox"`
 	ApprovalPolicy  string `yaml:"approval_policy"`
 
