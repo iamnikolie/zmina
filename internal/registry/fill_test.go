@@ -53,7 +53,7 @@ func TestFills(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "s", "subagents", "a.jsonl"),
 		[]byte(use(4, "e", "Grep", "")+result(4, "e", `"12345"`)), 0o600))
 
-	got, err := Fills(Transcript{Path: path}, time.Date(2026, 10, 26, 9, 1, 0, 0, time.UTC))
+	got, err := Fills(Transcript{Path: path}, time.Date(2026, 10, 26, 9, 1, 0, 0, time.UTC), time.Time{})
 	require.NoError(t, err)
 	assert.Equal(t, map[string]Fill{
 		"Bash: cat/sed/head/tail": {Tool: "Bash: cat/sed/head/tail", Calls: 1, Chars: BigResult + 1, Big: 1},
@@ -61,4 +61,9 @@ func TestFills(t *testing.T) {
 		"Bash: git":               {Tool: "Bash: git", Calls: 1, Chars: 3},
 		"Grep":                    {Tool: "Grep", Calls: 1, Chars: 5},
 	}, got, "an image's base64 is no text; a subagent's tools count; before the window none")
+
+	got, err = Fills(Transcript{Path: path}, time.Date(2026, 10, 26, 9, 1, 0, 0, time.UTC),
+		time.Date(2026, 10, 26, 9, 3, 0, 0, time.UTC))
+	require.NoError(t, err)
+	assert.Len(t, got, 2, "until: the window's end")
 }

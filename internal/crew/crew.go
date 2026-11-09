@@ -264,6 +264,9 @@ type Crew struct {
 	Skills *Skills `yaml:"skills"`
 	// Renotify is how long a delivered line waits for its reader's ack before it is said again (default 30m; off).
 	Renotify string `yaml:"renotify"`
+	// Morning is when the ticker tells the dispatcher yesterday's cost in one line (HH:MM in the crew's time zone;
+	// default 08:00; off).
+	Morning string `yaml:"morning"`
 	// Delivery is how lines reach a role: native (the default: its agent's own channel — a Claude session's inbox
 	// socket, a Codex bridge's inbox) or tmux (typed into its input line).
 	Delivery string `yaml:"delivery"`
@@ -301,6 +304,7 @@ type Crew struct {
 
 	bootGrace time.Duration
 	renotify  time.Duration
+	morning   time.Duration // past midnight; -1 off
 	loc       *time.Location
 	// Roles are keyed by role name.
 	Roles map[string]*Role `yaml:"roles"`
@@ -455,6 +459,12 @@ func (c *Crew) Socket() string { return suffixed(socket, "-", c.Name) }
 
 // LaunchdLabel is the crew's ticker: io.iamnikolie.zmina, or io.iamnikolie.zmina.<name>.
 func (c *Crew) LaunchdLabel() string { return suffixed(launchdLabel, ".", c.Name) }
+
+// MorningAt is how long past midnight the morning line is due; ok is false when it is off.
+func (c *Crew) MorningAt() (time.Duration, bool) { return c.morning, c.morning >= 0 }
+
+// defaultMorning is when the morning line is due unless the crew file says otherwise.
+const defaultMorning = 8 * time.Hour
 
 // RenotifyD is how long a delivered line waits for its ack before it is said again; zero is never.
 func (c *Crew) RenotifyD() time.Duration { return c.renotify }
@@ -869,6 +879,20 @@ func (c *Crew) resolve(strict bool) error {
 		}
 
 		c.renotify = d
+	}
+
+	c.morning = defaultMorning
+	switch v := strings.TrimSpace(c.Morning); v {
+	case "":
+	case "off":
+		c.morning = -1
+	default:
+		t, err := time.Parse("15:04", v)
+		if err != nil {
+			return fmt.Errorf("morning %q: a time of day such as 08:00, or off", c.Morning)
+		}
+
+		c.morning = time.Duration(t.Hour())*time.Hour + time.Duration(t.Minute())*time.Minute
 	}
 
 	c.loc = nil

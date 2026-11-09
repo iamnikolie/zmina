@@ -35,9 +35,9 @@ func (f *Fill) Add(o Fill) {
 	f.Images += o.Images
 }
 
-// Fills reads what the tools of a session and of its subagents put into their context since a time, by tool kind
-// (ToolKind).
-func Fills(t Transcript, since time.Time) (map[string]Fill, error) {
+// Fills reads what the tools of a session and of its subagents put into their context from since until until (zero:
+// up to now), by tool kind (ToolKind).
+func Fills(t Transcript, since, until time.Time) (map[string]Fill, error) {
 	out := map[string]Fill{}
 
 	paths := []string{t.Path}
@@ -45,7 +45,7 @@ func Fills(t Transcript, since time.Time) (map[string]Fill, error) {
 	paths = append(paths, subs...)
 
 	for _, p := range paths {
-		if err := readFills(p, since, out); err != nil {
+		if err := readFills(p, since, until, out); err != nil {
 			return nil, err
 		}
 	}
@@ -73,7 +73,7 @@ type fillBlock struct {
 	Content   json.RawMessage `json:"content"`
 }
 
-func readFills(path string, since time.Time, out map[string]Fill) error {
+func readFills(path string, since, until time.Time, out map[string]Fill) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -86,7 +86,7 @@ func readFills(path string, since time.Time, out map[string]Fill) error {
 	for {
 		raw, err := rd.ReadBytes('\n')
 		if len(raw) > 0 && (bytes.Contains(raw, []byte(`"tool_use"`)) || bytes.Contains(raw, []byte(`"tool_result"`))) {
-			fillFrom(raw, since, kinds, out)
+			fillFrom(raw, since, until, kinds, out)
 		}
 
 		if errors.Is(err, io.EOF) {
@@ -99,9 +99,9 @@ func readFills(path string, since time.Time, out map[string]Fill) error {
 	}
 }
 
-func fillFrom(raw []byte, since time.Time, kinds map[string]string, out map[string]Fill) {
+func fillFrom(raw []byte, since, until time.Time, kinds map[string]string, out map[string]Fill) {
 	var l fillLine
-	if json.Unmarshal(raw, &l) != nil || l.Timestamp.Before(since) {
+	if json.Unmarshal(raw, &l) != nil || l.Timestamp.Before(since) || !until.IsZero() && !l.Timestamp.Before(until) {
 		return
 	}
 

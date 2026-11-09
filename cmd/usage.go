@@ -107,7 +107,12 @@ func (a *app) usageCommand() *cobra.Command {
 				node = me.Name
 			}
 
-			got, fills, stretches, problems := usageRead(crews, node, from, prices, by == toolView)
+			var upTo *time.Time
+			if by == toolView {
+				upTo = &time.Time{}
+			}
+
+			got, fills, stretches, problems := usageRead(crews, node, from, prices, upTo)
 			restarts := usageRestarts(crews, node, from)
 			lessons := usageLessons(crews, node, from)
 
@@ -196,7 +201,7 @@ func crewsOf(cells []cost.Cell) map[string]bool {
 // usageCells reads, prices and attributes the crews' sessions since a time. A crew that cannot be read is a
 // problem, not a failure: the others still count.
 func usageCells(crews []uiCrew, node string, since time.Time, prices cost.Table) ([]cost.Cell, []string) {
-	cells, _, _, problems := usageRead(crews, node, since, prices, false)
+	cells, _, _, problems := usageRead(crews, node, since, prices, nil)
 
 	return cells, problems
 }
@@ -218,8 +223,9 @@ type usageStretch struct {
 	Stretches []int64 `json:"stretches"`
 }
 
-// usageRead is usageCells, the roles' stretches, and with fills what the tools put into the roles' context.
-func usageRead(crews []uiCrew, node string, since time.Time, prices cost.Table, fills bool) ([]cost.Cell, []usageFill,
+// usageRead is usageCells, the roles' stretches, and with fills what the tools put into the roles' context up to
+// *fills (zero: up to now).
+func usageRead(crews []uiCrew, node string, since time.Time, prices cost.Table, fills *time.Time) ([]cost.Cell, []usageFill,
 	[]usageStretch, []string) {
 	var (
 		filled   []usageFill
@@ -307,8 +313,8 @@ func usageRead(crews []uiCrew, node string, since time.Time, prices cost.Table, 
 				continue
 			}
 
-			if fills {
-				fs, err := registry.Fills(t, since)
+			if fills != nil {
+				fs, err := registry.Fills(t, since, *fills)
 				if err != nil {
 					problems = append(problems, fmt.Sprintf("crew %s: %s: %v", key, t.ID, err))
 				}
