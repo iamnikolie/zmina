@@ -1120,6 +1120,7 @@ func (a *app) tickCommand() *cobra.Command {
 			err := shift.RunTick(a.withState, runWatches, a.rang, a.printTick)
 			a.meshTick()
 			a.budgetTick(time.Now())
+			a.morningTick(time.Now())
 			a.lessonsBeat(time.Now())
 
 			return err

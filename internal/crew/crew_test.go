@@ -648,3 +648,26 @@ func TestSkills(t *testing.T) {
 		require.ErrorContains(t, err, want, body)
 	}
 }
+
+func TestMorning(t *testing.T) {
+	dir := t.TempDir()
+
+	c, err := Load(write(t, "dir: "+dir+"\nroles:\n  dispatcher:\n"))
+	require.NoError(t, err)
+	h, m, on := c.MorningAt()
+	assert.True(t, on)
+	assert.Equal(t, [2]int{8, 0}, [2]int{h, m}, "08:00 unless the crew file says otherwise")
+
+	c, err = Load(write(t, "dir: "+dir+"\nmorning: 07:30\nroles:\n  dispatcher:\n"))
+	require.NoError(t, err)
+	h, m, _ = c.MorningAt()
+	assert.Equal(t, [2]int{7, 30}, [2]int{h, m})
+
+	c, err = Load(write(t, "dir: "+dir+"\nmorning: \"off\"\nroles:\n  dispatcher:\n"))
+	require.NoError(t, err)
+	_, _, on = c.MorningAt()
+	assert.False(t, on)
+
+	_, err = Load(write(t, "dir: "+dir+"\nmorning: soon\nroles:\n  dispatcher:\n"))
+	require.ErrorContains(t, err, `morning "soon": a time of day such as 08:00, or off`)
+}

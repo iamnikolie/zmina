@@ -23,6 +23,8 @@ type Cell struct {
 	Model   string `json:"model,omitempty"`
 	Day     string `json:"day,omitempty"`
 	Trigger string `json:"trigger,omitempty"`
+	// Band is the context band the reply's prompt fell in (Bands); empty from a peer older than it.
+	Band string `json:"band,omitempty"`
 
 	Turns int `json:"turns"`
 	// Sub is how many of the turns were a subagent's.
@@ -36,13 +38,28 @@ type Cell struct {
 	// Cost is the priced turns' dollars; Unpriced how many turns had no price.
 	Cost     float64 `json:"cost"`
 	Unpriced int     `json:"unpriced,omitempty"`
+	// WriteCost, ReadCost and OutputCost are the parts of Cost paid for cache writes, cache reads and output; the
+	// rest is the uncached input and web searches. Zero from a peer older than them.
+	WriteCost  float64 `json:"write_cost,omitempty"`
+	ReadCost   float64 `json:"read_cost,omitempty"`
+	OutputCost float64 `json:"output_cost,omitempty"`
 	// Waits are the turns of polling chains past their first wait and look (registry.Message.Wait): foreground waits
 	// with at most three calls between them, the turns a background wait would not take. WaitCost is their dollars.
 	Waits    int     `json:"waits,omitempty"`
 	WaitCost float64 `json:"wait_cost,omitempty"`
+	// Compacts is how many compactions the sessions' conversations went through (Message.Compacted).
+	Compacts int `json:"compacts,omitempty"`
+	// Active is the stretches of Stretch in which the role (or its copy) replied, each once: its session-hours.
+	Active int `json:"active,omitempty"`
 }
 
-func (c *Cell) add(m registry.Message, usd float64, priced bool) {
+// Stretch is the piece of time hours are counted in: a session that replied in it was at work for all of it.
+const Stretch = 5 * time.Minute
+
+// StretchOf numbers the stretch a time falls in.
+func StretchOf(at time.Time) int64 { return at.Unix() / int64(Stretch/time.Second) }
+
+func (c *Cell) add(m registry.Message, p Parts, priced bool) {
 	c.Turns++
 	c.Input += m.Input
 	c.Write += m.Write
@@ -60,7 +77,11 @@ func (c *Cell) add(m registry.Message, usd float64, priced bool) {
 	}
 
 	if priced {
+		usd := p.Total()
 		c.Cost += usd
+		c.WriteCost += p.Write
+		c.ReadCost += p.Read
+		c.OutputCost += p.Output
 		if m.Wait {
 			c.WaitCost += usd
 		}
@@ -79,9 +100,14 @@ func (c *Cell) sum(o Cell) {
 	c.Read += o.Read
 	c.Output += o.Output
 	c.Cost += o.Cost
+	c.WriteCost += o.WriteCost
+	c.ReadCost += o.ReadCost
+	c.OutputCost += o.OutputCost
 	c.Unpriced += o.Unpriced
 	c.Waits += o.Waits
 	c.WaitCost += o.WaitCost
+	c.Compacts += o.Compacts
+	c.Active += o.Active
 }
 
 // Tokens is every token of the cell.
@@ -104,8 +130,17 @@ const TriggerDispatcher = "dispatcher"
 func Cells(sessions []Session, ledgers map[string]Ledger, prices Table, loc *time.Location) []Cell {
 	by := map[Cell]*Cell{}
 
+	// A role's (or copy's) stretches, each once: a role restarted, or a Codex role whose replies come one by one,
+	// is one session at a time.
+	counted := map[[3]string]map[int64]bool{}
+
 	for _, s := range sessions {
 		l := ledgers[s.Crew]
+
+		k := [3]string{s.Node, s.Crew, s.Role}
+		if counted[k] == nil {
+			counted[k] = map[int64]bool{}
+		}
 
 		for _, m := range s.Messages {
 			a := l.Of(s.Role, m.Cwd, m.At)
@@ -116,7 +151,7 @@ func Cells(sessions []Session, ledgers map[string]Ledger, prices Table, loc *tim
 			}
 
 			key := Cell{Node: s.Node, Crew: s.Crew, Role: s.Group, Task: a.Key(), How: a.How, Model: m.Model,
-				Day: m.At.In(loc).Format(time.DateOnly), Trigger: trigger}
+				Day: m.At.In(loc).Format(time.DateOnly), Trigger: trigger, Band: BandOf(m.Prompt())}
 
 			c := by[key]
 			if c == nil {
@@ -124,8 +159,18 @@ func Cells(sessions []Session, ledgers map[string]Ledger, prices Table, loc *tim
 				by[key] = c
 			}
 
-			usd, ok := prices.Cost(m)
-			c.add(m, usd, ok)
+			p, ok := prices.Parts(m)
+			c.add(m, p, ok)
+
+			// A stretch counts once per session, with the cell of its first reply.
+			if st := StretchOf(m.At); !counted[k][st] {
+				c.Active++
+				counted[k][st] = true
+			}
+
+			if m.Compacted {
+				c.Compacts++
+			}
 		}
 	}
 
@@ -138,7 +183,38 @@ func Cells(sessions []Session, ledgers map[string]Ledger, prices Table, loc *tim
 }
 
 // Views are what a usage table groups by.
-var Views = []string{"role", "task", "model", "day", "crew", "trigger", "how"}
+var Views = []string{"role", "task", "model", "day", "crew", "trigger", "how", "ctx"}
+
+// Bands are the context bands of --by ctx, by the least prompt each takes: a turn's price is mostly reading its
+// context again, so the cost of the turns past a band shows what a lower restart threshold would save.
+var Bands = []struct {
+	From int
+	Name string
+}{{0, "0-100k"}, {100_000, "100-200k"}, {200_000, "200-350k"}, {350_000, "350-500k"}, {500_000, "500-700k"},
+	{700_000, "700k+"}}
+
+// BandOf names the band of a prompt of n tokens.
+func BandOf(n int) string {
+	name := Bands[0].Name
+	for _, b := range Bands {
+		if n >= b.From {
+			name = b.Name
+		}
+	}
+
+	return name
+}
+
+// bandRank orders the bands; a band this zmina does not know (an older peer's empty one) comes last.
+func bandRank(name string) int {
+	for i, b := range Bands {
+		if b.Name == name {
+			return i
+		}
+	}
+
+	return len(Bands)
+}
 
 // Row is a table row: the cells that share the view's key, with their model mix and how their tasks were decided.
 type Row struct {
@@ -171,6 +247,12 @@ func keyOf(c Cell, view string) (key string, crewScoped bool) {
 		return c.Trigger, false
 	case "how":
 		return c.How, false
+	case "ctx":
+		if c.Band == "" {
+			return "?", false
+		}
+
+		return c.Band, false
 	}
 
 	panic(fmt.Sprintf("cost: no view %q", view))
@@ -223,6 +305,10 @@ func Group(cells []Cell, view string) []Row {
 	sort.Slice(out, func(i, j int) bool {
 		if view == "day" {
 			return out[i].Key > out[j].Key
+		}
+
+		if view == "ctx" {
+			return bandRank(out[i].Key) < bandRank(out[j].Key)
 		}
 
 		if out[i].Cost != out[j].Cost {
@@ -337,4 +423,25 @@ func ShortModel(id string) string {
 
 func isDigits(s string) bool {
 	return s != "" && strings.Trim(s, "0123456789") == ""
+}
+
+// Stretches are the stretches in which any of the sessions replied, each once, in order: their count is the
+// wall-clock time anyone was at work.
+func Stretches(sessions []Session) []int64 {
+	seen := map[int64]bool{}
+
+	for _, s := range sessions {
+		for _, m := range s.Messages {
+			seen[StretchOf(m.At)] = true
+		}
+	}
+
+	out := make([]int64, 0, len(seen))
+	for st := range seen {
+		out = append(out, st)
+	}
+
+	slices.Sort(out)
+
+	return out
 }

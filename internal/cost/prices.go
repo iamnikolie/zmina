@@ -160,12 +160,28 @@ func (t Table) Find(model string) (Price, bool) {
 
 // Cost is a reply's price in dollars; ok is false when the table has no price for its model or its speed.
 func (t Table) Cost(m registry.Message) (float64, bool) {
+	p, ok := t.Parts(m)
+
+	return p.Total(), ok
+}
+
+// Parts is a reply's price split by what it paid for, in dollars.
+type Parts struct {
+	// Input is the uncached prompt with the web searches; Write the cache writes; Read the cache reads.
+	Input, Write, Read, Output float64
+}
+
+// Total is the reply's whole price.
+func (p Parts) Total() float64 { return p.Input + p.Write + p.Read + p.Output }
+
+// Parts is a reply's price by part; ok is false when the table has no price for its model or its speed.
+func (t Table) Parts(m registry.Message) (Parts, bool) {
 	if m.UnpricedReason != "" {
-		return 0, false
+		return Parts{}, false
 	}
 	p, ok := t.Find(m.Model)
 	if !ok {
-		return 0, false
+		return Parts{}, false
 	}
 
 	r := p.Rates
@@ -178,7 +194,7 @@ func (t Table) Cost(m registry.Message) (float64, bool) {
 	}
 
 	if m.Write > 0 && r.Write == nil {
-		return 0, false
+		return Parts{}, false
 	}
 	mult := 1.0
 
@@ -188,17 +204,23 @@ func (t Table) Cost(m registry.Message) (float64, bool) {
 		} else if n := p.Multipliers[m.Speed]; n > 0 {
 			mult = n
 		} else {
-			return 0, false
+			return Parts{}, false
 		}
 	}
 
-	usd := (float64(m.Input)*r.Input + float64(m.Write5m)*r.write5m() + float64(m.Write1h)*r.write1h() +
-		float64(m.Read)*r.Read + float64(m.Output)*r.Output) / 1e6
+	out := Parts{
+		Input:  float64(m.Input) * r.Input / 1e6 * mult,
+		Write:  (float64(m.Write5m)*r.write5m() + float64(m.Write1h)*r.write1h()) / 1e6 * mult,
+		Read:   float64(m.Read) * r.Read / 1e6 * mult,
+		Output: float64(m.Output) * r.Output / 1e6 * mult,
+	}
 
 	if r.Write != nil {
-		usd += float64(m.Write) * *r.Write / 1e6
+		out.Write += float64(m.Write) * *r.Write / 1e6 * mult
 	}
-	return usd*mult + float64(m.WebSearch)*t.WebSearch, true
+	out.Input += float64(m.WebSearch) * t.WebSearch
+
+	return out, true
 }
 
 func or(v, def float64) float64 {

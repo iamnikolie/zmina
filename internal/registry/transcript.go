@@ -453,6 +453,8 @@ type Message struct {
 	// Wait is set for a reply of a polling chain past its first wait and look (see waitChain): it read the whole
 	// conversation again only to see whether something was done, which a background wait does once.
 	Wait bool `json:"wait,omitempty"`
+	// Compacted is set on a session's first reply after a compaction of its conversation.
+	Compacted bool `json:"compacted,omitempty"`
 }
 
 // Prompt is the tokens the reply read: its input, cache writes and cache reads.
@@ -620,8 +622,9 @@ func readMessages(path string, since time.Time, seen map[string]bool, parent []c
 	rd := bufio.NewReaderSize(f, 1<<20)
 
 	var (
-		chain waitChain
-		last  string
+		chain     waitChain
+		last      string
+		compacted bool
 	)
 
 	for {
@@ -644,6 +647,7 @@ func readMessages(path string, since time.Time, seen map[string]bool, parent []c
 			if ok && c.trigger != "" && parent == nil {
 				current = c
 				cues = append(cues, c)
+				compacted = compacted || c.trigger == TriggerCompact
 			} else if ok && c.trigger == "" && !m.At.Before(since) && (m.ID == "" || !seen[m.ID]) {
 				seen[m.ID] = true
 				m.Sub = parent != nil || m.Sub
@@ -654,6 +658,10 @@ func readMessages(path string, since time.Time, seen map[string]bool, parent []c
 				}
 
 				m.Trigger, m.From, m.Wait = at.trigger, at.from, wait
+				if parent == nil && !m.Sub {
+					m.Compacted, compacted = compacted, false
+				}
+
 				out = append(out, m)
 			}
 		}

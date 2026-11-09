@@ -40,6 +40,7 @@ read_guard: true                         # big cat/sed/Read become zmina read (p
 delivery: native                         # how lines reach roles: native (default: the agent's own channel) | tmux (per role too)
 delivery_mid_turn: true                  # the dispatcher's acked lines may go into a turn it is in (default true; false: at its end)
 renotify: 30m                            # an unacked line is said again this often (default 30m; off)
+morning: 08:00                           # when (in timezone:) the dispatcher hears yesterday's cost in one line (default 08:00; off)
 drop_env: [MY_TERMINAL_*]                # variables kept from the roles, on top of the built-in list
 drop_tools: [Artifact, Workflow]         # Claude Code tools every role starts without (--disallowedTools)
 skills:                                  # the skill list Claude roles are sent with every request, trimmed (default: Claude Code's own)
@@ -1262,12 +1263,26 @@ would not load is never saved), and leaves the previous file as `crew.yaml.bak`.
 
 ## Usage
 
-`zmina usage [--since 24h|7d] [--by role|task|model|day|crew|trigger|how] [--role r] [--all] [--json]` — what the
+`zmina usage [--since 24h|7d] [--by role|task|model|day|crew|trigger|how|ctx|tool] [--role r] [--all] [--json]` — what the
 work cost, from the transcripts: each API reply once, a role's copies (dev#2) with it, a subagent's replies with
 the session that started it (`SUB` counts them). Columns: turns, `WAITS`, tokens, `CACHED` (the share of the prompt read
-from cache), `$ API`, `$/TURN`, `CTX` (the context a turn carries on average; `!` past 200k — most of such a
+from cache), `REREAD` (cache reads over cache writes: how many times a token put in context was read again), `$ API`, `$/TURN`, `CTX` (the context a turn carries on average; `!` past 200k — most of such a
 turn's price is reading the conversation again: compact or restart the role), `MODELS` (the model mix by dollars,
-from each reply's own model), and for `--by task` `HOW`. A totals row `all`.
+from each reply's own model), and for `--by task` `HOW`. A totals row `all`. Under the table, the cost by what it
+paid for: `Of the cost: cache reads 60%, cache writes 17%, output 18%, input 5%.`
+
+- **Context bands** (`--by ctx`): rows by the context a turn carried (`0-100k`, `100-200k`, `200-350k`, `350-500k`,
+  `500-700k`, `700k+`), in that order, with `%TURNS` and `%COST`: what share of the cost the long turns take, so what a
+  lower `context_max` or restart threshold would save. Mixed models make the bands uneven; `--role r` reads one role.
+  A peer older than this has no bands: its turns are `?`.
+- **What fills the context** (`--by tool`): not dollars but what the tools' results put into the conversations, which
+  every later turn reads again until a compaction or a restart. Rows by tool kind — `Read`, `Grep`, a shell command
+  by its first program after `cd …&&` and `VAR=…` (`Bash: cat/sed/head/tail`, `Bash: git`, `Bash: grep/rg`, …; zmina's
+  own by subcommand, `Bash: zmina task`; a leading `zmina ack …&&` is skipped for the command after it) — with `CALLS`, `CHARS` (the results' text, about 4 a token), `%CHARS`,
+  `OVER 20K` (results over 20k characters) and `IMAGES` (a picture's data is not text; it counts apart). A subagent's
+  tools count with its session. Kinds under 1% with no big result and no image share one row; `--json` has every
+  kind. A `cat` the read guard answered with an outline still counts as `cat`. `--all` asks the peers too; one older
+  than this is `missing`.
 
 - **Waits** (`WAITS`: turns and their dollars; `waits` and `wait_cost` in `--json`): the turns spent polling. A wait
   is a Bash call in the foreground that waits — a `sleep` of 20 s or more, an `until`, `while` or `for … do` loop that
@@ -1312,6 +1327,18 @@ from each reply's own model), and for `--by task` `HOW`. A totals row `all`.
   role, a copy's with its role's, and what for: `Restarted fresh 4 times: backend 2 (context 1, idle 0, task done
   1), dev 2 (context 1, idle 1).` (`task done` only when there is one) `--json` has them as `restarts` (role, when, task, why);
   `--all` asks the peers for theirs.
+- **Morning line**: once a day, on the first beat past the crew file's `morning:` (default `08:00`, `off`) in its `timezone:`, the
+  ticker tells the dispatcher yesterday in one note: `morning: yesterday $65.67 API-equivalent, 1154 turns, 5.8 h at
+  work (1.9 sessions at once); context per turn: devops 176k, dispatcher 95k, …; filled by cat/sed/head/tail 25%,
+  git 24%, Read 17%; jumped: devops context 127k -> 176k; compacted 3 (zmina usage --since 24h, --by ctx, --by
+  tool)`. The four costliest roles' context; `jumped` names a role whose context per turn grew by a quarter and
+  30k or more, or whose price per turn grew by a quarter and a cent or more, from the day before (30 turns on
+  both days at least). Nobody at work yesterday: no line. The state keeps the day told (`morning_day`).
+- **Hours and compactions**, under the table: `At work 60.6 h wall-clock, 152.1 session-hours: 2.5 sessions at
+  once.` — a role (a copy apart) is at work in a 5-minute stretch it replied in; wall-clock is the stretches of any
+  counted role, each once (`--role r`: that role's). `Compacted 61 times: dispatcher 40, zmina-dev 8, …` — the
+  conversations compacted in the window, by role. `--json`: `wall_hours`, `session_hours`, `compacts` per row. A peer
+  older than this adds no hours or compactions.
 - Not counted: transcripts Claude Code no longer keeps, and headless runs outside every task's worktree.
 
 ## Log

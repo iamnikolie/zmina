@@ -193,6 +193,8 @@ func TestMessages(t *testing.T) {
 	assert.Equal(t, []string{"m1", "m2", "sub1", "m3", "m4", "m5"}, ids, "since, each reply once, by time")
 	assert.Equal(t, []string{TriggerHandoff, TriggerHandoff, TriggerHandoff, TriggerPeer, TriggerNotice, TriggerCompact},
 		triggers, "a tool result and a skill's text start no turn; a subagent's reply takes its parent's turn")
+	assert.True(t, got[5].Compacted, "the first reply after a compaction")
+	assert.False(t, got[4].Compacted)
 
 	assert.Equal(t, Message{ID: "m1", At: time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC), Model: "claude-opus-5-5",
 		Input: 2, Write5m: 40, Write1h: 60, Read: 1000, Output: 10, WebSearch: 2, Cwd: "/work/t1",

@@ -74,6 +74,8 @@ type State struct {
 	// crossed (role:<name>:<day>, task:<id>:<budget>), so each is told once.
 	BudgetAt time.Time `json:"budget_at,omitzero"`
 	Budgeted []string  `json:"budgeted,omitempty"`
+	// MorningDay is the day (2006-01-02) the morning line last told the dispatcher of.
+	MorningDay string `json:"morning_day,omitempty"`
 
 	// Legacy is set when the file read was in the first format (converted in memory, written as this one on
 	// the next save).

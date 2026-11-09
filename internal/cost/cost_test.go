@@ -1,6 +1,7 @@
 package cost
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -23,6 +24,9 @@ func TestCost(t *testing.T) {
 	usd, ok := p.Cost(m)
 	require.True(t, ok)
 	assert.InDelta(t, 4+5+8+0.20+20+0.02, usd, 1e-9)
+
+	parts, _ := p.Parts(m)
+	assert.Equal(t, Parts{Input: 4.02, Write: 13, Read: 0.20, Output: 20}, roundParts(parts), "by part, searches with input")
 
 	m.Speed = "fast"
 	usd, _ = p.Cost(m)
@@ -47,6 +51,52 @@ func TestCost(t *testing.T) {
 		_, ok = p.Find(id)
 		assert.False(t, ok, "%s is not a model the table has", id)
 	}
+}
+
+func roundParts(p Parts) Parts {
+	r := func(v float64) float64 { return math.Round(v*1e6) / 1e6 }
+
+	return Parts{Input: r(p.Input), Write: r(p.Write), Read: r(p.Read), Output: r(p.Output)}
+}
+
+func TestBands(t *testing.T) {
+	assert.Equal(t, "0-100k", BandOf(0))
+	assert.Equal(t, "100-200k", BandOf(100_000))
+	assert.Equal(t, "350-500k", BandOf(499_999))
+	assert.Equal(t, "700k+", BandOf(2_000_000))
+
+	at := func(read int) registry.Message {
+		return registry.Message{At: h(1), Model: "claude-opus-5-5", Read: read, Write5m: 1000, Output: 1000}
+	}
+	cells := Cells([]Session{{Crew: "acme", Role: "dev", Group: "dev", Messages: []registry.Message{
+		at(400_000), at(50_000), at(450_000), at(150_000)}}}, nil, Builtin(), time.UTC)
+	cells = append(cells, Cell{Crew: "old", Role: "dev", Turns: 1, Cost: 1}) // a peer older than bands
+
+	rows := Group(cells, "ctx")
+	keys := []string{}
+	for _, r := range rows {
+		keys = append(keys, r.Key)
+	}
+
+	assert.Equal(t, []string{"0-100k", "100-200k", "350-500k", "?"}, keys, "bands in order, not by cost")
+	assert.Equal(t, 2, rows[2].Turns)
+	assert.InDelta(t, 0.17, rows[2].ReadCost, 1e-9, "850k cache reads at $0.20 a million")
+	assert.InDelta(t, rows[2].Cost, rows[2].ReadCost+rows[2].WriteCost+rows[2].OutputCost, 1e-9, "no uncached input")
+
+	m := func(at time.Time, compacted bool) registry.Message {
+		return registry.Message{At: at, Model: "claude-opus-5-5", Output: 1, Compacted: compacted}
+	}
+	cells = Cells([]Session{
+		{Crew: "acme", Role: "dev", Group: "dev", Messages: []registry.Message{m(h(1), false),
+			m(h(1).Add(time.Minute), true), m(h(1).Add(10*time.Minute), false)}},
+		{Crew: "acme", Role: "dev", Group: "dev", Messages: []registry.Message{m(h(1).Add(2*time.Minute), false)}},
+		{Crew: "acme", Role: "dev#2", Group: "dev", Messages: []registry.Message{m(h(1), false)}},
+	}, nil, Builtin(), time.UTC)
+	total := Total(cells)
+	assert.Equal(t, 1, total.Compacts)
+	assert.Equal(t, 3, total.Active, "two stretches of dev (its sessions together), one of its copy")
+	assert.Len(t, Stretches([]Session{{Messages: []registry.Message{m(h(1), false), m(h(1).Add(time.Minute), false),
+		m(h(2), false)}}}), 2)
 }
 
 // TestBuiltinRates pins the built-in table to the public pricing page as of builtinDate: input, 5m and 1h cache
