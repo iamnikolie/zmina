@@ -1108,7 +1108,8 @@ zmina applies what passed: only CLAUDE.md, AGENTS.md, `<agents>/<role>/AGENT*.md
 regular files with no symlink on their path, the old text found exactly once, at most 40 lines, the edit and the
 commit message scanned again; one commit per lesson (the rule,
 `Why:`, `From:`, `Lesson: LS-n`). It pushes that one branch and nothing else, through the repository's own
-pre-push hooks (a refusal fails the run; the lessons stay new) (refused unless its commits over origin
+pre-push hooks (a refusal fails the run, the lessons stay new, and the daily run is held — `held after a refused
+push` in ls — until `zmina lesson triage` by hand pushes) (refused unless its commits over origin
 are exactly the run's, each naming its lesson and changing only its file) with GitLab push options that open a draft
 MR into the branch and remove the source branch on merge; its title starts with `Draft: `, which GitLab takes as a draft
 on every version, option or not. Then it reads the MR back with `glab`, or `gl` with a profile for the forge's host
@@ -1119,7 +1120,8 @@ spent week skips the run (`triage-skipped`). Each run's cost is logged (`lessons
 
 The owner gets one todo per MR: its url, each lesson and its file, what was dropped and why, the questions, and how
 many new lessons wait for it (new ones wait while it is open; `zmina ls` shows `lessons: 4 waiting · MR open <url>`).
-Hourly, and when the owner marks the todo done, the ticker looks at the MR: merged (its tip on origin's branch, or —
+Hourly, and when the owner marks the todo done (then every 5 minutes while the forge cannot be reached), the ticker
+looks at the MR: merged (its tip on origin's branch, or —
 a squash or rebase merge — origin's commits since the base naming every lesson, or its files carrying every line the
 lessons added) or its branch gone (closed) — then the lessons are merged or dropped, the todo is done, and the checkout the roles read is fast-forwarded
 when it is on that branch, clean and not ahead; otherwise zmina leaves it alone and adds a check with the one command,

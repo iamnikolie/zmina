@@ -28,6 +28,8 @@ import (
 const (
 	// lessonsCheckEvery is how often an open lessons merge request is looked at on the remote.
 	lessonsCheckEvery = time.Hour
+	// lessonsRecheck is how often the forge is asked again about an MR the owner marked done while it cannot be reached.
+	lessonsRecheck = 5 * time.Minute
 	// lessonsRunStale is how long a run may hold the record before it is taken as gone.
 	lessonsRunStale = time.Hour
 )
@@ -368,6 +370,8 @@ func lessonsLine(c *crew.Crew) string {
 
 	if !c.Lessons.On {
 		parts = append(parts, "triage off (lessons: on in the crew file)")
+	} else if st.Held != "" {
+		parts = append(parts, "held after a refused push: zmina lesson triage tries again")
 	} else if st.LastError != "" {
 		parts = append(parts, "last run failed: "+st.LastError)
 	}
@@ -475,6 +479,10 @@ func lessonStart(s *shift.Shift, dry, scheduled bool) (lessonRun, error) {
 
 	if st.Open != nil && !dry {
 		return lessonRun{}, quiet(scheduled, "a lessons MR is open ("+or(st.Open.URL, st.Open.Branch)+"): new lessons wait for it")
+	}
+
+	if st.Held != "" && scheduled {
+		return lessonRun{}, quiet(scheduled, "held after a refused push ("+st.Held+"): zmina lesson triage tries again")
 	}
 
 	items, err := lessonStore(c).All()
@@ -589,7 +597,16 @@ func lessonFinish(s *shift.Shift, run lessonRun, res lesson.Result, runErr error
 		s.Log("ticker", "triage-failed", "", runErr.Error())
 		s.AddNotes([]string{fmt.Sprintf("lessons triage failed: %v", runErr)})
 
+		if res.PushRefused {
+			st.Held = runErr.Error()
+			s.Log("ticker", "triage-held", "", "the daily run waits until a run by hand: zmina lesson triage")
+		}
+
 		return lesson.SaveState(run.dir, st)
+	}
+
+	if !dry && res.Pushed {
+		st.Held = ""
 	}
 
 	if dry {
@@ -615,9 +632,12 @@ func lessonFinish(s *shift.Shift, run lessonRun, res lesson.Result, runErr error
 		_ = store.Put(l)
 	}
 
+	var applied []string
+
 	for _, ap := range res.Applied {
 		mark(ap.ID, lesson.InMR, "applied", ap.File)
 		ids = append(ids, ap.ID)
+		applied = append(applied, ap.ID)
 	}
 
 	for _, d := range res.Dropped {
@@ -647,7 +667,7 @@ func lessonFinish(s *shift.Shift, run lessonRun, res lesson.Result, runErr error
 		}
 
 		st.Open = &lesson.Open{Branch: res.Branch, Target: run.cfg.Branch, URL: res.MRURL, Base: res.Base, Tip: res.Tip,
-			IDs: ids, Todo: ask.ID, Opened: s.Now()}
+			IDs: ids, Applied: applied, Todo: ask.ID, Opened: s.Now()}
 		s.Log("ticker", "lessons-mr", "", or(res.MRURL, res.Branch)+" "+ask.ID)
 		s.Log("ticker", "lessons-draft", "", lessonDraftLine(res, run.cfg.Remote))
 	case len(res.Questions) > 0:
@@ -809,7 +829,7 @@ func (a *app) lessonsBeat(now time.Time) {
 // lessonsDue reports whether the day's run should start: on, past its time today, not run today, lessons waiting,
 // no MR open, no run going.
 func lessonsDue(c *crew.Crew, st lesson.RunState, waiting int, now time.Time) bool {
-	if !c.Lessons.On || waiting == 0 || st.Open != nil {
+	if !c.Lessons.On || waiting == 0 || st.Open != nil || st.Held != "" {
 		return false
 	}
 
@@ -841,19 +861,20 @@ func (a *app) lessonsFollow(c *crew.Crew, st lesson.RunState, waiting int, now t
 		ownerDone = true
 	}
 
-	done, merged := ownerDone, false
+	done, merged := false, false
 
-	// The owner's tick on the todo ends it, but whether it was merged is the forge's to say: checked then too.
-	if ownerDone || now.Sub(st.Checked) >= lessonsCheckEvery {
+	// The owner's tick on the todo ends it, but whether it was merged is the forge's to say: asked then too (every
+	// few minutes while the forge cannot be reached, rather than filing a merged MR as closed).
+	if ownerDone && now.Sub(st.Checked) >= lessonsRecheck || now.Sub(st.Checked) >= lessonsCheckEvery {
 		repo := c.Lessons.Repo
 		if repo == "" {
 			repo, _ = lesson.FindRepo(c.Agents)
 		}
 
-		if repo != "" {
-			if d, m, err := lesson.Finished(repo, "origin", open.Branch, open.Target, open.Base, open.Tip, open.IDs); err == nil {
-				done, merged = d || ownerDone, m
-			}
+		if repo == "" {
+			done = ownerDone
+		} else if d, m, err := lesson.Finished(repo, "origin", open.Branch, open.Target, open.Base, open.Tip, open.Applied); err == nil {
+			done, merged = d || ownerDone, m
 		}
 
 		st.Checked = now

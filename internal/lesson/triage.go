@@ -156,6 +156,8 @@ type Result struct {
 	Pushed    bool
 	// PushNote says why the push did not open a merge request by itself (a remote without push options).
 	PushNote string
+	// PushRefused: the push itself failed (the remote, or a pre-push hook, said no).
+	PushRefused bool
 	// Draft is whether GitLab holds the MR as a draft, read back after the push: "yes", "no", "" (not read: no
 	// glab or gl profile for its host on this node). DraftVia names the client that read it.
 	Draft, DraftVia string
@@ -597,6 +599,8 @@ func Push(cfg Config, res *Result, title, description string) error {
 	}
 
 	if err != nil {
+		res.PushRefused = true
+
 		return fmt.Errorf("push %s: %w: %s", res.Branch, err, lastLine(out))
 	}
 

@@ -204,6 +204,7 @@ func TestLessonTriageEndToEnd(t *testing.T) {
 	var st lesson.RunState
 	require.NoError(t, a.readState(func(s *shift.Shift) error {
 		st, _ = lesson.LoadState(lessonDir(s.Crew))
+		assert.Equal(t, []string{"LS-1"}, st.Open.Applied, "only committed lessons: a squash is known by their names")
 		ask, err := askStore(s.Crew).Get(st.Open.Todo)
 		require.NoError(t, err)
 		assert.Contains(t, ask.Text, "1 new lessons wait for this MR.")
@@ -220,7 +221,7 @@ func TestLessonTriageEndToEnd(t *testing.T) {
 	// He ticks the todo before the hourly check: the forge still says it was merged, and the checkout catches up.
 	_, _, err = zm(t, file, "todo", "done", st.Open.Todo)
 	require.NoError(t, err)
-	a.lessonsBeat(time.Now())
+	a.lessonsBeat(time.Now().Add(lessonsRecheck))
 
 	out, _, err = zm(t, file, "lesson", "ls", "--all")
 	require.NoError(t, err)
@@ -273,4 +274,12 @@ func TestLessonDenyFailsClosed(t *testing.T) {
 	_, _, err := zm(t, file, "lesson", "add", "Reply short", "--why", "asked")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot be read")
+}
+
+// A push the remote refuses holds the daily run: the same refusal would cost the seats again each day.
+func TestLessonsHeldAfterARefusedPush(t *testing.T) {
+	c := &crew.Crew{Lessons: crew.Lessons{On: true, At: "06:00"}}
+	morning := time.Date(2026, 11, 9, 6, 30, 0, 0, c.Location())
+
+	assert.False(t, lessonsDue(c, lesson.RunState{Held: "push refused"}, 3, morning))
 }
