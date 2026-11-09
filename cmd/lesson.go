@@ -436,6 +436,9 @@ func (a *app) lessonTriage(ctx context.Context, dry, scheduled bool) error {
 			len(res.Applied), len(res.Dropped), len(res.Questions))
 
 		terr = lesson.Push(run.cfg, &res, title, desc)
+		if terr == nil && res.MRURL != "" {
+			res.Draft, res.DraftVia = lesson.ReadDraft(res.MRURL)
+		}
 	}
 
 	err = a.withState(func(s *shift.Shift) error { return lessonFinish(s, run, res, terr, false) })
@@ -635,6 +638,7 @@ func lessonFinish(s *shift.Shift, run lessonRun, res lesson.Result, runErr error
 		st.Open = &lesson.Open{Branch: res.Branch, Target: run.cfg.Branch, URL: res.MRURL, Base: res.Base, Tip: res.Tip,
 			IDs: ids, Todo: ask.ID, Opened: s.Now()}
 		s.Log("ticker", "lessons-mr", "", or(res.MRURL, res.Branch)+" "+ask.ID)
+		s.Log("ticker", "lessons-draft", "", lessonDraftLine(res, run.cfg.Remote))
 	case len(res.Questions) > 0:
 		ask, err := askStore(s.Crew).Add(asks.Ask{Kind: asks.Check, Title: "Lessons: questions",
 			Text: text, Role: "ticker", By: "ticker"}, s.Now())
@@ -654,6 +658,23 @@ func questionFor(questions []string, id string) string {
 	}
 
 	return ""
+}
+
+// lessonDraftLine says what the push left on the forge: the MR read back as a draft or not, or the pushed ref when
+// nothing on this node could read the MR.
+func lessonDraftLine(res lesson.Result, remote string) string {
+	ref := or(remote, "origin") + " refs/heads/" + res.Branch
+
+	switch {
+	case res.MRURL == "":
+		return "pushed " + ref + " (no MR url in the push reply)"
+	case res.Draft == "yes":
+		return "draft " + res.MRURL + " (read by " + res.DraftVia + ")"
+	case res.Draft == "no":
+		return "NOT A DRAFT " + res.MRURL + " (read by " + res.DraftVia + "): its title starts with Draft:, check it"
+	}
+
+	return "pushed " + ref + "; " + res.MRURL + " not read back (no glab or gl profile for its host)"
 }
 
 // lessonTodoText is the owner's todo for a run: the MR, the lessons in it, what was dropped, the questions, and how

@@ -149,6 +149,9 @@ type Result struct {
 	Pushed    bool
 	// PushNote says why the push did not open a merge request by itself (a remote without push options).
 	PushNote string
+	// Draft is whether GitLab holds the MR as a draft, read back after the push: "yes", "no", "" (not read: no
+	// glab or gl profile for its host on this node). DraftVia names the client that read it.
+	Draft, DraftVia string
 }
 
 // Git runs git in a directory and returns its output.
@@ -539,7 +542,7 @@ func Push(cfg Config, res *Result, title, description string) error {
 
 	ref := "refs/heads/" + res.Branch + ":refs/heads/" + res.Branch
 	opts := []string{"merge_request.create", "merge_request.draft", "merge_request.target=" + cfg.Branch,
-		"merge_request.title=" + oneLine(title), "merge_request.description=" + oneLine(description),
+		"merge_request.title=" + oneLine(DraftTitle(title)), "merge_request.description=" + oneLine(description),
 		"merge_request.remove_source_branch"}
 
 	args := []string{"push", "--no-verify"}

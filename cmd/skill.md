@@ -1106,8 +1106,10 @@ zmina applies what passed: only CLAUDE.md, AGENTS.md, `<agents>/<role>/AGENT*.md
 regular files, the old text found exactly once, at most 40 lines, scanned again; one commit per lesson (the rule,
 `Why:`, `From:`, `Lesson: LS-n`). It pushes that one branch and nothing else (refused unless its commits over origin
 are exactly the run's, each naming its lesson and changing only its file) with GitLab push options that open a draft
-MR into the branch and remove the source branch on merge; a remote without push options gets the branch, and the
-todo says to open the MR by hand. The run's budget is the smaller of `budget` and what is left of `week_budget`; a
+MR into the branch and remove the source branch on merge; its title starts with `Draft: `, which GitLab takes as a draft
+on every version, option or not. Then it reads the MR back with `glab`, or `gl` with a profile for the forge's host
+(`$GL_CONFIG` first), and logs `lessons-draft`: `draft <url>`, `NOT A DRAFT <url>`, or the pushed ref when nothing on
+the node could read it. A remote without push options gets the branch, and the todo says to open the MR by hand. The run's budget is the smaller of `budget` and what is left of `week_budget`; a
 spent week skips the run (`triage-skipped`). Each run's cost is logged (`lessons-cost`) and `zmina usage` shows
 `Lessons triage $x: <crew> $y (n times)` per crew, peers too with `--all`.
 

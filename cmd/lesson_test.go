@@ -248,3 +248,17 @@ func gitOut(t *testing.T, dir string, args ...string) string {
 
 	return strings.TrimSpace(string(out))
 }
+
+func TestLessonDraftLine(t *testing.T) {
+	r := lesson.Result{Branch: "lessons/2026-11-09"}
+	assert.Equal(t, "pushed origin refs/heads/lessons/2026-11-09 (no MR url in the push reply)", lessonDraftLine(r, ""))
+
+	r.MRURL = "https://gitlab.com/acme/agentic-os/-/merge_requests/12"
+	assert.Contains(t, lessonDraftLine(r, "origin"), "not read back")
+
+	r.Draft, r.DraftVia = "yes", "glab"
+	assert.Equal(t, "draft https://gitlab.com/acme/agentic-os/-/merge_requests/12 (read by glab)", lessonDraftLine(r, "origin"))
+
+	r.Draft = "no"
+	assert.Contains(t, lessonDraftLine(r, "origin"), "NOT A DRAFT")
+}
