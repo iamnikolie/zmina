@@ -194,6 +194,7 @@ func TestPublicationRelayCannotUseCachedV2OrGossipAsAuthority(t *testing.T) {
 	a := newOwner(t, "alpha")
 	b := enroll(t, a, "beta")
 	c := enroll(t, a, "gamma")
+	markRelay(t, a, "beta")
 	require.NoError(t, a.metCapabilities(b.Cert, []Peer{{Name: c.Name, Cert: &c.Cert, Direct: true, ReportsV1: true, ReportsV2: true}}, BodyMax, true, time.Now(), true))
 	ps, err := a.Peers()
 	require.NoError(t, err)

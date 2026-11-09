@@ -434,3 +434,36 @@ func TestSkillsAtStart(t *testing.T) {
 	assert.NotContains(t, strings.Join(none.s.Command(none.s.Crew.Roles["harvester"], ""), " "), "--settings")
 	assert.NotContains(t, strings.Join(none.s.Env(none.s.Crew.Roles["harvester"]), " "), "SLASH_COMMAND")
 }
+
+// TestRulesSize: what zmina's standing rules add to a fresh start, by what the crew turns on; the number doctor
+// shows, and a bound that makes their growth a decision.
+func TestRulesSize(t *testing.T) {
+	withBoot := strings.Replace(crewYAML, "  designer:\n", "  designer:\n    boot: read the brief\n", 1)
+	plain := fixtureWith(t, withBoot)
+	r := plain.s.Crew.Roles["designer"]
+	assert.Equal(t, len(RoleRules)+2, plain.s.RulesSize(r), "a typed-to Claude role: the owner and wait rules")
+
+	body := strings.Replace(withBoot, "roles:\n", "read_guard: true\nroles:\n", 1)
+	f, _ := nativeFixture(t, body)
+	r = f.s.Crew.Roles["designer"]
+	size := f.s.RulesSize(r)
+	assert.Greater(t, size, len(RoleRules)+len(ReadRule)+len(ReadGuardRule), "inbox, ack and read rules on top")
+	assert.Less(t, size, 5000, "zmina's own rules stay under 5k characters a Claude role")
+
+	boot := f.s.BootText(r)
+	assert.Equal(t, len(boot)-len(r.Boot), size, "the boot line without the role's own text")
+}
+
+func TestOutputCapAtStart(t *testing.T) {
+	body := strings.Replace(crewYAML, "roles:\n", "output_cap:\n  bash: 12k\n  read_tokens: 6k\nroles:\n", 1)
+	f, _ := nativeFixture(t, body)
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal([]byte(f.s.roleSettings("designer")), &got))
+	assert.InDelta(t, 12000, got["bashOutputMaxChars"], 0)
+	assert.Contains(t, f.s.Env(f.s.Crew.Roles["designer"]), "CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS=6000")
+
+	plain := fixtureWith(t, body)
+	argv := strings.Join(plain.s.Command(plain.s.Crew.Roles["harvester"], ""), " ")
+	assert.Contains(t, argv, `--settings {"bashOutputMaxChars":12000}`)
+}

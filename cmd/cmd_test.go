@@ -336,6 +336,8 @@ func TestDoctorReports(t *testing.T) {
 	assert.Contains(t, out, "warn  registry")
 	assert.Contains(t, out, "warn  ticker")
 	assert.Contains(t, out, "ok    lock")
+	assert.Contains(t, out, "ok    boot      zmina's rules at a fresh start: ")
+	assert.Contains(t, out, "ok    boot      skill list not trimmed")
 	assert.NoError(t, err, "warnings only")
 
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "claude"), []byte("#!/bin/sh\necho '--model'\n"), 0o700))

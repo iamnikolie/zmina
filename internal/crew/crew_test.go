@@ -629,7 +629,7 @@ func TestSkills(t *testing.T) {
 		"  own:\n    delivery: tmux\n    args: [--settings, '{}']\n  cx:\n    runtime: codex\n"))
 	require.NoError(t, err)
 	assert.Equal(t, SkillList{Listing: 9000}, c.Roles["own"].SkillList(), "its own --settings: the listing only")
-	assert.Contains(t, c.Warnings, "role own: args has --settings, so skills desc_max, off, name_only and user_only are not passed to it (listing is)")
+	assert.Contains(t, c.Warnings, "role own: args has --settings, so skills desc_max, off, name_only, user_only and output_cap.bash are not passed to it (listing, read_tokens and mcp_tokens are)")
 	assert.True(t, c.Roles["cx"].SkillList().Empty(), "a Codex role has no skill list of Claude's")
 
 	_, err = Load(write(t, "dir: "+dir+"\nroles:\n  dispatcher:\n  cx:\n    runtime: codex\n    skills: {listing: 9k}\n"))
@@ -643,6 +643,43 @@ func TestSkills(t *testing.T) {
 		"skills:\n  off: [oko, oko]\nroles:\n  dispatcher:\n":                      "skills.off: oko is listed twice",
 		"roles:\n  dispatcher:\n    skills:\n      desc_max: -1\n":                 "role dispatcher: skills.desc_max -1",
 		"roles:\n  dispatcher:\n    skills:\n      listing: lots\n":                "role dispatcher: skills.listing",
+	} {
+		_, err := Load(write(t, "dir: "+dir+"\n"+body))
+		require.ErrorContains(t, err, want, body)
+	}
+}
+
+func TestOutputCap(t *testing.T) {
+	dir := t.TempDir()
+	c, err := Load(write(t, "dir: "+dir+"\noutput_cap:\n  bash: 12k\n  read_tokens: 6k\nroles:\n  dispatcher:\n"+
+		"  dev:\n    output_cap:\n      read_tokens: 'off'\n      mcp_tokens: 8_000\n  ops:\n    output_cap:\n      bash: 40k\n"+
+		"  own:\n    delivery: tmux\n    args: [--settings, '{}']\n  cx:\n    runtime: codex\n"))
+	require.NoError(t, err)
+
+	assert.Equal(t, OutputCaps{Bash: 12000, ReadTokens: 6000}, c.Roles["dispatcher"].OutputCaps(), "the crew's")
+	assert.Equal(t, OutputCaps{Bash: 12000, MCPTokens: 8000}, c.Roles["dev"].OutputCaps(), "the role's fields over the crew's; off drops one")
+	assert.Equal(t, OutputCaps{Bash: 40000, ReadTokens: 6000}, c.Roles["ops"].OutputCaps())
+	assert.Equal(t, OutputCaps{ReadTokens: 6000}, c.Roles["own"].OutputCaps(), "its own --settings: the env caps only")
+	assert.Equal(t, OutputCaps{}, c.Roles["cx"].OutputCaps(), "a Codex role has no Claude Code caps")
+
+	dev := c.Roles["dev"]
+	assert.Equal(t, map[string]any{"bashOutputMaxChars": 12000}, dev.Settings())
+	assert.Equal(t, []string{"MAX_MCP_OUTPUT_TOKENS=8000"}, dev.Env())
+	assert.Equal(t, []string{"CLAUDE_CODE_FILE_READ_MAX_OUTPUT_TOKENS=6000"}, c.Roles["dispatcher"].Env())
+
+	c, err = Load(write(t, "dir: "+dir+"\nroles:\n  dispatcher:\n"))
+	require.NoError(t, err)
+	assert.Empty(t, c.Roles["dispatcher"].Settings(), "Claude Code's own caps unless asked")
+	assert.Empty(t, c.Roles["dispatcher"].Env())
+
+	_, err = Load(write(t, "dir: "+dir+"\nroles:\n  dispatcher:\n  cx:\n    runtime: codex\n    output_cap: {bash: 12k}\n"))
+	require.ErrorContains(t, err, "output_cap")
+
+	for body, want := range map[string]string{
+		"output_cap:\n  bash: 2k\nroles:\n  dispatcher:\n":                "output_cap.bash \"2k\": a number from 4k to 128k",
+		"output_cap:\n  bash: 200k\nroles:\n  dispatcher:\n":              "output_cap.bash",
+		"output_cap:\n  read_tokens: lots\nroles:\n  dispatcher:\n":       "output_cap.read_tokens",
+		"roles:\n  dispatcher:\n    output_cap:\n      mcp_tokens: 500\n": "role dispatcher: output_cap.mcp_tokens",
 	} {
 		_, err := Load(write(t, "dir: "+dir+"\n"+body))
 		require.ErrorContains(t, err, want, body)

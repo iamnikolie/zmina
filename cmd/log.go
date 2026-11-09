@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -55,10 +56,15 @@ func (a *app) logCommand() *cobra.Command {
 					return a.printJSON(evs)
 				}
 
+				titles := ledgerTitles(s, evs)
+
 				for _, e := range evs {
 					line := e.TS.Local().Format(time.DateTime) + "  " + dash(e.Role) + "  " + e.Event
 					if e.Task != "" {
 						line += " " + e.Task
+						if t := titles[e.Task]; t != "" {
+							line += " (" + clip(oneLine(t), 40) + ")"
+						}
 					}
 
 					if e.By != "" {
@@ -106,4 +112,25 @@ func parseAge(s string) (time.Duration, error) {
 	}
 
 	return d, nil
+}
+
+// ledgerTitles are the titles of the tasks and parked items the events name, read only when one does: a line names
+// what it is about, not an id alone.
+func ledgerTitles(s *shift.Shift, evs []events.Event) map[string]string {
+	out := map[string]string{}
+	if !slices.ContainsFunc(evs, func(e events.Event) bool { return e.Task != "" }) {
+		return out
+	}
+
+	tasks, _, _ := taskStore(s.Crew).Scan()
+	for _, t := range tasks {
+		out[t.ID] = t.Headline()
+	}
+
+	items, _, _ := laterStore(s.Crew).Scan()
+	for _, it := range items {
+		out[it.ID] = it.Text
+	}
+
+	return out
 }

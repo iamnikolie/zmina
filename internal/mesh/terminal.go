@@ -422,7 +422,7 @@ func (n *Node) routeVia(ctx context.Context, t Transport, target string, via, vi
 		errs = append(errs, err)
 	}
 	via = append(slices.Clone(via), n.Name)
-	for _, relay := range dest.Through {
+	for _, relay := range dest.relays(book) {
 		if relay == target || slices.Contains(via, relay) {
 			continue
 		}
