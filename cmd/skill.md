@@ -1065,6 +1065,11 @@ Todo answers never type into a role. The separate Terminals page attaches direct
 Bound to 127.0.0.1 by default and only answers requests that name it (`Host`), so another web page cannot read or
 write through the browser. Writes need the page's own header. A non-loopback `--addr` is refused unless
 `--token <secret>` (or `$ZMINA_UI_TOKEN`) is set: the page then needs `?token=` once on a new device (it is kept in a 90-day HttpOnly, SameSite Strict cookie, renewed on authenticated page loads); on this machine `zmina ui` signs the browser in with a one-time login code, and the address it prints carries no token.
+On loopback with no token given the page still needs one — loopback keeps out other machines, not another account or
+process on this one, and the page types into every role: `zmina ui` makes a token for the run that nobody types. The
+browser it opens signs in with its one-time code, `zmina ui` again opens the running one signed in, another browser
+signs in with a code from `zmina connect`; a browser signed in to an earlier run signs in again the same way. Any other
+client gets 401, the terminal socket included.
 Live over server-sent events; the files are inside the binary. Each update is patched in: what did not change stays
 the very element it was, so its focus, its scroll and an agent's reference to it hold; an element with a handler is
 always the one just drawn, so it acts on what it shows (`testdata/patch.html` checks it in a browser).
@@ -1078,9 +1083,9 @@ last) and a fresh one-time six-digit code to type on the sign-in page: single us
 minute and 10 an hour; the code is the last line, `Code: 123456`, the addresses above it. It needs no notifier. The cockpit makes the code and keeps it in its memory only; zmina
 connect asks for it with the handoff secret of `~/.zmina/ui.json`, from this machine only (loopback, or the
 cockpit's own address), and the code is in no file, log line, argv or environment. `--qr` also draws the first
-address a phone reaches as a QR code — the address, never the code. No cockpit running, one with no token
-(open on this machine only, nothing to sign in to) or an older one: it says so, exit 1, with the line that starts
-one. Anyone who reaches the sign-in page can spend a live code with 5 wrong guesses, and, guessing on, keep
+address a phone reaches as a QR code — the address, never the code. A cockpit on loopback with no token given
+answers with its own addresses only (a code there signs in another browser of this machine). No cockpit running, or
+an older one (one with no token at all, or no codes): it says so, exit 1, with the line that starts one. Anyone who reaches the sign-in page can spend a live code with 5 wrong guesses, and, guessing on, keep
 `zmina connect` short of codes for the hour: keep the cockpit on a tailnet or behind a private proxy (`?token=`
 signs in regardless). A recorded cockpit is asked only while its process runs and at an address of this machine,
 and the handoff secret is taken only from this machine — not through a proxy (an `--allow-host` Host or any

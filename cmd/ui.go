@@ -125,11 +125,18 @@ func (a *app) uiCommand() *cobra.Command {
 				return err
 			}
 
-			a.uiLogins = newUILogins()
-			// With a token a device signs in with a code: from zmina connect, and from the notifier when there is one.
-			if token != "" {
-				a.uiSignin = newUISignin(codeCommand, func(line string) { fmt.Fprintln(a.err, "zmina ui:", line) })
+			// The page always needs a token. Loopback keeps out other machines, not another account or process of
+			// this one, and the page types into every role. With none given, one made for this run that nobody types:
+			// the browser opened here signs in with a one-time code, as does a second zmina ui, another browser with a
+			// code from zmina connect.
+			made := token == ""
+			if made {
+				token = randomHex(32)
 			}
+
+			a.uiLogins = newUILogins()
+			// A device signs in with a code: from zmina connect, and from the notifier when there is one.
+			a.uiSignin = newUISignin(codeCommand, func(line string) { fmt.Fprintln(a.err, "zmina ui:", line) })
 			srv := &http.Server{Handler: a.uiHandler(ln.Addr().String(), loopback, token, allowHosts...),
 				ReadHeaderTimeout: 10 * time.Second}
 
@@ -141,14 +148,12 @@ func (a *app) uiCommand() *cobra.Command {
 			defer dropUIState()
 
 			fmt.Fprintln(a.out, "zmina ui on", url, "(Ctrl-C stops it)")
+			if made {
+				fmt.Fprintln(a.out, "  sign in: zmina ui again opens it signed in; another browser takes a code from zmina connect")
+			}
 
 			if !noOpen {
-				open := url
-				if token != "" {
-					open += "?login=" + a.uiLogins.code()
-				}
-
-				openBrowser(open)
+				openBrowser(url + "?login=" + a.uiLogins.code())
 			}
 
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
@@ -173,7 +178,7 @@ func (a *app) uiCommand() *cobra.Command {
 
 	c.Flags().StringVar(&addr, "addr", "127.0.0.1:7517", "address to listen on; a non-loopback one needs --token")
 	c.Flags().StringVar(&token, "token", "", "secret the page needs (?token= once, then a cookie); default "+
-		"$ZMINA_UI_TOKEN")
+		"$ZMINA_UI_TOKEN, else one made for this run (signed in by a one-time code)")
 	c.Flags().BoolVar(&noOpen, "no-open", false, "print the address, do not open a browser")
 	c.Flags().StringSliceVar(&allowHosts, "allow-host", nil, "additional exact Host for a private reverse proxy; requires a token")
 	c.Flags().StringVar(&codeCommand, "code-command", "", "shell command that sends a sign-in code to the owner (the "+
