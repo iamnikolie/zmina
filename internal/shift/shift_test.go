@@ -535,10 +535,10 @@ func TestDownKeepsTheDispatcherWithoutForce(t *testing.T) {
 func TestCleanEnv(t *testing.T) {
 	env := []string{"PATH=/bin", "CLAUDECODE=1", "CLAUDE_CODE_SESSION_ID=x", "CLAUDE_CONFIG_DIR=/p",
 		"CLAUDE_CODE_MESSAGING_SOCKET=/s", "CLAUDE_CODE_USE_BEDROCK=1", "EXAMPLE_PROFILE=d", "TMUX=/t", "CMUX_TAB_ID=3",
-		"HOME=/h"}
+		"HOME=/h", "ZMINA_UI_TOKEN=secret", "ZMINA_UI_CODE_COMMAND=notify"}
 
 	assert.Equal(t, []string{"PATH=/bin", "CLAUDE_CODE_USE_BEDROCK=1", "EXAMPLE_PROFILE=d", "HOME=/h"},
-		tmux.CleanEnv(env, nil), "session identity goes, provider settings stay")
+		tmux.CleanEnv(env, nil), "session identity and the cockpit's secrets go, provider settings stay")
 	assert.Equal(t, []string{"PATH=/bin", "CLAUDE_CODE_USE_BEDROCK=1", "HOME=/h"},
 		tmux.CleanEnv(env, []string{"EXAMPLE_*"}), "drop_env adds to the list")
 }

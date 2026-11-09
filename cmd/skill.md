@@ -199,8 +199,8 @@ A role runs `claude [--model m] [args] [--settings '{"crossSessionInbound":"acce
 less directories under the temp dir (a terminal's per-window shims, such as cmux's, vanish with the
 window and would wrap claude in that window's hooks),
 on top of the tmux server's environment minus what ties a process to another session or terminal
-(`CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_MESSAGING_*`, `TMUX`, `CMUX_*`, … and
-`drop_env`); provider settings such as `CLAUDE_CODE_USE_BEDROCK` pass. With Remote Control every
+(`CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_MESSAGING_*`, `TMUX`, `CMUX_*`, …), the cockpit's
+secrets (`ZMINA_UI_*`) and `drop_env`; provider settings such as `CLAUDE_CODE_USE_BEDROCK` pass. With Remote Control every
 role is reachable from claude.ai/code and the phone under its session name.
 
 ### Delivery: the agent's own channel
@@ -1087,7 +1087,7 @@ node's address for it (as `zmina ls <node>/<crew>`), the code coming back over s
 In 5 minutes, with Tailscale on this machine and the phone:
 
 ```
-export ZMINA_UI_TOKEN=$(openssl rand -hex 24)   # once; keep it in the launchd plist's environment, not in argv
+export ZMINA_UI_TOKEN=$(openssl rand -hex 24)   # once; keep it in the launchd plist (0600), not in argv or a profile
 zmina ui --addr "$(tailscale ip -4)":7517 --no-open
 zmina connect --qr                              # scan the address, type the code
 ```
