@@ -52,3 +52,24 @@ func TestGuardReadIndentTypes(t *testing.T) {
 	assert.Equal(t, Decision{}, read(open), "a verbatim string left open: no answer")
 	assert.Equal(t, Decision{}, read(other), "a type the guard does not read: Read as asked")
 }
+
+func TestIndentReviewEdges(t *testing.T) {
+	cs := "namespace Acme\n{\n    public class Svc\n    {\n        public void Real()\n        {\n            x = 1;\n        }\n\n/*\n" +
+		"        public void Fake()\n        {\n            y = 2;\n        }\n*/\n        public void After()\n        {\n            z = 3;\n        }\n    }\n}\n"
+	assert.Equal(t, []string{"0 1-21 Acme", "1 3-20 Acme.Svc", "2 5-8 Acme.Svc.Real", "2 15-19 Acme.Svc.After"},
+		names(Outline("b.cs", []byte(cs))), "commented-out code is no code")
+	assert.True(t, csSure([]byte(cs)))
+	assert.False(t, csSure([]byte("class A\n{\n/*\n    void B() {}\n}\n")), "a block comment left open")
+
+	php := "<?php function head() { ?>\n<p>Don't stop</p>\n<?php }\n\nfunction real() {\n    echo 'function fake() {';\n    return 1;\n}\n\n" +
+		"function b() {\n    return 2;\n}\n?>\n<p>It's done</p>\n"
+	assert.Equal(t, []string{"0 5-8 real", "0 10-13 b"}, names(Outline("b.php", []byte(php))), "HTML after ?> holds no strings")
+	assert.True(t, phpSure([]byte(php)))
+
+	py := "import os\n\nrecord = load()\n\nclass Repo:\n    interface = None\n\n    def get(self):\n        return 1\n"
+	assert.Equal(t, []string{"0 5-9 Repo", "1 8-9 Repo.get"}, names(Outline("b.py", []byte(py))), "a name like record or interface is no declaration")
+
+	sh := "say() {\n  echo $'it\\'s here'\n}\n\nrun() {\n  true\n}\n"
+	assert.Equal(t, []string{"0 1-3 say", "0 5-7 run"}, names(Outline("s.sh", []byte(sh))), "$'…' has escapes")
+	assert.True(t, shSure([]byte(sh)))
+}

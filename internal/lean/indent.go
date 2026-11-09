@@ -161,16 +161,21 @@ var vbExts = map[string]bool{".vb": true, ".bas": true, ".cls": true, ".frm": tr
 // picks Visual Basic's line continuation and labels, and the shell's quoting.
 func codeLines(lines []string, ext string) (_ []codeLine, closed bool) {
 	vb, sh, php := vbExts[ext], shExts[ext], ext == ".php"
+	cfam := !vb && !sh && !php && ext != ".py" && ext != ".pyi" // /* */ comments over lines
 
 	var (
 		out     []codeLine
-		quote   string // the open multi-line string's delimiter: """, ''' or `
+		quote   string // the open multi-line string's delimiter: """, ''' or `; */ a block comment; ?> PHP's HTML
 		heredoc string // the open here-document's closing word
 		open    int    // ( and [ the statement has left open so far
 		cont    bool   // the statement goes on to the next line
 		tail    string // this code line, for the next
 		prev    string // the code line before this one
 	)
+
+	if php {
+		quote = "?>" // a PHP file is HTML until <?php
+	}
 
 	for i, l := range lines {
 		t := strings.TrimSpace(l)
@@ -195,8 +200,14 @@ func codeLines(lines []string, ext string) (_ []codeLine, closed bool) {
 		}
 
 		if php { // every line is scanned, a comment's too: a docblock's line may end in { or ,
-			inside, comment = quote == "'" || quote == `"`, comment || quote == "*/"
+			inside, comment = quote == "'" || quote == `"`, comment || quote == "*/" || quote == "?>"
 			quote = stepPHP(t, quote)
+		}
+
+		// A block comment's lines (commented-out code too) are no code, and open nothing.
+		if cfam && (quote == "*/" || comment && strings.HasPrefix(t, "/*")) {
+			quote = stepQuotes(t, quote)
+			continue
 		}
 
 		if !inside && (t == "" || comment || vb && vbLabel.MatchString(t)) {
@@ -247,14 +258,14 @@ func codeLines(lines []string, ext string) (_ []codeLine, closed bool) {
 		}
 	}
 
-	return out, quote == "" && heredoc == ""
+	return out, (quote == "" || php && quote == "?>") && heredoc == ""
 }
 
 // shExts are the shell's: strings in ' or " run over lines, and $( … ) inside " … " holds quotes of its own.
 var shExts = map[string]bool{".sh": true, ".bash": true, ".zsh": true, ".ksh": true}
 
-// stepShell is the shell's open quoting after line t, given what was open before it: a stack of ' " ` and ( (a $( …
-// ) or a subshell, code again inside a string).
+// stepShell is the shell's open quoting after line t, given what was open before it: a stack of ' " ` a ($'…', with
+// escapes) and ( (a $( … ) or a subshell, code again inside a string).
 func stepShell(t, stack string) string {
 	for i := 0; i < len(t); i++ {
 		top := byte(0)
@@ -267,6 +278,15 @@ func stepShell(t, stack string) string {
 		switch top {
 		case '\'':
 			if c == '\'' {
+				stack = stack[:len(stack)-1]
+			}
+
+			continue
+		case 'a': // $'…': backslash escapes
+			switch c {
+			case '\\':
+				i++
+			case '\'':
 				stack = stack[:len(stack)-1]
 			}
 
@@ -290,6 +310,9 @@ func stepShell(t, stack string) string {
 		switch {
 		case c == '\\':
 			i++
+		case c == '$' && i+1 < len(t) && t[i+1] == '\'':
+			stack += "a"
+			i++
 		case c == '\'' || c == '"' || c == '`':
 			stack += string(c)
 		case c == '(':
@@ -305,7 +328,7 @@ func stepShell(t, stack string) string {
 }
 
 // shString: the shell's quoting left open is a string (not only an open $( or subshell).
-func shString(stack string) bool { return strings.ContainsAny(stack, "'\"`") }
+func shString(stack string) bool { return strings.ContainsAny(stack, "'\"`a") }
 
 // stepQuotes is the multi-line string open after line t (three double or single quotes, a backtick), given the one
 // open before it: a quote inside a string that closes on the line ('"""') or after a comment mark (# or // after a
@@ -351,6 +374,8 @@ func stepQuotes(t, quote string) string {
 			} else {
 				i++
 			}
+		case strings.HasPrefix(r, "/*"):
+			quote, i = "*/", i+2
 		case (r[0] == '#' || strings.HasPrefix(r, "//")) && (i == 0 || t[i-1] == ' ' || t[i-1] == '\t'):
 			return ""
 		default:
@@ -378,11 +403,18 @@ func verbatimClose(t string, i int) int {
 	return -1
 }
 
-// stepPHP is PHP's open string or comment after line t, given the one open before it: ' and " strings run over lines
-// (a backslash escapes), /* */ comments too; // and # (not #[) end the line.
+// stepPHP is PHP's open string, comment or HTML after line t, given the one open before it: ' and " strings run over
+// lines (a backslash escapes), /* */ comments too; // and # (not #[) end the line; text after ?> is HTML up to <?php
+// or <?=, its quotes no strings.
 func stepPHP(t, open string) string {
 	for i := 0; i < len(t); i++ {
 		switch open {
+		case "?>":
+			if strings.HasPrefix(t[i:], "<?php") || strings.HasPrefix(t[i:], "<?=") {
+				open, i = "", i+2
+			}
+
+			continue
 		case "*/":
 			if strings.HasPrefix(t[i:], "*/") {
 				open, i = "", i+1
@@ -405,6 +437,8 @@ func stepPHP(t, open string) string {
 			open = r[:1]
 		case strings.HasPrefix(r, "/*"):
 			open, i = "*/", i+1
+		case strings.HasPrefix(r, "?>"):
+			open, i = "?>", i+1 // HTML until the next <?php
 		case strings.HasPrefix(r, "//") || r[0] == '#' && !strings.HasPrefix(r, "#["):
 			return ""
 		}
@@ -688,10 +722,12 @@ func declLine(t string) bool {
 			continue
 		}
 
-		switch strings.TrimSuffix(w, ":") {
+		switch w {
 		case "def", "class", "function", "fn", "func", "sub", "procedure", "interface", "struct", "enum", "record",
 			"trait":
-			return true
+			// record = load(), interface: Foo = None: a name, not a declaration
+			rest := strings.TrimSpace(t[strings.Index(strings.ToLower(t), w)+len(w):])
+			return rest != "" && !strings.HasPrefix(rest, "=") && !strings.HasPrefix(rest, ":") && !strings.HasPrefix(rest, ".")
 		}
 
 		return false
