@@ -34,6 +34,7 @@ func (a *app) codexCommand() *cobra.Command {
 	c.Flags().StringVar(&o.Profile, "profile", "", "Codex profile name")
 	c.Flags().StringVar(&o.Model, "model", "", "Model")
 	c.Flags().StringVar(&o.Effort, "effort", "", "Reasoning effort")
+	c.Flags().StringVar(&o.ServiceTier, "service-tier", "", "Codex service tier (default: the profile's, else default)")
 	c.Flags().StringVar(&o.Sandbox, "sandbox", "", "Sandbox mode")
 	c.Flags().StringVar(&o.Approval, "approval", "", "Approval policy")
 	_ = c.MarkFlagRequired("session")

@@ -90,6 +90,7 @@ roles:
     profile: deep-review                  # ~/.codex/deep-review.config.toml
     # model: your-model-id                 # optional override of the profile
     reasoning_effort: high
+    # service_tier: priority              # Codex's fast mode, 2x the price; default: the normal tier
     sandbox: workspace-write
     approval_policy: on-request
     resume: always
@@ -109,6 +110,10 @@ A standalone server holds a separate writer lease and can cause "Another Codex s
 when opening the same thread from the app. Stop the idle role, change its transport, then resume it to
 move that thread to the shared daemon. Do not set `args` in shared mode: use role fields/profile for
 per-thread settings; global server flags belong to the daemon. `down` disconnects this role, not the daemon.
+A Codex seat runs on the normal service tier (`service_tier: default`) unless its role or its profile names one:
+`service_tier: priority` is Codex's fast mode, twice the price (`zmina usage` prices it so). The owner's global
+`service_tier` in `<codex_home>/config.toml` never reaches a crew: zmina passes the tier with every thread start and
+resume, and `attach` passes the same one to the native TUI. Restart a seat for a change to reach its thread.
 The server reads the Codex home configuration, then applies the selected profile and explicit role settings. `args` are App Server
 flags, not interactive Codex CLI flags. `profile` loads `<codex_home>/<name>.config.toml`, using top-level
 TOML keys as in current Codex CLI profiles (letters, digits, hyphens and underscores in names). Missing or
@@ -1083,7 +1088,7 @@ todo. The log has `alarm` (set, moved, off, rang) and `sleep`.
 | Command | Does |
 |---|---|
 | `zmina seat add <role> [--about … --dir … --boot … --model … --keep … --args=--chrome,--x --resume always --schedule "…" --prompt "…" --expires 3d]` | add a role. `--expires` takes `12h`, `3d`, a date or a date and time. |
-| `zmina seat set <role> key=value …` | change keys; `key=` removes one. Keys: runtime, profile, codex_transport, codex_home, reasoning_effort, sandbox, approval_policy, session, dir, boot, keep, model, args (`[--a, --b]` or `--a,--b`), about, remote_control (`true`/`false`), delivery (`native`/`tmux`), resume, schedule, prompt, expires, context_max, context_action, drop_tools, keep_tools (lists, like args), release_idle_minutes, budget (dollars a day, a number: `budget=20`, written unquoted). |
+| `zmina seat set <role> key=value …` | change keys; `key=` removes one. Keys: runtime, profile, codex_transport, codex_home, reasoning_effort, service_tier (`default`/`priority`), sandbox, approval_policy, session, dir, boot, keep, model, args (`[--a, --b]` or `--a,--b`), about, remote_control (`true`/`false`), delivery (`native`/`tmux`), resume, schedule, prompt, expires, context_max, context_action, drop_tools, keep_tools (lists, like args), release_idle_minutes, budget (dollars a day, a number: `budget=20`, written unquoted). |
 | `zmina seat rm <role>` | remove a role that is down and holds no active task (`--force` despite tasks). |
 
 Every edit keeps the file's comments, is checked by loading it before it is written (a crew that

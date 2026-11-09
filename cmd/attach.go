@@ -111,6 +111,10 @@ func (a *app) attachProcess(name string, raw bool) (*exec.Cmd, error) {
 			if r.ReasoningEffort != "" {
 				argv = append(argv, "-c", "model_reasoning_effort="+strconv.Quote(r.ReasoningEffort))
 			}
+			// The thread's tier as the bridge set it, so the native client never switches it to the owner's global one.
+			// A profile that does not read is left to the native client to report (the bridge could not have started).
+			profile, _ := codex.LoadProfile(r.CodexHome, r.Profile)
+			argv = append(argv, "-c", "service_tier="+strconv.Quote(codex.ServiceTier(r.ServiceTier, profile)))
 			process = exec.Command(s.Crew.Codex, argv...)
 			process.Dir = dir
 			process.Env = attachEnvironment(os.Environ(), s.Env(r))
