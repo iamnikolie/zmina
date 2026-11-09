@@ -117,6 +117,8 @@ func resolveSkills(crew, own *Skills) (SkillList, error) {
 				return SkillList{}, fmt.Errorf("skills.%s: an empty name", l.key)
 			case strings.ContainsAny(n, "*?"):
 				return SkillList{}, fmt.Errorf("skills.%s %q: exact names only, Claude Code takes no pattern", l.key, n)
+			case seen[n] == l.key:
+				return SkillList{}, fmt.Errorf("skills.%s: %s is listed twice", l.key, n)
 			case seen[n] != "":
 				return SkillList{}, fmt.Errorf("skills: %s is in %s and %s", n, seen[n], l.key)
 			}

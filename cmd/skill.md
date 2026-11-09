@@ -318,6 +318,7 @@ off saves only where the list is under its budget: at the budget the room freed 
 A short description can make a role miss a skill: watch which skills a role calls before and after. A role's
 `skills` go over the crew's field by field (a list it sets replaces the crew's; `off: []` clears it). A change
 applies at the role's next start. A role whose `args` pass `--settings` gets the `listing` only, with a warning.
+`listing` wins over a `SLASH_COMMAND_TOOL_CHAR_BUDGET` set in the environment the roles start from.
 
 ## Roles
 
