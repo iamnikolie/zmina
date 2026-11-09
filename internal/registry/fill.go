@@ -194,11 +194,25 @@ var toolKinds = []struct {
 // zminaSub is a zmina command's subcommand, after its global flags (--crew file, --config name).
 var zminaSub = regexp.MustCompile(`^(?:\S*/)?zmina\s+(?:--(?:crew|config)(?:=\S+|\s+\S+)\s+)*([a-z][a-z-]*)`)
 
+// ackFirst is a leading zmina ack and what joins the next command to it.
+var ackFirst = regexp.MustCompile(`^(?:\S*/)?zmina\s+(?:--(?:crew|config)(?:=\S+|\s+\S+)\s+)*ack\b[^&;|\n]*(?:&&|;|\|\||\n)`)
+
 var shellPrefix = regexp.MustCompile(`^(?:\s*(?:cd\s+[^&;|]*(?:&&|;)|[A-Za-z_][A-Za-z0-9_]*=\S*\s+|export\s+[^;&]*(?:&&|;)))+\s*`)
 
 // ToolKind names a Bash command's kind: what usage --by tool groups the shell's results by.
 func ToolKind(cmd string) string {
 	c := shellPrefix.ReplaceAllString(strings.TrimSpace(cmd), "")
+
+	// zmina ack prints a word: a command chained after it (zmina ack S-1 && zmina task show T-2) is what fills.
+	for {
+		m := ackFirst.FindStringIndex(c)
+		if m == nil {
+			break
+		}
+
+		c = shellPrefix.ReplaceAllString(strings.TrimSpace(c[m[1]:]), "")
+	}
+
 	if m := zminaSub.FindStringSubmatch(c); m != nil {
 		return "zmina " + m[1] // zmina's own output is zmina's to make lean: by subcommand
 	}

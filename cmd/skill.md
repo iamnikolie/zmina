@@ -1274,7 +1274,7 @@ paid for: `Of the cost: cache reads 60%, cache writes 17%, output 18%, input 5%.
 - **What fills the context** (`--by tool`): not dollars but what the tools' results put into the conversations, which
   every later turn reads again until a compaction or a restart. Rows by tool kind — `Read`, `Grep`, a shell command
   by its first program after `cd …&&` and `VAR=…` (`Bash: cat/sed/head/tail`, `Bash: git`, `Bash: grep/rg`, …; zmina's
-  own by subcommand, `Bash: zmina task`) — with `CALLS`, `CHARS` (the results' text, about 4 a token), `%CHARS`,
+  own by subcommand, `Bash: zmina task`; a leading `zmina ack …&&` is skipped for the command after it) — with `CALLS`, `CHARS` (the results' text, about 4 a token), `%CHARS`,
   `OVER 20K` (results over 20k characters) and `IMAGES` (a picture's data is not text; it counts apart). A subagent's
   tools count with its session. Kinds under 1% with no big result and no image share one row; `--json` has every
   kind. A `cat` the read guard answered with an outline still counts as `cat`. `--all` asks the peers too; one older

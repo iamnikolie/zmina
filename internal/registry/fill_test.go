@@ -23,6 +23,9 @@ func TestToolKind(t *testing.T) {
 		"~/.local/bin/zmina ack S-1":                "zmina ack",
 		"rg -n Foo":                                 "grep/rg",
 		"./deploy.sh":                               "other",
+		"zmina ack S-1 && zmina task show T-2":      "zmina task",
+		"zmina ack S-1 S-2; git log -3":             "git",
+		"zmina ack S-1":                             "zmina ack",
 	} {
 		assert.Equal(t, want, ToolKind(cmd), cmd)
 	}
