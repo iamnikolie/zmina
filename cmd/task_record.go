@@ -89,6 +89,16 @@ func (a *app) saveRecordFile(id, kind, file string, cmd *cobra.Command) error {
 		if err != nil {
 			return err
 		}
+		// A lessons section is filed as lessons and leaves the record: its place is the lessons store, and a
+		// lesson the scan refuses must not stay in the record either.
+		var lessonErr error
+		if _, ok := values["lessons"]; ok {
+			lessonErr = lessonsFromCheckpoint(s, values, t.Role, t.ID)
+			delete(values, "lessons")
+		}
+		if lessonErr != nil {
+			fmt.Fprintln(a.err, "zmina: lessons not filed:", lessonErr)
+		}
 		d := record.Document{Version: 1, Kind: kind, Task: t.ID, Role: t.Role, By: s.By, At: s.Now(), Shape: s.Crew.HandoffFor(r), Values: values}
 		ref, err := record.Save(s.Crew.StateDir(), d)
 		if err != nil {

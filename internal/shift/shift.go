@@ -503,6 +503,9 @@ func (s *Shift) bootText(r *crew.Role, tagged bool) string {
 
 		text = strings.TrimSpace(text + "\n\n" + rule)
 	}
+	if s.Crew.Lessons.On && text != "" {
+		text = strings.TrimSpace(text + "\n\n" + LessonRule)
+	}
 	// A retired crew tells every role; a crew that stood still tells whoever reads its ledger first.
 	if n := s.Standing(); n != "" && (s.Crew.IsRetired() || r.Name == s.Crew.Dispatcher) {
 		text = strings.TrimSpace(text + "\n\n[zmina] " + n)
@@ -590,6 +593,14 @@ const WaitRule = "[zmina] Waiting: start a command that runs long or waits for s
 	"your turn: you are woken once when it ends. Waiting for another role, just end your turn: zmina brings you its " +
 	"line. Never sleep in a loop or check a status again and again: each check is a turn that reads your whole " +
 	"conversation again. Look once after the wake."
+
+// LessonRule is what a role of a crew with lessons on is told at boot: a lasting rule goes to the lessons, never into
+// the instruction files or the role's memory by its own hand; the owner's merge is the only way it applies.
+const LessonRule = "[zmina] Lessons: a lasting rule you learned (a trap, a correction from the owner, a check that " +
+	"failed twice) goes to `zmina lesson add \"<rule>\" --why \"<why>\" --applies every|role|task|unsure [--task T-n]`, " +
+	"or a lessons section in your checkpoint (### rule / Why: / Applies to: / In a file already:). Never edit " +
+	"CLAUDE.md, AGENTS.md, an AGENT.md or your memory for it yourself: a daily triage offers the lessons to the " +
+	"owner as one draft merge request, and his merge applies them. No secrets or customer data in a lesson."
 
 // CodexWaitRule is the same rule for a Codex role, whose runtime has no background command that wakes it: it waits
 // inside one command instead of in a series of calls, and that call's own timeout must outlast the wait.

@@ -27,3 +27,16 @@ func TestBootCarriesTheWaitRule(t *testing.T) {
 	assert.NotContains(t, codex, "run_in_background", "no such tool in Codex")
 	assert.Contains(t, codex, OwnerRules+"\n\n"+CodexWaitRule)
 }
+
+// A crew with lessons on tells its roles where a lasting rule goes; one without says nothing of lessons.
+func TestBootCarriesTheLessonRuleWhenOn(t *testing.T) {
+	s, _, _, _ := fixture(t)
+	r, err := s.Role("designer")
+	require.NoError(t, err)
+	r.Boot = "read AGENTS.md"
+
+	assert.NotContains(t, s.BootText(r), "zmina lesson add")
+
+	s.Crew.Lessons.On = true
+	assert.Contains(t, s.BootText(r), LessonRule)
+}
