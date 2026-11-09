@@ -3,8 +3,10 @@ package crew
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -234,8 +236,18 @@ func setKey(body *yaml.Node, key, value string) error {
 }
 
 // valueNode is a string for every key but the list keys (args, drop_tools, keep_tools: [--chrome] or
-// --chrome,--verbose), and remote_control, a bool.
+// --chrome,--verbose), remote_control, a bool, and budget, a number.
 func valueNode(key, value string) (*yaml.Node, error) {
+	if key == "budget" {
+		f, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+			return nil, fmt.Errorf("budget: dollars a day, a number such as 20 or 12.5, not %q", value)
+		}
+
+		// Untagged and plain, so it is written as the number it is: a quoted "100" does not load into a float.
+		return &yaml.Node{Kind: yaml.ScalarNode, Value: strconv.FormatFloat(f, 'f', -1, 64)}, nil
+	}
+
 	if key == "handoff" {
 		var doc yaml.Node
 		if err := yaml.Unmarshal([]byte(value), &doc); err != nil {
