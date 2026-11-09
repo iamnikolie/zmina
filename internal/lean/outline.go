@@ -29,24 +29,36 @@ type Symbol struct {
 	Label string
 }
 
-// outliner reads one type of file into its outline. A file of any other type is outlined by its indentation
-// (indentOutline); one without blocks shows its start, and ranges and the cap work on every file.
+// outliner reads one type of file into its outline, or writes its summary (a table: what a row holds, how many, the
+// first). A file of any other type is outlined by its indentation (indentOutline); one without blocks shows its
+// start, and ranges and the cap work on every file.
 type outliner struct {
 	lang  string
 	exts  []string
 	parse func(src []byte, lines int) []Symbol
+	// summary, for a type without an outline, is what zmina read shows of a big file instead. It shows the file's
+	// rows, so the read guard never answers with it.
+	summary func(b *strings.Builder, f *File, path, header string, left int)
 	// hint is how the outline footer names a piece of this type (after the path).
 	hint string
 }
 
+// whole adapts an outliner that needs no line count.
+func whole(parse func(src []byte) []Symbol) func(src []byte, lines int) []Symbol {
+	return func(src []byte, _ int) []Symbol { return parse(src) }
+}
+
 var outliners = []outliner{
-	{"go", []string{".go"}, func(src []byte, _ int) []Symbol { return goOutline(src) }, ":Name (Func, Type.Method)"},
-	{"markdown", []string{".md", ".markdown", ".mdx", ".txt"}, func(src []byte, _ int) []Symbol { return mdOutline(src) },
-		"#Heading"},
-	{"yaml", []string{".yaml", ".yml"}, yamlOutline, ":key (a.b below the top)"},
-	{"json", []string{".json"}, jsonOutline, ":key (a.b below the top)"},
-	{"foxpro", []string{".prg"}, func(src []byte, _ int) []Symbol { return foxOutline(src) },
-		":Name (PROCEDURE, FUNCTION, Class.Method)"},
+	{lang: "go", exts: []string{".go"}, parse: whole(goOutline), hint: ":Name (Func, Type.Method)"},
+	{lang: "markdown", exts: []string{".md", ".markdown", ".mdx", ".txt"}, parse: whole(mdOutline), hint: "#Heading"},
+	{lang: "yaml", exts: []string{".yaml", ".yml"}, parse: yamlOutline, hint: ":key (a.b below the top)"},
+	{lang: "json", exts: []string{".json"}, parse: jsonOutline, hint: ":key (a.b below the top)"},
+	{lang: "foxpro", exts: []string{".prg"}, parse: whole(foxOutline), hint: ":Name (PROCEDURE, FUNCTION, Class.Method)"},
+	{lang: "sql", exts: []string{".sql", ".pgsql", ".psql", ".mysql", ".ddl"}, parse: whole(sqlOutline),
+		hint: ":name (every statement on a table or object; Up, Down)"},
+	{lang: "csv", exts: []string{".csv"}, summary: writeCSVSummary},
+	{lang: "tsv", exts: []string{".tsv", ".tab"}, summary: writeCSVSummary},
+	{lang: "jsonl", exts: []string{".jsonl", ".ndjson"}, summary: writeJSONLSummary},
 }
 
 func outlinerFor(path string) *outliner {
@@ -60,7 +72,8 @@ func outlinerFor(path string) *outliner {
 	return nil
 }
 
-// Lang names the outliner for a path: go, markdown, yaml, json, foxpro, or "" (none: ranges and the cap only).
+// Lang names the outliner for a path: go, markdown, yaml, json, foxpro, sql, csv, tsv, jsonl, or "" (outlined by
+// indentation).
 func Lang(path string) string {
 	if o := outlinerFor(path); o != nil {
 		return o.lang
@@ -76,6 +89,10 @@ func Outline(path string, src []byte) []Symbol {
 	o := outlinerFor(path)
 	if o == nil {
 		return indentOutline(src)
+	}
+
+	if o.parse == nil {
+		return nil
 	}
 
 	out := o.parse(src, countLines(src))

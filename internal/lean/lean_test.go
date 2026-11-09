@@ -596,7 +596,8 @@ func TestIndentOutline(t *testing.T) {
 	assert.Equal(t, []string{"0 1-4 uk", "0 6-11 sum"}, names(Outline("m.ts", []byte(ts))), "quoted keys are no comments")
 
 	sql := "-- the sheets\nCREATE TABLE IF NOT EXISTS sheets (\n  id BIGINT,\n  name TEXT,\n  a INT,\n  b INT,\n  c INT\n);\n\nCREATE INDEX ix ON sheets (id);\n"
-	assert.Equal(t, []string{"0 1-8 sheets"}, names(Outline("x.sql", []byte(sql))))
+	assert.Equal(t, []string{"0 1-8 sheets"}, names(indentOutline([]byte(sql))), "a statement over lines is a block")
+	assert.Equal(t, []string{"0 1-8 sheets", "0 10-10 ix"}, names(Outline("x.sql", []byte(sql))), ".sql: by statement")
 
 	css := "#main {\n  color: red;\n}\n\n.btn,\n.link {\n  margin: 0;\n}\n"
 	assert.Equal(t, []string{"0 1-3 #main", "0 6-8 .link"}, names(Outline("x.css", []byte(css))), "a selector list: its last line")

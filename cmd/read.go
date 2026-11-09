@@ -28,9 +28,11 @@ func (a *app) readCommand() *cobra.Command {
 		Short: "Read files lean: a small file whole, a big one as an outline; then a function, section or lines",
 		Long: `Read files lean. Several targets go in one call, under one cap (default 12k characters).
 
-  path            up to the cap: the file, numbered; bigger: its outline (line ranges and sizes)
+  path            up to the cap: the file, numbered; bigger: its outline (line ranges and sizes); a CSV,
+                  TSV or JSON Lines file: its columns or keys, row count, first rows
   path:Name       a Go func, type or method (Type.Method), a YAML/JSON key (a.b below the top), a FoxPro
-                  PROCEDURE/FUNCTION/class; any other code: a function, class or block by its name (Class.method)
+                  PROCEDURE/FUNCTION/class, every SQL statement on a table (Up, Down, a CTE); any other
+                  code: a function, class or block by its name (Class.method)
   path#Heading    a Markdown section with its subsections (path:#Heading is read the same)
   path:120-180    lines; path:412- to the end; path:120 the lines around 120
 
