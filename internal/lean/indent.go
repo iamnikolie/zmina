@@ -160,7 +160,7 @@ var vbExts = map[string]bool{".vb": true, ".bas": true, ".cls": true, ".frm": tr
 // codeLines are the file's statements; closed: no multi-line string or here-document is left open at the end. ext
 // picks Visual Basic's line continuation and labels, and the shell's quoting.
 func codeLines(lines []string, ext string) (_ []codeLine, closed bool) {
-	vb, sh := vbExts[ext], shExts[ext]
+	vb, sh, php := vbExts[ext], shExts[ext], ext == ".php"
 
 	var (
 		out     []codeLine
@@ -194,6 +194,11 @@ func codeLines(lines []string, ext string) (_ []codeLine, closed bool) {
 			comment = strings.HasPrefix(t, "#")
 		}
 
+		if php { // every line is scanned, a comment's too: a docblock's line may end in { or ,
+			inside, comment = quote == "'" || quote == `"`, comment || quote == "*/"
+			quote = stepPHP(t, quote)
+		}
+
 		if !inside && (t == "" || comment || vb && vbLabel.MatchString(t)) {
 			continue // a quote in a comment opens no string
 		}
@@ -201,6 +206,7 @@ func codeLines(lines []string, ext string) (_ []codeLine, closed bool) {
 		switch {
 		case sh:
 			quote = stepShell(t, quote)
+		case php:
 		case !vb: // Visual Basic has no multi-line strings; "" is a quote inside one
 			quote = stepQuotes(t, quote)
 		}
@@ -236,7 +242,7 @@ func codeLines(lines []string, ext string) (_ []codeLine, closed bool) {
 		open = max(open+delta, 0)
 		cont = vb && strings.HasSuffix(t, " _") || strings.HasSuffix(t, `\`)
 
-		if quote == "" || sh && !shString(quote) {
+		if quote == "" || sh && !shString(quote) || php && quote == "*/" {
 			heredoc = hereStart(t, lines[i+1:])
 		}
 	}
@@ -306,6 +312,17 @@ func shString(stack string) bool { return strings.ContainsAny(stack, "'\"`") }
 // space) opens none.
 func stepQuotes(t, quote string) string {
 	for i := 0; i < len(t); {
+		if quote == `@"` {
+			j := verbatimClose(t, i)
+			if j < 0 {
+				return quote
+			}
+
+			i, quote = j, ""
+
+			continue
+		}
+
 		if quote != "" {
 			j := strings.Index(t[i:], quote)
 			if j < 0 {
@@ -323,7 +340,11 @@ func stepQuotes(t, quote string) string {
 		case r[0] == '`':
 			quote, i = "`", i+1
 		case r[0] == '"' && i > 0 && t[i-1] == '@' || r[0] == '"' && i > 1 && t[i-2] == '@' && t[i-1] == '$':
-			i = verbatimEnd(t, i) // C#'s @"…" with "" inside
+			if j := verbatimClose(t, i+1); j > 0 { // C#'s @"…" with "" inside, over lines too
+				i = j
+			} else {
+				return `@"`
+			}
 		case r[0] == '"' || r[0] == '\'':
 			if j := closesOnLine(t, i, r[0]); j > 0 {
 				i = j
@@ -340,9 +361,10 @@ func stepQuotes(t, quote string) string {
 	return quote
 }
 
-// verbatimEnd is the index past the quote that closes a C# verbatim string opened at i ("" inside is a quote).
-func verbatimEnd(t string, i int) int {
-	for j := i + 1; j < len(t); j++ {
+// verbatimClose is the index past the quote that closes a C# verbatim string whose text goes on at i ("" inside is a
+// quote), -1 when it goes on past the line.
+func verbatimClose(t string, i int) int {
+	for j := i; j < len(t); j++ {
 		if t[j] == '"' {
 			if j+1 < len(t) && t[j+1] == '"' {
 				j++
@@ -353,7 +375,76 @@ func verbatimEnd(t string, i int) int {
 		}
 	}
 
-	return len(t)
+	return -1
+}
+
+// stepPHP is PHP's open string or comment after line t, given the one open before it: ' and " strings run over lines
+// (a backslash escapes), /* */ comments too; // and # (not #[) end the line.
+func stepPHP(t, open string) string {
+	for i := 0; i < len(t); i++ {
+		switch open {
+		case "*/":
+			if strings.HasPrefix(t[i:], "*/") {
+				open, i = "", i+1
+			}
+
+			continue
+		case "'", `"`:
+			switch t[i] {
+			case '\\':
+				i++
+			case open[0]:
+				open = ""
+			}
+
+			continue
+		}
+
+		switch r := t[i:]; {
+		case r[0] == '\'' || r[0] == '"':
+			open = r[:1]
+		case strings.HasPrefix(r, "/*"):
+			open, i = "*/", i+1
+		case strings.HasPrefix(r, "//") || r[0] == '#' && !strings.HasPrefix(r, "#["):
+			return ""
+		}
+	}
+
+	return open
+}
+
+// vbSure: no Visual Basic line leaves a string open (its "" is a quote inside one; ' outside a string starts a
+// comment), so no string's text is read as code.
+func vbSure(src []byte) bool {
+	for _, l := range splitLines(src) {
+		in := false
+
+		for i := 0; i < len(l); i++ {
+			if l[i] == '"' {
+				in = !in
+			} else if l[i] == '\'' && !in {
+				break
+			}
+		}
+
+		if in {
+			return false
+		}
+	}
+
+	return true
+}
+
+// csSure (C#, Java and the like): every string over lines (""", @"…") closes.
+func csSure(src []byte) bool {
+	_, closed := codeLines(splitLines(src), ".cs")
+	return closed
+}
+
+// phpSure: every string, comment and here-document over lines closes.
+func phpSure(src []byte) bool {
+	_, closed := codeLines(splitLines(src), ".php")
+	return closed
 }
 
 var docRe = regexp.MustCompile(`^[rRuUbBfF]{0,2}(?:"""|''')`)
@@ -497,7 +588,8 @@ func headStart(lines []string, n int) int {
 
 // heading: a line that belongs to the declaration below it (a comment, a decorator, an attribute).
 func heading(t string) bool {
-	return isComment(t) || strings.HasPrefix(t, "@") || strings.HasPrefix(t, "#[") ||
+	return isComment(t) || strings.HasPrefix(t, "* ") || strings.HasPrefix(t, "*/") || strings.HasPrefix(t, "@") ||
+		strings.HasPrefix(t, "#[") ||
 		strings.HasPrefix(t, "[") && strings.HasSuffix(t, "]") || strings.HasPrefix(t, "<") && strings.HasSuffix(t, "> _")
 }
 
@@ -592,7 +684,8 @@ func declLine(t string) bool {
 		}
 
 		switch strings.TrimSuffix(w, ":") {
-		case "def", "class", "function", "fn", "func", "sub", "procedure":
+		case "def", "class", "function", "fn", "func", "sub", "procedure", "interface", "struct", "enum", "record",
+			"trait":
 			return true
 		}
 

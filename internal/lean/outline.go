@@ -48,6 +48,11 @@ type outliner struct {
 
 func indentShell(src []byte, _ int) []Symbol { return indentOutline(src, ".sh") }
 
+// indentAs is the indentation outline read with the quoting of a type (ext).
+func indentAs(ext string) func(src []byte, _ int) []Symbol {
+	return func(src []byte, _ int) []Symbol { return indentOutline(src, ext) }
+}
+
 // whole adapts an outliner that needs no line count.
 func whole(parse func(src []byte) []Symbol) func(src []byte, lines int) []Symbol {
 	return func(src []byte, _ int) []Symbol { return parse(src) }
@@ -69,6 +74,11 @@ var outliners = []outliner{
 		sure: pySure, hint: ":Name (def, class, Class.method)"},
 	{lang: "shell", exts: []string{".sh", ".bash", ".zsh", ".ksh"}, parse: indentShell, sure: shSure,
 		hint: ":Name (a function by its name)"},
+	{lang: "csharp", exts: []string{".cs"}, parse: indentAs(".cs"), sure: csSure, hint: indentHint},
+	{lang: "java", exts: []string{".java"}, parse: indentAs(".java"), sure: csSure, hint: indentHint},
+	{lang: "php", exts: []string{".php"}, parse: indentAs(".php"), sure: phpSure, hint: indentHint},
+	{lang: "vb", exts: []string{".vb", ".bas", ".cls", ".frm", ".ctl", ".vbs", ".dsr"}, parse: indentAs(".vb"), sure: vbSure,
+		hint: indentHint},
 	{lang: "rust", exts: []string{".rs"}, parse: whole(rustOutline), sure: rustSure,
 		hint: ":Name (fn, Type.method, a struct, trait or mod)"},
 	{lang: "csv", exts: []string{".csv"}, summary: writeCSVSummary},
@@ -87,8 +97,8 @@ func outlinerFor(path string) *outliner {
 	return nil
 }
 
-// Lang names the outliner for a path: go, markdown, yaml, json, foxpro, sql, typescript, javascript, python, shell, rust,
-// csv, tsv, jsonl, or "" (outlined by indentation).
+// Lang names the outliner for a path: go, markdown, yaml, json, foxpro, sql, typescript, javascript, python, shell, csharp,
+// java, php, vb, rust, csv, tsv, jsonl, or "" (outlined by indentation).
 func Lang(path string) string {
 	if o := outlinerFor(path); o != nil {
 		return o.lang
