@@ -284,7 +284,8 @@ lines — not health notes, and not watch notes, which have their own `zmina wat
 nothing to do), `zmina ack <ids>`. The line itself names no command: Claude Code tells a role that a message from
 another session cannot ask it for a write, and a role was seen to refuse an ack the message asked for; told by its
 own boot line, it acks. Until then a line
-is said again `renotify` after it was last delivered (`S-12 (still pending since Mon 2 Nov 11:55) …`, the same id;
+is said again `renotify` after it was last delivered, or after the role was last started fresh or trimmed by zmina
+(its boot brief listed it then) (`S-12 (still pending since Mon 2 Nov 11:55) …`, the same id;
 never while it is still queued or not yet seen; three times at most, then only listed; a line acked while it still
 waits in the queue is taken out of it, never posted: a queued line is known by the S-ids zmina keeps with it, never
 by its text), is listed in the dispatcher's

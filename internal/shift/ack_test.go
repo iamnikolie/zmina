@@ -197,6 +197,34 @@ func TestAckQueuedLineToARole(t *testing.T) {
 	assert.Contains(t, f.s.PendingBrief("designer", true), "S-1 (since "+since+") [dispatcher] look at T-1")
 }
 
+func TestRenotifyAfterAFreshStartOrTrim(t *testing.T) {
+	for _, how := range []string{"started", "trimmed"} {
+		f, p := nativeFixture(t, crewYAML)
+		upNative(t, f, "designer")
+
+		_, err := f.s.QueueTracked("designer", "[dispatcher] look at T-1")
+		require.NoError(t, err)
+		require.NotEmpty(t, f.s.deliverInbox("designer", *f.now))
+		p.showAll()
+		f.s.deliverInbox("designer", *f.now) // settles the posted line
+
+		// 40 minutes on, the role is started fresh (or trimmed): its boot brief lists S-1.
+		*f.now = f.now.Add(40 * time.Minute)
+		rs := f.s.State.Role("designer")
+		if how == "started" {
+			rs.Started = *f.now
+		} else {
+			rs.Trimmed = *f.now
+		}
+
+		f.s.renotify(f.now.Add(time.Minute))
+		assert.Empty(t, rs.Inbox, "%s: the brief told it a minute ago", how)
+
+		f.s.renotify(f.now.Add(30 * time.Minute))
+		assert.Len(t, rs.Inbox, 1, "%s: said again once a full period after the brief", how)
+	}
+}
+
 func TestAckOldRoleIsLeftAsItWas(t *testing.T) {
 	f, _ := nativeFixture(t, crewYAML)
 	upNative(t, f, "designer")
