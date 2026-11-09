@@ -176,7 +176,8 @@ The cockpit Terminals page remains the existing text/bridge view; it does not la
 create another thread writer. Native shared TUI attach is the local CLI command described above.
 
 Claude Remote Control, Claude tool names (`drop_tools` / `keep_tools`) and `skills` do not apply to Codex.
-Per-role Claude-only settings are rejected; crew `drop_tools` and `skills` apply only to Claude (doctor warns of `drop_tools`).
+Per-role Claude-only settings are rejected; crew `drop_tools` and `skills` apply only to Claude
+(doctor does not warn of them).
 Configure Codex tools/permissions in its configuration. Codex token accounting feeds the same `usage`, task cost, UI totals and budget notifications as Claude.
 Snapshots live under the crew's `codex/usage/` directory and survive `down`, role removal and runtime changes.
 Duplicate notifications/resumed history do not add spend. Cost uses the resolved model, cache reads, output
