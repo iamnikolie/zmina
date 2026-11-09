@@ -42,6 +42,11 @@ delivery_mid_turn: true                  # the dispatcher's acked lines may go i
 renotify: 30m                            # an unacked line is said again this often (default 30m; off)
 drop_env: [MY_TERMINAL_*]                # variables kept from the roles, on top of the built-in list
 drop_tools: [Artifact, Workflow]         # Claude Code tools every role starts without (--disallowedTools)
+skills:                                  # the skill list Claude roles are sent with every request, trimmed (default: Claude Code's own)
+  listing: 9k                            # the most characters the list takes; descriptions are shortened to fit (1k-1000k)
+  desc_max: 250                          # each description cut at this many characters (Claude Code's default 1536)
+  off: [anthropic-skills:docx]           # skills left out; exact names as the list shows them, no patterns
+  name_only: [kreida]                    # skills listed by name, without a description
 context_max: 400k                        # every role's, unless it sets its own (default: none)
 context_action: compact                  # every role's, unless it sets its own (default compact)
 restart_at: 250k                         # a role holding a task this full restarts fresh from its note (default 250k; off)
@@ -70,6 +75,7 @@ roles:
     args: [--chrome]                     # extra claude flags
     drop_tools: [Agent]                  # this role also starts without these
     keep_tools: [Workflow]               # ... and keeps these of the crew's list
+    skills: {desc_max: 500, off: []}     # its own, field by field over the crew's; a list it sets replaces the crew's
     resume: always                       # start on the role's last conversation (claude --resume)
     expires: 2026-11-01                  # a temporary seat: past it, reported for removal once down
     context_max: 200k                    # conversation fuller than this -> trimmed once idle (150k, 1m; 50k at least; off)
@@ -168,8 +174,8 @@ The bridge prints this startup/resume diagnostic in its console (`peek` / `attac
 The cockpit Terminals page remains the existing text/bridge view; it does not launch the native TUI or
 create another thread writer. Native shared TUI attach is the local CLI command described above.
 
-Claude Remote Control and Claude tool names (`drop_tools` / `keep_tools`) do not apply to Codex.
-Per-role Claude-only settings are rejected; crew `drop_tools` applies only to Claude (doctor warns).
+Claude Remote Control, Claude tool names (`drop_tools` / `keep_tools`) and `skills` do not apply to Codex.
+Per-role Claude-only settings are rejected; crew `drop_tools` and `skills` apply only to Claude (doctor warns of `drop_tools`).
 Configure Codex tools/permissions in its configuration. Codex token accounting feeds the same `usage`, task cost, UI totals and budget notifications as Claude.
 Snapshots live under the crew's `codex/usage/` directory and survive `down`, role removal and runtime changes.
 Duplicate notifications/resumed history do not add spend. Cost uses the resolved model, cache reads, output
@@ -186,7 +192,7 @@ whole model entry, so include its input/output/read rates and any long-context/s
 needed by the crew, including Codex App Server support.
 
 A role runs `claude [--model m] [args] [--settings '{"crossSessionInbound":"accept"}'] [--disallowedTools=<tools>]
-[--resume id] --name <session> "<boot>" [--remote-control <session>]` in its dir, with `CLAUDE_CONFIG_DIR`, `ZMINA_ROLE`, `ZMINA_CREW`, and the caller's PATH
+[--resume id] --name <session> "<boot>" [--remote-control <session>]` in its dir, with `CLAUDE_CONFIG_DIR`, `ZMINA_ROLE`, `ZMINA_CREW`, `SLASH_COMMAND_TOOL_CHAR_BUDGET` (with `skills.listing`), and the caller's PATH
 less directories under the temp dir (a terminal's per-window shims, such as cmux's, vanish with the
 window and would wrap claude in that window's hooks),
 on top of the tmux server's environment minus what ties a process to another session or terminal
@@ -301,6 +307,17 @@ deferred tool loads in full). A change applies at the role's next start; a role 
 `resume: always` goes on with its conversation. A role whose `args` pass `--disallowedTools`
 themselves keeps only that flag, with a warning: move the list to `drop_tools`, so the crew's and
 the role's add up.
+
+The skill list is the other part every request carries: each skill's name and description, sized by Claude Code
+to 1% of the context window in characters (a server flag often raises it; descriptions are shortened when the list
+is over it). `skills` trims it for the Claude roles: `listing` (characters, `9k`; passed as
+`SLASH_COMMAND_TOOL_CHAR_BUDGET`) is the lever that saves — a listing of ~30k characters cut to 9k took ~7k tokens
+off every request; `desc_max` cuts each description (`skillListingMaxDescChars`); `off` and `name_only` take
+skills out or list them by name (`skillOverrides`, exact names as the list shows them; no patterns). Turning skills
+off saves only where the list is under its budget: at the budget the room freed goes to the other descriptions.
+A short description can make a role miss a skill: watch which skills a role calls before and after. A role's
+`skills` go over the crew's field by field (a list it sets replaces the crew's; `off: []` clears it). A change
+applies at the role's next start. A role whose `args` pass `--settings` gets the `listing` only, with a warning.
 
 ## Roles
 

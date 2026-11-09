@@ -87,6 +87,8 @@ type Role struct {
 	RemoteControl *bool `yaml:"remote_control"`
 	// ReadGuard overrides the crew's read_guard for this role.
 	ReadGuard *bool `yaml:"read_guard"`
+	// Skills overrides the crew's skills for this role, field by field.
+	Skills *Skills `yaml:"skills"`
 	// Delivery overrides the crew's delivery for this role.
 	Delivery string `yaml:"delivery"`
 	// Resume "always" starts the role on its last conversation (claude --resume) whenever one is known.
@@ -124,6 +126,7 @@ type Role struct {
 	contextMax  int
 	releaseIdle time.Duration
 	restartAt   int
+	skills      SkillList
 	restartIdle time.Duration
 	restartDone int
 	dirErr      error
@@ -175,6 +178,9 @@ const (
 // RestartContext is the context, in tokens, past which a role holding a task is restarted fresh with its note once it
 // is between turns (restart_at); 0: never.
 func (r *Role) RestartContext() int { return r.restartAt }
+
+// SkillList is the role's skills setting, its own over the crew's.
+func (r *Role) SkillList() SkillList { return r.skills }
 
 // RestartAfter is how long a role holding a task and a conversation over 100k may sit idle before it is restarted
 // fresh rather than woken on a cold cache (restart_idle); 0: never.
@@ -253,6 +259,9 @@ type Crew struct {
 	// ReadGuard gives every Claude role the read guard: a PreToolUse hook that turns a big cat, sed, head or tail
 	// into zmina read and answers a Read of a big file without offset/limit with its outline. Default false.
 	ReadGuard *bool `yaml:"read_guard"`
+	// Skills trims the skill list every Claude role is sent with each request (listing budget, desc_max, off,
+	// name_only); a role's own skills override it field by field.
+	Skills *Skills `yaml:"skills"`
 	// Renotify is how long a delivered line waits for its reader's ack before it is said again (default 30m; off).
 	Renotify string `yaml:"renotify"`
 	// Delivery is how lines reach a role: native (the default: its agent's own channel — a Claude session's inbox
@@ -907,6 +916,10 @@ func (c *Crew) resolve(strict bool) error {
 		return err
 	}
 
+	if _, err := resolveSkills(c.Skills, nil); err != nil {
+		return err
+	}
+
 	for _, name := range c.Names() {
 		r := c.Roles[name]
 
@@ -946,6 +959,19 @@ func (c *Crew) resolve(strict bool) error {
 
 		if r.restartAt, err = parseRestartAt(r.RestartAt, crewRestartAt); err != nil {
 			return fmt.Errorf("role %s: %w", name, err)
+		}
+
+		if r.skills, err = resolveSkills(c.Skills, r.Skills); err != nil {
+			return fmt.Errorf("role %s: %w", name, err)
+		}
+
+		switch {
+		case r.IsCodex():
+			r.skills = SkillList{}
+		case r.ownsSettings() && len(r.skills.Settings()) > 0:
+			c.Warnings = append(c.Warnings, fmt.Sprintf("role %s: args has --settings, so skills desc_max, off and "+
+				"name_only are not passed to it (listing is)", name))
+			r.skills = SkillList{Listing: r.skills.Listing}
 		}
 
 		if r.restartIdle, err = parseRestartIdle(r.RestartIdle, crewRestartIdle); err != nil {

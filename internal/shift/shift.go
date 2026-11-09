@@ -2,6 +2,7 @@
 package shift
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -417,6 +418,9 @@ func (s *Shift) Command(r *crew.Role, resume string) []string {
 	argv = append(argv, r.Args...)
 	if s.inbound(r) {
 		argv = append(argv, "--settings", s.roleSettings(r.Name))
+	} else if sk := r.SkillList(); !sk.Empty() && len(sk.Settings()) > 0 {
+		raw, _ := json.Marshal(sk.Settings())
+		argv = append(argv, "--settings", string(raw))
 	}
 
 	if off := s.Crew.ToolsOff(r); len(off) > 0 {
@@ -664,6 +668,7 @@ func (s *Shift) Env(r *crew.Role) []string {
 		env = append(env, "CODEX_HOME="+home)
 	} else {
 		env = append([]string{"CLAUDE_CONFIG_DIR=" + s.Crew.Namespace}, env...)
+		env = append(env, r.SkillList().Env()...)
 	}
 	return env
 }
