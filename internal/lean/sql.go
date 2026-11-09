@@ -14,13 +14,9 @@ import (
 // data lines up to "\.". A statement's Name is its object without its schema, so file.sql:users reads every
 // statement on users.
 func sqlOutline(src []byte) []Symbol {
-	// A backslash escapes a quote in MySQL, not in a Postgres standard string ('C:\dir\'): when the scan with
-	// escapes leaves a string open to the end, the one without them is taken if it closes them all.
-	stmts, sections, open := sqlStatements(src, true)
-	if open {
-		if s2, sec2, open2 := sqlStatements(src, false); !open2 {
-			stmts, sections = s2, sec2
-		}
+	stmts, sections, _ := sqlScan(src)
+	if stmts == nil {
+		return nil
 	}
 
 	if len(stmts) == 0 {
@@ -94,6 +90,59 @@ func sqlOutline(src []byte) []Symbol {
 
 // sqlLongStatement is the length from which a statement's outline shows its CTEs.
 const sqlLongStatement = 30
+
+// sqlScan reads the file's statements. A backslash escapes a quote in MySQL ('it\'s'), not in a Postgres standard
+// string ('C:\dir\'), so the file is scanned both ways. sure: both agree on every statement — the backslash makes no
+// difference, and no string's text can have been read as code — or the file is MySQL's (its signs) and the scan with
+// escapes, its own rule, closes. Else the scan that closes its strings is taken, the one without escapes when both
+// do; open both ways, nil: cut short or no SQL.
+func sqlScan(src []byte) (stmts []sqlStmt, sections []Symbol, sure bool) {
+	esc, escSec, escOpen := sqlStatements(src, true)
+	raw, rawSec, rawOpen := sqlStatements(src, false)
+
+	switch {
+	case escOpen == rawOpen && sameStatements(esc, raw):
+		if escOpen {
+			return nil, nil, false
+		}
+
+		return esc, escSec, true
+	case escOpen && rawOpen:
+		return nil, nil, false
+	case mysqlSigns.Match(src) && !escOpen: // MySQL escapes its quotes with a backslash: that scan is right
+		return esc, escSec, true
+	case rawOpen:
+		return esc, escSec, false
+	case escOpen:
+		return raw, rawSec, false
+	default:
+		return raw, rawSec, false
+	}
+}
+
+// mysqlSigns are what a MySQL file has and a Postgres one has not: backticks, /*! … */, a table's ENGINE=, DELIMITER.
+var mysqlSigns = regexp.MustCompile("(?im)`|/\\*!|\\bengine\\s*=|^\\s*delimiter\\s")
+
+func sameStatements(a, b []sqlStmt) bool {
+	if len(a) != len(b) {
+		return false
+	}
+
+	for i := range a {
+		if a[i].start != b[i].start || a[i].end != b[i].end || a[i].code != b[i].code {
+			return false
+		}
+	}
+
+	return true
+}
+
+// sqlSure reports a SQL file whose outline cannot hold a string's text as code: its backslashes (if any) make no
+// difference to its statements. The read guard answers only with such an outline.
+func sqlSure(src []byte) bool {
+	_, _, sure := sqlScan(src)
+	return sure
+}
 
 type sqlStmt struct {
 	start, end int

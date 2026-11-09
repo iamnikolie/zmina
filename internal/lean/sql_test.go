@@ -161,17 +161,39 @@ func TestSQLScanEdges(t *testing.T) {
 	assert.Equal(t, []string{"1-6 CREATE FUNCTION f", "7-7 CREATE TABLE users"},
 		names("CREATE FUNCTION f() RETURNS int AS $body1$\nBEGIN\n  INSERT INTO a VALUES (1);\n  RETURN 1;\nEND;\n$body1$ LANGUAGE plpgsql;\nCREATE TABLE users (id int);\n"))
 
-	assert.Equal(t, []string{"1-2 CREATE TABLE a", "3-3 statement"}, names("CREATE TABLE a (\n id int);\nghp_token 'never closed\n"),
-		"an unknown first word is no label; the end is the file's")
+	assert.Equal(t, []string{"1-1 CREATE TABLE a", "2-2 statement"}, names("CREATE TABLE a (id int);\nghp_token;\n"),
+		"an unknown first word is no label")
+	assert.Nil(t, names("SELECT 1 FROM t;\nghp_token $$\n x\n"), "a body open to the end: cut short, no outline")
 
-	// over the guard's size: the reason names statements, never a value
+	open := "SELECT 1 FROM t WHERE a LIKE 'x' ESCAPE '\\';\nINSERT INTO k VALUES ('note; use ghp_TOKEN99 x; call ghp_TOKEN98');\n" +
+		"SELECT 'never closed\n"
+	assert.False(t, sqlSure([]byte(open)), "its backslash changes its statements: the guard never answers with it")
+	assert.False(t, sqlSure([]byte(pg)))
+	assert.True(t, sqlSure([]byte(dumpSrc)), "MySQL's own escapes")
+	assert.True(t, sqlSure([]byte(gooseSrc)), "no backslash")
+
+	// over the guard's size: the reason names statements, never a value; a file it is not sure of goes to Read
 	dir := t.TempDir()
-	p := write(t, dir, "dump.sql", pg+strings.Repeat("INSERT INTO k VALUES ('filler row value');\n", 400))
-	d := Guard(HookInput{Cwd: dir, ToolName: "Read", ToolInput: map[string]any{"file_path": p}}, "/opt/zmina", nil)
+	guard := func(name, body string) Decision {
+		p := write(t, dir, name, body)
+		return Guard(HookInput{Cwd: dir, ToolName: "Read", ToolInput: map[string]any{"file_path": p}}, "/opt/zmina", nil)
+	}
+	filler := strings.Repeat("INSERT INTO k VALUES ('filler row value');\n", 400)
+
+	d := guard("plain.sql", filler+secret)
 	assert.Equal(t, "outline", d.Kind)
-	assert.Contains(t, d.Reason, "INSERT INTO k ×402")
+	assert.Contains(t, d.Reason, "INSERT INTO k ×401")
 	assert.NotContains(t, strings.ToLower(d.Reason), "ghp_")
 	assert.NotContains(t, d.Reason, "filler")
+
+	d = guard("dump.sql", dumpSrc+filler+secret)
+	assert.Equal(t, "outline", d.Kind, "a MySQL dump")
+	assert.NotContains(t, strings.ToLower(d.Reason), "ghp_")
+	assert.NotContains(t, d.Reason, "fine")
+
+	assert.Equal(t, Decision{}, guard("pg.sql", pg+filler), "a backslash that changes the statements")
+	assert.Equal(t, Decision{}, guard("cut.sql", filler+open), "a string open")
+
 }
 
 // A long query and its first CTE start on one line: grep counts each apart.
