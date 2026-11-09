@@ -112,3 +112,64 @@ func TestReadGuardCommand(t *testing.T) {
 	assert.Contains(t, string(raw), `"kind":"guard-rewrite","what":"cat"`)
 	assert.Contains(t, string(raw), `"session":"s-2"`)
 }
+
+// The hook takes a file in the crew's worktrees, or in an active task's worktree elsewhere, as the role's own though
+// its session started in another directory; a burst of reader calls in one session is marked bulk in the meter.
+func TestReadGuardTaskWorktrees(t *testing.T) {
+	dir := t.TempDir()
+	crewFile := filepath.Join(dir, "crew.yaml")
+	require.NoError(t, os.WriteFile(crewFile, []byte("dir: "+dir+"\nroles:\n  dispatcher:\n  dev:\n"), 0o644))
+
+	body := []byte("package acme\n\n" + strings.Repeat("// words words words words\n", 1000))
+	inCrew := filepath.Join(dir, "worktrees", "acme-T-1")
+	require.NoError(t, os.MkdirAll(inCrew, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(inCrew, "big.go"), body, 0o644))
+
+	away := filepath.Join(t.TempDir(), "acme-T-2")
+	require.NoError(t, os.MkdirAll(away, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(away, "big.go"), body, 0o644))
+
+	_, _, err := zm(t, crewFile, "task", "new", "dev", "Fix the build")
+	require.NoError(t, err)
+
+	raw, err := os.ReadFile(filepath.Join(dir, "tasks", "T-1.json"))
+	require.NoError(t, err)
+
+	var tk map[string]any
+	require.NoError(t, json.Unmarshal(raw, &tk))
+	tk["worktree"] = away
+	raw, err = json.Marshal(tk)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "tasks", "T-1.json"), raw, 0o600))
+
+	session := t.TempDir()
+
+	guard := func(cmd string) string {
+		in, _ := json.Marshal(map[string]any{"session_id": "s-1", "cwd": session, "permission_mode": "bypassPermissions",
+			"tool_name": "Bash", "tool_input": map[string]any{"command": cmd}})
+
+		var out, errb bytes.Buffer
+
+		root := NewRoot(&out, &errb)
+		root.SetIn(bytes.NewReader(in))
+		root.SetArgs([]string{"--crew", crewFile, "_read-guard", "--role", "dev"})
+		require.NoError(t, root.Execute())
+
+		return out.String()
+	}
+
+	assert.Contains(t, guard("cd "+inCrew+" && cat big.go"), " read --via 'cat big.go' big.go", "the crew's worktrees")
+	assert.Contains(t, guard("cd "+away+" && cat big.go"), " read --via 'cat big.go' big.go", "an active task's worktree")
+	assert.Empty(t, guard("cd "+t.TempDir()+" && cat big.go"), "elsewhere: as it was")
+
+	for range lean.BulkPerMinute {
+		guard("cat " + filepath.Join(inCrew, "big.go"))
+	}
+
+	lines, err := os.ReadFile(filepath.Join(dir, "reads.jsonl"))
+	require.NoError(t, err)
+
+	all := strings.Split(strings.TrimSpace(string(lines)), "\n")
+	assert.NotContains(t, all[lean.BulkPerMinute-1], `"bulk"`)
+	assert.Contains(t, all[len(all)-1], `"bulk":true`, "past 30 a minute in one session")
+}

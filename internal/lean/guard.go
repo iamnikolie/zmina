@@ -42,12 +42,14 @@ type Decision struct {
 var noOutlineExt = map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true,
 	".pdf": true, ".ipynb": true, ".svg": true}
 
-// Guard decides on one tool call. self is the zmina executable a rewritten command runs. It is sure or it lets the
-// call go: anything it does not parse plainly passes untouched.
-func Guard(in HookInput, self string) Decision {
+// Guard decides on one tool call. self is the zmina executable a rewritten command runs. roots, asked only for a file
+// outside the session's directory, are the other directories whose files the guard takes as the session's own: the
+// crew's worktrees directory and its active tasks' worktrees, where a role works away from where it started. It is
+// sure or it lets the call go: anything it does not parse plainly passes untouched.
+func Guard(in HookInput, self string, roots func() []string) Decision {
 	switch in.ToolName {
 	case "Read":
-		return guardRead(in)
+		return guardRead(in, roots)
 	case "Bash":
 		if in.PermissionMode != "bypassPermissions" {
 			return Decision{}
@@ -55,16 +57,36 @@ func Guard(in HookInput, self string) Decision {
 
 		cmd, _ := in.ToolInput["command"].(string)
 
-		return guardBash(cmd, in.Cwd, self)
+		return guardBash(cmd, in.Cwd, self, roots)
 	}
 
 	return Decision{}
 }
 
+// ownFile: the file is the session's — under its directory, or under one of roots (a task's worktree the role cd'd
+// into or names by its path) — with the hidden-part and link checks made against that directory or root.
+func ownFile(p, session string, roots func() []string) bool {
+	if guardable(p, session) {
+		return true
+	}
+
+	if roots == nil {
+		return false
+	}
+
+	for _, r := range roots() {
+		if r != "" && guardable(p, r) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // guardRead answers a Read of a big file without offset or limit with its outline. The hook runs before Claude Code's
 // permission rules, so the deny reason it writes must never carry what those rules might withhold: only a file under
 // the session's directory, not hidden, of a type with a real outline (names and line ranges, never its lines).
-func guardRead(in HookInput) Decision {
+func guardRead(in HookInput, roots func() []string) Decision {
 	p, _ := in.ToolInput["file_path"].(string)
 	if p == "" || in.ToolInput["offset"] != nil || in.ToolInput["limit"] != nil || noOutlineExt[strings.ToLower(filepath.Ext(p))] {
 		return Decision{}
@@ -74,7 +96,7 @@ func guardRead(in HookInput) Decision {
 		p = filepath.Join(in.Cwd, p)
 	}
 
-	if Lang(p) == "" || !guardable(p, in.Cwd) {
+	if Lang(p) == "" || !ownFile(p, in.Cwd, roots) {
 		return Decision{}
 	}
 
@@ -111,7 +133,7 @@ var (
 	shellMeta = regexp.MustCompile("[|;&<>`$(){}*?\\[\\]~!\\\\\n]")
 )
 
-func guardBash(cmd, cwd, self string) Decision {
+func guardBash(cmd, cwd, self string, roots func() []string) Decision {
 	session := cwd
 	if self == "" {
 		return Decision{}
@@ -230,7 +252,7 @@ func guardBash(cmd, cwd, self string) Decision {
 			file = t[:strings.LastIndex(t, ":")]
 		}
 
-		if strings.ContainsAny(t, "'") || !guardable(abs(file, dir), session) {
+		if strings.ContainsAny(t, "'") || !ownFile(abs(file, dir), session, roots) {
 			return Decision{}
 		}
 	}
