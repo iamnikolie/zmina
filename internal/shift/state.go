@@ -95,6 +95,9 @@ type RoleState struct {
 	Up bool `json:"up,omitempty"`
 	// Started is when zmina last started (or tried to start) it.
 	Started time.Time `json:"started,omitzero"`
+	// Pending is a restart or release the ticker began (BeginDown) and must finish, saved with Downing: the process
+	// that began it may die during the wait outside the lock, and the next beat finishes it (Shift.finishStale).
+	Pending *PendingDown `json:"pending,omitempty"`
 	// AbsentBeats counts the ticker's beats in a row that found the role missing from the crew file; at
 	// pruneAfterBeats its state is archived and dropped (Shift.pruneAbsent).
 	AbsentBeats int `json:"absent_beats,omitempty"`

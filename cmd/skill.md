@@ -1365,7 +1365,11 @@ tick.log. A PATH that changes later (claude moved by an upgrade) needs `ticker i
 
 `zmina tick` is one beat, under a lock shared with every other zmina command (a command waits up to
 30 s for it, then fails naming the pid that holds it). A role tmux does not answer about is left
-alone for the beat — never taken as ended; a role being put down is left alone too.
+alone for the beat — never taken as ended; a role being put down is left alone too, for 75 s. A restart or
+release the ticker began is saved with the down (`pending` in the role's state): when the beat that began it died
+during its wait, a later beat finishes it (`restart-late`, `released-late`). A down with nothing saved (a `zmina down`
+or `sleep` whose process died during the wait) stops counting after 150 s (`down-stale`), and the dispatcher hears
+`<role>: went down halfway … stays down`.
 
 0. Alarms whose time has come ring, once each (see Alarms): a reminder for the owner becomes a check on the todo,
    a parked item comes back to it, a role is started if down and gets its line queued, another crew is told.

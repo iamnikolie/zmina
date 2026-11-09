@@ -87,6 +87,15 @@ func (s *Shift) Tick() []string {
 			continue
 		}
 
+		// Past downingFor a begun down should be over: the process that began it died during its wait.
+		if !rs.Downing.IsZero() {
+			if line := s.finishStale(name, rs, now); line != "" {
+				did = append(did, line)
+
+				continue
+			}
+		}
+
 		p, err := s.probe(name)
 		if err != nil {
 			did = append(did, name+": left alone this beat, tmux did not answer: "+err.Error())

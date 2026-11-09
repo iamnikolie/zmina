@@ -467,8 +467,10 @@ func (s *Shift) beginRestart(name string, tasks []task.Task, why, done string) s
 		return name + ": restart: " + err.Error()
 	}
 
-	s.Restarts = append(s.Restarts, Restart{Name: name, Claim: rs.Downing, Opts: UpOptions{Fresh: true, Dir: dir},
-		Tasks: ids, Why: why, Notes: strings.Join(notes, ", "), Done: done})
+	job := Restart{Name: name, Claim: rs.Downing, Opts: UpOptions{Fresh: true, Dir: dir}, Tasks: ids, Why: why,
+		Notes: strings.Join(notes, ", "), Done: done}
+	s.Restarts = append(s.Restarts, job)
+	rs.Pending = pendingOf(job) // saved with Downing: a beat that dies during the wait is finished by the next one
 
 	if done != "" {
 		return fmt.Sprintf("%s: %s; restarting fresh", name, why)

@@ -168,6 +168,7 @@ func (s *Shift) putDown(name string) (did, note string) {
 	tasks := strings.Join(rs.ReleaseTasks, ",")
 	rs.Releasing, rs.ReleaseTasks, rs.ReleaseIdle = time.Time{}, nil, 0
 	s.Released = append(s.Released, name)
+	rs.Pending = &PendingDown{Kind: pendingRelease, Claim: rs.Downing}
 
 	note = "released " + name + " after " + idleFor(idle) + " idle"
 	if len(items) > 0 {

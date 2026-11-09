@@ -805,7 +805,7 @@ func (s *Shift) start(name string, o UpOptions) error {
 		return fmt.Errorf("%s: %w", name, err)
 	}
 
-	rs.Started, rs.Up, rs.Downing, rs.Dir = s.Now(), true, time.Time{}, o.Dir
+	rs.Started, rs.Up, rs.Downing, rs.Pending, rs.Dir = s.Now(), true, time.Time{}, nil, o.Dir
 	rs.Releasing, rs.ReleaseTasks, rs.ReleaseIdle = time.Time{}, nil, 0
 	rs.Sent, rs.NoPrompt, rs.BlockedNoted, rs.Trusted, rs.Booted = nil, time.Time{}, false, false, time.Time{}
 	rs.Instance = isInstance(name)
@@ -1005,7 +1005,7 @@ func joinDetail(a, b string) string {
 // forgets an instance.
 func (s *Shift) FinishDown(name string) error {
 	rs := s.State.Role(name)
-	rs.Up, rs.Downing = false, time.Time{}
+	rs.Up, rs.Downing, rs.Pending = false, time.Time{}, nil
 
 	defer s.forget(name)
 
