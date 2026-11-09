@@ -9,6 +9,7 @@ import (
 
 	"path/filepath"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -46,6 +47,8 @@ type usageReport struct {
 	Restarts []usageRestart `json:"restarts,omitempty"`
 	// Lessons are the lessons triage runs in the window and their cost.
 	Lessons []usageLesson `json:"lessons,omitempty"`
+	// Fills are what the tools put into the roles' context, by tool kind, with --by tool.
+	Fills []registry.Fill `json:"fills,omitempty"`
 }
 
 // peerCells is what a peer answers usage --cells with.
@@ -54,6 +57,7 @@ type peerCells struct {
 	Problems []string       `json:"problems,omitempty"`
 	Restarts []usageRestart `json:"restarts,omitempty"`
 	Lessons  []usageLesson  `json:"lessons,omitempty"`
+	Fills    []usageFill    `json:"fills,omitempty"`
 }
 
 // peerUsageTimeout is how long --all waits for one peer's answer.
@@ -68,7 +72,7 @@ func (a *app) usageCommand() *cobra.Command {
 
 	c := &cobra.Command{
 		Use: "usage",
-		Short: "What the work cost (--since 24h, --by role|task|model|day|crew|trigger|how, --all): turns, tokens, " +
+		Short: "What the work cost (--since 24h, --by role|task|model|day|crew|trigger|how|ctx|tool, --all): turns, tokens, " +
 			"API-equivalent dollars and the model mix, from the transcripts",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -77,8 +81,8 @@ func (a *app) usageCommand() *cobra.Command {
 				return err
 			}
 
-			if !slices.Contains(cost.Views, by) {
-				return fmt.Errorf("--by %q: one of %s", by, strings.Join(cost.Views, ", "))
+			if !slices.Contains(cost.Views, by) && by != toolView {
+				return fmt.Errorf("--by %q: one of %s, %s", by, strings.Join(cost.Views, ", "), toolView)
 			}
 
 			prices, err := cost.Load(pricesPath())
@@ -98,27 +102,39 @@ func (a *app) usageCommand() *cobra.Command {
 				node = me.Name
 			}
 
-			got, problems := usageCells(crews, node, from, prices)
+			got, fills, problems := usageRead(crews, node, from, prices, by == toolView)
 			restarts := usageRestarts(crews, node, from)
 			lessons := usageLessons(crews, node, from)
 
 			if cells {
 				return json.NewEncoder(a.out).Encode(peerCells{Cells: got, Problems: problems, Restarts: restarts,
-					Lessons: lessons})
+					Lessons: lessons, Fills: fills})
 			}
 
 			if all && !local {
 				// The parsed duration goes into the peer's command line, never the flag's text.
-				peers := peersUsage(cmd.Context(), d.String())
+				peers := peersUsage(cmd.Context(), d.String(), by == toolView)
 				got = append(got, peers.Cells...)
 				problems = append(problems, peers.Problems...)
 				restarts = append(restarts, peers.Restarts...)
 				lessons = append(lessons, peers.Lessons...)
+				fills = append(fills, peers.Fills...)
 			}
 
 			if role != "" {
 				got = slices.DeleteFunc(got, func(c cost.Cell) bool { return c.Role != role })
 				restarts = slices.DeleteFunc(restarts, func(r usageRestart) bool { return r.Role != role })
+				fills = slices.DeleteFunc(fills, func(f usageFill) bool { return f.Role != role })
+			}
+
+			if by == toolView {
+				rows := groupFills(fills)
+				if asJSON {
+					return a.printJSON(usageReport{By: by, Since: from, Rows: []cost.Row{}, Total: cost.Total(got),
+						Prices: prices.Date + " (" + prices.From + ")", Missing: problems, Fills: rows})
+				}
+
+				return printFills(a.out, rows, problems)
 			}
 
 			rows := cost.Group(got, by)
@@ -147,7 +163,8 @@ func (a *app) usageCommand() *cobra.Command {
 	}
 
 	c.Flags().StringVar(&since, "since", "24h", "how far back: 90m, 12h, 7d")
-	c.Flags().StringVar(&by, "by", "role", "rows by: "+strings.Join(cost.Views, ", "))
+	c.Flags().StringVar(&by, "by", "role", "rows by: "+strings.Join(cost.Views, ", ")+", "+toolView+
+		" (what the tools put into the context)")
 	c.Flags().StringVar(&role, "role", "", "only this role's turns")
 	c.Flags().BoolVar(&all, "all", false, "every crew under ~/.zmina, and through the mesh every peer's crews")
 	c.Flags().BoolVar(&asJSON, "json", false, "JSON output")
@@ -170,7 +187,24 @@ func crewsOf(cells []cost.Cell) map[string]bool {
 // usageCells reads, prices and attributes the crews' sessions since a time. A crew that cannot be read is a
 // problem, not a failure: the others still count.
 func usageCells(crews []uiCrew, node string, since time.Time, prices cost.Table) ([]cost.Cell, []string) {
+	cells, _, problems := usageRead(crews, node, since, prices, false)
+
+	return cells, problems
+}
+
+// usageFill is what one tool kind put into one role's context (usage --by tool).
+type usageFill struct {
+	Node string `json:"node,omitempty"`
+	Crew string `json:"crew,omitempty"`
+	Role string `json:"role"`
+	registry.Fill
+}
+
+// usageRead is usageCells, and with fills what the tools put into the roles' context.
+func usageRead(crews []uiCrew, node string, since time.Time, prices cost.Table, fills bool) ([]cost.Cell, []usageFill,
+	[]string) {
 	var (
+		filled   []usageFill
 		problems []string
 		loaded   []*crew.Crew
 		keys     []string
@@ -255,12 +289,23 @@ func usageCells(crews []uiCrew, node string, since time.Time, prices cost.Table)
 				continue
 			}
 
+			if fills {
+				fs, err := registry.Fills(t, since)
+				if err != nil {
+					problems = append(problems, fmt.Sprintf("crew %s: %s: %v", key, t.ID, err))
+				}
+
+				for _, f := range fs {
+					filled = append(filled, usageFill{Node: node, Crew: key, Role: who[1], Fill: f})
+				}
+			}
+
 			sessions = append(sessions, cost.Session{Node: node, Crew: key, Role: who[0], Group: who[1],
 				Dispatcher: dispatcherSession(c), Messages: ms})
 		}
 	}
 
-	return cost.Cells(sessions, ledgers, prices, time.Local), problems
+	return cost.Cells(sessions, ledgers, prices, time.Local), filled, problems
 }
 
 func dispatcherSession(c *crew.Crew) string {
@@ -304,7 +349,7 @@ func worktreeDirs(c *crew.Crew, tasks []task.Task) map[string]bool {
 
 // peersUsage asks every peer with an address for its crews' cells, all at once; a peer that does not answer is
 // missing, with why.
-func peersUsage(ctx context.Context, since string) peerCells {
+func peersUsage(ctx context.Context, since string, fills bool) peerCells {
 	me, err := openNode()
 	if err != nil {
 		return peerCells{}
@@ -322,6 +367,7 @@ func peersUsage(ctx context.Context, since string) peerCells {
 		missing  []string
 		restarts []usageRestart
 		lessons  []usageLesson
+		filled   []usageFill
 	)
 
 	for _, p := range peers {
@@ -338,7 +384,7 @@ func peersUsage(ctx context.Context, since string) peerCells {
 		go func(p mesh.Peer) {
 			defer wg.Done()
 
-			cells, err := peerUsage(ctx, p, since)
+			cells, err := peerUsage(ctx, p, since, fills)
 
 			mu.Lock()
 			defer mu.Unlock()
@@ -352,6 +398,7 @@ func peersUsage(ctx context.Context, since string) peerCells {
 			out = append(out, cells.Cells...)
 			restarts = append(restarts, cells.Restarts...)
 			lessons = append(lessons, cells.Lessons...)
+			filled = append(filled, cells.Fills...)
 			for _, pr := range cells.Problems {
 				missing = append(missing, p.Name+": "+pr)
 			}
@@ -361,17 +408,22 @@ func peersUsage(ctx context.Context, since string) peerCells {
 	wg.Wait()
 	slices.Sort(missing)
 
-	return peerCells{Cells: out, Problems: missing, Restarts: restarts, Lessons: lessons}
+	return peerCells{Cells: out, Problems: missing, Restarts: restarts, Lessons: lessons, Fills: filled}
 }
 
-func peerUsage(ctx context.Context, p mesh.Peer, since string) (peerCells, error) {
+func peerUsage(ctx context.Context, p mesh.Peer, since string, fills bool) (peerCells, error) {
 	ctx, cancel := context.WithTimeout(ctx, peerUsageTimeout)
 	defer cancel()
 
 	var errs []error
 
 	for _, addr := range p.Addrs {
-		raw, err := runPeer(ctx, addr, nil, "usage", "--all", "--local", "--cells", "--since", since)
+		args := []string{"usage", "--all", "--local", "--cells", "--since", since}
+		if fills {
+			args = append(args, "--by", toolView)
+		}
+
+		raw, err := runPeer(ctx, addr, nil, args...)
 		if err != nil {
 			errs = append(errs, err)
 
@@ -392,6 +444,12 @@ func peerUsage(ctx context.Context, p mesh.Peer, since string) (peerCells, error
 		for i := range pc.Restarts {
 			if pc.Restarts[i].Node == "" {
 				pc.Restarts[i].Node = p.Name
+			}
+		}
+
+		for i := range pc.Fills {
+			if pc.Fills[i].Node == "" {
+				pc.Fills[i].Node = p.Name
 			}
 		}
 
@@ -633,4 +691,92 @@ func (a *app) taskCost(t task.Task, s *shift.Shift) string {
 	}
 
 	return line
+}
+
+// toolView is usage --by tool: not a cost view, the tools' results that fill the context.
+const toolView = "tool"
+
+// groupFills sums the fills by tool kind across roles and crews, the most characters first.
+func groupFills(fills []usageFill) []registry.Fill {
+	by := map[string]*registry.Fill{}
+
+	for _, f := range fills {
+		r := by[f.Tool]
+		if r == nil {
+			r = &registry.Fill{Tool: f.Tool}
+			by[f.Tool] = r
+		}
+
+		r.Add(f.Fill)
+	}
+
+	out := make([]registry.Fill, 0, len(by))
+	for _, r := range by {
+		out = append(out, *r)
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Chars != out[j].Chars {
+			return out[i].Chars > out[j].Chars
+		}
+
+		return out[i].Tool < out[j].Tool
+	})
+
+	return out
+}
+
+// printFills is the --by tool table: what each kind of tool call put into the context, which every later turn reads
+// again until a compaction or a restart.
+func printFills(out io.Writer, rows []registry.Fill, problems []string) error {
+	var total registry.Fill
+	for _, r := range rows {
+		total.Add(r)
+	}
+
+	total.Tool = "all"
+
+	// The long tail in one row (--json has every tool): under 1% of the characters, no big result, no image.
+	var (
+		shown []registry.Fill
+		rest  registry.Fill
+		n     int
+	)
+
+	for _, r := range rows {
+		if 100*r.Chars < total.Chars && r.Big == 0 && r.Images == 0 {
+			rest.Add(r)
+			n++
+
+			continue
+		}
+
+		shown = append(shown, r)
+	}
+
+	if n > 0 {
+		rest.Tool = fmt.Sprintf("%d more under 1%%", n)
+		shown = append(shown, rest)
+	}
+
+	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "TOOL\tCALLS\tCHARS\t%CHARS\tOVER 20K\tIMAGES")
+
+	for _, r := range append(shown, total) {
+		fmt.Fprintf(w, "%s\t%d\t%s\t%s\t%d\t%d\n", r.Tool, r.Calls, shift.Tokens(r.Chars),
+			share(float64(r.Chars), float64(total.Chars)), r.Big, r.Images)
+	}
+
+	if err := w.Flush(); err != nil {
+		return err
+	}
+
+	fmt.Fprintln(out, "\nCHARS: the text of the tools' results (about 4 a token), read again with every turn after it until "+
+		"a compaction or a restart; an image counts apart.")
+
+	for _, p := range problems {
+		fmt.Fprintln(out, "missing:", p)
+	}
+
+	return nil
 }

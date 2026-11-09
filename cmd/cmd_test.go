@@ -459,7 +459,11 @@ func TestUsage(t *testing.T) {
 	body := `{"type":"agent-name","agentName":"` + name + `-dev-2"}` + "\n" + reply("m1", "claude-opus-5-5", "/work") +
 		reply("m2", "claude-opus-9", "/work")
 	require.NoError(t, os.WriteFile(filepath.Join(proj, "s1.jsonl"), []byte(body), 0o600))
-	body = `{"type":"agent-name","agentName":"` + name + `-dev"}` + "\n" + reply("m3", "claude-opus-5-5", "/work")
+	body = `{"type":"agent-name","agentName":"` + name + `-dev"}` + "\n" + reply("m3", "claude-opus-5-5", "/work") +
+		`{"type":"assistant","timestamp":"` + time.Now().UTC().Format(time.RFC3339) + `","message":{"content":[` +
+		`{"type":"tool_use","id":"u1","name":"Bash","input":{"command":"cat main.go"}}]}}` + "\n" +
+		`{"type":"user","timestamp":"` + time.Now().UTC().Format(time.RFC3339) + `","message":{"content":[` +
+		`{"type":"tool_result","tool_use_id":"u1","content":"package main"}]}}` + "\n"
 	require.NoError(t, os.WriteFile(filepath.Join(proj, "s2.jsonl"), []byte(body), 0o600))
 
 	out, _, err := zm(t, crewFile, "usage")
@@ -475,6 +479,11 @@ func TestUsage(t *testing.T) {
 	require.NoError(t, err)
 	assert.Regexp(t, `(?m)^BAND\s+TURNS\s+%TURNS\s.*\$ API\s+%COST\s`, out)
 	assert.Regexp(t, `(?m)^200-350k\s+3\s+100%\s.*\$0\.116\s+100%\s`, out, "every turn carried 201k")
+
+	out, _, err = zm(t, crewFile, "usage", "--by", "tool")
+	require.NoError(t, err)
+	assert.Regexp(t, `(?m)^Bash: cat/sed/head/tail\s+1\s+12\s+100%\s+0\s+0$`, out, "what the tools put into the context")
+	assert.Regexp(t, `(?m)^all\s+1\s+12\s+100%`, out)
 
 	out, _, err = zm(t, crewFile, "usage", "--by", "task")
 	require.NoError(t, err)

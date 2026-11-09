@@ -1258,7 +1258,7 @@ would not load is never saved), and leaves the previous file as `crew.yaml.bak`.
 
 ## Usage
 
-`zmina usage [--since 24h|7d] [--by role|task|model|day|crew|trigger|how|ctx] [--role r] [--all] [--json]` — what the
+`zmina usage [--since 24h|7d] [--by role|task|model|day|crew|trigger|how|ctx|tool] [--role r] [--all] [--json]` — what the
 work cost, from the transcripts: each API reply once, a role's copies (dev#2) with it, a subagent's replies with
 the session that started it (`SUB` counts them). Columns: turns, `WAITS`, tokens, `CACHED` (the share of the prompt read
 from cache), `REREAD` (cache reads over cache writes: how many times a token put in context was read again), `$ API`, `$/TURN`, `CTX` (the context a turn carries on average; `!` past 200k — most of such a
@@ -1270,6 +1270,14 @@ paid for: `Of the cost: cache reads 60%, cache writes 17%, output 18%, input 5%.
   `500-700k`, `700k+`), in that order, with `%TURNS` and `%COST`: what share of the cost the long turns take, so what a
   lower `context_max` or restart threshold would save. Mixed models make the bands uneven; `--role r` reads one role.
   A peer older than this has no bands: its turns are `?`.
+- **What fills the context** (`--by tool`): not dollars but what the tools' results put into the conversations, which
+  every later turn reads again until a compaction or a restart. Rows by tool kind — `Read`, `Grep`, a shell command
+  by its first program after `cd …&&` and `VAR=…` (`Bash: cat/sed/head/tail`, `Bash: git`, `Bash: grep/rg`, …; zmina's
+  own by subcommand, `Bash: zmina task`) — with `CALLS`, `CHARS` (the results' text, about 4 a token), `%CHARS`,
+  `OVER 20K` (results over 20k characters) and `IMAGES` (a picture's data is not text; it counts apart). A subagent's
+  tools count with its session. Kinds under 1% with no big result and no image share one row; `--json` has every
+  kind. A `cat` the read guard answered with an outline still counts as `cat`. `--all` asks the peers too; one older
+  than this is `missing`.
 
 - **Waits** (`WAITS`: turns and their dollars; `waits` and `wait_cost` in `--json`): the turns spent polling. A wait
   is a Bash call in the foreground that waits — a `sleep` of 20 s or more, an `until`, `while` or `for … do` loop that
