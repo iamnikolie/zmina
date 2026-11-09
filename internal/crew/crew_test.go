@@ -653,18 +653,18 @@ func TestMorning(t *testing.T) {
 
 	c, err := Load(write(t, "dir: "+dir+"\nroles:\n  dispatcher:\n"))
 	require.NoError(t, err)
-	at, on := c.MorningAt()
+	h, m, on := c.MorningAt()
 	assert.True(t, on)
-	assert.Equal(t, 8*time.Hour, at, "08:00 unless the crew file says otherwise")
+	assert.Equal(t, [2]int{8, 0}, [2]int{h, m}, "08:00 unless the crew file says otherwise")
 
 	c, err = Load(write(t, "dir: "+dir+"\nmorning: 07:30\nroles:\n  dispatcher:\n"))
 	require.NoError(t, err)
-	at, _ = c.MorningAt()
-	assert.Equal(t, 7*time.Hour+30*time.Minute, at)
+	h, m, _ = c.MorningAt()
+	assert.Equal(t, [2]int{7, 30}, [2]int{h, m})
 
 	c, err = Load(write(t, "dir: "+dir+"\nmorning: \"off\"\nroles:\n  dispatcher:\n"))
 	require.NoError(t, err)
-	_, on = c.MorningAt()
+	_, _, on = c.MorningAt()
 	assert.False(t, on)
 
 	_, err = Load(write(t, "dir: "+dir+"\nmorning: soon\nroles:\n  dispatcher:\n"))

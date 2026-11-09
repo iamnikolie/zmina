@@ -40,7 +40,7 @@ read_guard: true                         # big cat/sed/Read become zmina read (p
 delivery: native                         # how lines reach roles: native (default: the agent's own channel) | tmux (per role too)
 delivery_mid_turn: true                  # the dispatcher's acked lines may go into a turn it is in (default true; false: at its end)
 renotify: 30m                            # an unacked line is said again this often (default 30m; off)
-morning: 08:00                           # when the dispatcher hears yesterday's cost in one line (default 08:00; off)
+morning: 08:00                           # when (in timezone:) the dispatcher hears yesterday's cost in one line (default 08:00; off)
 drop_env: [MY_TERMINAL_*]                # variables kept from the roles, on top of the built-in list
 drop_tools: [Artifact, Workflow]         # Claude Code tools every role starts without (--disallowedTools)
 skills:                                  # the skill list Claude roles are sent with every request, trimmed (default: Claude Code's own)
@@ -1323,7 +1323,7 @@ paid for: `Of the cost: cache reads 60%, cache writes 17%, output 18%, input 5%.
   role, a copy's with its role's, and what for: `Restarted fresh 4 times: backend 2 (context 1, idle 0, task done
   1), dev 2 (context 1, idle 1).` (`task done` only when there is one) `--json` has them as `restarts` (role, when, task, why);
   `--all` asks the peers for theirs.
-- **Morning line**: once a day, on the first beat past the crew file's `morning:` (default `08:00`, `off`), the
+- **Morning line**: once a day, on the first beat past the crew file's `morning:` (default `08:00`, `off`) in its `timezone:`, the
   ticker tells the dispatcher yesterday in one note: `morning: yesterday $65.67 API-equivalent, 1154 turns, 5.8 h at
   work (1.9 sessions at once); context per turn: devops 176k, dispatcher 95k, …; filled by cat/sed/head/tail 25%,
   git 24%, Read 17%; jumped: devops context 127k -> 176k; compacted 3 (zmina usage --since 24h, --by ctx, --by

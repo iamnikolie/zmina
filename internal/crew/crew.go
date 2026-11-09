@@ -460,8 +460,11 @@ func (c *Crew) Socket() string { return suffixed(socket, "-", c.Name) }
 // LaunchdLabel is the crew's ticker: io.iamnikolie.zmina, or io.iamnikolie.zmina.<name>.
 func (c *Crew) LaunchdLabel() string { return suffixed(launchdLabel, ".", c.Name) }
 
-// MorningAt is how long past midnight the morning line is due; ok is false when it is off.
-func (c *Crew) MorningAt() (time.Duration, bool) { return c.morning, c.morning >= 0 }
+// MorningAt is the time of day, in the crew's time zone (Location), the morning line is due; ok is false when it
+// is off.
+func (c *Crew) MorningAt() (hour, minute int, ok bool) {
+	return int(c.morning / time.Hour), int(c.morning % time.Hour / time.Minute), c.morning >= 0
+}
 
 // defaultMorning is when the morning line is due unless the crew file says otherwise.
 const defaultMorning = 8 * time.Hour

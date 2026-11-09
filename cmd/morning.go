@@ -19,28 +19,33 @@ const (
 	jumpTurns = 30
 )
 
-// morningTick tells the dispatcher, once a day after the crew's morning time (crew file morning:, default 08:00),
+// morningTick tells the dispatcher, once a day after the crew's morning time (crew file morning:, default 08:00, in
+// its timezone:),
 // what yesterday cost in one line, with the roles whose context or price per turn jumped from the day before. It
 // runs outside the beat's lock.
 func (a *app) morningTick(now time.Time) {
 	var (
 		crewFile string
-		at       time.Duration
+		h, m     int
 		on       bool
 		done     string
+		loc      *time.Location
 	)
 
 	_ = a.readState(func(s *shift.Shift) error {
-		at, on = s.Crew.MorningAt()
-		done, crewFile = s.State.MorningDay, s.Crew.Path
+		h, m, on = s.Crew.MorningAt()
+		done, crewFile, loc = s.State.MorningDay, s.Crew.Path, s.Crew.Location()
 
 		return nil
 	})
 
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	// The crew's clock, as the lessons run's: its time zone's midnight and morning, DST days too.
+	local := now.In(loc)
+	today := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
 	day := today.AddDate(0, 0, -1)
 
-	if !on || now.Sub(today) < at || done == day.Format(time.DateOnly) {
+	if !on || local.Before(time.Date(local.Year(), local.Month(), local.Day(), h, m, 0, 0, loc)) ||
+		done == day.Format(time.DateOnly) {
 		return
 	}
 
@@ -65,8 +70,8 @@ func (a *app) morningTick(now time.Time) {
 	}
 
 	crews := []uiCrew{{Key: a.crewKey(), Path: crewFile}}
-	cells, _, stretches, _ := usageRead(crews, "", day.AddDate(0, 0, -1), prices, nil)
-	_, fills, _, _ := usageRead(crews, "", day, prices, &today)
+	cells, _, stretches, _ := usageRead(crews, "", day.AddDate(0, 0, -1), prices, nil, loc)
+	_, fills, _, _ := usageRead(crews, "", day, prices, &today, loc)
 
 	line := morningLine(cells, fills, stretches, day)
 	if line == "" {

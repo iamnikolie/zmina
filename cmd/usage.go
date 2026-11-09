@@ -112,7 +112,7 @@ func (a *app) usageCommand() *cobra.Command {
 				upTo = &time.Time{}
 			}
 
-			got, fills, stretches, problems := usageRead(crews, node, from, prices, upTo)
+			got, fills, stretches, problems := usageRead(crews, node, from, prices, upTo, time.Local)
 			restarts := usageRestarts(crews, node, from)
 			lessons := usageLessons(crews, node, from)
 
@@ -201,7 +201,7 @@ func crewsOf(cells []cost.Cell) map[string]bool {
 // usageCells reads, prices and attributes the crews' sessions since a time. A crew that cannot be read is a
 // problem, not a failure: the others still count.
 func usageCells(crews []uiCrew, node string, since time.Time, prices cost.Table) ([]cost.Cell, []string) {
-	cells, _, _, problems := usageRead(crews, node, since, prices, nil)
+	cells, _, _, problems := usageRead(crews, node, since, prices, nil, time.Local)
 
 	return cells, problems
 }
@@ -224,9 +224,9 @@ type usageStretch struct {
 }
 
 // usageRead is usageCells, the roles' stretches, and with fills what the tools put into the roles' context up to
-// *fills (zero: up to now).
-func usageRead(crews []uiCrew, node string, since time.Time, prices cost.Table, fills *time.Time) ([]cost.Cell, []usageFill,
-	[]usageStretch, []string) {
+// *fills (zero: up to now). loc is the clock the cells' days are counted in.
+func usageRead(crews []uiCrew, node string, since time.Time, prices cost.Table, fills *time.Time,
+	loc *time.Location) ([]cost.Cell, []usageFill, []usageStretch, []string) {
 	var (
 		filled   []usageFill
 		problems []string
@@ -340,7 +340,7 @@ func usageRead(crews []uiCrew, node string, since time.Time, prices cost.Table, 
 		stretches = append(stretches, usageStretch{Node: node, Crew: k[0], Role: k[1], Stretches: cost.Stretches(ss)})
 	}
 
-	return cost.Cells(sessions, ledgers, prices, time.Local), filled, stretches, problems
+	return cost.Cells(sessions, ledgers, prices, loc), filled, stretches, problems
 }
 
 func dispatcherSession(c *crew.Crew) string {

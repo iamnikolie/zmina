@@ -49,19 +49,30 @@ func TestMorningTick(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	crewFile := testCrew(t, "  dev:\n")
+	f, err := os.OpenFile(crewFile, os.O_APPEND|os.O_WRONLY, 0)
+	require.NoError(t, err)
+	_, err = f.WriteString("timezone: America/New_York\n")
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
 	dir := filepath.Dir(crewFile)
 	proj := filepath.Join(dir, "ns", "projects", "-work")
 	require.NoError(t, os.MkdirAll(proj, 0o700))
 
-	now := time.Now()
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	yesterday := today.Add(-12 * time.Hour)
+	// The crew's clock, not the host's: 1 November 2026 has 25 hours there (the clocks go back at 02:00).
+	ny, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+
+	reply := func(at time.Time, id string) string {
+		return `{"type":"assistant","timestamp":"` + at.UTC().Format(time.RFC3339) + `","cwd":"/work","message":{"id":"` +
+			id + `","model":"claude-opus-5-5","usage":{"input_tokens":4,"cache_creation_input_tokens":0,` +
+			`"cache_read_input_tokens":200000,"output_tokens":2000}}}` + "\n"
+	}
 
 	name := strings.TrimPrefix(strings.SplitN(string(mustRead(t, crewFile)), "\n", 2)[0], "name: ")
-	body := `{"type":"agent-name","agentName":"` + name + `-dev"}` + "\n" + `{"type":"assistant","timestamp":"` +
-		yesterday.UTC().Format(time.RFC3339) + `","cwd":"/work","message":{"id":"m1","model":"claude-opus-5-5",` +
-		`"usage":{"input_tokens":4,"cache_creation_input_tokens":0,"cache_read_input_tokens":200000,` +
-		`"output_tokens":2000}}}` + "\n"
+	body := `{"type":"agent-name","agentName":"` + name + `-dev"}` + "\n" +
+		reply(time.Date(2026, 10, 31, 23, 30, 0, 0, ny), "m1") + // yesterday there, already 1 November in UTC
+		reply(time.Date(2026, 11, 1, 0, 30, 0, 0, ny), "m2") // today there
 	require.NoError(t, os.WriteFile(filepath.Join(proj, "s1.jsonl"), []byte(body), 0o600))
 
 	a := &app{out: io.Discard, err: io.Discard, crew: crewFile}
@@ -72,14 +83,15 @@ func TestMorningTick(t *testing.T) {
 		return st
 	}
 
-	a.morningTick(today.Add(7 * time.Hour))
-	assert.Empty(t, state().Notes, "not before the crew's morning")
+	a.morningTick(time.Date(2026, 11, 1, 7, 30, 0, 0, ny))
+	assert.Empty(t, state().Notes, "07:30 there: 8.5 hours past midnight, but not yet 08:00")
 
-	a.morningTick(today.Add(9 * time.Hour))
+	a.morningTick(time.Date(2026, 11, 1, 8, 0, 0, 0, ny))
 	require.Len(t, state().Notes, 1)
-	assert.True(t, strings.HasPrefix(state().Notes[0], "morning: yesterday $0.080 API-equivalent, 1 turns"), state().Notes[0])
-	assert.Equal(t, yesterday.Format(time.DateOnly), state().MorningDay)
+	assert.True(t, strings.HasPrefix(state().Notes[0], "morning: yesterday $0.080 API-equivalent, 1 turns"),
+		"yesterday is the crew's day: %s", state().Notes[0])
+	assert.Equal(t, "2026-10-31", state().MorningDay)
 
-	a.morningTick(today.Add(10 * time.Hour))
+	a.morningTick(time.Date(2026, 11, 1, 10, 0, 0, 0, ny))
 	assert.Len(t, state().Notes, 1, "once a day")
 }
