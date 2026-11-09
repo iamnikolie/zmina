@@ -174,6 +174,10 @@ type Shift struct {
 	Rang []Rung
 	// Warn reports a problem that must not fail the command (the event log cannot be written); nil is quiet.
 	Warn func(error)
+	// Flush writes the state at once, keeping the lock (Locked.Flush); nil in tests that keep state in memory.
+	Flush func() error
+	// flushErr is the first flush that failed: the beat then types, posts and starts nothing more.
+	flushErr error
 
 	warned bool
 	// resumed is the conversation each role of this run was last started on ("" fresh): what up checks it lives.
@@ -420,8 +424,8 @@ func (s *Shift) Command(r *crew.Role, resume string) []string {
 	argv = append(argv, r.Args...)
 	if s.inbound(r) {
 		argv = append(argv, "--settings", s.roleSettings(r.Name))
-	} else if sk := r.SkillList(); !sk.Empty() && len(sk.Settings()) > 0 {
-		raw, _ := json.Marshal(sk.Settings())
+	} else if set := r.Settings(); len(set) > 0 {
+		raw, _ := json.Marshal(set)
 		argv = append(argv, "--settings", string(raw))
 	}
 
@@ -480,7 +484,39 @@ func (s *Shift) BootText(r *crew.Role) string { return s.bootText(r, true) }
 // bootText is the boot, naming the start's tag or not: the boot queued after a clear is a line like any other, seen
 // in the log, the queue and the recovery pack, so it leaves the tag to the clear's hook (PendingBrief).
 func (s *Shift) bootText(r *crew.Role, tagged bool) string {
-	text := r.Boot
+	text := s.rulesText(r, r.Boot)
+	// A retired crew tells every role; a crew that stood still tells whoever reads its ledger first.
+	if n := s.Standing(); n != "" && (s.Crew.IsRetired() || r.Name == s.Crew.Dispatcher) {
+		text = strings.TrimSpace(text + "\n\n[zmina] " + n)
+	}
+	if s.inbound(r) {
+		tag := ""
+		if tagged {
+			tag = s.tag(r.Name)
+		}
+
+		text = strings.TrimSpace(text + "\n\n" + InboxRule(tag) + " " + s.ackRule())
+	}
+	if r.Name != "" && r.Name == s.Crew.Dispatcher {
+		text = s.recoveryBoot(text)
+	}
+	return text
+}
+
+// RulesSize is how many characters of zmina's own standing rules a fresh start of r carries on top of its boot:
+// what the crew file's switches (read_guard, lessons, delivery, Codex seats) add to every fresh session's prefix.
+// The standing note and the dispatcher's recovery line are left out: they come and go.
+func (s *Shift) RulesSize(r *crew.Role) int {
+	text := s.rulesText(r, r.Boot)
+	if s.inbound(r) {
+		text = strings.TrimSpace(text + "\n\n" + InboxRule(strings.Repeat("x", 12)) + " " + s.ackRule())
+	}
+
+	return max(len(text)-len(strings.TrimSpace(r.Boot)), 0)
+}
+
+// rulesText is text, the role's boot, with the rules every start of r is told after it.
+func (s *Shift) rulesText(r *crew.Role, text string) string {
 	if r.IsCodex() && r.CodexTransport == "shared" {
 		text += fmt.Sprintf("\n[zmina] Shared-runtime tools may not inherit role environment. Your role is %s; pass --crew %s on zmina commands and --role %s on task accept.", r.Name, shellWord(s.Crew.Path), shellWord(r.Name))
 	}
@@ -511,21 +547,6 @@ func (s *Shift) bootText(r *crew.Role, tagged bool) string {
 	}
 	if s.Crew.Lessons.On && text != "" {
 		text = strings.TrimSpace(text + "\n\n" + LessonRule)
-	}
-	// A retired crew tells every role; a crew that stood still tells whoever reads its ledger first.
-	if n := s.Standing(); n != "" && (s.Crew.IsRetired() || r.Name == s.Crew.Dispatcher) {
-		text = strings.TrimSpace(text + "\n\n[zmina] " + n)
-	}
-	if s.inbound(r) {
-		tag := ""
-		if tagged {
-			tag = s.tag(r.Name)
-		}
-
-		text = strings.TrimSpace(text + "\n\n" + InboxRule(tag) + " " + s.ackRule())
-	}
-	if r.Name != "" && r.Name == s.Crew.Dispatcher {
-		text = s.recoveryBoot(text)
 	}
 	return text
 }
@@ -670,7 +691,7 @@ func (s *Shift) Env(r *crew.Role) []string {
 		env = append(env, "CODEX_HOME="+home)
 	} else {
 		env = append([]string{"CLAUDE_CONFIG_DIR=" + s.Crew.Namespace}, env...)
-		env = append(env, r.SkillList().Env()...)
+		env = append(env, r.Env()...)
 	}
 	return env
 }
@@ -705,6 +726,7 @@ func (s *Shift) UpWith(name string, o UpOptions) error {
 
 	rs := s.State.Role(name)
 	rs.Held, rs.Broken, rs.QuickEnds = false, false, 0
+	s.flush() // with the start it belongs to, whatever the command does after
 
 	return nil
 }
@@ -807,7 +829,9 @@ func (s *Shift) start(name string, o UpOptions) error {
 		return fmt.Errorf("%s: %w", name, err)
 	}
 
-	rs.Started, rs.Up, rs.Downing, rs.Dir = s.Now(), true, time.Time{}, o.Dir
+	defer s.flush() // the session runs: a beat killed later must not start a second one
+
+	rs.Started, rs.Up, rs.Downing, rs.Pending, rs.Dir = s.Now(), true, time.Time{}, nil, o.Dir
 	rs.Releasing, rs.ReleaseTasks, rs.ReleaseIdle = time.Time{}, nil, 0
 	rs.Sent, rs.NoPrompt, rs.BlockedNoted, rs.Trusted, rs.Booted = nil, time.Time{}, false, false, time.Time{}
 	rs.Instance = isInstance(name)
@@ -1008,7 +1032,7 @@ func joinDetail(a, b string) string {
 // forgets an instance.
 func (s *Shift) FinishDown(name string) error {
 	rs := s.State.Role(name)
-	rs.Up, rs.Downing = false, time.Time{}
+	rs.Up, rs.Downing, rs.Pending = false, time.Time{}, nil
 
 	defer s.forget(name)
 

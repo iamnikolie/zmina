@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/iamnikolie/zmina/internal/tmux"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -72,7 +73,7 @@ roles:
     boot: hello
 %s`, name, filepath.Join(dir, "ns"), dir, claude, roles)), 0o600))
 
-	t.Cleanup(func() { _ = exec.Command("tmux", "-L", "zmina-"+name, "kill-server").Run() })
+	t.Cleanup(func() { tmux.KillServer("zmina-" + name) })
 
 	// The fake claude keeps no transcripts: a resume test names any session it likes. TestUpResumeThatEndsAtOnce puts
 	// the real check back.
@@ -336,6 +337,8 @@ func TestDoctorReports(t *testing.T) {
 	assert.Contains(t, out, "warn  registry")
 	assert.Contains(t, out, "warn  ticker")
 	assert.Contains(t, out, "ok    lock")
+	assert.Contains(t, out, "ok    boot      zmina's rules at a fresh start: ")
+	assert.Contains(t, out, "ok    boot      skill list not trimmed")
 	assert.NoError(t, err, "warnings only")
 
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "claude"), []byte("#!/bin/sh\necho '--model'\n"), 0o700))

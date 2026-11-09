@@ -99,6 +99,9 @@ type RoleState struct {
 	Up bool `json:"up,omitempty"`
 	// Started is when zmina last started (or tried to start) it.
 	Started time.Time `json:"started,omitzero"`
+	// Pending is a restart or release the ticker began (BeginDown) and must finish, saved with Downing: the process
+	// that began it may die during the wait outside the lock, and the next beat finishes it (Shift.finishStale).
+	Pending *PendingDown `json:"pending,omitempty"`
 	// AbsentBeats counts the ticker's beats in a row that found the role missing from the crew file; at
 	// pruneAfterBeats its state is archived and dropped (Shift.pruneAbsent).
 	AbsentBeats int `json:"absent_beats,omitempty"`
@@ -419,6 +422,14 @@ func takeLock(dir string) (*os.File, error) {
 func (l *Locked) Save() error {
 	defer l.Release()
 
+	return l.write()
+}
+
+// Flush writes the state and keeps the lock: a beat saves what it did after each effect it cannot take back.
+func (l *Locked) Flush() error { return l.write() }
+
+// write puts the state on disk whole: a temporary file, synced, renamed over the old one (kept as state.json.prev).
+func (l *Locked) write() error {
 	if l.legacy != nil {
 		bak := l.path + ".v1.bak"
 		if _, err := os.Stat(bak); errors.Is(err, os.ErrNotExist) {

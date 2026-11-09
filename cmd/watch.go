@@ -198,7 +198,7 @@ func (a *app) runOne(name string, baseline bool) error {
 			fmt.Fprintln(a.out, line)
 		}
 
-		return res.Err
+		return shift.Partial(res.Err) // the failure itself is recorded: failures, last error, the reservation let go
 	})
 }
 

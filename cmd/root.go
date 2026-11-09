@@ -89,7 +89,7 @@ Run 'zmina skill' for the full agent reference.`,
 	root.MarkFlagsMutuallyExclusive("config", "crew")
 
 	root.AddCommand(a.roleCommands()...)
-	root.AddCommand(a.connectCommand(), a.lessonCommand(), a.taskCommand(), a.todoCommand(), a.laterCommand(), a.remindCommand(), a.sleepCommand(), a.seatCommand(), a.logCommand(), a.noteCommand(), a.inboxCommand(), a.watchCommand(),
+	root.AddCommand(a.connectCommand(), a.showCommand(), a.lessonCommand(), a.taskCommand(), a.todoCommand(), a.laterCommand(), a.remindCommand(), a.sleepCommand(), a.seatCommand(), a.logCommand(), a.noteCommand(), a.inboxCommand(), a.watchCommand(),
 		a.stopCommand(), a.startCommand(), a.retireCommand(), a.queueCommand(), a.stateCommand(), a.tickerCommand(),
 		a.launchdCommand(), a.doctorCommand(), a.usageCommand(), a.skillCommand(), a.versionCommand(), a.uiCommand(),
 		a.messageCommand(), a.contextCommand(), a.reportCommand(), a.nodeCommand(), a.tellCommand(), a.codexCommand(), a.terminalCommand(),
@@ -235,6 +235,7 @@ func (a *app) withState(fn func(s *shift.Shift) error) error {
 	}
 
 	s.State = l.State
+	s.Flush = l.Flush
 	s.CommittedMessageStages = map[string]map[string]time.Time{}
 	for key, stages := range s.State.MessageStages {
 		copy := map[string]time.Time{}
@@ -247,7 +248,15 @@ func (a *app) withState(fn func(s *shift.Shift) error) error {
 	// (Shift.pruneAbsent), so a crew file broken for a moment loses no queue or resume id.
 	s.PruneWatches()
 
+	// A command that failed leaves the state as it was (what it typed or started is already saved by the flush after
+	// it); one that failed after doing part of its work says so with shift.Partial, and that part is saved.
 	ferr := fn(s)
+	if ferr != nil && !errors.Is(ferr, shift.ErrPartial) {
+		l.Release()
+
+		return ferr
+	}
+
 	if err := l.Save(); err != nil {
 		return errors.Join(ferr, fmt.Errorf("not saved: %w", err))
 	}

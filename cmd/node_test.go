@@ -78,6 +78,24 @@ func TestTellOnThisNode(t *testing.T) {
 
 	_, _, err = zm(t, ops, "node", "peer", "add", "box", "--ssh", "-oProxyCommand=x")
 	require.Error(t, err, "an ssh address is never an option")
+
+	// Only the owner's hand makes a relay: with an address, alone for a node that calls in, and taken back.
+	out, _, err = zm(t, ops, "node", "peer", "add", "box", "--ssh", "box", "--relay")
+	require.NoError(t, err)
+	assert.Equal(t, "peer box at ssh box · relay\n", out)
+	out, _, err = zm(t, ops, "node", "peer", "add", "jump", "--relay")
+	require.NoError(t, err)
+	assert.Equal(t, "peer jump · relay\n", out)
+	out, _, err = zm(t, ops, "node", "peer", "add", "box", "--relay=false")
+	require.NoError(t, err)
+	assert.Equal(t, "peer box · no relay\n", out)
+	_, _, err = zm(t, ops, "node", "peer", "add", "other")
+	require.Error(t, err, "no address and no relay word")
+
+	out, _, err = zm(t, ops, "node", "ls")
+	require.NoError(t, err)
+	assert.Contains(t, out, "  box · hand · at ssh box · not met yet\n")
+	assert.Contains(t, out, "  jump · hand · relay · no way there: it calls in")
 }
 
 // TestRemoteLinesCannotPassForLocal: a line from another node reaches a crew's dispatcher only, as a note marked as

@@ -169,7 +169,7 @@ func TestTypedReportCapAndRelayUseConnectionSnapshot(t *testing.T) {
 	a := newOwner(t, "alpha")
 	env := tell(t, a, "ops", "gamma/ops", TypedReportPrefix+strings.Repeat("x", 150))
 	// Cached recipient/relay capabilities cannot override the connection's smaller cap or missing support.
-	book := []Peer{{Name: "gamma", Through: []string{"beta"}, ReportsV1: true, BodyMax: BodyMax}, {Name: "beta", ReportsV1: true, BodyMax: BodyMax}}
+	book := []Peer{{Name: "gamma", Through: []string{"beta"}, ReportsV1: true, BodyMax: BodyMax}, {Name: "beta", ReportsV1: true, BodyMax: BodyMax, Relay: true}}
 	for _, peer := range []Peer{{Name: "beta", BodyMax: BodyMax}, {Name: "beta", ReportsV1: true, BodyMax: 100}} {
 		out, problems := a.handFor(peer, book)
 		require.Empty(t, out)

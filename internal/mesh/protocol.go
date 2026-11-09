@@ -151,6 +151,10 @@ func (n *Node) ServeTerminals(ctx context.Context, rw io.ReadWriter, deliver Del
 		return fail(err)
 	}
 
+	if err := n.current(*hi.Cert); err != nil {
+		return fail(err)
+	}
+
 	mine, err := nonce()
 	if err != nil {
 		return fail(err)
@@ -372,6 +376,10 @@ func (n *Node) open(c *conn, want string, now func() time.Time) (string, error) 
 		return "", err
 	}
 
+	if err := n.current(*hi.Cert); err != nil {
+		return "", err
+	}
+
 	if !ed25519.Verify(hi.Cert.Key, helloMessage("server", mine), hi.Sig) {
 		return "", errors.New("the peer did not prove its key")
 	}
@@ -537,6 +545,8 @@ func (n *Node) metPeer(cert Cert, told []Peer, caps Peer, now time.Time) error {
 			p.TellReceipts = caps.TellReceipts
 			p.Crews, p.CrewsAt = caps.Crews, now
 		})
+		// Only a relay the owner named may carry: a peer's own claim that it reaches a node is not enough.
+		relay := isRelay(ps, cert.Name)
 
 		for i, t := range told {
 			if i >= toldMax {
@@ -549,7 +559,7 @@ func (n *Node) metPeer(cert Cert, told []Peer, caps Peer, now time.Time) error {
 
 			ps = upsert(ps, *t.Cert, "told", func(p *Peer) {
 				p.Through = slices.DeleteFunc(p.Through, func(s string) bool { return s == cert.Name })
-				if t.Direct {
+				if t.Direct && relay {
 					p.Through = append(p.Through, cert.Name)
 				}
 
@@ -593,7 +603,8 @@ func upsert(ps []Peer, cert Cert, source string, fn func(p *Peer)) []Peer {
 }
 
 // handFor is what this node hands peer: the envelopes for it, and those for a node this node cannot reach itself
-// (no address, or its last try failed) when peer said it reaches that node and has not held the envelope yet.
+// (no address, or its last try failed) when peer said it reaches that node, the owner marked peer a relay in book,
+// and peer has not held the envelope yet.
 func (n *Node) handFor(peer Peer, book []Peer) ([]Envelope, []string) {
 	all, err := n.Outbox()
 	if err != nil {
@@ -607,7 +618,7 @@ func (n *Node) handFor(peer Peer, book []Peer) ([]Envelope, []string) {
 	var problems []string
 	for _, e := range all {
 		d := byName[e.dest()]
-		if e.dest() != peer.Name && (d.direct() || !slices.Contains(d.Through, peer.Name) || e.held(peer.Name) || len(e.Via) >= maxHops) {
+		if e.dest() != peer.Name && (d.direct() || !slices.Contains(d.relays(book), peer.Name) || e.held(peer.Name) || len(e.Via) >= maxHops) {
 			continue
 		}
 		if IsTellReceipt(e.Body) && !peer.TellReceipts {
@@ -742,10 +753,31 @@ func (n *Node) admit(e Envelope, book []Peer, now time.Time) error {
 		return fmt.Errorf("%s: written %s, too old or from the future", e.ID, e.At)
 	}
 
-	for _, p := range book {
-		if p.Name == e.Cert.Name && p.Cert != nil && p.Cert.Newer(e.Cert) && !p.Cert.Key.Equal(e.Cert.Key) {
-			return fmt.Errorf("%s: signed with a replaced key of %s", e.ID, p.Name)
-		}
+	if replaced(book, e.Cert) {
+		return fmt.Errorf("%s: signed with a replaced key of %s", e.ID, e.Cert.Name)
+	}
+
+	return nil
+}
+
+// replaced reports whether book holds a newer certificate for c's node with another key: the owner re-certified
+// that node, and c's key no longer speaks for it.
+func replaced(book []Peer, c Cert) bool {
+	return slices.ContainsFunc(book, func(p Peer) bool {
+		return p.Name == c.Name && p.Cert != nil && p.Cert.Newer(c) && !p.Cert.Key.Equal(c.Key)
+	})
+}
+
+// current refuses a session with a certificate the book knows was replaced: a retired or stolen key of a node the
+// owner re-certified opens no session, so it neither pulls that node's envelopes nor reaches its terminals.
+func (n *Node) current(c Cert) error {
+	book, err := n.Peers()
+	if err != nil {
+		return err
+	}
+
+	if replaced(book, c) {
+		return fmt.Errorf("the key of %s was replaced: its owner certified a newer one", c.Name)
 	}
 
 	return nil

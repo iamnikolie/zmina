@@ -585,7 +585,7 @@ func answerTodo(s *shift.Shift, from, action, id, words string) (string, error) 
 		if t, err := store.Get(tid); err == nil && t.State == task.Waiting {
 			t.Answered = s.Now()
 			if err := store.Put(t); err != nil {
-				return "", err
+				return "", shift.Partial(err) // the ask is closed and the dispatcher's note queued: keep the note
 			}
 		}
 	}

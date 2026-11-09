@@ -222,7 +222,7 @@ func (a *app) nodeEnroll() *cobra.Command {
 				return err
 			}
 
-			if err := addPeer(me, name, addr); err != nil {
+			if err := addPeer(me, name, addr, nil); err != nil {
 				return err
 			}
 
@@ -259,7 +259,9 @@ func runPeer(ctx context.Context, addr mesh.Addr, stdin []byte, args ...string) 
 	return out.Bytes(), nil
 }
 
-func addPeer(me *mesh.Node, name string, addr mesh.Addr) error {
+// addPeer adds a peer, or another address of one, by the owner's hand; relay, when not nil, sets whether it may
+// carry for the nodes it says it reaches.
+func addPeer(me *mesh.Node, name string, addr mesh.Addr, relay *bool) error {
 	if name == me.Name {
 		return errors.New("that is this node")
 	}
@@ -267,13 +269,21 @@ func addPeer(me *mesh.Node, name string, addr mesh.Addr) error {
 	return me.UpdatePeers(func(ps []mesh.Peer) []mesh.Peer {
 		i := slices.IndexFunc(ps, func(p mesh.Peer) bool { return p.Name == name })
 		if i < 0 {
-			return append(ps, mesh.Peer{Name: name, Addrs: []mesh.Addr{addr}, Source: "hand"})
+			ps = append(ps, mesh.Peer{Name: name, Source: "hand"})
+			i = len(ps) - 1
 		}
 
-		// The owner's hand replaces what other nodes told.
-		ps[i].Source, ps[i].Err = "hand", ""
-		if !slices.Contains(ps[i].Addrs, addr) {
-			ps[i].Addrs = append([]mesh.Addr{addr}, ps[i].Addrs...)
+		// The owner's hand replaces what other nodes told. No address: only the relay word changes.
+		ps[i].Source = "hand"
+		if addr != (mesh.Addr{}) {
+			ps[i].Err = ""
+			if !slices.Contains(ps[i].Addrs, addr) {
+				ps[i].Addrs = append([]mesh.Addr{addr}, ps[i].Addrs...)
+			}
+		}
+
+		if relay != nil {
+			ps[i].Relay = *relay
 		}
 
 		return ps
@@ -286,19 +296,25 @@ func (a *app) nodePeer() *cobra.Command {
 		Short: "This node's address book by hand: add or remove a peer",
 	}
 
-	var addr mesh.Addr
+	var (
+		addr  mesh.Addr
+		relay bool
+	)
 
 	add := &cobra.Command{
-		Use:   "add <node> (--ssh <host> | --cmd <command>)",
-		Short: "Add a peer (already certified) or another address of one",
+		Use:   "add <node> (--ssh <host> | --cmd <command> | --relay[=false])",
+		Short: "Add a peer (already certified) or another address of one; --relay lets it carry for nodes it reaches",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !mesh.ValidName(args[0]) {
 				return fmt.Errorf("node name %q: use letters, digits, '.', '_' and '-'", args[0])
 			}
 
-			if err := addr.Check(); err != nil {
-				return err
+			// --relay alone marks a peer that calls in (no address of its own here).
+			if addr != (mesh.Addr{}) || !cmd.Flags().Changed("relay") {
+				if err := addr.Check(); err != nil {
+					return err
+				}
 			}
 
 			me, err := openNode()
@@ -306,16 +322,32 @@ func (a *app) nodePeer() *cobra.Command {
 				return err
 			}
 
-			if err := addPeer(me, args[0], addr); err != nil {
+			var setRelay *bool
+			if cmd.Flags().Changed("relay") {
+				setRelay = &relay
+			}
+
+			if err := addPeer(me, args[0], addr, setRelay); err != nil {
 				return err
 			}
 
-			fmt.Fprintf(a.out, "peer %s at %s\n", args[0], addr)
+			line := "peer " + args[0]
+			if addr != (mesh.Addr{}) {
+				line += " at " + addr.String()
+			}
+
+			if setRelay != nil {
+				line += map[bool]string{true: " · relay", false: " · no relay"}[relay]
+			}
+
+			fmt.Fprintln(a.out, line)
 
 			return nil
 		},
 	}
 	addrFlags(add, &addr)
+	add.Flags().BoolVar(&relay, "relay", false, "let this peer carry envelopes and tunnels for the nodes it says it "+
+		"reaches (--relay=false takes it back); without it a peer's claim to reach a node routes nothing")
 
 	rm := &cobra.Command{
 		Use:   "rm <node>",
@@ -438,6 +470,9 @@ func (a *app) nodeLs() *cobra.Command {
 
 func peerLine(p mesh.Peer, now time.Time) string {
 	parts := []string{p.Name, p.Source}
+	if p.Relay {
+		parts = append(parts, "relay")
+	}
 
 	var addrs []string
 	for _, ad := range p.Addrs {

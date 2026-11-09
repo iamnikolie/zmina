@@ -113,6 +113,28 @@ func addPeer(t *testing.T, n *Node, name string) {
 	}))
 }
 
+// addRelay adds a peer by hand the owner lets carry for the nodes it reaches.
+func addRelay(t *testing.T, n *Node, name string) {
+	t.Helper()
+	require.NoError(t, n.UpdatePeers(func(ps []Peer) []Peer {
+		return append(ps, Peer{Name: name, Addrs: []Addr{{Cmd: name}}, Source: "hand", Relay: true})
+	}))
+}
+
+// markRelay marks a peer, known or not yet, as one the owner lets carry.
+func markRelay(t *testing.T, n *Node, name string) {
+	t.Helper()
+	require.NoError(t, n.UpdatePeers(func(ps []Peer) []Peer {
+		for i := range ps {
+			if ps[i].Name == name {
+				ps[i].Relay = true
+				return ps
+			}
+		}
+		return append(ps, Peer{Name: name, Source: "hand", Relay: true})
+	}))
+}
+
 func tell(t *testing.T, n *Node, crew, to, body string) Envelope {
 	t.Helper()
 
@@ -177,7 +199,8 @@ func TestCarriedByAThirdNode(t *testing.T) {
 	p, laptop, ops, web := trio(t)
 
 	// ops cannot reach web; laptop reaches both. Three rounds at most: laptop meets web, ops hears laptop reaches web and hands
-	// it over, laptop hands it to web.
+	// it over, laptop hands it to web. ops's owner lets laptop carry.
+	markRelay(t, ops, "laptop")
 	e := tell(t, ops, "ops", "box-web/web", "the dump is ready")
 
 	for range 3 {

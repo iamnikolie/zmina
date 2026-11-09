@@ -255,7 +255,7 @@ func (a *app) deliverReport(c uiCrew, from mesh.Address, envelopeID, body string
 			return err
 		}
 		s.Deliver()
-		return a.reconcileMessages(s)
+		return shift.Partial(a.reconcileMessages(s)) // the report is queued and maybe typed: keep that
 	})
 	_ = envelopeID
 	_ = sent
