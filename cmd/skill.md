@@ -1112,11 +1112,12 @@ turn's price is reading the conversation again: compact or restart the role), `M
 from each reply's own model), and for `--by task` `HOW`. A totals row `all`.
 
 - **Waits** (`WAITS`: turns and their dollars; `waits` and `wait_cost` in `--json`): the turns spent polling. A wait
-  is a Bash call in the foreground that waits — a `sleep` of 20 s or more, an `until …; do` / `while …; do` loop that
+  is a Bash call in the foreground that waits — a `sleep` of 20 s or more, an `until`, `while` or `for … do` loop that
   sleeps, `kubectl rollout status`, `gh run watch`, `gh pr checks --watch`; a here-document's body is not read. Waits
   with at most three calls between them (the look at whether it is done) and no new prompt are one polling chain. Its
   first wait and look cost what a background wait costs too (woken once, one look), so from its second wait on the
-  reply after each wait and the reply after its first look are counted: each read the whole conversation again only to
+  reply after each wait is counted, and the reply after a look of its own that came before it (a look inside the
+  wait's command, `sleep 60; gl pipeline show`, spends none): each read the whole conversation again only to
   see whether something was done. A call with `run_in_background` and a Monitor are never waits: that is how the
   boot's wait rule says to wait. The column shows whether the rule is kept. Claude transcripts only (Codex token
   events carry no tool calls).

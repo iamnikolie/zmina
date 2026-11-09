@@ -29,6 +29,7 @@ func TestWaitCall(t *testing.T) {
 		"python3 - <<'EOF'\nimport time\ntime.sleep(60)\nos.system('sleep 60')\nEOF": false,
 		"cat > a.sh <<EOF\nwhile true; do sleep 30; done\nEOF\nsleep 25":             true,
 		"for f in *.go; do gofmt -l $f; done":                                        false,
+		"for i in $(seq 1 30); do curl -sf localhost:8080 && break; sleep 1; done":   true,
 	} {
 		assert.Equal(t, want, WaitCall(cmd), cmd)
 	}
@@ -87,6 +88,17 @@ func TestMessagesMarkWaits(t *testing.T) {
 		reply("a11", bash("sleep 3; oko shot", false)), // a settle pause
 		result,
 		reply("a12", ""),
+		// The look inside the wait's own command: one reply per extra wait.
+		`{"type":"user","timestamp":"2026-11-09T12:00:00Z","message":{"role":"user","content":"and the next one"}}`,
+		reply("b1", bash("sleep 60; gl pipeline show 44", false)),
+		result,
+		reply("b2", bash("sleep 60; gl pipeline show 44", false)),
+		result,
+		reply("b3", bash("sleep 60; gl pipeline show 44", false)),
+		result,
+		reply("b4", bash("go build ./...", false)),
+		result,
+		reply("b5", ""),
 	}
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "s1.jsonl"), []byte(strings.Join(lines, "\n")+"\n"), 0o600))
 
@@ -100,6 +112,6 @@ func TestMessagesMarkWaits(t *testing.T) {
 		}
 	}
 
-	assert.Equal(t, []string{"a4", "a5"}, waits,
+	assert.Equal(t, []string{"a4", "a5", "b3", "b4"}, waits,
 		"after the second wait of a chain and after its look; work, the owner's line or a background wait ends it")
 }

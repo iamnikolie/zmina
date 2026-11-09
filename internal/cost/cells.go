@@ -37,7 +37,7 @@ type Cell struct {
 	Cost     float64 `json:"cost"`
 	Unpriced int     `json:"unpriced,omitempty"`
 	// Waits are the turns of polling chains past their first wait and look (registry.Message.Wait): foreground waits
-	// with at most one call between them, the turns a background wait would not take. WaitCost is their dollars.
+	// with at most three calls between them, the turns a background wait would not take. WaitCost is their dollars.
 	Waits    int     `json:"waits,omitempty"`
 	WaitCost float64 `json:"wait_cost,omitempty"`
 }

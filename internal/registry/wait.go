@@ -12,7 +12,7 @@ var (
 	// sleepRe is a sleep with its length; a short one (under minSleep) is a settle pause, not a wait.
 	sleepRe = regexp.MustCompile(`\bsleep\s+(\d+(?:\.\d+)?)([smh]?)\b`)
 	// loopRe is a shell loop; it waits only when it sleeps.
-	loopRe = regexp.MustCompile(`\b(until|while)\b[^\n]*\bdo\b`)
+	loopRe = regexp.MustCompile(`\b(until|while|for)\b[^\n]*\bdo\b`)
 	// watchRe are commands that wait on a rollout or a CI run.
 	watchRe = regexp.MustCompile(`\bkubectl\s+rollout\s+status\b|\bgh\s+run\s+watch\b|\bgh\s+pr\s+checks\b[^\n]*--watch`)
 	// heredocRe opens a here-document; its body is text for another program, not shell.
@@ -137,8 +137,8 @@ func toolCalls(raw []byte) []bool {
 
 // waitChain follows polling in a conversation: foreground waits with at most maxLooks calls between them (the look
 // at whether it is done), with no new prompt between. The first wait and its look cost what a background wait costs
-// too (woken once, one look); from the second wait of a chain on, the reply after each wait and the reply after its
-// first look are wait turns. More calls in a row that are not waits are work again: the chain ends.
+// too (woken once, one look); from the second wait of a chain on, the reply after each wait is a wait turn, and the
+// reply after the look that came before it. More calls in a row that are not waits are work again: the chain ends.
 type waitChain struct {
 	waits, since, left int
 	pending             bool
@@ -177,6 +177,7 @@ func (w *waitChain) calls(id string, waiting []bool) {
 			continue
 		}
 
+		looked := w.since > 0
 		if w.waits > 0 && w.since <= maxLooks {
 			w.waits++
 		} else {
@@ -184,8 +185,14 @@ func (w *waitChain) calls(id string, waiting []bool) {
 		}
 
 		w.since = 0
+
+		// A look of its own stood between the waits: its reply was spent too. A look inside the wait's own command
+		// (sleep 60; gl pipeline show) costs no reply of its own.
 		if w.waits >= 2 {
-			w.left = 2
+			w.left = 1
+			if looked {
+				w.left = 2
+			}
 		}
 	}
 }
