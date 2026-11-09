@@ -184,7 +184,18 @@ func (s *Shift) renotify(now time.Time) {
 
 	for _, id := range slices.SortedFunc(maps.Keys(s.State.Acks), func(a, b string) int { return ackNum(a) - ackNum(b) }) {
 		a := s.State.Acks[id]
-		if a.Last.IsZero() || now.Sub(a.Last) < every || a.Renotes >= renotesMax || !s.has(a.Role) || s.inFlight(a) {
+		if a.Last.IsZero() || a.Renotes >= renotesMax || !s.has(a.Role) || s.inFlight(a) {
+			continue
+		}
+
+		// A role started fresh or trimmed since got the line in its boot brief (zmina pending --brief): the clock runs
+		// from then, so the line is not said twice.
+		told := a.Last
+		if rs := s.State.Role(a.Role); rs.Started.After(told) || rs.Trimmed.After(told) {
+			told = latest(rs.Started, rs.Trimmed)
+		}
+
+		if now.Sub(told) < every {
 			continue
 		}
 
@@ -662,4 +673,13 @@ func (s *Shift) roleSettings(name string) string {
 	raw, _ := json.Marshal(settings)
 
 	return string(raw)
+}
+
+// latest is the later of two times.
+func latest(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+
+	return a
 }

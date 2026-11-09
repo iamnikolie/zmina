@@ -8,7 +8,15 @@ permissions:
   contents: write
 
 jobs:
+  # The tagged commit passes CI's checks and tests here, whatever ran on main before: no binary or formula ships
+  # from a red commit.
+  ci:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   goreleaser:
+    needs: ci
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

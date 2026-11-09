@@ -105,6 +105,30 @@ func TestHandoffSignsInWithoutTheToken(t *testing.T) {
 	_ = state.Body.Close()
 	assert.Equal(t, http.StatusOK, state.StatusCode)
 
+	for path, want := range map[string]string{
+		"//example.invalid/x":     "/example.invalid/x",
+		"/\\example.invalid/x":    "/example.invalid/x",
+		"///example.invalid/x":    "/example.invalid/x",
+		"/%09/example.invalid/x":  "/%09/example.invalid/x",
+		"/%09%09example.invalid":  "/%09%09example.invalid",
+		"/%0A/example.invalid/x":  "",
+		"/%0D/example.invalid/x":  "",
+		"/%09%2F/example.invalid": "/%09/example.invalid",
+	} {
+		away, err := noRedirect().Get(srv.URL + path + "?login=nope&tab=2")
+		require.NoError(t, err)
+		_ = away.Body.Close()
+
+		loc := away.Header.Get("Location")
+		if want != "" {
+			assert.Equal(t, want+"?tab=2", loc, "%s: a path on this cockpit, never another site", path)
+		}
+
+		assert.True(t, strings.HasPrefix(loc, "/") && !strings.HasPrefix(loc, "//") && !strings.HasPrefix(loc, "/\\"),
+			"%s: %q", path, loc)
+		assert.False(t, strings.ContainsAny(loc, "\t\r\n"), "%s: no control character a browser would strip: %q", path, loc)
+	}
+
 	again, err := noRedirect().Get(srv.URL + "/?login=" + got.Code)
 	require.NoError(t, err)
 	_ = again.Body.Close()

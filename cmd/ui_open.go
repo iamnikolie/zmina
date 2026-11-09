@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -261,10 +262,9 @@ func serveLogin(w http.ResponseWriter, r *http.Request, l *uiLogins, token strin
 	q := r.URL.Query()
 	q.Del("login")
 
-	target := r.URL.Path
-	if len(q) > 0 {
-		target += "?" + q.Encode()
-	}
+	// Always a path on this cockpit: "//host/x" or "/\\host/x" would send the browser to another site, and so would a
+	// control character a browser strips ("/\t/host/x"): the path is encoded, a tab goes out as %09.
+	target := (&url.URL{Path: "/" + strings.TrimLeft(r.URL.Path, "/\\"), RawQuery: q.Encode()}).String()
 
 	w.Header().Set("Cache-Control", "no-store")
 	http.Redirect(w, r, target, http.StatusSeeOther)

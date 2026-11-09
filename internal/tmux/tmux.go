@@ -572,11 +572,13 @@ func (c *Client) run(args ...string) (string, error) {
 // DefaultDrop are the variables that tie a process to the session or terminal it runs in. The first zmina call
 // starts the tmux server and every role inherits its environment: a role started from inside a Claude Code session
 // or a terminal app must not look like a child of it. Provider settings (CLAUDE_CODE_USE_BEDROCK, ANTHROPIC_*) pass.
+// The cockpit's own secrets (ZMINA_UI_TOKEN, ZMINA_UI_CODE_COMMAND) never reach a role: a role that reads its
+// environment must not hold the credential that opens every node's terminal.
 var DefaultDrop = []string{
 	"CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_CHILD_SESSION",
 	"CLAUDE_CODE_MESSAGING_*", "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_EXECPATH", "CLAUDE_PID", "CLAUDE_EFFORT",
 	"CLAUDE_CONFIG_DIR", "ZMINA_ROLE", "TMUX", "TMUX_PANE", "CMUX_*", "TERM_SESSION_ID", "ITERM_SESSION_ID",
-	"__CFBundleIdentifier", "CODEX_THREAD_ID", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+	"__CFBundleIdentifier", "CODEX_THREAD_ID", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE", "ZMINA_UI_*",
 }
 
 // CleanEnv drops DefaultDrop and the extra names (NAME, or PREFIX*) from env.

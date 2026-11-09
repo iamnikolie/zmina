@@ -242,7 +242,8 @@ func (a *app) withState(fn func(s *shift.Shift) error) error {
 		}
 		s.CommittedMessageStages[key] = copy
 	}
-	s.State.Prune(s.Known)
+	// A role missing from the crew file keeps its state here: the ticker drops it only after it stays missing
+	// (Shift.pruneAbsent), so a crew file broken for a moment loses no queue or resume id.
 	s.PruneWatches()
 
 	ferr := fn(s)

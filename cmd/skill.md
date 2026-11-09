@@ -199,8 +199,8 @@ A role runs `claude [--model m] [args] [--settings '{"crossSessionInbound":"acce
 less directories under the temp dir (a terminal's per-window shims, such as cmux's, vanish with the
 window and would wrap claude in that window's hooks),
 on top of the tmux server's environment minus what ties a process to another session or terminal
-(`CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_MESSAGING_*`, `TMUX`, `CMUX_*`, … and
-`drop_env`); provider settings such as `CLAUDE_CODE_USE_BEDROCK` pass. With Remote Control every
+(`CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_MESSAGING_*`, `TMUX`, `CMUX_*`, …), the cockpit's
+secrets (`ZMINA_UI_*`) and `drop_env`; provider settings such as `CLAUDE_CODE_USE_BEDROCK` pass. With Remote Control every
 role is reachable from claude.ai/code and the phone under its session name.
 
 ### Delivery: the agent's own channel
@@ -284,7 +284,8 @@ lines — not health notes, and not watch notes, which have their own `zmina wat
 nothing to do), `zmina ack <ids>`. The line itself names no command: Claude Code tells a role that a message from
 another session cannot ask it for a write, and a role was seen to refuse an ack the message asked for; told by its
 own boot line, it acks. Until then a line
-is said again `renotify` after it was last delivered (`S-12 (still pending since Mon 2 Nov 11:55) …`, the same id;
+is said again `renotify` after it was last delivered, or after the role was last started fresh or trimmed by zmina
+(its boot brief listed it then) (`S-12 (still pending since Mon 2 Nov 11:55) …`, the same id;
 never while it is still queued or not yet seen; three times at most, then only listed; a line acked while it still
 waits in the queue is taken out of it, never posted: a queued line is known by the S-ids zmina keeps with it, never
 by its text), is listed in the dispatcher's
@@ -1087,7 +1088,7 @@ node's address for it (as `zmina ls <node>/<crew>`), the code coming back over s
 In 5 minutes, with Tailscale on this machine and the phone:
 
 ```
-export ZMINA_UI_TOKEN=$(openssl rand -hex 24)   # once; keep it in the launchd plist's environment, not in argv
+export ZMINA_UI_TOKEN=$(openssl rand -hex 24)   # once; keep it in the launchd plist (0600), not in argv or a profile
 zmina ui --addr "$(tailscale ip -4)":7517 --no-open
 zmina connect --qr                              # scan the address, type the code
 ```
@@ -1504,7 +1505,10 @@ State: `~/.zmina/state.json` (version 2; the first format is read and kept as `s
 on the first save). Part of it is what zmina saw and could see again; most is what it was told or
 decided — holds, broken marks, queues, last session ids, schedule progress, watch fingerprints —
 and exists nowhere else. It is written whole (rename) and never over a file zmina cannot read: see
-`zmina state recover`. Roles and watches no longer in the crew are dropped from it.
+`zmina state recover`; the state before each save stays beside it as `state.json.prev`. Watches no longer in
+the crew are dropped from it. A role missing from the crew file keeps its state while it is missing for a moment
+(an edit, a merge, a rename and back): the ticker drops it after 10 beats in a row, keeps a copy in
+`pruned/<role>-<time>.json` beside the state and logs `pruned`; a role that comes back starts the count again.
 
 ## For the dispatcher
 
