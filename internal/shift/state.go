@@ -194,6 +194,10 @@ type RoleState struct {
 	// session the dispatcher was told runs without working hooks.
 	Hooks        string `json:"hooks,omitempty"`
 	HooksFlagged string `json:"hooks_flagged,omitempty"`
+	// Version is the version of the zmina that started the role (zmina version): the command lines its hooks run
+	// and a Codex role's bridge stay those of that zmina until the role is started again; doctor compares it with
+	// the zmina installed now. Empty for a start by a zmina that did not record it.
+	Version string `json:"zmina_version,omitempty"`
 	// QueuedBoot is the boot line a clear queued for the role: it goes alone, before anything else waiting for it.
 	QueuedBoot string `json:"queued_boot,omitempty"`
 	// QueuedIDs are the S-ids each queued line carries, by the line: a tracked line's own id from the moment it is

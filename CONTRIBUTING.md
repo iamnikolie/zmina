@@ -34,6 +34,11 @@ House rules:
 - **Files a running crew wrote stay readable.** `state.json`, `tasks/*.json`
   and `crew.yaml`: a new field is optional, a renamed value keeps its old name
   readable.
+- **Hook command lines are an API.** A running role keeps the command lines
+  zmina wrote into its start (`pending --brief`, `_turn-end`, `_read-guard`,
+  the `_codex` flags) and runs them with every zmina installed after it. A
+  rename keeps the old name as an alias for at least two minor releases;
+  `TestHookCommandsResolve` fails when a name those lines use is gone.
 - **Update the docs in the same commit.** Any change to the commands or the
   crew file must also update `cmd/skill.md` (embedded in the binary, printed by
   `zmina skill`, and the single source of truth for command UX) and, where it

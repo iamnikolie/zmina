@@ -259,6 +259,14 @@ gone (…): its lines wait for the next beat after each turn …; restart it …
 also works from the dispatcher's own session): zmina records the hooks each start
 gets, and asks the process (`ps`) of a role an earlier zmina started.
 
+A start also records the zmina version that made it. After an install the roles keep the hook command lines the
+earlier zmina wrote and run them with the new executable: the hidden commands and flags those lines name
+(`pending --brief`, `_turn-end`, `_read-guard`, the `_codex` bridge's flags) stay valid across versions, a renamed one
+keeps its old name. A Codex role's bridge and a running `zmina ui` keep the earlier zmina's code until they are started
+again. `zmina doctor` says which (`versions`): a cockpit or a Codex bridge of another version warns, Claude roles
+started by another version are listed without a warning; `zmina restart <role> --continue` starts one with this
+zmina. A `zmina ui` that finds the cockpit running says so when that one is of another version.
+
 Typed into the input line as before: a slash command (a posted one is plain text), the owner's own message from Chat
 (below: his own turn, never another session's message), a role whose `args`
 pass their own `--settings` (zmina's are not passed: a warning), a role with `delivery: tmux`, a role started by an
@@ -351,7 +359,7 @@ applies at the role's next start. A role whose `args` pass `--settings` gets the
 | `zmina stop` | the ticker starts nothing any more (no keep: always role, no scheduled run), then every role goes down, the dispatcher too; a role with a draft or a dialog stays up and is named (`--clear` as with `down`). `ls` shows `STOPPED`. |
 | `zmina start` | lifts the stop and starts the dispatcher. A retired crew refuses it, naming the live one. |
 | `zmina retire [--moved-to <node>/<crew>] [--clear]` / `retire --off` | the owner's word that this crew is no longer the live one: `retired:` and `moved_to:` in the crew file (a state file recovered or a stop lifted does not lose them), then as `zmina stop`. `--off` takes the mark off; the shift stays stopped until `zmina start`. Only this mark says one crew went on as another: two crews with one name are never taken for one. |
-| `zmina doctor [--json]` | checks crew file, tmux (3.2 or newer), claude as roles find it (their PATH; a binary in a temp dir fails) and the flags zmina passes, Claude Code's session registry (zmina reads it to tell idle from busy; it is not a public interface — doctor says when its shape changed), ticker beat, state, lock holder, task files, crews sharing a tmux server. Exit 1 on a fail. |
+| `zmina doctor [--json]` | checks crew file, tmux (3.2 or newer), claude as roles find it (their PATH; a binary in a temp dir fails) and the flags zmina passes, Claude Code's session registry (zmina reads it to tell idle from busy; it is not a public interface — doctor says when its shape changed), ticker beat, state, lock holder, task files, crews sharing a tmux server, versions (this zmina's; a cockpit, a Codex bridge or Claude roles that another zmina started). Exit 1 on a fail. |
 | `zmina queue ls [--full] [--json]` | what waits to be typed: the dispatcher's signals and health notes, each role's inbox, lines posted to its inbox socket not yet seen in its conversation, and its failed lines (a line tmux refused three beats in a row); each line clipped to 160 characters, `--full` whole. |
 | `zmina queue retry <role>` / `queue drop <role> [--all]` | put failed lines back at the head of the inbox / drop them (`--all`: the inbox too; for the dispatcher its signals and notes). Without `--all`, any retained inbox count and the command needed to drop it are printed. The hint includes the resolved `--crew` path and shell-quotes both path and role, so it still targets this crew when pasted into another shell. |
 | `zmina state show` | the state as zmina reads it (JSON). |

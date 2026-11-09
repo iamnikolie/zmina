@@ -573,3 +573,17 @@ func TestNativeDispatcherPostStopsAtTheOwnersMessage(t *testing.T) {
 	assert.Empty(t, p.posted)
 	assert.Equal(t, "typed into dispatcher: "+owner, f.s.deliverInbox("dispatcher", *f.now))
 }
+
+// A start records the version of the zmina that made it: its hooks' command lines are that zmina's until the next
+// start, which records the new one.
+func TestStartRecordsZminaVersion(t *testing.T) {
+	f, _ := nativeFixture(t, crewYAML)
+	f.s.Version = "v1.0.0"
+	require.NoError(t, f.s.Up("designer"))
+	assert.Equal(t, "v1.0.0", f.s.State.Role("designer").Version)
+
+	require.NoError(t, f.s.Down("designer", DownOptions{}))
+	f.s.Version = "v1.1.0"
+	require.NoError(t, f.s.Up("designer"))
+	assert.Equal(t, "v1.1.0", f.s.State.Role("designer").Version)
+}

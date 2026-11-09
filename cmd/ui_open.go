@@ -30,6 +30,8 @@ type uiRunning struct {
 	URL     string `json:"url"`
 	PID     int    `json:"pid"`
 	Handoff string `json:"handoff"`
+	// Version is the cockpit's zmina version: it serves that one's code until it is started again.
+	Version string `json:"version,omitempty"`
 }
 
 // uiLogins hands out one-time login codes: to whoever shows the handoff secret, and to the server itself.
@@ -91,7 +93,7 @@ func (l *uiLogins) take(code string) bool {
 
 // writeUIState records the running cockpit; dropUIState removes it while it is still this process's.
 func writeUIState(url string, l *uiLogins) error {
-	raw, err := json.Marshal(uiRunning{URL: url, PID: os.Getpid(), Handoff: l.handoff})
+	raw, err := json.Marshal(uiRunning{URL: url, PID: os.Getpid(), Handoff: l.handoff, Version: version})
 	if err != nil {
 		return err
 	}
