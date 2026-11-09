@@ -20,8 +20,10 @@ make test          # go test ./... (needs tmux 3.2+ on PATH)
 golangci-lint run  # config in .golangci.yml
 ```
 
-CI runs the same on Linux and macOS, so a green local run usually means a green
-PR.
+CI runs the tests on Linux and macOS, and once on Linux golangci-lint, a `go mod tidy`
+diff and `tools/publiccheck` (its always-on rules: no addresses outside loopback and
+documentation ranges, no home paths), so a green local run usually means a green PR.
+A release tag runs the same checks again before anything is built.
 
 House rules:
 

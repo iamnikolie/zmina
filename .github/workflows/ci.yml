@@ -4,11 +4,47 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The release runs the same checks on the tagged commit before it builds anything.
+  workflow_call:
 
 permissions:
   contents: read
 
 jobs:
+  # What a contributor's machine runs before a push, minus the private names only the owner's machine knows.
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go mod tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13.1
+
+      # The always-on rules (addresses outside loopback and documentation ranges, home paths other than the
+      # neutral ones) over what this run brings: the pull request, the push, or since the previous tag.
+      - name: publiccheck
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            BASE=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || git rev-list --max-parents=0 HEAD | tail -1)
+          fi
+          go run ./tools/publiccheck -base "$BASE"
+
   test:
     strategy:
       fail-fast: false
