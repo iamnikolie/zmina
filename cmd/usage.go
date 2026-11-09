@@ -49,6 +49,9 @@ type usageReport struct {
 	Lessons []usageLesson `json:"lessons,omitempty"`
 	// Fills are what the tools put into the roles' context, by tool kind, with --by tool.
 	Fills []registry.Fill `json:"fills,omitempty"`
+	// WallHours is the time any of the counted roles was at work; SessionHours their sessions' time together.
+	WallHours    float64 `json:"wall_hours"`
+	SessionHours float64 `json:"session_hours"`
 }
 
 // peerCells is what a peer answers usage --cells with.
@@ -58,6 +61,8 @@ type peerCells struct {
 	Restarts []usageRestart `json:"restarts,omitempty"`
 	Lessons  []usageLesson  `json:"lessons,omitempty"`
 	Fills    []usageFill    `json:"fills,omitempty"`
+	// Stretches are absent from a peer older than them: its hours are not in the wall-clock time.
+	Stretches []usageStretch `json:"stretches,omitempty"`
 }
 
 // peerUsageTimeout is how long --all waits for one peer's answer.
@@ -102,13 +107,13 @@ func (a *app) usageCommand() *cobra.Command {
 				node = me.Name
 			}
 
-			got, fills, problems := usageRead(crews, node, from, prices, by == toolView)
+			got, fills, stretches, problems := usageRead(crews, node, from, prices, by == toolView)
 			restarts := usageRestarts(crews, node, from)
 			lessons := usageLessons(crews, node, from)
 
 			if cells {
 				return json.NewEncoder(a.out).Encode(peerCells{Cells: got, Problems: problems, Restarts: restarts,
-					Lessons: lessons, Fills: fills})
+					Lessons: lessons, Fills: fills, Stretches: stretches})
 			}
 
 			if all && !local {
@@ -119,12 +124,14 @@ func (a *app) usageCommand() *cobra.Command {
 				restarts = append(restarts, peers.Restarts...)
 				lessons = append(lessons, peers.Lessons...)
 				fills = append(fills, peers.Fills...)
+				stretches = append(stretches, peers.Stretches...)
 			}
 
 			if role != "" {
 				got = slices.DeleteFunc(got, func(c cost.Cell) bool { return c.Role != role })
 				restarts = slices.DeleteFunc(restarts, func(r usageRestart) bool { return r.Role != role })
 				fills = slices.DeleteFunc(fills, func(f usageFill) bool { return f.Role != role })
+				stretches = slices.DeleteFunc(stretches, func(s usageStretch) bool { return s.Role != role })
 			}
 
 			if by == toolView {
@@ -146,6 +153,7 @@ func (a *app) usageCommand() *cobra.Command {
 				}
 
 				return a.printJSON(usageReport{By: by, Since: from, Rows: rows, Total: total,
+					WallHours: wallHours(stretches), SessionHours: stretchHours(total.Active),
 					Prices: prices.Date + " (" + prices.From + ")", Missing: problems, Restarts: restarts, Lessons: lessons})
 			}
 
@@ -154,6 +162,7 @@ func (a *app) usageCommand() *cobra.Command {
 			}
 
 			printRestarts(a.out, restarts, len(crewsOf(got)) > 1)
+			printHours(a.out, got, total, wallHours(stretches), len(crewsOf(got)) > 1)
 			printLessons(a.out, lessons)
 
 			printUsageNotes(a.out, prices, total, problems)
@@ -187,7 +196,7 @@ func crewsOf(cells []cost.Cell) map[string]bool {
 // usageCells reads, prices and attributes the crews' sessions since a time. A crew that cannot be read is a
 // problem, not a failure: the others still count.
 func usageCells(crews []uiCrew, node string, since time.Time, prices cost.Table) ([]cost.Cell, []string) {
-	cells, _, problems := usageRead(crews, node, since, prices, false)
+	cells, _, _, problems := usageRead(crews, node, since, prices, false)
 
 	return cells, problems
 }
@@ -200,9 +209,18 @@ type usageFill struct {
 	registry.Fill
 }
 
-// usageRead is usageCells, and with fills what the tools put into the roles' context.
+// usageStretch is the stretches (cost.Stretch) in which a role's sessions replied: the wall-clock time it was at
+// work, which no sum of cells gives.
+type usageStretch struct {
+	Node      string  `json:"node,omitempty"`
+	Crew      string  `json:"crew,omitempty"`
+	Role      string  `json:"role"`
+	Stretches []int64 `json:"stretches"`
+}
+
+// usageRead is usageCells, the roles' stretches, and with fills what the tools put into the roles' context.
 func usageRead(crews []uiCrew, node string, since time.Time, prices cost.Table, fills bool) ([]cost.Cell, []usageFill,
-	[]string) {
+	[]usageStretch, []string) {
 	var (
 		filled   []usageFill
 		problems []string
@@ -305,7 +323,18 @@ func usageRead(crews []uiCrew, node string, since time.Time, prices cost.Table, 
 		}
 	}
 
-	return cost.Cells(sessions, ledgers, prices, time.Local), filled, problems
+	byRole := map[[2]string][]cost.Session{}
+	for _, s := range sessions {
+		k := [2]string{s.Crew, s.Group}
+		byRole[k] = append(byRole[k], s)
+	}
+
+	var stretches []usageStretch
+	for k, ss := range byRole {
+		stretches = append(stretches, usageStretch{Node: node, Crew: k[0], Role: k[1], Stretches: cost.Stretches(ss)})
+	}
+
+	return cost.Cells(sessions, ledgers, prices, time.Local), filled, stretches, problems
 }
 
 func dispatcherSession(c *crew.Crew) string {
@@ -368,6 +397,7 @@ func peersUsage(ctx context.Context, since string, fills bool) peerCells {
 		restarts []usageRestart
 		lessons  []usageLesson
 		filled   []usageFill
+		spans    []usageStretch
 	)
 
 	for _, p := range peers {
@@ -399,6 +429,7 @@ func peersUsage(ctx context.Context, since string, fills bool) peerCells {
 			restarts = append(restarts, cells.Restarts...)
 			lessons = append(lessons, cells.Lessons...)
 			filled = append(filled, cells.Fills...)
+			spans = append(spans, cells.Stretches...)
 			for _, pr := range cells.Problems {
 				missing = append(missing, p.Name+": "+pr)
 			}
@@ -408,7 +439,8 @@ func peersUsage(ctx context.Context, since string, fills bool) peerCells {
 	wg.Wait()
 	slices.Sort(missing)
 
-	return peerCells{Cells: out, Problems: missing, Restarts: restarts, Lessons: lessons, Fills: filled}
+	return peerCells{Cells: out, Problems: missing, Restarts: restarts, Lessons: lessons, Fills: filled,
+		Stretches: spans}
 }
 
 func peerUsage(ctx context.Context, p mesh.Peer, since string, fills bool) (peerCells, error) {
@@ -444,6 +476,12 @@ func peerUsage(ctx context.Context, p mesh.Peer, since string, fills bool) (peer
 		for i := range pc.Restarts {
 			if pc.Restarts[i].Node == "" {
 				pc.Restarts[i].Node = p.Name
+			}
+		}
+
+		for i := range pc.Stretches {
+			if pc.Stretches[i].Node == "" {
+				pc.Stretches[i].Node = p.Name
 			}
 		}
 
@@ -779,4 +817,52 @@ func printFills(out io.Writer, rows []registry.Fill, problems []string) error {
 	}
 
 	return nil
+}
+
+// stretchHours is n stretches in hours.
+func stretchHours(n int) float64 { return float64(n) * cost.Stretch.Hours() }
+
+// wallHours is the time any of the roles was at work: their stretches together, each once.
+func wallHours(ss []usageStretch) float64 {
+	seen := map[int64]bool{}
+	for _, s := range ss {
+		for _, st := range s.Stretches {
+			seen[st] = true
+		}
+	}
+
+	return stretchHours(len(seen))
+}
+
+// printHours says how long the roles worked, wall-clock and in session-hours, and how often their conversations
+// were compacted, by role.
+func printHours(out io.Writer, cells []cost.Cell, total cost.Row, wall float64, manyCrews bool) {
+	if total.Active > 0 && wall > 0 {
+		sess := stretchHours(total.Active)
+		fmt.Fprintf(out, "\nAt work %.1f h wall-clock, %.1f session-hours: %.1f sessions at once.\n", wall, sess, sess/wall)
+	}
+
+	if total.Compacts == 0 {
+		return
+	}
+
+	rows := cost.Group(cells, "role")
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].Compacts > rows[j].Compacts })
+
+	var parts []string
+
+	for _, r := range rows {
+		if r.Compacts == 0 || len(parts) == 6 {
+			break
+		}
+
+		name := r.Key
+		if manyCrews {
+			name = crewLabel(r.Node, r.Crew) + " " + r.Key
+		}
+
+		parts = append(parts, fmt.Sprintf("%s %d", name, r.Compacts))
+	}
+
+	fmt.Fprintf(out, "Compacted %d times: %s.\n", total.Compacts, strings.Join(parts, ", "))
 }

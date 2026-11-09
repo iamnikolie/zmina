@@ -1322,6 +1322,11 @@ paid for: `Of the cost: cache reads 60%, cache writes 17%, output 18%, input 5%.
   role, a copy's with its role's, and what for: `Restarted fresh 4 times: backend 2 (context 1, idle 0, task done
   1), dev 2 (context 1, idle 1).` (`task done` only when there is one) `--json` has them as `restarts` (role, when, task, why);
   `--all` asks the peers for theirs.
+- **Hours and compactions**, under the table: `At work 60.6 h wall-clock, 152.1 session-hours: 2.5 sessions at
+  once.` — a role (a copy apart) is at work in a 5-minute stretch it replied in; wall-clock is the stretches of any
+  counted role, each once (`--role r`: that role's). `Compacted 61 times: dispatcher 40, zmina-dev 8, …` — the
+  conversations compacted in the window, by role. `--json`: `wall_hours`, `session_hours`, `compacts` per row. A peer
+  older than this adds no hours or compactions.
 - Not counted: transcripts Claude Code no longer keeps, and headless runs outside every task's worktree.
 
 ## Log

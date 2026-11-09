@@ -82,6 +82,21 @@ func TestBands(t *testing.T) {
 	assert.Equal(t, 2, rows[2].Turns)
 	assert.InDelta(t, 0.17, rows[2].ReadCost, 1e-9, "850k cache reads at $0.20 a million")
 	assert.InDelta(t, rows[2].Cost, rows[2].ReadCost+rows[2].WriteCost+rows[2].OutputCost, 1e-9, "no uncached input")
+
+	m := func(at time.Time, compacted bool) registry.Message {
+		return registry.Message{At: at, Model: "claude-opus-5-5", Output: 1, Compacted: compacted}
+	}
+	cells = Cells([]Session{
+		{Crew: "acme", Role: "dev", Group: "dev", Messages: []registry.Message{m(h(1), false),
+			m(h(1).Add(time.Minute), true), m(h(1).Add(10*time.Minute), false)}},
+		{Crew: "acme", Role: "dev", Group: "dev", Messages: []registry.Message{m(h(1).Add(2*time.Minute), false)}},
+		{Crew: "acme", Role: "dev#2", Group: "dev", Messages: []registry.Message{m(h(1), false)}},
+	}, nil, Builtin(), time.UTC)
+	total := Total(cells)
+	assert.Equal(t, 1, total.Compacts)
+	assert.Equal(t, 3, total.Active, "two stretches of dev (its sessions together), one of its copy")
+	assert.Len(t, Stretches([]Session{{Messages: []registry.Message{m(h(1), false), m(h(1).Add(time.Minute), false),
+		m(h(2), false)}}}), 2)
 }
 
 // TestBuiltinRates pins the built-in table to the public pricing page as of builtinDate: input, 5m and 1h cache

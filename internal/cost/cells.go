@@ -47,7 +47,17 @@ type Cell struct {
 	// with at most three calls between them, the turns a background wait would not take. WaitCost is their dollars.
 	Waits    int     `json:"waits,omitempty"`
 	WaitCost float64 `json:"wait_cost,omitempty"`
+	// Compacts is how many compactions the sessions' conversations went through (Message.Compacted).
+	Compacts int `json:"compacts,omitempty"`
+	// Active is the stretches of Stretch in which the role (or its copy) replied, each once: its session-hours.
+	Active int `json:"active,omitempty"`
 }
+
+// Stretch is the piece of time hours are counted in: a session that replied in it was at work for all of it.
+const Stretch = 5 * time.Minute
+
+// StretchOf numbers the stretch a time falls in.
+func StretchOf(at time.Time) int64 { return at.Unix() / int64(Stretch/time.Second) }
 
 func (c *Cell) add(m registry.Message, p Parts, priced bool) {
 	c.Turns++
@@ -96,6 +106,8 @@ func (c *Cell) sum(o Cell) {
 	c.Unpriced += o.Unpriced
 	c.Waits += o.Waits
 	c.WaitCost += o.WaitCost
+	c.Compacts += o.Compacts
+	c.Active += o.Active
 }
 
 // Tokens is every token of the cell.
@@ -118,8 +130,17 @@ const TriggerDispatcher = "dispatcher"
 func Cells(sessions []Session, ledgers map[string]Ledger, prices Table, loc *time.Location) []Cell {
 	by := map[Cell]*Cell{}
 
+	// A role's (or copy's) stretches, each once: a role restarted, or a Codex role whose replies come one by one,
+	// is one session at a time.
+	counted := map[[3]string]map[int64]bool{}
+
 	for _, s := range sessions {
 		l := ledgers[s.Crew]
+
+		k := [3]string{s.Node, s.Crew, s.Role}
+		if counted[k] == nil {
+			counted[k] = map[int64]bool{}
+		}
 
 		for _, m := range s.Messages {
 			a := l.Of(s.Role, m.Cwd, m.At)
@@ -140,6 +161,16 @@ func Cells(sessions []Session, ledgers map[string]Ledger, prices Table, loc *tim
 
 			p, ok := prices.Parts(m)
 			c.add(m, p, ok)
+
+			// A stretch counts once per session, with the cell of its first reply.
+			if st := StretchOf(m.At); !counted[k][st] {
+				c.Active++
+				counted[k][st] = true
+			}
+
+			if m.Compacted {
+				c.Compacts++
+			}
 		}
 	}
 
@@ -392,4 +423,25 @@ func ShortModel(id string) string {
 
 func isDigits(s string) bool {
 	return s != "" && strings.Trim(s, "0123456789") == ""
+}
+
+// Stretches are the stretches in which any of the sessions replied, each once, in order: their count is the
+// wall-clock time anyone was at work.
+func Stretches(sessions []Session) []int64 {
+	seen := map[int64]bool{}
+
+	for _, s := range sessions {
+		for _, m := range s.Messages {
+			seen[StretchOf(m.At)] = true
+		}
+	}
+
+	out := make([]int64, 0, len(seen))
+	for st := range seen {
+		out = append(out, st)
+	}
+
+	slices.Sort(out)
+
+	return out
 }

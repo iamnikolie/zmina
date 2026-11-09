@@ -474,6 +474,8 @@ func TestUsage(t *testing.T) {
 	assert.Contains(t, out, "API-equivalent")
 	assert.Contains(t, out, "1 turns unpriced, models claude-opus-9")
 	assert.Contains(t, out, "Of the cost: cache reads 69%, cache writes 14%, output 17%, input 0%.")
+	assert.Regexp(t, `At work 0\.\d h wall-clock, 0\.\d session-hours: \d\.\d sessions at once\.`, out,
+		"dev and its copy at once")
 
 	out, _, err = zm(t, crewFile, "usage", "--by", "ctx")
 	require.NoError(t, err)
