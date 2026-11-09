@@ -87,6 +87,10 @@ func (a *app) diagnose() []check {
 		}
 	}
 
+	for _, ck := range lessonsDoctor(c) {
+		add("lessons", ck[0], "%s", ck[1])
+	}
+
 	if t, err := tmux.New(c.Socket()); err != nil {
 		add("tmux", "fail", "%v", err)
 	} else {
