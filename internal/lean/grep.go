@@ -1,0 +1,257 @@
+package lean
+
+import (
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+)
+
+// GrepOptions shape one grep call.
+type GrepOptions struct {
+	Max        int    // total characters; 0: 4000
+	PerFile    int    // hits shown a file; 0: 5
+	IgnoreCase bool   // -i
+	Fixed      bool   // -F: the pattern is a plain string
+	Glob       string // -g: only files whose base name matches
+}
+
+// skipDirs are never walked into unless named as a root.
+var skipDirs = map[string]bool{".git": true, "node_modules": true, "vendor": true, "dist": true, "build": true,
+	".next": true, "target": true, "__pycache__": true, ".venv": true, "venv": true}
+
+const (
+	grepMaxFile  = 2 << 20
+	grepMaxFiles = 20000
+)
+
+type hit struct {
+	line int
+	text string
+}
+
+// Grep searches the roots (files or directories) and writes hits grouped by file and by the function or section
+// they sit in, within a budget, then what it left out and how to see it.
+func Grep(pattern string, roots []string, dir string, o GrepOptions) (string, error) {
+	if o.Max <= 0 {
+		o.Max = 4000
+	}
+
+	if o.PerFile <= 0 {
+		o.PerFile = 5
+	}
+
+	expr := pattern
+	if o.Fixed {
+		expr = regexp.QuoteMeta(pattern)
+	}
+
+	if o.IgnoreCase {
+		expr = "(?i)" + expr
+	}
+
+	re, err := regexp.Compile(expr)
+	if err != nil {
+		return "", fmt.Errorf("pattern: %w (Go regexp syntax; -F for a plain string)", err)
+	}
+
+	if len(roots) == 0 {
+		roots = []string{"."}
+	}
+
+	var (
+		files   []string
+		walked  int
+		stopped bool
+	)
+
+	for _, r := range roots {
+		root := abs(r, dir)
+
+		info, err := os.Stat(root)
+		if err != nil {
+			return "", fmt.Errorf("%s: %w", r, err)
+		}
+
+		if !info.IsDir() {
+			files = append(files, r)
+			continue
+		}
+
+		_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+
+			if d.IsDir() {
+				if p != root && (skipDirs[d.Name()] || strings.HasPrefix(d.Name(), ".")) {
+					return filepath.SkipDir
+				}
+
+				return nil
+			}
+
+			walked++
+			if walked > grepMaxFiles {
+				stopped = true
+				return filepath.SkipAll
+			}
+
+			if o.Glob != "" {
+				if ok, _ := filepath.Match(o.Glob, d.Name()); !ok {
+					return nil
+				}
+			}
+
+			rel, _ := filepath.Rel(dir, p)
+			if dir == "" || strings.HasPrefix(rel, "..") {
+				rel = p
+			}
+
+			files = append(files, rel)
+
+			return nil
+		})
+	}
+
+	sort.Strings(files)
+
+	var (
+		b          strings.Builder
+		total      int
+		inFiles    int
+		shown      int
+		cutFiles   []string
+		budgetHit  bool
+		moreInFile int
+	)
+
+	for _, name := range files {
+		p := abs(name, dir)
+
+		info, err := os.Stat(p)
+		if err != nil || info.Size() > grepMaxFile {
+			continue
+		}
+
+		src, err := os.ReadFile(p)
+		if err != nil || Kind(p, src) == "binary" {
+			continue
+		}
+
+		var hits []hit
+
+		for i, l := range splitLines(src) {
+			if re.MatchString(l) {
+				hits = append(hits, hit{i + 1, l})
+			}
+		}
+
+		if len(hits) == 0 {
+			continue
+		}
+
+		total += len(hits)
+		inFiles++
+
+		if budgetHit {
+			cutFiles = append(cutFiles, name)
+			continue
+		}
+
+		block := grepBlock(name, p, src, hits, o.PerFile)
+		if b.Len()+len(block) > o.Max {
+			budgetHit = true
+
+			cutFiles = append(cutFiles, name)
+
+			continue
+		}
+
+		b.WriteString(block)
+
+		n := min(len(hits), o.PerFile)
+		shown += n
+		moreInFile += len(hits) - n
+	}
+
+	if total == 0 {
+		return fmt.Sprintf("no match for %q\n", pattern), nil
+	}
+
+	fmt.Fprintf(&b, "— %d hits in %d files; shown %d", total, inFiles, shown)
+
+	if moreInFile > 0 {
+		fmt.Fprintf(&b, "; %d more in the files above (--per-file %d)", moreInFile, o.PerFile*4)
+	}
+
+	if len(cutFiles) > 0 {
+		fmt.Fprintf(&b, "; not shown, over the %s budget: %s (--max %d, or grep one of them)", kchars(o.Max),
+			listFew(cutFiles, 6), o.Max*3)
+	}
+
+	if stopped {
+		fmt.Fprintf(&b, "; stopped after %d files: name a narrower path", grepMaxFiles)
+	}
+
+	b.WriteString("\n")
+
+	return b.String(), nil
+}
+
+// grepBlock is one file's hits: under the function or section each sits in, numbered, clipped to one short line.
+func grepBlock(name, path string, src []byte, hits []hit, perFile int) string {
+	syms := Outline(path, src)
+
+	var b strings.Builder
+
+	fmt.Fprintf(&b, "%s (%d)\n", name, len(hits))
+
+	last := ""
+
+	for i, h := range hits {
+		if i == perFile {
+			break
+		}
+
+		if s, ok := enclosing(syms, h.line); ok {
+			if s.Label != last {
+				fmt.Fprintf(&b, "  %s · %d-%d\n", s.Label, s.Start, s.End)
+				last = s.Label
+			}
+		} else if last != "" {
+			last = ""
+		}
+
+		fmt.Fprintf(&b, "    %d: %s\n", h.line, clip(strings.TrimSpace(h.text), 160))
+	}
+
+	return b.String()
+}
+
+// enclosing is the innermost outline entry holding the line (the deepest one that starts last).
+func enclosing(syms []Symbol, line int) (Symbol, bool) {
+	var (
+		best Symbol
+		ok   bool
+	)
+
+	for _, s := range syms {
+		if s.Start <= line && line <= s.End && (!ok || s.Depth >= best.Depth) {
+			best, ok = s, true
+		}
+	}
+
+	return best, ok
+}
+
+func listFew(list []string, n int) string {
+	if len(list) <= n {
+		return strings.Join(list, ", ")
+	}
+
+	return strings.Join(list[:n], ", ") + fmt.Sprintf(" and %d more", len(list)-n)
+}

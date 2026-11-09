@@ -85,6 +85,8 @@ type Role struct {
 	About string `yaml:"about"`
 	// RemoteControl overrides the crew's remote_control for this role.
 	RemoteControl *bool `yaml:"remote_control"`
+	// ReadGuard overrides the crew's read_guard for this role.
+	ReadGuard *bool `yaml:"read_guard"`
 	// Delivery overrides the crew's delivery for this role.
 	Delivery string `yaml:"delivery"`
 	// Resume "always" starts the role on its last conversation (claude --resume) whenever one is known.
@@ -239,6 +241,9 @@ type Crew struct {
 	ReleaseIdleMinutes string `yaml:"release_idle_minutes"`
 	// RemoteControl opens every role to Remote Control (claude --remote-control); default true.
 	RemoteControl *bool `yaml:"remote_control"`
+	// ReadGuard gives every Claude role the read guard: a PreToolUse hook that turns a big cat, sed, head or tail
+	// into zmina read and answers a Read of a big file without offset/limit with its outline. Default false.
+	ReadGuard *bool `yaml:"read_guard"`
 	// Renotify is how long a delivered line waits for its reader's ack before it is said again (default 30m; off).
 	Renotify string `yaml:"renotify"`
 	// Delivery is how lines reach a role: native (the default: its agent's own channel — a Claude session's inbox
@@ -464,6 +469,18 @@ func (c *Crew) toolsListed(r *Role) []string {
 	}
 
 	return out
+}
+
+// ReadGuardFor reports whether a role starts with the read guard: its own setting, else the crew's, else no.
+func (c *Crew) ReadGuardFor(r *Role) bool {
+	switch {
+	case r.ReadGuard != nil:
+		return *r.ReadGuard
+	case c.ReadGuard != nil:
+		return *c.ReadGuard
+	default:
+		return false
+	}
 }
 
 // RemoteControlFor reports whether a role is opened to Remote Control: its own setting, else the crew's, else yes.

@@ -608,6 +608,19 @@ func (s *Shift) PendingBrief(role string, tagRule bool) string {
 	return strings.Join(out, "\n\n")
 }
 
+// readGuardTimeout is the read guard's timeout in seconds: it answers in milliseconds, and a guard that does not
+// answer lets the call go as typed.
+const readGuardTimeout = 3
+
+// readGuard reports whether a role (or a copy of it, role#N) starts with the read guard.
+func (s *Shift) readGuard(name string) bool {
+	base, _, _ := strings.Cut(name, "#")
+
+	r, ok := s.Crew.Roles[base]
+
+	return ok && !r.IsCodex() && s.Crew.ReadGuardFor(r)
+}
+
 // turnEndTimeout is the Stop hook's timeout in seconds; the hook itself returns in milliseconds (TurnEnd).
 const turnEndTimeout = 5
 
@@ -625,10 +638,19 @@ func (s *Shift) roleSettings(name string) string {
 			"command": base + " _turn-end --role " + shellWord(name) + " >/dev/null 2>&1 || true"}}
 		// A compaction ends no turn, so no Stop hook runs after it: the start hook Claude Code runs once it is over
 		// (source compact) has what waits posted too.
-		settings["hooks"] = map[string]any{
+		hooks := map[string]any{
 			"SessionStart": []any{map[string]any{"hooks": start}, map[string]any{"matcher": "compact", "hooks": stop}},
 			"Stop":         []any{map[string]any{"hooks": stop}},
 		}
+		// The read guard (read_guard): a big cat, sed, head or tail becomes zmina read, a Read of a big file without
+		// offset or limit is answered with its outline. Silent and exit 0 whenever it does not step in.
+		if s.readGuard(name) {
+			guard := []any{map[string]any{"type": "command", "timeout": readGuardTimeout,
+				"command": base + " _read-guard --role " + shellWord(name)}}
+			hooks["PreToolUse"] = []any{map[string]any{"matcher": "Bash|Read", "hooks": guard}}
+		}
+
+		settings["hooks"] = hooks
 	}
 
 	raw, _ := json.Marshal(settings)

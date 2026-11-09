@@ -93,7 +93,7 @@ Run 'zmina skill' for the full agent reference.`,
 		a.stopCommand(), a.startCommand(), a.retireCommand(), a.queueCommand(), a.stateCommand(), a.tickerCommand(),
 		a.launchdCommand(), a.doctorCommand(), a.usageCommand(), a.skillCommand(), a.versionCommand(), a.uiCommand(),
 		a.messageCommand(), a.contextCommand(), a.reportCommand(), a.nodeCommand(), a.tellCommand(), a.codexCommand(), a.terminalCommand(),
-		a.ackCommand(), a.pendingCommand(), a.turnEndCommand())
+		a.ackCommand(), a.pendingCommand(), a.turnEndCommand(), a.readCommand(), a.grepCommand(), a.readGuardCommand())
 
 	return root
 }

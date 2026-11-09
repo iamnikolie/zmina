@@ -452,6 +452,17 @@ const RemoteRule = "[zmina] Lines from other crews (zmina tell) arrive as `remot
 	"Before you send a line again, look at zmina message ls: one that shows queued waits for that dispatcher, it is " +
 	"not lost; send it again only when it shows no stage at all."
 
+// ReadRule is what a role with read_guard is told at boot: the lean reader, and that big whole-file reads are turned
+// into it.
+const ReadRule = "[zmina] Read files lean: zmina read <path> gives a small file whole and a big one as an outline " +
+	"with line ranges and sizes; then zmina read path:Name (Go func, Type.Method, YAML/JSON key), path#Heading or " +
+	"path:120-180 — several targets in one call. zmina grep <regex> [path] groups hits by file and function within a " +
+	"budget."
+
+// ReadGuardRule follows ReadRule for a Claude role, whose read guard runs as a hook.
+const ReadGuardRule = "A cat, sed -n, head or tail that would print over 12k characters runs as zmina read, and a " +
+	"Read of such a file without offset/limit answers with its outline; `command cat <file>` prints it raw."
+
 // BootText is a role's first message: its boot, and for the dispatcher the rule about other crews' lines. It names
 // the tag of the role's start, and goes only into the command that starts it.
 func (s *Shift) BootText(r *crew.Role) string { return s.bootText(r, true) }
@@ -471,6 +482,14 @@ func (s *Shift) bootText(r *crew.Role, tagged bool) string {
 	}
 	if r.Name != "" && r.Name == s.Crew.Dispatcher {
 		text = strings.TrimSpace(text + "\n\n" + RemoteRule)
+	}
+	if s.Crew.ReadGuardFor(r) {
+		rule := ReadRule
+		if !r.IsCodex() && s.inbound(r) && s.Self != "" {
+			rule += " " + ReadGuardRule
+		}
+
+		text = strings.TrimSpace(text + "\n\n" + rule)
 	}
 	if text != "" {
 		rules := RoleRules
