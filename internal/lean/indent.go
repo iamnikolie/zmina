@@ -152,6 +152,11 @@ func container(t string) bool {
 	return false
 }
 
+// cExts are the C family's: /* */ comments run over lines and // starts a comment wherever it stands.
+var cExts = map[string]bool{".cs": true, ".java": true, ".c": true, ".h": true, ".cpp": true, ".hpp": true, ".cc": true,
+	".cxx": true, ".m": true, ".mm": true, ".swift": true, ".kt": true, ".kts": true, ".scala": true, ".groovy": true,
+	".dart": true, ".css": true, ".scss": true, ".less": true, ".vue": true, ".svelte": true}
+
 // vbExts are Visual Basic's: " _" at a line's end goes on to the next line, and a word with a colon alone on a line
 // is a label inside a procedure (at column 0 too), not a statement.
 var vbExts = map[string]bool{".vb": true, ".bas": true, ".cls": true, ".frm": true, ".ctl": true, ".vbs": true,
@@ -161,7 +166,7 @@ var vbExts = map[string]bool{".vb": true, ".bas": true, ".cls": true, ".frm": tr
 // picks Visual Basic's line continuation and labels, and the shell's quoting.
 func codeLines(lines []string, ext string) (_ []codeLine, closed bool) {
 	vb, sh, php := vbExts[ext], shExts[ext], ext == ".php"
-	cfam := !vb && !sh && !php && ext != ".py" && ext != ".pyi" // /* */ comments over lines
+	cfam := cExts[ext] // /* */ comments over lines, // a comment wherever it stands
 
 	var (
 		out     []codeLine
@@ -200,13 +205,20 @@ func codeLines(lines []string, ext string) (_ []codeLine, closed bool) {
 		}
 
 		if php { // every line is scanned, a comment's too: a docblock's line may end in { or ,
-			inside, comment = quote == "'" || quote == `"`, comment || quote == "*/" || quote == "?>"
+			html := quote == "?>"
+			inside, comment = quote == "'" || quote == `"`, comment || quote == "*/" || html
 			quote = stepPHP(t, quote)
+
+			// <?php function head() { ?>: the code after <?php is the line's.
+			if k := strings.Index(t, "<?php"); html && k >= 0 && strings.TrimSpace(t[k+5:]) != "" {
+				t = strings.TrimSpace(t[k+5:])
+				comment = isComment(t)
+			}
 		}
 
 		// A block comment's lines (commented-out code too) are no code, and open nothing.
 		if cfam && (quote == "*/" || comment && strings.HasPrefix(t, "/*")) {
-			quote = stepQuotes(t, quote)
+			quote = stepQuotes(t, quote, cfam)
 			continue
 		}
 
@@ -219,7 +231,7 @@ func codeLines(lines []string, ext string) (_ []codeLine, closed bool) {
 			quote = stepShell(t, quote)
 		case php:
 		case !vb: // Visual Basic has no multi-line strings; "" is a quote inside one
-			quote = stepQuotes(t, quote)
+			quote = stepQuotes(t, quote, cfam)
 		}
 
 		if inside || t == "" || comment {
@@ -333,7 +345,7 @@ func shString(stack string) bool { return strings.ContainsAny(stack, "'\"`a") }
 // stepQuotes is the multi-line string open after line t (three double or single quotes, a backtick), given the one
 // open before it: a quote inside a string that closes on the line ('"""') or after a comment mark (# or // after a
 // space) opens none.
-func stepQuotes(t, quote string) string {
+func stepQuotes(t, quote string, cfam bool) string {
 	for i := 0; i < len(t); {
 		if quote == `@"` {
 			j := verbatimClose(t, i)
@@ -374,8 +386,10 @@ func stepQuotes(t, quote string) string {
 			} else {
 				i++
 			}
-		case strings.HasPrefix(r, "/*"):
+		case cfam && strings.HasPrefix(r, "/*"):
 			quote, i = "*/", i+2
+		case cfam && strings.HasPrefix(r, "//"):
+			return ""
 		case (r[0] == '#' || strings.HasPrefix(r, "//")) && (i == 0 || t[i-1] == ' ' || t[i-1] == '\t'):
 			return ""
 		default:
@@ -404,8 +418,8 @@ func verbatimClose(t string, i int) int {
 }
 
 // stepPHP is PHP's open string, comment or HTML after line t, given the one open before it: ' and " strings run over
-// lines (a backslash escapes), /* */ comments too; // and # (not #[) end the line; text after ?> is HTML up to <?php
-// or <?=, its quotes no strings.
+// lines (a backslash escapes), /* */ comments too; // and # (not #[) end the line or run to a ?>; text after ?> is
+// HTML up to <?php or <?=, its quotes no strings.
 func stepPHP(t, open string) string {
 	for i := 0; i < len(t); i++ {
 		switch open {
@@ -440,7 +454,12 @@ func stepPHP(t, open string) string {
 		case strings.HasPrefix(r, "?>"):
 			open, i = "?>", i+1 // HTML until the next <?php
 		case strings.HasPrefix(r, "//") || r[0] == '#' && !strings.HasPrefix(r, "#["):
-			return ""
+			k := strings.Index(r, "?>") // a one-line comment ends at ?> too
+			if k < 0 {
+				return ""
+			}
+
+			open, i = "?>", i+k+1
 		}
 	}
 
@@ -727,7 +746,7 @@ func declLine(t string) bool {
 			"trait":
 			// record = load(), interface: Foo = None: a name, not a declaration
 			rest := strings.TrimSpace(t[strings.Index(strings.ToLower(t), w)+len(w):])
-			return rest != "" && !strings.HasPrefix(rest, "=") && !strings.HasPrefix(rest, ":") && !strings.HasPrefix(rest, ".")
+			return rest != "" && !strings.ContainsRune("=:.(", rune(rest[0])) // record(x): a call
 		}
 
 		return false

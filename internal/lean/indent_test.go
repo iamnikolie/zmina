@@ -63,7 +63,7 @@ func TestIndentReviewEdges(t *testing.T) {
 
 	php := "<?php function head() { ?>\n<p>Don't stop</p>\n<?php }\n\nfunction real() {\n    echo 'function fake() {';\n    return 1;\n}\n\n" +
 		"function b() {\n    return 2;\n}\n?>\n<p>It's done</p>\n"
-	assert.Equal(t, []string{"0 5-8 real", "0 10-13 b"}, names(Outline("b.php", []byte(php))), "HTML after ?> holds no strings")
+	assert.Equal(t, []string{"0 1-1 head", "0 5-8 real", "0 10-13 b"}, names(Outline("b.php", []byte(php))), "HTML after ?> holds no strings")
 	assert.True(t, phpSure([]byte(php)))
 
 	py := "import os\n\nrecord = load()\n\nclass Repo:\n    interface = None\n\n    def get(self):\n        return 1\n"
@@ -72,4 +72,16 @@ func TestIndentReviewEdges(t *testing.T) {
 	sh := "say() {\n  echo $'it\\'s here'\n}\n\nrun() {\n  true\n}\n"
 	assert.Equal(t, []string{"0 1-3 say", "0 5-7 run"}, names(Outline("s.sh", []byte(sh))), "$'…' has escapes")
 	assert.True(t, shSure([]byte(sh)))
+
+	deploy := "#!/bin/bash\nset -e\n\nclean() {\n    rm -rf build/*\n    mkdir -p build\n}\n\nbuild() {\n    cp assets/* build/\n}\n"
+	assert.Equal(t, []string{"0 4-7 clean", "0 9-11 build"}, names(Outline("deploy", []byte(deploy))), "/* is a comment only in the C family")
+
+	java := "class A {\n    void one() {\n        call();// see docs/*\n    }\n\n    void two() {\n        x();\n    }\n}\n"
+	assert.Equal(t, []string{"0 1-9 A", "1 2-4 A.one", "1 6-8 A.two"}, names(Outline("c.java", []byte(java))), "// with no space before it is a comment")
+
+	php2 := "<?php\n// done ?>\n<p>It's here</p>\n<?php\nfunction tail() {\n    return 1;\n}\n"
+	assert.Equal(t, []string{"0 5-7 tail"}, names(Outline("t.php", []byte(php2))), "?> in a one-line comment ends PHP")
+	assert.True(t, phpSure([]byte(php2)))
+
+	assert.False(t, declLine("record(x)"), "a call")
 }
