@@ -76,6 +76,10 @@ type State struct {
 	Budgeted []string  `json:"budgeted,omitempty"`
 	// MorningDay is the day (2006-01-02) the morning line last told the dispatcher of.
 	MorningDay string `json:"morning_day,omitempty"`
+	// Pushed is when each item on the owner's todo (A-3, T-12) last went through the notify command; an item leaves
+	// it when it leaves the todo. PushFrom is when the ticker began pushing: asks older than that are not new.
+	Pushed   map[string]time.Time `json:"pushed,omitempty"`
+	PushFrom time.Time            `json:"push_from,omitzero"`
 
 	// Legacy is set when the file read was in the first format (converted in memory, written as this one on
 	// the next save).

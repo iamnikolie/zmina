@@ -983,6 +983,7 @@ func (a *app) readCrew(s *shift.Shift, key string, cv *uiCrewView, snap *uiSnaps
 	}
 
 	items, _ := todo(s.Crew, now, views)
+	withPushed(items, s.State)
 	needs := map[string]todoItem{}
 
 	for _, it := range items {
