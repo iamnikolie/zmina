@@ -1546,7 +1546,8 @@ State: `~/.zmina/state.json` (version 2; the first format is read and kept as `s
 on the first save). Part of it is what zmina saw and could see again; most is what it was told or
 decided — holds, broken marks, queues, last session ids, schedule progress, watch fingerprints —
 and exists nowhere else. It is written whole (rename) and never over a file zmina cannot read: see
-`zmina state recover`; the state before each save stays beside it as `state.json.prev`. A command that fails saves
+`zmina state recover`; the state before each write stays beside it as `state.json.prev` (a beat
+writes it after each line it types, so `.prev` may be from the same beat). A command that fails saves
 nothing of what it changed (a line it typed or a role it started is saved the moment it happens); one that fails
 after part of its work — several roles of which one would not start, a sleep whose alarm could not be written, a
 watch whose source failed — saves that part. Watches no longer in

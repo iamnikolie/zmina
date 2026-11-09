@@ -485,6 +485,13 @@ func (s *Shift) beginRestart(name string, tasks []task.Task, why, done string) s
 func (s *Shift) FinishRestart(job Restart) string {
 	rs := s.State.Role(job.Name)
 	if !rs.Downing.Equal(job.Claim) {
+		// Started since: a later beat finished this restart from its saved job (finishStale), or a command did.
+		if rs.Pending == nil && rs.Downing.IsZero() && rs.Started.After(job.Claim) {
+			s.log(job.Name, "restart-superseded", job.logTask(), "a later beat or a command started it meanwhile")
+
+			return job.Name + ": restart: a later beat or a command started it meanwhile"
+		}
+
 		s.log(job.Name, "restart-failed", job.logTask(), "another command took it over meanwhile")
 
 		return job.Name + ": restart: another command took it over meanwhile"
