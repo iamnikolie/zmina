@@ -20,7 +20,7 @@ func indentOutline(src []byte, ext string) []Symbol {
 		return nil
 	}
 
-	in, _ := codeLines(lines, vbExts[ext])
+	in, _ := codeLines(lines, ext)
 	if len(in) == 0 {
 		return nil
 	}
@@ -76,7 +76,8 @@ func indentOutline(src []byte, ext string) []Symbol {
 
 			// Definitions under a top-level condition (if sys.platform == "win32":, try: … except ImportError:) are
 			// listed as the top level's.
-			if depth == 0 && end > k && strings.HasSuffix(c.text, ":") && condWords[firstWord(c.text)] && holdsDecl(in, k+1, end) {
+			if depth == 0 && end > k && (strings.HasSuffix(c.text, ":") || strings.HasSuffix(c.text, "then")) &&
+				condWords[firstWord(c.text)] && holdsDecl(in, k+1, end) {
 				walk(k+1, end+1, depth, parent)
 
 				k = end
@@ -156,9 +157,11 @@ func container(t string) bool {
 var vbExts = map[string]bool{".vb": true, ".bas": true, ".cls": true, ".frm": true, ".ctl": true, ".vbs": true,
 	".dsr": true}
 
-// codeLines are the file's statements; closed: no multi-line string or here-document is left open at the end. vb:
-// Visual Basic's line continuation and labels.
-func codeLines(lines []string, vb bool) (_ []codeLine, closed bool) {
+// codeLines are the file's statements; closed: no multi-line string or here-document is left open at the end. ext
+// picks Visual Basic's line continuation and labels, and the shell's quoting.
+func codeLines(lines []string, ext string) (_ []codeLine, closed bool) {
+	vb, sh := vbExts[ext], shExts[ext]
+
 	var (
 		out     []codeLine
 		quote   string // the open multi-line string's delimiter: """, ''' or `
@@ -184,16 +187,25 @@ func codeLines(lines []string, vb bool) (_ []codeLine, closed bool) {
 			continue
 		}
 
-		inside := quote != ""
-		if !inside && (t == "" || isComment(t) || vb && vbLabel.MatchString(t)) {
+		inside := quote != "" || sh && shString(quote)
+
+		comment := isComment(t)
+		if sh { // in the shell only # starts a comment (#! too); * and -- start code: case patterns, options
+			comment = strings.HasPrefix(t, "#")
+		}
+
+		if !inside && (t == "" || comment || vb && vbLabel.MatchString(t)) {
 			continue // a quote in a comment opens no string
 		}
 
-		if !vb { // Visual Basic has no multi-line strings; "" is a quote inside one
+		switch {
+		case sh:
+			quote = stepShell(t, quote)
+		case !vb: // Visual Basic has no multi-line strings; "" is a quote inside one
 			quote = stepQuotes(t, quote)
 		}
 
-		if inside || t == "" || isComment(t) {
+		if inside || t == "" || comment {
 			if inside && len(out) > 0 {
 				out[len(out)-1].last = i + 1
 			}
@@ -224,13 +236,70 @@ func codeLines(lines []string, vb bool) (_ []codeLine, closed bool) {
 		open = max(open+delta, 0)
 		cont = vb && strings.HasSuffix(t, " _") || strings.HasSuffix(t, `\`)
 
-		if quote == "" {
+		if quote == "" || sh && !shString(quote) {
 			heredoc = hereStart(t, lines[i+1:])
 		}
 	}
 
 	return out, quote == "" && heredoc == ""
 }
+
+// shExts are the shell's: strings in ' or " run over lines, and $( … ) inside " … " holds quotes of its own.
+var shExts = map[string]bool{".sh": true, ".bash": true, ".zsh": true, ".ksh": true}
+
+// stepShell is the shell's open quoting after line t, given what was open before it: a stack of ' " ` and ( (a $( …
+// ) or a subshell, code again inside a string).
+func stepShell(t, stack string) string {
+	for i := 0; i < len(t); i++ {
+		top := byte(0)
+		if stack != "" {
+			top = stack[len(stack)-1]
+		}
+
+		c := t[i]
+
+		switch top {
+		case '\'':
+			if c == '\'' {
+				stack = stack[:len(stack)-1]
+			}
+
+			continue
+		case '"', '`':
+			switch {
+			case c == '\\':
+				i++
+			case c == top:
+				stack = stack[:len(stack)-1]
+			case c == '$' && i+1 < len(t) && t[i+1] == '(':
+				stack += "("
+				i++
+			case c == '`':
+				stack += "`"
+			}
+
+			continue
+		}
+
+		switch {
+		case c == '\\':
+			i++
+		case c == '\'' || c == '"' || c == '`':
+			stack += string(c)
+		case c == '(':
+			stack += "("
+		case c == ')' && top == '(':
+			stack = stack[:len(stack)-1]
+		case c == '#' && (i == 0 || t[i-1] == ' ' || t[i-1] == '\t' || t[i-1] == ';'):
+			return stack // a comment to the line's end
+		}
+	}
+
+	return stack
+}
+
+// shString: the shell's quoting left open is a string (not only an open $( or subshell).
+func shString(stack string) bool { return strings.ContainsAny(stack, "'\"`") }
 
 // stepQuotes is the multi-line string open after line t (three double or single quotes, a backtick), given the one
 // open before it: a quote inside a string that closes on the line ('"""') or after a comment mark (# or // after a
@@ -294,7 +363,13 @@ func docString(t string) bool { return docRe.MatchString(t) }
 
 // pySure: every triple-quoted string closes, so no docstring's text is read as code.
 func pySure(src []byte) bool {
-	_, closed := codeLines(splitLines(src), false)
+	_, closed := codeLines(splitLines(src), ".py")
+	return closed
+}
+
+// shSure: every string and here-document closes, so no string's text is read as code.
+func shSure(src []byte) bool {
+	_, closed := codeLines(splitLines(src), ".sh")
 	return closed
 }
 
@@ -501,8 +576,15 @@ func blockName(t string) string {
 
 var condWords = map[string]bool{"if": true, "try:": true, "with": true}
 
-// declLine: the statement declares a function or a class (def, class, function, fn, func, Sub …) after its modifiers.
+var shFuncRe = regexp.MustCompile(`^[\p{L}_][\p{L}\p{N}_:.-]*\s*\(\)\s*\{?$`)
+
+// declLine: the statement declares a function or a class (def, class, function, fn, func, Sub …) after its modifiers,
+// or is a shell function (name() {).
 func declLine(t string) bool {
+	if shFuncRe.MatchString(t) {
+		return true
+	}
+
 	for _, w := range strings.Fields(t) {
 		w = strings.ToLower(w)
 		if modifiers[w] {

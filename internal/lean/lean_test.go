@@ -625,6 +625,13 @@ func TestIndentOutline(t *testing.T) {
 	sh := "usage() {\n  cat <<'EOF'\nUsage: run\n  deploy() {\nEOF\n}\n\nrun() {\n  echo $((1 << 2))\n}\n"
 	assert.Equal(t, []string{"0 1-6 usage", "0 8-10 run"}, names(Outline("x.sh", []byte(sh))), "a here-document is no code; << alone opens none")
 
+	shq := "#!/usr/bin/env bash\nlist() {\n  case \"$1\" in\n    *) OUT=\"${1%%\nv*}\" ;;\n  esac\n  echo \"$(which \"$1\") ($(sed -e \"s/\\`|'//g\"))\"\n}\n\n" +
+		"if [ -t 1 ]; then\n  is_tty() {\n    true\n  }\nfi\n\nusage() {\n  echo \"Usage: run\n  deploy() {\n\"\n}\n"
+	assert.Equal(t, []string{"0 2-8 list", "0 11-13 is_tty", "0 16-20 usage"}, names(Outline("x.sh", []byte(shq))),
+		"quotes inside $( ) in a string, a string over lines, a case pattern; a function under a top-level if")
+	assert.True(t, shSure([]byte(shq)))
+	assert.False(t, shSure([]byte("run() {\n  echo \"open\n}\n")), "a string left open")
+
 	dir := t.TempDir()
 	write(t, dir, "shop.py", py)
 

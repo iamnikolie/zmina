@@ -46,6 +46,8 @@ type outliner struct {
 	sure func(src []byte) bool
 }
 
+func indentShell(src []byte, _ int) []Symbol { return indentOutline(src, ".sh") }
+
 // whole adapts an outliner that needs no line count.
 func whole(parse func(src []byte) []Symbol) func(src []byte, lines int) []Symbol {
 	return func(src []byte, _ int) []Symbol { return parse(src) }
@@ -65,6 +67,8 @@ var outliners = []outliner{
 		hint: ":Name (function, Class.method, a test's title)"},
 	{lang: "python", exts: []string{".py", ".pyi"}, parse: func(src []byte, _ int) []Symbol { return indentOutline(src, ".py") },
 		sure: pySure, hint: ":Name (def, class, Class.method)"},
+	{lang: "shell", exts: []string{".sh", ".bash", ".zsh", ".ksh"}, parse: indentShell, sure: shSure,
+		hint: ":Name (a function by its name)"},
 	{lang: "rust", exts: []string{".rs"}, parse: whole(rustOutline), sure: rustSure,
 		hint: ":Name (fn, Type.method, a struct, trait or mod)"},
 	{lang: "csv", exts: []string{".csv"}, summary: writeCSVSummary},
@@ -83,8 +87,8 @@ func outlinerFor(path string) *outliner {
 	return nil
 }
 
-// Lang names the outliner for a path: go, markdown, yaml, json, foxpro, sql, typescript, javascript, python, rust, csv,
-// tsv, jsonl, or "" (outlined by indentation).
+// Lang names the outliner for a path: go, markdown, yaml, json, foxpro, sql, typescript, javascript, python, shell, rust,
+// csv, tsv, jsonl, or "" (outlined by indentation).
 func Lang(path string) string {
 	if o := outlinerFor(path); o != nil {
 		return o.lang
