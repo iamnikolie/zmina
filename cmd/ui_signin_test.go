@@ -128,7 +128,7 @@ func TestSigninFailedSendLeavesNoCode(t *testing.T) {
 	f.fail = errors.New("notifier down")
 	_, err := f.s.request(context.Background())
 	require.Error(t, err)
-	assert.Empty(t, f.s.code)
+	assert.Empty(t, f.s.mail.code)
 
 	f.fail = nil
 	_, err = f.s.request(context.Background())

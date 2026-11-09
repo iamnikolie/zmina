@@ -1,5 +1,6 @@
-// The sign-in page (D-10): ask for a one-time code (sent to the owner's Telegram by zmina ui's --code-command), then
-// enter it. A right code sets the same device cookie as the ?token= link, and the page it stood for opens. The step
+// The sign-in page (D-10): a one-time code, sent to the owner by zmina ui's --code-command when the page asks, or
+// printed by zmina connect in the owner's terminal; then enter it. With no code command the page opens on the
+// code step. A right code sets the same device cookie as the ?token= link, and the page it stood for opens. The step
 // survives a reload while the code lives: iOS may reload a home-screen app left for Telegram.
 "use strict";
 (() => {
@@ -33,12 +34,26 @@
   function step2(wait) {
     $("ask").hidden = true;
     $("enter").hidden = false;
-    $("head").textContent = "Code sent to Telegram";
+    $("head").textContent = "Code sent";
     $("lead").textContent = "Enter the 6 digits. The code works once, for 5 minutes.";
     field.value = "";
     invalid(false);
     field.focus();
     countdown(wait);
+  }
+
+  // typing is the code step for a code from zmina connect: nothing was sent; with no code command, nothing can be.
+  function typing(sends) {
+    $("ask").hidden = true;
+    $("enter").hidden = false;
+    $("head").textContent = "Sign in on this device";
+    $("lead").textContent = "On the machine where zmina runs, run zmina connect and enter the 6 digits it prints. " +
+      "The code works once, for 5 minutes.";
+    $("again").hidden = !sends;
+    if (sends) { clearInterval(timer); $("again").disabled = false; $("again").textContent = "Send a code instead"; }
+    field.value = "";
+    invalid(false);
+    field.focus();
   }
 
   async function ask(status) {
@@ -77,6 +92,7 @@
   }
 
   $("ask").addEventListener("submit", (e) => { e.preventDefault(); ask("ask-status"); });
+  $("have").addEventListener("click", () => typing(true));
   $("again").addEventListener("click", () => ask("status"));
   field.addEventListener("input", () => {
     field.value = field.value.replace(/\D/g, "").slice(0, 6);
@@ -93,7 +109,8 @@
       const r = await post("/api/signin/verify", { code });
       if (r.ok) { keep(null); say("status", "Signed in. Opening…"); open(); return; }
       invalid(true);
-      say("status", "Wrong or expired code. Check it, or send a new one.", true);
+      say("status", $("again").hidden ? "Wrong or expired code. Check it, or run zmina connect again." :
+        "Wrong or expired code. Check it, or send a new one.", true);
       field.value = "";
       field.focus();
     } catch (_) {
@@ -102,8 +119,12 @@
     $("go").disabled = false;
   });
 
-  // A code asked for less than five minutes ago: open on its step, with what is left of the wait.
+  // A code asked for less than five minutes ago: open on its step, with what is left of the wait. With no code
+  // command, on the step for a code from zmina connect.
   const was = kept();
   if (was && Date.now() - was.sentAt < TTL) step2(GAP - (Date.now() - was.sentAt) / 1000);
   else keep(null);
+  fetch("/api/signin", { cache: "no-store" }).then((r) => r.ok ? r.json() : null).then((info) => {
+    if (info && !info.send) typing(false);
+  }).catch(() => { /* the page stays as it is */ });
 })();

@@ -126,7 +126,8 @@ func (a *app) uiCommand() *cobra.Command {
 			}
 
 			a.uiLogins = newUILogins()
-			if codeCommand != "" {
+			// With a token a device signs in with a code: from zmina connect, and from the notifier when there is one.
+			if token != "" {
 				a.uiSignin = newUISignin(codeCommand, func(line string) { fmt.Fprintln(a.err, "zmina ui:", line) })
 			}
 			srv := &http.Server{Handler: a.uiHandler(ln.Addr().String(), loopback, token, allowHosts...),
@@ -545,7 +546,7 @@ func guardLogins(next http.Handler, bound string, loopback bool, token string, l
 			return
 		}
 
-		if serveLogin(w, r, logins, token, allowHosts) {
+		if serveLogin(w, r, logins, token, allowHosts) || serveConnect(w, r, logins, signin, bound, allowHosts) {
 			return
 		}
 

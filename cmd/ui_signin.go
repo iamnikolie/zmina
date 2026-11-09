@@ -31,25 +31,47 @@ const (
 	signinSendFor = 20 * time.Second
 )
 
-var errSigninWait = errors.New("wait before asking for another code")
+var (
+	errSigninWait = errors.New("wait before asking for another code")
+	// errSigninNoSend is a code asked from the page of a cockpit with no notifier: its codes come from zmina connect.
+	errSigninNoSend = errors.New("no code command: run zmina connect on the machine where zmina ui runs")
+)
 
-// uiSignin signs a new device in with a one-time code sent through the owner's own notifier (--code-command), for a
-// browser that has neither the ?token= link nor its cookie. One code lives at a time: six digits, single use, five
-// minutes, five tries; codes are rate-limited. The code is never logged, never in the page, never in an argv.
+// uiSignin signs a new device in with a one-time code, for a browser that has neither the ?token= link nor its
+// cookie. A code comes two ways, each in a slot of its own: sent through the owner's own notifier (--code-command)
+// when the page asks, or printed in the owner's terminal by zmina connect. The slots are apart, so a page asking for
+// a code never replaces the one the owner is typing. Each code: six digits, single use, five minutes, five wrong
+// tries; codes of each slot are rate-limited. A code is never logged, never in the page, never in an argv.
 type uiSignin struct {
-	mu      sync.Mutex
-	send    func(ctx context.Context, text string) error
-	now     func() time.Time
-	log     func(string)
+	mu sync.Mutex
+	// send delivers a code through the owner's notifier; nil when there is none (codes only from zmina connect).
+	send func(ctx context.Context, text string) error
+	now  func() time.Time
+	log  func(string)
+	// mail holds the code sent through the notifier, term the one zmina connect printed.
+	mail, term signinSlot
+}
+
+// signinSlot is one live code with its tries, and the times codes were made there (for the limits).
+type signinSlot struct {
 	code    string
 	expires time.Time
 	tries   int
-	sent    []time.Time
+	made    []time.Time
 }
 
+// newUISignin is the sign-in of a cockpit with a token; command is its notifier, empty for none.
 func newUISignin(command string, log func(string)) *uiSignin {
-	return &uiSignin{send: commandNotifier(command), now: time.Now, log: log}
+	s := &uiSignin{now: time.Now, log: log}
+	if command != "" {
+		s.send = commandNotifier(command)
+	}
+
+	return s
 }
+
+// sends reports whether codes can be sent through a notifier.
+func (s *uiSignin) sends() bool { return s.send != nil }
 
 // commandNotifier runs the owner's command through the shell with the message on its stdin (never in its argv,
 // where other users could read it); what it prints goes to /dev/null, so no pipe of ours can keep it waiting. It
@@ -69,7 +91,11 @@ func commandNotifier(command string) func(ctx context.Context, text string) erro
 // request makes a new code and sends it; wait is how long until the next one may be asked for when refused. The
 // limits and the code are settled under the lock, the send runs outside it: a slow notifier holds up no check.
 func (s *uiSignin) request(ctx context.Context) (time.Duration, error) {
-	code, wait, err := s.reserve()
+	if s.send == nil {
+		return 0, errSigninNoSend
+	}
+
+	code, wait, err := s.reserve(&s.mail, "sign-in")
 	if err != nil {
 		return wait, err
 	}
@@ -80,8 +106,8 @@ func (s *uiSignin) request(ctx context.Context) (time.Duration, error) {
 	text := "zmina sign-in code: " + code + "\nIt works once, for 5 minutes. If you did not ask for it, ignore it."
 	if err := s.send(sctx, text); err != nil {
 		s.mu.Lock()
-		if s.code == code {
-			s.code = ""
+		if s.mail.code == code {
+			s.mail.code = ""
 		}
 		s.mu.Unlock()
 		s.log("sign-in: the code command failed: " + err.Error())
@@ -94,32 +120,45 @@ func (s *uiSignin) request(ctx context.Context) (time.Duration, error) {
 	return 0, nil
 }
 
-// reserve checks the limits and makes the live code, counting the send before it is made.
-func (s *uiSignin) reserve() (string, time.Duration, error) {
+// connect makes the code zmina connect prints; wait is how long until the next one when refused. It replaces an
+// earlier connect code, never the notifier's.
+func (s *uiSignin) connect() (string, time.Duration, error) {
+	code, wait, err := s.reserve(&s.term, "sign-in: zmina connect")
+	if err != nil {
+		return "", wait, err
+	}
+
+	s.log("sign-in: code made for zmina connect")
+
+	return code, 0, nil
+}
+
+// reserve checks a slot's limits and makes its live code, counting it before it is used.
+func (s *uiSignin) reserve(slot *signinSlot, who string) (string, time.Duration, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	now := s.now()
-	kept := s.sent[:0]
+	kept := slot.made[:0]
 
-	for _, at := range s.sent {
+	for _, at := range slot.made {
 		if now.Sub(at) < time.Hour {
 			kept = append(kept, at)
 		}
 	}
 
-	s.sent = kept
+	slot.made = kept
 
-	if n := len(s.sent); n > 0 && now.Sub(s.sent[n-1]) < signinGap {
-		s.log("sign-in: code refused, asked again within a minute")
+	if n := len(slot.made); n > 0 && now.Sub(slot.made[n-1]) < signinGap {
+		s.log(who + ": code refused, asked again within a minute")
 
-		return "", signinGap - now.Sub(s.sent[n-1]), errSigninWait
+		return "", signinGap - now.Sub(slot.made[n-1]), errSigninWait
 	}
 
-	if len(s.sent) >= signinPerHour {
-		s.log("sign-in: code refused, " + fmt.Sprint(signinPerHour) + " codes this hour")
+	if len(slot.made) >= signinPerHour {
+		s.log(who + ": code refused, " + fmt.Sprint(signinPerHour) + " codes this hour")
 
-		return "", time.Hour - now.Sub(s.sent[0]), errSigninWait
+		return "", time.Hour - now.Sub(slot.made[0]), errSigninWait
 	}
 
 	n, err := rand.Int(rand.Reader, big.NewInt(1_000_000))
@@ -127,48 +166,75 @@ func (s *uiSignin) reserve() (string, time.Duration, error) {
 		return "", 0, err
 	}
 
-	// The send counts against the limits even when it fails: a broken notifier is not a way to ask without end.
-	s.sent = append(s.sent, now)
-	s.code, s.expires, s.tries = fmt.Sprintf("%06d", n.Int64()), now.Add(signinTTL), 0
+	// The code counts against the limits even when its send fails: a broken notifier is not a way to ask without end.
+	slot.made = append(slot.made, now)
+	slot.code, slot.expires, slot.tries = fmt.Sprintf("%06d", n.Int64()), now.Add(signinTTL), 0
 
-	return s.code, 0, nil
+	return slot.code, 0, nil
 }
 
-// check takes a code: true once, for the live code, within its time and its tries.
+// check takes a code: true once, for a live code, within its time and its tries. A wrong code counts as a try on
+// every live code; a right one spends only its own.
 func (s *uiSignin) check(code string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.code == "" {
-		s.log("sign-in: a code was tried with none live")
+	now := s.now()
+	live := []*signinSlot{}
+	expired := false
+
+	for _, slot := range []*signinSlot{&s.mail, &s.term} {
+		if slot.code == "" {
+			continue
+		}
+
+		if !now.Before(slot.expires) {
+			slot.code, expired = "", true
+
+			continue
+		}
+
+		live = append(live, slot)
+	}
+
+	if len(live) == 0 {
+		if expired {
+			s.log("sign-in: a code was tried after it expired")
+		} else {
+			s.log("sign-in: a code was tried with none live")
+		}
 
 		return false
 	}
 
-	if !s.now().Before(s.expires) {
-		s.code = ""
-		s.log("sign-in: a code was tried after it expired")
+	// Every live code is compared, matched or not, so the time taken says nothing about which one was.
+	var hit *signinSlot
 
-		return false
+	for _, slot := range live {
+		if len(code) == len(slot.code) && subtle.ConstantTimeCompare([]byte(code), []byte(slot.code)) == 1 {
+			hit = slot
+		}
 	}
 
-	s.tries++
-
-	if len(code) == len(s.code) && subtle.ConstantTimeCompare([]byte(code), []byte(s.code)) == 1 {
-		s.code = ""
+	if hit != nil {
+		hit.code = ""
 		s.log("sign-in: signed in with a code")
 
 		return true
 	}
 
-	if s.tries >= signinTries {
-		s.code = ""
-		s.log(fmt.Sprintf("sign-in: wrong code (%d of %d), the code is spent", s.tries, signinTries))
+	for _, slot := range live {
+		slot.tries++
 
-		return false
+		if slot.tries >= signinTries {
+			slot.code = ""
+			s.log(fmt.Sprintf("sign-in: wrong code (%d of %d), the code is spent", slot.tries, signinTries))
+
+			continue
+		}
+
+		s.log(fmt.Sprintf("sign-in: wrong code (%d of %d)", slot.tries, signinTries))
 	}
-
-	s.log(fmt.Sprintf("sign-in: wrong code (%d of %d)", s.tries, signinTries))
 
 	return false
 }
@@ -176,14 +242,27 @@ func (s *uiSignin) check(code string) bool {
 // signinAsset is what a browser not signed in may load: the sign-in page's own script and style.
 func signinAsset(path string) bool { return path == "/signin.js" || path == "/signin.css" }
 
-// serveSignin answers the sign-in API (POST /api/signin/code, POST /api/signin/verify) for a browser not signed in;
-// false when the request is not one of them.
+// serveSignin answers the sign-in API for a browser not signed in: GET /api/signin (whether codes can be sent, so
+// the page knows which way to offer), POST /api/signin/code, POST /api/signin/verify; false when the request is not
+// one of them.
 func serveSignin(w http.ResponseWriter, r *http.Request, s *uiSignin, token string, allowHosts []string) bool {
-	if s == nil || (r.URL.Path != "/api/signin/code" && r.URL.Path != "/api/signin/verify") {
+	if s == nil || (r.URL.Path != "/api/signin" && r.URL.Path != "/api/signin/code" && r.URL.Path != "/api/signin/verify") {
 		return false
 	}
 
 	w.Header().Set("Cache-Control", "no-store")
+
+	if r.URL.Path == "/api/signin" {
+		if r.Method != http.MethodGet {
+			http.Error(w, "forbidden", http.StatusForbidden)
+
+			return true
+		}
+
+		writeJSON(w, map[string]any{"send": s.sends()})
+
+		return true
+	}
 
 	if r.Method != http.MethodPost || r.Header.Get("X-Zmina") != "1" {
 		http.Error(w, "forbidden", http.StatusForbidden)
@@ -195,6 +274,9 @@ func serveSignin(w http.ResponseWriter, r *http.Request, s *uiSignin, token stri
 		wait, err := s.request(r.Context())
 
 		switch {
+		case errors.Is(err, errSigninNoSend):
+			w.WriteHeader(http.StatusNotFound)
+			writeJSON(w, map[string]any{"error": "no code command: run zmina connect"})
 		case errors.Is(err, errSigninWait):
 			w.WriteHeader(http.StatusTooManyRequests)
 			writeJSON(w, map[string]any{"wait": int(wait.Round(time.Second) / time.Second)})
@@ -231,7 +313,7 @@ func serveSignin(w http.ResponseWriter, r *http.Request, s *uiSignin, token stri
 	return true
 }
 
-// signinPage is the page a browser not signed in gets in place of the cockpit when codes can be sent.
+// signinPage is the page a browser not signed in gets in place of the cockpit when it has a token.
 func signinPage(w http.ResponseWriter) {
 	page, err := fs.ReadFile(ui.Files, "static/signin.html")
 	if err != nil {
