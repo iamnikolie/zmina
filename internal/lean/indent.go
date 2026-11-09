@@ -19,7 +19,7 @@ func indentOutline(src []byte, ext string) []Symbol {
 		return nil
 	}
 
-	in := codeLines(lines, vbExts[ext])
+	in, _ := codeLines(lines, vbExts[ext])
 	if len(in) == 0 {
 		return nil
 	}
@@ -28,13 +28,27 @@ func indentOutline(src []byte, ext string) []Symbol {
 
 	var walk func(from, to, depth int, parent string)
 	walk = func(from, to, depth int, parent string) {
+		head := 0 // the first line of the decorators over lines above the next block
+
 		for k := from; k < to; k++ {
 			c := in[k]
 
-			// A line that starts by closing something, or a bare brace, opens no block of its own.
-			if closer(c.text) || c.text == "{" {
+			// A line that starts by closing something, a bare brace or a docstring opens no block of its own.
+			if closer(c.text) || c.text == "{" || docString(c.text) {
 				continue
 			}
+
+			// A decorator over lines (@pytest.mark.parametrize(…)) heads the block below it.
+			if strings.HasPrefix(c.text, "@") && k+1 < to && in[k+1].indent == c.indent {
+				if head == 0 {
+					head = headStart(lines, c.n)
+				}
+
+				continue
+			}
+
+			first := head
+			head = 0
 
 			if isImport(c.text) {
 				n, end := 0, k
@@ -64,6 +78,10 @@ func indentOutline(src []byte, ext string) []Symbol {
 			}
 
 			start := headStart(lines, c.n)
+			if first > 0 {
+				start = first
+			}
+
 			last := in[end].last
 			out = append(out, Symbol{Start: start, End: last, Depth: depth, Name: name, Label: clip(c.text, 110)})
 
@@ -125,8 +143,9 @@ func container(t string) bool {
 var vbExts = map[string]bool{".vb": true, ".bas": true, ".cls": true, ".frm": true, ".ctl": true, ".vbs": true,
 	".dsr": true}
 
-// codeLines are the file's statements. vb: Visual Basic's line continuation and labels.
-func codeLines(lines []string, vb bool) []codeLine {
+// codeLines are the file's statements; closed: no multi-line string or here-document is left open at the end. vb:
+// Visual Basic's line continuation and labels.
+func codeLines(lines []string, vb bool) (_ []codeLine, closed bool) {
 	var (
 		out     []codeLine
 		quote   string // the open multi-line string's delimiter: """, ''' or `
@@ -157,18 +176,8 @@ func codeLines(lines []string, vb bool) []codeLine {
 			continue // a quote in a comment opens no string
 		}
 
-		for _, q := range []string{`"""`, `'''`, "`"} {
-			if quote != "" && quote != q {
-				continue
-			}
-
-			if strings.Count(t, q)%2 == 1 {
-				if quote == "" {
-					quote = q
-				} else {
-					quote = ""
-				}
-			}
+		if !vb { // Visual Basic has no multi-line strings; "" is a quote inside one
+			quote = stepQuotes(t, quote)
 		}
 
 		if inside || t == "" || isComment(t) {
@@ -207,7 +216,73 @@ func codeLines(lines []string, vb bool) []codeLine {
 		}
 	}
 
-	return out
+	return out, quote == "" && heredoc == ""
+}
+
+// stepQuotes is the multi-line string open after line t (three double or single quotes, a backtick), given the one
+// open before it: a quote inside a string that closes on the line ('"""') or after a comment mark (# or // after a
+// space) opens none.
+func stepQuotes(t, quote string) string {
+	for i := 0; i < len(t); {
+		if quote != "" {
+			j := strings.Index(t[i:], quote)
+			if j < 0 {
+				return quote
+			}
+
+			i, quote = i+j+len(quote), ""
+
+			continue
+		}
+
+		switch r := t[i:]; {
+		case strings.HasPrefix(r, `"""`) || strings.HasPrefix(r, `'''`):
+			quote, i = r[:3], i+3
+		case r[0] == '`':
+			quote, i = "`", i+1
+		case r[0] == '"' && i > 0 && t[i-1] == '@' || r[0] == '"' && i > 1 && t[i-2] == '@' && t[i-1] == '$':
+			i = verbatimEnd(t, i) // C#'s @"…" with "" inside
+		case r[0] == '"' || r[0] == '\'':
+			if j := closesOnLine(t, i, r[0]); j > 0 {
+				i = j
+			} else {
+				i++
+			}
+		case (r[0] == '#' || strings.HasPrefix(r, "//")) && (i == 0 || t[i-1] == ' ' || t[i-1] == '\t'):
+			return ""
+		default:
+			i++
+		}
+	}
+
+	return quote
+}
+
+// verbatimEnd is the index past the quote that closes a C# verbatim string opened at i ("" inside is a quote).
+func verbatimEnd(t string, i int) int {
+	for j := i + 1; j < len(t); j++ {
+		if t[j] == '"' {
+			if j+1 < len(t) && t[j+1] == '"' {
+				j++
+				continue
+			}
+
+			return j + 1
+		}
+	}
+
+	return len(t)
+}
+
+var docRe = regexp.MustCompile(`^[rRuUbBfF]{0,2}(?:"""|''')`)
+
+// docString: the statement is a string on its own (a Python docstring).
+func docString(t string) bool { return docRe.MatchString(t) }
+
+// pySure: every triple-quoted string closes, so no docstring's text is read as code.
+func pySure(src []byte) bool {
+	_, closed := codeLines(splitLines(src), false)
+	return closed
 }
 
 var (

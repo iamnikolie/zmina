@@ -632,7 +632,27 @@ func TestIndentOutline(t *testing.T) {
 	assert.Contains(t, out, "· 55-60 def close(self):\n55\t    def close(self):\n")
 
 	out = Read([]Target{{Path: "shop.py"}}, dir, Options{Outline: true})
-	assert.Contains(t, out, "read a piece: zmina read shop.py:Name (a function, class or block by its name; Class.method below the top)")
+	assert.Contains(t, out, "read a piece: zmina read shop.py:Name (def, class, Class.method)")
+
+	write(t, dir, "shop.rb", "class Shop\n  def open\n  end\nend\n")
+	out = Read([]Target{{Path: "shop.rb"}}, dir, Options{Outline: true})
+	assert.Contains(t, out, "read a piece: zmina read shop.rb:Name (a function, class or block by its name; Class.method below the top)")
+
+	deco := "\"\"\"Shop.\n\nclass Fake:\n\"\"\"\n\n\n@pytest.mark.parametrize(\n    \"day\",\n    [\"mon\", \"tue\"],\n)\ndef test_open(day):\n    assert day\n"
+	assert.Equal(t, []string{"0 7-12 test_open"}, names(Outline("t.py", []byte(deco))),
+		"a docstring is no block; a decorator over lines heads the def")
+	assert.True(t, pySure([]byte(deco)))
+	assert.False(t, pySure([]byte("def f():\n    \"\"\"Open.\n    return 1\n")), "a docstring left open")
+
+	quoted := "SEP = '\"\"\"'  # three quotes\nEND = '\"\"\"'\n\n\ndef f():\n    \"\"\"Doc.\n\nclass Fake:\n    \"\"\"\n    return 1\n"
+	assert.Equal(t, []string{"0 5-10 f"}, names(Outline("q.py", []byte(quoted))), "quotes inside a string open nothing")
+	assert.True(t, pySure([]byte(quoted)))
+
+	vbq := "Public Function Esc(s As String) As String\n    Esc = \"say \"\"\" & s & \"\"\"\" ' a ` and a \"\"\"\nEnd Function\n\nPublic Sub Done()\n    y = 2\nEnd Sub\n"
+	assert.Equal(t, []string{"0 1-3 Esc", "0 5-7 Done"}, names(Outline("m.bas", []byte(vbq))), "Visual Basic's \"\" opens no string over lines")
+
+	cs := "class A\n{\n    string q = @\"say \"\"\"\" \";\n    void B()\n    {\n    }\n}\n"
+	assert.Equal(t, []string{"0 1-7 A"}, names(Outline("a.cs", []byte(cs))), "C#'s @\"…\"\" opens no string over lines")
 }
 
 // A FoxPro form exported as text: each object is a class, its methods the procedures in it.
