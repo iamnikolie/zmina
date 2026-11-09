@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/iamnikolie/zmina/internal/codex"
 	"github.com/iamnikolie/zmina/internal/crew"
+	"github.com/iamnikolie/zmina/internal/peer"
 	"github.com/iamnikolie/zmina/internal/shift"
 	"github.com/iamnikolie/zmina/internal/tmux"
 )
@@ -109,6 +111,7 @@ func (a *app) diagnose() []check {
 		a.checkClaude(c, add)
 		a.checkRegistry(c, add)
 	}
+	checkBoot(c, add)
 	if hasCodex {
 		a.checkCodex(c, add)
 	}
@@ -179,6 +182,53 @@ func (a *app) diagnose() []check {
 	a.checkSockets(c, add)
 
 	return out
+}
+
+// checkBoot shows what zmina adds to every fresh role session's prefix: its standing rules, by what the crew file
+// turns on, and whether the skill list (Claude Code's own, usually larger) is trimmed.
+func checkBoot(c *crew.Crew, add func(name, level, format string, args ...any)) {
+	s := &shift.Shift{Crew: c, Peer: peer.Inbox{}, CodexInbox: codex.Inbox{}, Self: self(), State: shift.NewState()}
+
+	most, mostRole, total, n := 0, "", 0, 0
+	for _, name := range c.Names() {
+		size := s.RulesSize(c.Roles[name])
+		total += size
+		n++
+
+		if size > most {
+			most, mostRole = size, name
+		}
+	}
+
+	if n == 0 {
+		return
+	}
+
+	add("boot", "ok", "zmina's rules at a fresh start: %s characters a role on average (about %s tokens), %s most "+
+		"(%s); they stay in every request of the session", kChars(total/n), kChars(total/n/4), mostRole, kChars(most))
+
+	trimmed := c.Skills != nil
+	for _, r := range c.Roles {
+		trimmed = trimmed || r.Skills != nil
+	}
+
+	for _, r := range c.Roles {
+		if !r.IsCodex() && !trimmed {
+			add("boot", "ok", "skill list not trimmed: every Claude role is sent Claude Code's whole list with every "+
+				"request, often several thousand tokens (skills: — zmina skill, The crew file)")
+
+			break
+		}
+	}
+}
+
+// kChars is a count as 4.4k, or the number below a thousand.
+func kChars(n int) string {
+	if n < 1000 {
+		return strconv.Itoa(n)
+	}
+
+	return strconv.FormatFloat(float64(n)/1000, 'f', 1, 64) + "k"
 }
 
 func (a *app) checkClaude(c *crew.Crew, add func(name, level, format string, args ...any)) {

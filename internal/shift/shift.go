@@ -478,7 +478,39 @@ func (s *Shift) BootText(r *crew.Role) string { return s.bootText(r, true) }
 // bootText is the boot, naming the start's tag or not: the boot queued after a clear is a line like any other, seen
 // in the log, the queue and the recovery pack, so it leaves the tag to the clear's hook (PendingBrief).
 func (s *Shift) bootText(r *crew.Role, tagged bool) string {
-	text := r.Boot
+	text := s.rulesText(r, r.Boot)
+	// A retired crew tells every role; a crew that stood still tells whoever reads its ledger first.
+	if n := s.Standing(); n != "" && (s.Crew.IsRetired() || r.Name == s.Crew.Dispatcher) {
+		text = strings.TrimSpace(text + "\n\n[zmina] " + n)
+	}
+	if s.inbound(r) {
+		tag := ""
+		if tagged {
+			tag = s.tag(r.Name)
+		}
+
+		text = strings.TrimSpace(text + "\n\n" + InboxRule(tag) + " " + s.ackRule())
+	}
+	if r.Name != "" && r.Name == s.Crew.Dispatcher {
+		text = s.recoveryBoot(text)
+	}
+	return text
+}
+
+// RulesSize is how many characters of zmina's own standing rules a fresh start of r carries on top of its boot:
+// what the crew file's switches (read_guard, lessons, delivery, Codex seats) add to every fresh session's prefix.
+// The standing note and the dispatcher's recovery line are left out: they come and go.
+func (s *Shift) RulesSize(r *crew.Role) int {
+	text := s.rulesText(r, r.Boot)
+	if s.inbound(r) {
+		text = strings.TrimSpace(text + "\n\n" + InboxRule(strings.Repeat("x", 12)) + " " + s.ackRule())
+	}
+
+	return max(len(text)-len(strings.TrimSpace(r.Boot)), 0)
+}
+
+// rulesText is text, the role's boot, with the rules every start of r is told after it.
+func (s *Shift) rulesText(r *crew.Role, text string) string {
 	if r.IsCodex() && r.CodexTransport == "shared" {
 		text += fmt.Sprintf("\n[zmina] Shared-runtime tools may not inherit role environment. Your role is %s; pass --crew %s on zmina commands and --role %s on task accept.", r.Name, shellWord(s.Crew.Path), shellWord(r.Name))
 	}
@@ -509,21 +541,6 @@ func (s *Shift) bootText(r *crew.Role, tagged bool) string {
 	}
 	if s.Crew.Lessons.On && text != "" {
 		text = strings.TrimSpace(text + "\n\n" + LessonRule)
-	}
-	// A retired crew tells every role; a crew that stood still tells whoever reads its ledger first.
-	if n := s.Standing(); n != "" && (s.Crew.IsRetired() || r.Name == s.Crew.Dispatcher) {
-		text = strings.TrimSpace(text + "\n\n[zmina] " + n)
-	}
-	if s.inbound(r) {
-		tag := ""
-		if tagged {
-			tag = s.tag(r.Name)
-		}
-
-		text = strings.TrimSpace(text + "\n\n" + InboxRule(tag) + " " + s.ackRule())
-	}
-	if r.Name != "" && r.Name == s.Crew.Dispatcher {
-		text = s.recoveryBoot(text)
 	}
 	return text
 }
