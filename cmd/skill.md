@@ -1211,14 +1211,18 @@ characters — below that a whole read is cheaper than an outline and a second t
   offset/limit (which also counts as read for Edit) or a `zmina read` target follows. A file of another type, or
   one with no outline, goes to Read as asked.
 
-Both only for regular files of at most 8 MB under the session's working directory with no hidden part in their
-path (`.env`, `.git/`, `.ssh/`), judged by where the file really is (links resolved): the hook runs before Claude Code's permission rules, so what those usually guard
+Both only for regular files of at most 8 MB under the session's working directory — or under the crew's
+`worktrees/` or an active task's worktree, where a role works after `cd <worktree> &&` or names a file by its path
+(a Read there only in a session that bypasses permissions: elsewhere Claude Code would ask first) —
+with no hidden part in their path below that directory (`.env`, `.git/`, `.ssh/`), judged by where the file really is
+(links resolved: one out of the worktree is not the guard's): the hook runs before Claude Code's permission rules, so what those usually guard
 is left to them. Any error, panic or doubt (unparsable input, a device, a FIFO): no output, exit 0, the call goes as
 typed. A copy
 (`dev#2`) has its role's setting; a Codex seat gets the boot paragraph without the guard. A change applies at the
 role's next start. Each step goes to `reads.jsonl` (`guard-rewrite` / `guard-outline`, what, path, size), each
 `zmina read`/`grep` of a role too (`read`/`grep`, path, lines, size, mtime, session) — the trial's meter; savings
-are measured from transcripts, not from these lines.
+are measured from transcripts, not from these lines. Past 30 calls in a minute in one session the rest of that minute
+is marked `"bulk": true` (a script sweeping files, not an agent reading them); a measurement leaves those out.
 
 ## Seats — editing the crew file
 
