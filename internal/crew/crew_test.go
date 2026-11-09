@@ -639,6 +639,7 @@ func TestSkills(t *testing.T) {
 		"skills:\n  listing: 500\nroles:\n  dispatcher:\n":                   "skills.listing \"500\": a number of characters from 1k",
 		"skills:\n  off: ['anthropic-skills:*']\nroles:\n  dispatcher:\n":    "exact names only",
 		"skills:\n  off: [oko]\n  name_only: [oko]\nroles:\n  dispatcher:\n": "oko is in off and name_only",
+		"skills:\n  off: [oko, oko]\nroles:\n  dispatcher:\n":                "skills.off: oko is listed twice",
 		"roles:\n  dispatcher:\n    skills:\n      desc_max: -1\n":           "role dispatcher: skills.desc_max -1",
 		"roles:\n  dispatcher:\n    skills:\n      listing: lots\n":          "role dispatcher: skills.listing",
 	} {
