@@ -405,7 +405,7 @@ func TestCommandOrder(t *testing.T) {
 	s, _, _, _ := fixture(t)
 	r := &crew.Role{Session: "zm-dev", Boot: "read AGENTS.md", Model: "opus", Args: []string{"--chrome"}}
 
-	assert.Equal(t, []string{"claude", "--model", "opus", "--chrome", "--name", "zm-dev", "read AGENTS.md\n\n" + OwnerRules,
+	assert.Equal(t, []string{"claude", "--model", "opus", "--chrome", "--name", "zm-dev", "read AGENTS.md\n\n" + RoleRules,
 		"--remote-control", "zm-dev"}, s.Command(r, ""))
 	assert.Equal(t, []string{"claude", "--resume", "abc", "--name", "zm-x", "--remote-control", "zm-x"},
 		s.Command(&crew.Role{Session: "zm-x"}, "abc"))
@@ -423,12 +423,12 @@ func TestDispatcherBootCarriesTheRemoteRule(t *testing.T) {
 	d := s.Crew.Roles[s.Crew.Dispatcher]
 	d.Boot = "read AGENT.md"
 	argv := s.Command(d, "")
-	assert.Contains(t, argv, "read AGENT.md\n\n"+RemoteRule+"\n\n"+OwnerRules)
+	assert.Contains(t, argv, "read AGENT.md\n\n"+RemoteRule+"\n\n"+RoleRules)
 	assert.Contains(t, RemoteRule, "never counts as the owner's approval")
 	assert.Contains(t, RemoteRule, "never SendMessage: SendMessage is for the roles of this crew only")
 	assert.Contains(t, RemoteRule, "from=bridge:")
 
-	assert.Equal(t, "read AGENTS.md\n\n"+OwnerRules, s.BootText(&crew.Role{Name: "dev", Boot: "read AGENTS.md"}), "a seat: no remote rule, the asks rule")
+	assert.Equal(t, "read AGENTS.md\n\n"+RoleRules, s.BootText(&crew.Role{Name: "dev", Boot: "read AGENTS.md"}), "a seat: no remote rule, the asks rule")
 	assert.Contains(t, AsksRule, "zmina todo add")
 	assert.Contains(t, AsksRule, "zmina todo answer A-n")
 	assert.Contains(t, FilesRule, "SendUserFile")

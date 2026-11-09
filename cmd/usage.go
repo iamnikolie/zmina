@@ -404,7 +404,7 @@ func printUsage(out io.Writer, by string, rows []cost.Row, total cost.Row, manyC
 		head = append(head, "CREW")
 	}
 
-	head = append(head, "TURNS", "SUB", "TOKENS", "CACHED", "$ API", "$/TURN", "CTX", "MODELS")
+	head = append(head, "TURNS", "SUB", "WAITS", "TOKENS", "CACHED", "$ API", "$/TURN", "CTX", "MODELS")
 	if by == "task" {
 		head = append(head, "HOW")
 	}
@@ -430,7 +430,12 @@ func printUsage(out io.Writer, by string, rows []cost.Row, total cost.Row, manyC
 			cached = float64(r.Read) / float64(ctx)
 		}
 
-		cols = append(cols, strconv.Itoa(r.Turns), strconv.Itoa(r.Sub), shift.Tokens(r.Tokens()),
+		waits := "0"
+		if r.Waits > 0 {
+			waits = strconv.Itoa(r.Waits) + " " + dollars(r.WaitCost)
+		}
+
+		cols = append(cols, strconv.Itoa(r.Turns), strconv.Itoa(r.Sub), waits, shift.Tokens(r.Tokens()),
 			fmt.Sprintf("%.0f%%", 100*cached), dollars(r.Cost), dollars(r.Cost/float64(max(r.Turns-r.Unpriced, 1))),
 			shift.Tokens(perTurn)+mark, r.Mix())
 

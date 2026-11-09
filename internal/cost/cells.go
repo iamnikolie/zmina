@@ -36,6 +36,10 @@ type Cell struct {
 	// Cost is the priced turns' dollars; Unpriced how many turns had no price.
 	Cost     float64 `json:"cost"`
 	Unpriced int     `json:"unpriced,omitempty"`
+	// Waits are the turns that came after a call that waited in the foreground (a sleep, a wait loop, a repeated
+	// status check: registry.WaitCall), WaitCost their dollars: what waiting in the background would have spared.
+	Waits    int     `json:"waits,omitempty"`
+	WaitCost float64 `json:"wait_cost,omitempty"`
 }
 
 func (c *Cell) add(m registry.Message, usd float64, priced bool) {
@@ -51,8 +55,15 @@ func (c *Cell) add(m registry.Message, usd float64, priced bool) {
 		c.Sub++
 	}
 
+	if m.Wait {
+		c.Waits++
+	}
+
 	if priced {
 		c.Cost += usd
+		if m.Wait {
+			c.WaitCost += usd
+		}
 	} else {
 		c.Unpriced++
 	}
@@ -69,6 +80,8 @@ func (c *Cell) sum(o Cell) {
 	c.Output += o.Output
 	c.Cost += o.Cost
 	c.Unpriced += o.Unpriced
+	c.Waits += o.Waits
+	c.WaitCost += o.WaitCost
 }
 
 // Tokens is every token of the cell.

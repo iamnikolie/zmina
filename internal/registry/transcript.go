@@ -450,6 +450,9 @@ type Message struct {
 	// message came from.
 	Trigger string `json:"trigger"`
 	From    string `json:"from,omitempty"`
+	// Wait is set for a reply that came after a call that waited in the foreground (see WaitCall): it read the
+	// whole conversation again only to see whether something was done.
+	Wait bool `json:"wait,omitempty"`
 }
 
 // Prompt is the tokens the reply read: its input, cache writes and cache reads.
@@ -616,10 +619,30 @@ func readMessages(path string, since time.Time, seen map[string]bool, parent []c
 	current := cue{trigger: TriggerOwner}
 	rd := bufio.NewReaderSize(f, 1<<20)
 
+	// waited is the reply that made a waiting call: the next reply is the one that came after it. polled is the
+	// last status check, so a second one alike is a poll.
+	var waited, polled string
+
 	for {
 		raw, err := rd.ReadBytes('\n')
 		if len(raw) > 0 {
-			if m, c, ok := parseLine(raw); ok && c.trigger != "" && parent == nil {
+			m, c, ok := parseLine(raw)
+			if ok && c.trigger == "" {
+				if waits, check := waitCalls(raw); waits || check != "" {
+					if waits || check == polled {
+						waited = m.ID
+						if waited == "" {
+							waited = "-"
+						}
+					}
+
+					if check != "" {
+						polled = check
+					}
+				}
+			}
+
+			if ok && c.trigger != "" && parent == nil {
 				current = c
 				cues = append(cues, c)
 			} else if ok && c.trigger == "" && !m.At.Before(since) && (m.ID == "" || !seen[m.ID]) {
@@ -632,7 +655,13 @@ func readMessages(path string, since time.Time, seen map[string]bool, parent []c
 				}
 
 				m.Trigger, m.From = at.trigger, at.from
+				if waited != "" && waited != m.ID {
+					m.Wait, waited = true, ""
+				}
+
 				out = append(out, m)
+			} else if ok && c.trigger == "" && waited != "" && waited != m.ID && (m.ID == "" || !seen[m.ID]) {
+				waited = "" // the reply after the wait is before the window
 			}
 		}
 

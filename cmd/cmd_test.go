@@ -300,7 +300,7 @@ func TestStartStopWithRealTmux(t *testing.T) {
 	assert.NotContains(t, out, "-dev", "compact: no session column")
 
 	require.Eventually(t, func() bool {
-		out, _, err = zm(t, crewFile, "peek", "dev", "-n", "5")
+		out, _, err = zm(t, crewFile, "peek", "dev", "-n", "40")
 		return err == nil && strings.Contains(out, "--name")
 	}, 15*time.Second, 100*time.Millisecond)
 	require.Eventually(t, func() bool { text, _, _ := zm(t, crewFile, "peek", "dispatcher"); return strings.Contains(text, "❯") }, 15*time.Second, 100*time.Millisecond)
@@ -465,7 +465,7 @@ func TestUsage(t *testing.T) {
 	out, _, err := zm(t, crewFile, "usage")
 	require.NoError(t, err)
 	// 4 in, 1000 1h writes, 200k reads, 500 out at opus-5.5: $0.000016 + $0.008 + $0.04 + $0.01.
-	assert.Regexp(t, `(?m)^dev\s+3\s+0\s+604k\s+100%\s+\$0\.116\s+\$0\.058\s+201k !\s+opus-5\.5 100% · opus-9 unpriced$`,
+	assert.Regexp(t, `(?m)^dev\s+3\s+0\s+0\s+604k\s+100%\s+\$0\.116\s+\$0\.058\s+201k !\s+opus-5\.5 100% · opus-9 unpriced$`,
 		out, "a copy counts with its role; the unknown model is shown, not priced")
 	assert.Contains(t, out, "API-equivalent")
 	assert.Contains(t, out, "1 turns unpriced, models claude-opus-9")

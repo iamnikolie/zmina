@@ -470,7 +470,12 @@ func (s *Shift) bootText(r *crew.Role, tagged bool) string {
 		text = strings.TrimSpace(text + "\n\n" + RemoteRule)
 	}
 	if text != "" {
-		text = strings.TrimSpace(text + "\n\n" + OwnerRules)
+		rules := RoleRules
+		if r.IsCodex() {
+			rules = CodexRoleRules
+		}
+
+		text = strings.TrimSpace(text + "\n\n" + rules)
 	}
 	// A retired crew tells every role; a crew that stood still tells whoever reads its ledger first.
 	if n := s.Standing(); n != "" && (s.Crew.IsRetired() || r.Name == s.Crew.Dispatcher) {
@@ -550,6 +555,26 @@ const FilesRule = "[zmina] Files for the owner: he also reads you in zmina's Tal
 
 // OwnerRules are the rules every role hears at boot about the owner: his questions, his files.
 const OwnerRules = AsksRule + "\n\n" + FilesRule
+
+// WaitRule is what zmina tells every Claude role at boot about waiting: in the background, woken once, never in a
+// loop of checks — each check is a turn that reads the whole conversation again (thousands of such turns a month
+// across the crews).
+const WaitRule = "[zmina] Waiting: start a command that runs long or waits for something (a build, CI, a deploy, a " +
+	"file, another role) in the background — Bash with run_in_background, or Monitor with an until-loop for a " +
+	"condition — and end your turn: you are woken once when it ends. Never sleep in a loop or check a status again " +
+	"and again: each check is a turn that reads your whole conversation again. Look once after the wake."
+
+// CodexWaitRule is the same rule for a Codex role, whose runtime has no background command that wakes it: it waits
+// inside one command instead of in a series of calls.
+const CodexWaitRule = "[zmina] Waiting: wait for a build, CI, a deploy, a file or another role inside one command " +
+	"— `until <check>; do sleep 30; done` under a timeout — never by running a status check again and again: each " +
+	"call is a model turn that reads your whole conversation again. Look once when it returns."
+
+// RoleRules are the rules every Claude role hears at boot; CodexRoleRules every Codex role's.
+const (
+	RoleRules      = OwnerRules + "\n\n" + WaitRule
+	CodexRoleRules = OwnerRules + "\n\n" + CodexWaitRule
+)
 
 const MixedRuntimeRule = "[zmina] This crew includes Codex seats. For inter-role messages use " +
 	"`zmina send <role> --when-idle <text>` with a role key from `zmina ls`; Claude SendMessage cannot reach " +
