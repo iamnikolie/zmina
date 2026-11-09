@@ -38,10 +38,11 @@ changelog:
   sort: asc
   filters:
     exclude:
-      - "^docs:"
-      - "^test:"
-      - "^chore:"
+      # A scope too: docs(skill):, test(remote):.
+      - "^(docs|test|chore|style)(\\(.+\\))?:"
       - Merge pull request
+      # Local merges repeat the subject of the commit they bring in.
+      - "^Merge "
 
 release:
   draft: false
