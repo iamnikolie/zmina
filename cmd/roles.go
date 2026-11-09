@@ -431,6 +431,10 @@ func (a *app) upCommand() *cobra.Command {
 					started = append(started, st)
 				}
 
+				if len(started) > 0 {
+					return shift.Partial(errors.Join(errs...)) // the roles that did start are saved
+				}
+
 				return errors.Join(errs...)
 			})
 

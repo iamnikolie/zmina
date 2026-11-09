@@ -204,7 +204,6 @@ func (s *Shift) Tick() []string {
 	if line := s.deliver(now); line != "" {
 		typed[s.Crew.Dispatcher] = true
 		did = append(did, "told the dispatcher: "+line)
-		s.flush()
 	}
 
 	for _, name := range s.Names() {
@@ -215,7 +214,6 @@ func (s *Shift) Tick() []string {
 		if line := s.deliverInbox(name, now); line != "" {
 			typed[name] = true
 			did = append(did, line)
-			s.flush()
 		}
 	}
 
@@ -771,7 +769,7 @@ func (s *Shift) atPrompt(name string, now time.Time) bool {
 // deliver gives the dispatcher what waits for it: the signals (work, with their ids), the lines of other crews and
 // the health notes. Posted to its own channel, one post takes everything (postDispatcher); typed, it is one line when
 // it is up, booted and idle (typeDispatcher).
-func (s *Shift) deliver(now time.Time) string {
+func (s *Shift) deliverOnce(now time.Time) string {
 	d := s.Crew.Dispatcher
 	s.pruneTaskInbox(d)
 
@@ -1237,7 +1235,7 @@ func (s *Shift) Deliver() string { return s.deliver(s.Now()) }
 // deliverInbox types a role's first waiting line when it is up, booted and idle; one line per beat, so the role
 // reads each before the next. A line tmux refuses is tried typeTries beats, then moves to the failed list (zmina
 // queue), so it never blocks the lines after it. It returns a line for the log.
-func (s *Shift) deliverInbox(name string, now time.Time) string {
+func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 	s.pruneTaskInbox(name)
 	rs := s.State.Role(name)
 
@@ -1410,4 +1408,33 @@ func (s *Shift) flush() {
 			s.Warn(fmt.Errorf("state not saved, nothing more typed this beat: %w", err))
 		}
 	}
+}
+
+// deliver types or posts the dispatcher's queue (deliverOnce) and saves at once what it did; after a failed flush
+// nothing more is typed this beat.
+func (s *Shift) deliver(now time.Time) string {
+	if s.flushErr != nil {
+		return ""
+	}
+
+	line := s.deliverOnce(now)
+	if line != "" {
+		s.flush()
+	}
+
+	return line
+}
+
+// deliverInbox types or posts a role's first waiting line (deliverInboxOnce) and saves at once what it did.
+func (s *Shift) deliverInbox(name string, now time.Time) string {
+	if s.flushErr != nil {
+		return ""
+	}
+
+	line := s.deliverInboxOnce(name, now)
+	if line != "" {
+		s.flush()
+	}
+
+	return line
 }

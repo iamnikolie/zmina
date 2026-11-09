@@ -270,14 +270,14 @@ func (s *Shift) Sleep(name string, at time.Time, when, note string, o DownOption
 				a.Note = note
 			}
 
-			return a, wait, s.Alarms.Put(a)
+			return a, wait, Partial(s.Alarms.Put(a)) // the down is begun: it is saved even when the alarm is not
 		}
 	}
 
 	a, err := s.Alarms.Add(alarm.Alarm{Kind: alarm.Sleep, Role: name, At: at, When: when, Text: text, Note: note,
 		By: s.By}, s.Now())
 	if err != nil {
-		return a, wait, err
+		return a, wait, Partial(err)
 	}
 
 	s.log(name, "sleep", "", a.ID+" until "+at.In(s.Crew.Location()).Format("Mon 2 Jan 15:04"))
