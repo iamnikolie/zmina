@@ -22,9 +22,11 @@ import (
 )
 
 type fakeTmux struct {
-	up    map[string]int // role -> pane pid
-	dead  map[string]bool
-	typed map[string][]string
+	// startErr makes every Start fail.
+	startErr error
+	up       map[string]int // role -> pane pid
+	dead     map[string]bool
+	typed    map[string][]string
 	// kept is what of typed went with its line breaks kept (TypeLines).
 	kept   map[string][]string
 	keys   map[string][]string
@@ -148,6 +150,10 @@ func (f *fakeTmux) PanePID(n string) (int, error) {
 }
 
 func (f *fakeTmux) Start(n, dir string, _ []string, argv []string) error {
+	if f.startErr != nil {
+		return f.startErr
+	}
+
 	if f.dirs == nil {
 		f.dirs = map[string]string{}
 	}
@@ -1297,4 +1303,17 @@ func TestRenameAcrossRolesAndFailedLines(t *testing.T) {
 	require.NoError(t, f.s.UpWith("designer", UpOptions{Fresh: true}))
 	assert.Empty(t, designer.Failed)
 	assert.Equal(t, "zm-harvester", f.s.State.Titles["conv"])
+}
+
+// zmina start lifts the stop even when the dispatcher does not start: the ticker tries it again every beat, and the
+// error says why (shift.Partial, so the lifted stop is saved).
+func TestStartLiftsTheStopWhenTheDispatcherFails(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	f.s.State.Stopped = *f.now
+	f.tm.startErr = errors.New("no tmux")
+
+	err := f.s.Start()
+	require.ErrorContains(t, err, "no tmux")
+	assert.ErrorIs(t, err, ErrPartial)
+	assert.True(t, f.s.State.Stopped.IsZero())
 }
