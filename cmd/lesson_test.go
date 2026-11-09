@@ -258,6 +258,10 @@ func TestLessonDraftLine(t *testing.T) {
 
 	r.Draft = "no"
 	assert.Contains(t, lessonDraftLine(r, "origin"), "NOT A DRAFT")
+
+	r.Pushed = true
+	assert.True(t, strings.HasPrefix(lessonTodoText(r, lessonRun{}, 0), "NOT A DRAFT: GitLab holds "+r.MRURL),
+		"the owner reads the todo, not the log")
 }
 
 // A deny file that is named but cannot be read refuses lessons instead of letting them through unchecked.

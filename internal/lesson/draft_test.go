@@ -46,7 +46,7 @@ func stub(t *testing.T, on map[string]bool, answer func(name string, args []stri
 func TestReadDraft(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("GL_CONFIG", "")
+	t.Setenv("GL_CONFIG", "work") // a profile for another host: never asked about a gitlab.com MR
 
 	for name, host := range map[string]string{"work": "gitlab.int.acme.example", "own": "gitlab.com"} {
 		require.NoError(t, os.MkdirAll(filepath.Join(home, ".gl", name), 0o700))
@@ -59,7 +59,7 @@ func TestReadDraft(t *testing.T) {
 	d, via := ReadDraft(mr)
 	assert.Equal(t, "yes", d)
 	assert.Equal(t, "glab", via)
-	assert.Equal(t, []string{"glab api --hostname gitlab.com projects/acme%2Fagentic-os/merge_requests/12"}, *calls)
+	assert.Equal(t, []string{"glab api --method GET --hostname gitlab.com projects/acme%2Fagentic-os/merge_requests/12"}, *calls)
 
 	// glab fails; gl answers with the profile for gitlab.com, never the other host's.
 	calls = stub(t, map[string]bool{"glab": true, "gl": true}, func(name string, _ []string) (string, error) {

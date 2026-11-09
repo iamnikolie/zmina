@@ -72,7 +72,7 @@ func ReadDraft(mr string) (draft, via string) {
 	}
 
 	if _, err := LookPath("glab"); err == nil {
-		if d := try("glab", "api", "--hostname", host, path); d != "" {
+		if d := try("glab", "api", "--method", "GET", "--hostname", host, path); d != "" {
 			return d, "glab"
 		}
 	}
@@ -88,19 +88,15 @@ func ReadDraft(mr string) (draft, via string) {
 	return "", ""
 }
 
-// glProfiles are the gl profiles (~/.gl/<name>/config.yaml) for a host: $GL_CONFIG first, then those whose host is
-// it (gitlab.com when a profile names none).
+// glProfiles are the gl profiles (~/.gl/<name>/config.yaml) whose host is the MR's (gitlab.com when a profile names
+// none), $GL_CONFIG first when it is one of them: a profile of another host would read another project's MR.
 func glProfiles(host string) []string {
-	var out []string
-
-	if p := os.Getenv("GL_CONFIG"); p != "" {
-		out = append(out, p)
-	}
-
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return out
+		return nil
 	}
+
+	var out []string
 
 	files, _ := filepath.Glob(filepath.Join(home, ".gl", "*", "config.yaml"))
 	for _, f := range files {
@@ -116,8 +112,15 @@ func glProfiles(host string) []string {
 			}
 		}
 
+		h = strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(h, "https://"), "http://"), "/")
+		if !strings.EqualFold(h, host) {
+			continue
+		}
+
 		name := filepath.Base(filepath.Dir(f))
-		if strings.EqualFold(strings.TrimPrefix(strings.TrimPrefix(h, "https://"), "http://"), host) && name != os.Getenv("GL_CONFIG") {
+		if name == os.Getenv("GL_CONFIG") {
+			out = append([]string{name}, out...)
+		} else {
 			out = append(out, name)
 		}
 	}

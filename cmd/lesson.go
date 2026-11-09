@@ -693,6 +693,11 @@ func lessonDraftLine(res lesson.Result, remote string) string {
 func lessonTodoText(res lesson.Result, run lessonRun, waiting int) string {
 	var b strings.Builder
 
+	if res.Draft == "no" {
+		fmt.Fprintf(&b, "NOT A DRAFT: GitLab holds %s as a ready MR (read by %s); mark it draft before anyone merges "+
+			"it by mistake. ", res.MRURL, res.DraftVia)
+	}
+
 	if res.Pushed {
 		fmt.Fprintf(&b, "Draft MR %s on %s: %d lessons, one commit each. Review and merge it in GitLab (zmina never "+
 			"merges); mark this done if you close it instead.", or(res.MRURL, res.Branch), filepath.Base(run.cfg.Repo),
