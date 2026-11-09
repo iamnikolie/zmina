@@ -242,7 +242,7 @@ func codeLines(lines []string, ext string) (_ []codeLine, closed bool) {
 		open = max(open+delta, 0)
 		cont = vb && strings.HasSuffix(t, " _") || strings.HasSuffix(t, `\`)
 
-		if quote == "" || sh && !shString(quote) || php && quote == "*/" {
+		if hereExts[ext] && (quote == "" || sh && !shString(quote) || php && quote == "*/") {
 			heredoc = hereStart(t, lines[i+1:])
 		}
 	}
@@ -468,6 +468,11 @@ var (
 	vbLabel = regexp.MustCompile(`^[\p{L}_][\p{L}\p{N}_]*:\s*(?:'.*)?$`)
 	hereRe  = regexp.MustCompile(`<<<?[-~]?\s*(?:'([A-Za-z_]\w*)'|"([A-Za-z_]\w*)"|([A-Z_][A-Z0-9_]*)\b)`)
 )
+
+// hereExts are the types with here-documents: shell, PHP, Ruby, Perl, and a script without an extension. In any other
+// type 1 << FLAG is a shift.
+var hereExts = map[string]bool{"": true, ".sh": true, ".bash": true, ".zsh": true, ".ksh": true, ".php": true, ".rb": true,
+	".pl": true, ".pm": true}
 
 // hereStart is the closing word of a here-document the line opens (shell <<EOF, <<-'EOF', PHP <<<EOT, Ruby <<~SQL),
 // "" when it opens none: a word in capitals or quoted, closed by a line of its own further down (so "x << MAX" in C

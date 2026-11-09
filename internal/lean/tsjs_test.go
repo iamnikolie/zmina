@@ -129,3 +129,12 @@ func TestGuardReadJS(t *testing.T) {
 	assert.Contains(t, d.Reason, "37-41\tasync open(day: string): Promise<void>")
 	assert.Equal(t, Decision{}, read(unsure), "brackets that did not close by kind: no answer")
 }
+
+func TestJSReviewEdges(t *testing.T) {
+	js := "import x from 'y'\nconst RE = /abc/g\nfunction foo() {\n  return 1\n}\nconst y = z!\nfunction baz() {\n  return 3\n}\n" +
+		"const s = \"line one \\\nfunction hidden() { return 1 } \\\nend\"\nfunction after() {\n  return 4\n}\n"
+	assert.Equal(t, []string{"0 1-1 imports", "0 2-2 RE", "0 3-5 foo", "0 6-6 y", "0 7-9 baz", "0 10-12 s", "0 13-15 after"},
+		names(Outline("a.ts", []byte(js))), "a regexp or x! at a line's end ends it; a string a backslash continues is no code")
+	assert.True(t, jsSure([]byte(js)))
+	assert.False(t, jsSure([]byte("const s = \"one \\\ntwo\nfunction f() {}\n")), "a string the next line does not close")
+}

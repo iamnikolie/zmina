@@ -24,6 +24,7 @@ func braceScan(lines []string, rust bool) (out []braceLine, sure bool) {
 		stack   []byte // ( [ { ; ` a template; $ a ${ inside one
 		comment int    // nested /* */ open
 		str     bool   // a Rust string open over lines
+		jsq     byte   // the quote of a JS string a backslash at a line's end goes on with
 		hashes  int    // its closing quote's hashes; -1: an ordinary string with escapes
 		prev    byte   // the last code character written, across lines (JS: regexp or division)
 		word    string // the last word written
@@ -35,7 +36,7 @@ func braceScan(lines []string, rust bool) (out []braceLine, sure bool) {
 	for li, l := range lines {
 		bl := &out[li]
 		bl.depth = len(stack)
-		bl.in = comment > 0 || str || len(stack) > 0 && stack[len(stack)-1] == '`'
+		bl.in = comment > 0 || str || jsq != 0 || len(stack) > 0 && stack[len(stack)-1] == '`'
 
 		// A declaration at column 0 is at the top: a count that says otherwise went wrong above (a regexp or JSX
 		// read as something else). Start again from it.
@@ -53,10 +54,15 @@ func braceScan(lines []string, rust bool) (out []braceLine, sure bool) {
 		emit := func(s string) {
 			code.WriteString(s)
 
-			if t := strings.TrimRight(s, " \t"); t != "" {
+			t := strings.TrimRight(s, " \t")
+			if t != s {
+				word = "" // a space ends a word
+			}
+
+			if t != "" {
 				prev = t[len(t)-1]
 				if wordByte(prev) {
-					word += s
+					word += t
 				} else {
 					word = ""
 				}
@@ -78,6 +84,19 @@ func braceScan(lines []string, rust bool) (out []braceLine, sure bool) {
 					i += 2
 				default:
 					i++
+				}
+
+				continue
+			case jsq != 0:
+				switch j := closesOnLine(l, i-1, jsq); {
+				case j > 0:
+					jsq, i = 0, j
+
+					emit(string([]byte{'"', '"'}))
+				case !lineGoesOn(l):
+					jsq, sure, i = 0, false, len(l) // a string a line's end cut off
+				default:
+					i = len(l)
 				}
 
 				continue
@@ -145,11 +164,16 @@ func braceScan(lines []string, rust bool) (out []braceLine, sure bool) {
 
 				emit("''")
 			case c == '\'' || c == '"':
-				if j := closesOnLine(l, i, c); j > 0 {
+				switch j := closesOnLine(l, i, c); {
+				case j > 0:
 					i = j
 
 					emit(string([]byte{c, c}))
-				} else {
+				case lineGoesOn(l):
+					jsq, i = c, len(l) // "line one \ goes on with the next line
+
+					emit(`"`)
+				default:
 					i++ // JSX text: Don't
 				}
 			case c == '`' && !rust:
@@ -161,7 +185,7 @@ func braceScan(lines []string, rust bool) (out []braceLine, sure bool) {
 				if j := regexpEnd(l, i); j > 0 {
 					i = j
 
-					emit("/r/")
+					emit(`""`) // as a string: no operator at the statement's end
 				} else {
 					i++
 
@@ -197,7 +221,13 @@ func braceScan(lines []string, rust bool) (out []braceLine, sure bool) {
 		bl.end, bl.min, bl.code = len(stack), low, strings.TrimSpace(code.String())
 	}
 
-	return out, sure && len(stack) == 0 && comment == 0 && !str
+	return out, sure && len(stack) == 0 && comment == 0 && !str && jsq == 0
+}
+
+// lineGoesOn: the line ends in an odd run of backslashes, so a string open at its end goes on with the next line.
+func lineGoesOn(l string) bool {
+	n := len(l) - len(strings.TrimRight(l, "\\"))
+	return n%2 == 1
 }
 
 // closes: c closes what top opened (a } closes a template's ${ too).
@@ -337,8 +367,8 @@ func rustStringEnd(l string, i, hashes int) (int, bool) {
 // or a label ('a, 'static).
 func rustQuote(l string, i int) int {
 	if i+1 < len(l) && l[i+1] == '\\' {
-		if j := strings.IndexByte(l[i+2:], '\''); j >= 0 {
-			return i + 2 + j + 1
+		if j := strings.IndexByte(l[min(i+3, len(l)):], '\''); j >= 0 { // past the escaped char: '\''
+			return i + 3 + j + 1
 		}
 
 		return len(l)
@@ -376,8 +406,12 @@ func braceStatements(bl []braceLine, from, to, d int, list bool) [][2]int {
 // line ends it (not an operator, a comma or => at its end; the next line not going on with . | && ? : where { ->).
 func braceStatementEnd(bl []braceLine, i, to, d int, list bool) int {
 	for j := i; j <= to; j++ {
-		if bl[j].min < d {
-			return max(j-1, i)
+		if bl[j].min < d { // it closes the block around: the statement ends above, or before the } on this line
+			if j > i && strings.HasPrefix(bl[j].code, "}") {
+				return j - 1
+			}
+
+			return j
 		}
 
 		if bl[j].end != d || j+1 < len(bl) && bl[j+1].in {
@@ -394,7 +428,7 @@ func braceStatementEnd(bl []braceLine, i, to, d int, list bool) int {
 
 var (
 	goesOnSuffix = []string{"=>", "=", ",", "(", "[", "+", "-", "*", "/", "%", "&", "|", "^", "?", ":", ".", "<",
-		"!", "~", " extends", " implements", " where", " as", " in", " of", " new", " ->"}
+		"~", " extends", " implements", " where", " as", " in", " of", " new", " ->"}
 	goesOnPrefix = []string{".", "?", ":", "|", "&", "+", "*", "/", "=", "{", ">", "->", "where", "extends", "implements",
 		"as ", ")", "]"}
 )

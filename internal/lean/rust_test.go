@@ -87,3 +87,9 @@ func TestRustOutline(t *testing.T) {
 	big := "impl Big {\n" + strings.Repeat("    fn m(&self) {\n        x();\n    }\n", 30) + "}\n"
 	assert.Len(t, Outline("big.rs", []byte(big)), 31, "an impl's fns are listed whatever its size")
 }
+
+func TestRustEscapedQuote(t *testing.T) {
+	src := "fn quotes() -> Vec<char> {\n    vec!['\\'','\"', '{', '\\\\', '\\u{1F600}']\n}\n\nfn after() {\n    let x = 1;\n}\n"
+	assert.Equal(t, []string{"0 1-3 quotes", "0 5-7 after"}, names(Outline("q.rs", []byte(src))))
+	assert.True(t, rustSure([]byte(src)))
+}

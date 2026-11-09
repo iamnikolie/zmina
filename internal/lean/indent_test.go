@@ -26,6 +26,9 @@ func TestIndentSure(t *testing.T) {
 	assert.Equal(t, []string{"0 2-11 Box", "1 4-10 Box.get"}, names(Outline("b.php", []byte(doc))), "a quote in a docblock opens nothing")
 	assert.True(t, phpSure([]byte(doc)))
 
+	shift := "import os\n\nmask = 1 << ENABLED\n\ndef first():\n    return call(\n        ENABLED,\n    )\n\ndef second():\n    return 2\n"
+	assert.Equal(t, []string{"0 5-8 first", "0 10-11 second"}, names(Outline("a.py", []byte(shift))), "<< outside shell, PHP, Ruby, Perl is a shift")
+
 	assert.True(t, vbSure([]byte("Sub A()\n    x = \"say \"\"hi\"\"\" ' it's \"\nEnd Sub\n")), "\"\" inside a string, a quote in a comment")
 	assert.False(t, vbSure([]byte("Sub A()\n    x = \"open\nEnd Sub\n")))
 
