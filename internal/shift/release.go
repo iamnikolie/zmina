@@ -38,7 +38,8 @@ func (s *Shift) release(name string, r *crew.Role, now time.Time) (did, note str
 		return "", ""
 	}
 
-	if len(rs.Inbox) > 0 || !s.ready(name, now) || !s.landed(name, now) {
+	if len(rs.Inbox) > 0 || !rs.RestartAsked.IsZero() || !rs.Downing.IsZero() || !s.ready(name, now) ||
+		!s.landed(name, now) {
 		return "", ""
 	}
 

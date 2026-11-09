@@ -38,6 +38,17 @@ func Release(dir, role string, packets []Packet) (string, error) {
 	}{role, packets, "Write each requested checkpoint, then park each task with what remains. Do not invent missing information."})
 }
 
+// Restart writes one short-locator request for the role's handoff notes before zmina restarts it fresh.
+func Restart(dir, role string, packets []Packet) (string, error) {
+	return publish(filepath.Join(dir, "restarts"), struct {
+		Role         string   `json:"role"`
+		Tasks        []Packet `json:"tasks"`
+		Instructions string   `json:"instructions"`
+	}{role, packets, "Write each requested checkpoint as the note your fresh self starts from: what is done, what is left, " +
+		"where things are, open questions. Then stop: zmina restarts you fresh with each task's packet and its note. " +
+		"Do not park the tasks or start new work. Do not invent missing information."})
+}
+
 func publish(dir string, value any) (string, error) {
 	raw, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {

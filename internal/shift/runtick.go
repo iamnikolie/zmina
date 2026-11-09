@@ -1,6 +1,10 @@
 package shift
 
-import "github.com/iamnikolie/zmina/internal/watch"
+import (
+	"slices"
+
+	"github.com/iamnikolie/zmina/internal/watch"
+)
 
 // WithLock runs fn on a shift holding the state lock and saves after; it is how RunTick takes the lock twice.
 type WithLock func(fn func(s *Shift) error) error
@@ -14,6 +18,7 @@ func RunTick(locked WithLock, run func([]WatchRun) []watch.Result, rang func([]R
 	var (
 		runs     []WatchRun
 		released []string
+		restarts []Restart
 		rung     []Rung
 		tm       Tmux
 		told     bool
@@ -23,7 +28,7 @@ func RunTick(locked WithLock, run func([]WatchRun) []watch.Result, rang func([]R
 		s.By = "ticker"
 		out(s.Tick())
 
-		told, released, rung, tm = s.Told, s.Released, s.Rang, s.Tmux
+		told, released, restarts, rung, tm = s.Told, s.Released, s.Restarts, s.Rang, s.Tmux
 		runs = s.DueWatches()
 
 		return nil
@@ -36,12 +41,17 @@ func RunTick(locked WithLock, run func([]WatchRun) []watch.Result, rang func([]R
 		out(rang(rung))
 	}
 
-	if len(runs)+len(released) == 0 {
+	if len(runs)+len(released)+len(restarts) == 0 {
 		return nil
 	}
 
-	if len(released) > 0 {
-		WaitGone(tm, released, ExitWait)
+	gone := slices.Clone(released)
+	for _, r := range restarts {
+		gone = append(gone, r.Name)
+	}
+
+	if len(gone) > 0 {
+		WaitGone(tm, gone, ExitWait)
 	}
 
 	var results []watch.Result
@@ -61,6 +71,10 @@ func RunTick(locked WithLock, run func([]WatchRun) []watch.Result, rang func([]R
 			if err := s.FinishDown(name); err != nil {
 				out([]string{"release " + name + ": " + err.Error()})
 			}
+		}
+
+		for _, r := range restarts {
+			out([]string{s.FinishRestart(r)})
 		}
 
 		for i, r := range runs {

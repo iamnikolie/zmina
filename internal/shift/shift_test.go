@@ -204,7 +204,11 @@ type fakeReg struct {
 	endedAt map[string]time.Time
 	// compacted is when a session's newest compaction was written.
 	compacted map[string]time.Time
+	// activity is what a session's conversation says of background work and the owner's last line.
+	activity map[string]registry.Activity
 }
+
+func (f *fakeReg) Activity(id string) (registry.Activity, error) { return f.activity[id], nil }
 
 func (f *fakeReg) Last(id string) (registry.Turn, error) {
 	t := registry.Turn{Context: f.context[id], Ended: f.ended[id], Compacted: f.compacted[id]}

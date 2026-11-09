@@ -529,3 +529,43 @@ func TestSessionNameWithASlash(t *testing.T) {
 	_, err := Load(write(t, "dir: "+dir+"\nprefix: box/acme-\nroles:\n  dispatcher:\n"))
 	require.ErrorContains(t, err, `no '/' (it reads as a <node>/<crew> address); use "box-acme-dispatcher"`)
 }
+
+func TestRestartKeys(t *testing.T) {
+	c, err := Load(write(t, "dir: "+t.TempDir()+"\nroles:\n  dispatcher:\n  dev:\n"))
+	require.NoError(t, err)
+	assert.Equal(t, 250_000, c.Roles["dev"].RestartContext(), "on by default")
+	assert.Equal(t, time.Hour, c.Roles["dev"].RestartAfter())
+	assert.Equal(t, 250_000, c.Roles["dev"].Instance(2).RestartContext(), "a copy keeps its role's")
+
+	c, err = Load(write(t, "dir: "+t.TempDir()+"\nrestart_at: 300k\nrestart_idle: 90m\nroles:\n  dispatcher:\n  dev:\n"+
+		"  ops:\n    restart_at: off\n    restart_idle: off\n  backend:\n    restart_at: 200k\n    restart_idle: 2h\n"))
+	require.NoError(t, err)
+	assert.Equal(t, 300_000, c.Roles["dev"].RestartContext(), "the crew's value")
+	assert.Equal(t, 90*time.Minute, c.Roles["dev"].RestartAfter())
+	assert.Zero(t, c.Roles["ops"].RestartContext(), "off")
+	assert.Zero(t, c.Roles["ops"].RestartAfter())
+	assert.Equal(t, 200_000, c.Roles["backend"].RestartContext(), "a role's own value wins")
+	assert.Equal(t, 2*time.Hour, c.Roles["backend"].RestartAfter())
+	assert.NotContains(t, strings.Join(c.Warnings, "\n"), "restart")
+
+	for _, body := range []string{"restart_at: soon\nroles:\n  dispatcher:\n", "restart_at: 10k\nroles:\n  dispatcher:\n",
+		"restart_idle: 10m\nroles:\n  dispatcher:\n", "restart_idle: 60\nroles:\n  dispatcher:\n",
+		"roles:\n  dispatcher:\n  dev:\n    restart_idle: soon\n"} {
+		_, err := Load(write(t, "dir: "+t.TempDir()+"\n"+body))
+		assert.ErrorContains(t, err, "restart_", body)
+	}
+
+	c, err = Load(write(t, "dir: "+t.TempDir()+"\nroles:\n  dispatcher:\n    restart_at: 200k\n"))
+	require.NoError(t, err)
+	assert.Contains(t, strings.Join(c.Warnings, "\n"), "role dispatcher is the dispatcher: it is never restarted")
+
+	path := write(t, "dir: "+t.TempDir()+"\nroles:\n  dispatcher:\n  dev:\n")
+	e, err := Open(path)
+	require.NoError(t, err)
+	require.NoError(t, e.Set("dev", map[string]string{"restart_at": "300k", "restart_idle": "2h"}))
+	require.NoError(t, e.Save(), "seat set writes values that load")
+	c, err = Load(path)
+	require.NoError(t, err)
+	assert.Equal(t, 300_000, c.Roles["dev"].RestartContext())
+	assert.Equal(t, 2*time.Hour, c.Roles["dev"].RestartAfter())
+}
