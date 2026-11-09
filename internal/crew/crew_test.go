@@ -469,6 +469,44 @@ func TestBudget(t *testing.T) {
 	assert.Contains(t, SeatKeys, "budget", "zmina seat set dev budget=20")
 }
 
+func TestSeatSetWritesTypedValues(t *testing.T) {
+	dir := t.TempDir()
+	path := write(t, "dir: "+dir+"\nroles:\n  dispatcher:\n  dev:\n    budget: 5 # dollars a day\n  ops:\n")
+
+	e, err := Open(path)
+	require.NoError(t, err)
+	require.NoError(t, e.Set("dev", map[string]string{"budget": "100"}))
+	require.NoError(t, e.Set("ops", map[string]string{"budget": "12.5", "remote_control": "false",
+		"release_idle_minutes": "120", "context_max": "400000", "args": "--chrome", "about": "123"}))
+	require.NoError(t, e.Save(), "a budget seat set wrote loads again")
+
+	raw, _ := os.ReadFile(path)
+	body := string(raw)
+	assert.Contains(t, body, "budget: 100 # dollars a day", "a number, unquoted, its comment kept")
+	assert.Contains(t, body, "budget: 12.5")
+	assert.Contains(t, body, "remote_control: false")
+
+	c, err := Load(path)
+	require.NoError(t, err)
+	assert.InDelta(t, 100, c.Roles["dev"].Budget, 0)
+	assert.InDelta(t, 12.5, c.Roles["ops"].Budget, 0)
+	require.NotNil(t, c.Roles["ops"].RemoteControl)
+	assert.False(t, *c.Roles["ops"].RemoteControl)
+	assert.Equal(t, "120", c.Roles["ops"].ReleaseIdleMinutes)
+	assert.Equal(t, "400000", c.Roles["ops"].ContextMax)
+	assert.Equal(t, "123", c.Roles["ops"].About, "a text key stays text however it reads")
+
+	for _, bad := range []string{"abc", "NaN", "Inf", "$20"} {
+		assert.ErrorContains(t, e.Set("dev", map[string]string{"budget": bad}), "budget:", bad)
+	}
+
+	require.NoError(t, e.Set("dev", map[string]string{"budget": ""}))
+	require.NoError(t, e.Save())
+	c, err = Load(path)
+	require.NoError(t, err)
+	assert.Zero(t, c.Roles["dev"].Budget, "budget= removes it")
+}
+
 func TestDelivery(t *testing.T) {
 	c, err := Load(write(t, "namespace: /ns\nroles:\n  dispatcher:\n  dev:\n    delivery: tmux\n  own:\n    args: [--settings, /x.json]\n"))
 	require.NoError(t, err)
