@@ -88,7 +88,7 @@ func TestMeshTerminalDirectAndRelay(t *testing.T) {
 			service, opened := echoService(t)
 			transport := &terminalPipes{nodes: map[string]*Node{"owner": owner, "jump": jump, "worker": worker}, services: map[string]*TerminalServices{"worker": service}}
 			if relay {
-				addPeer(t, owner, "jump")
+				addRelay(t, owner, "jump")
 				addPeer(t, jump, "worker")
 				require.NoError(t, owner.UpdatePeers(func(ps []Peer) []Peer { return append(ps, Peer{Name: "worker", Through: []string{"jump"}}) }))
 			} else {
@@ -175,7 +175,7 @@ func TestTerminalSignatureCannotBeReplayedOrChanged(t *testing.T) {
 func TestTerminalRelayLoopsAreBounded(t *testing.T) {
 	owner := newOwner(t, "owner")
 	require.NoError(t, owner.UpdatePeers(func(ps []Peer) []Peer {
-		return []Peer{{Name: "a", Through: []string{"b"}}, {Name: "b", Through: []string{"a"}}}
+		return []Peer{{Name: "a", Through: []string{"b"}, Relay: true}, {Name: "b", Through: []string{"a"}, Relay: true}}
 	}))
 	_, err := owner.TerminalList(context.Background(), &terminalPipes{}, "a")
 	require.ErrorContains(t, err, "looping")
@@ -193,7 +193,7 @@ func TestChatOwnerOperationsThroughRelay(t *testing.T) {
 	owner := newOwner(t, "owner")
 	jump := enroll(t, owner, "jump")
 	worker := enroll(t, owner, "worker")
-	addPeer(t, owner, "jump")
+	addRelay(t, owner, "jump")
 	addPeer(t, jump, "worker")
 	require.NoError(t, owner.UpdatePeers(func(ps []Peer) []Peer { return append(ps, Peer{Name: "worker", Through: []string{"jump"}}) }))
 	service := &TerminalServices{ChatRead: func(crew, role string) (chat.Snapshot, error) {
@@ -229,7 +229,7 @@ func TestChatAttachmentsFollowOwnerSignedRelayRoute(t *testing.T) {
 	owner := newOwner(t, "owner")
 	jump := enroll(t, owner, "jump")
 	worker := enroll(t, owner, "worker")
-	addPeer(t, owner, "jump")
+	addRelay(t, owner, "jump")
 	addPeer(t, jump, "worker")
 	require.NoError(t, owner.UpdatePeers(func(peers []Peer) []Peer { return append(peers, Peer{Name: "worker", Through: []string{"jump"}}) }))
 	file := chat.Upload{ID: "abcdefab-1234-1234-1234-123456789abc", Name: "image.png", Data: []byte{0, 255, 1, 2}}
@@ -262,7 +262,7 @@ func TestCrewStatusIsOwnerOnlyAndRelayed(t *testing.T) {
 	jump := enroll(t, owner, "jump")
 	worker := enroll(t, owner, "worker")
 	old := enroll(t, owner, "old")
-	addPeer(t, owner, "jump")
+	addRelay(t, owner, "jump")
 	addPeer(t, owner, "old")
 	addPeer(t, jump, "worker")
 	require.NoError(t, owner.UpdatePeers(func(ps []Peer) []Peer { return append(ps, Peer{Name: "worker", Through: []string{"jump"}}) }))
@@ -292,7 +292,7 @@ func TestActIsOwnerOnlyAndRelayed(t *testing.T) {
 	jump := enroll(t, owner, "jump")
 	worker := enroll(t, owner, "worker")
 	old := enroll(t, owner, "old")
-	addPeer(t, owner, "jump")
+	addRelay(t, owner, "jump")
 	addPeer(t, owner, "old")
 	addPeer(t, jump, "worker")
 	require.NoError(t, owner.UpdatePeers(func(ps []Peer) []Peer { return append(ps, Peer{Name: "worker", Through: []string{"jump"}}) }))
@@ -358,7 +358,7 @@ func TestItemReadIsOwnerOnlyAndRelayed(t *testing.T) {
 	jump := enroll(t, owner, "jump")
 	worker := enroll(t, owner, "worker")
 	old := enroll(t, owner, "old")
-	addPeer(t, owner, "jump")
+	addRelay(t, owner, "jump")
 	addPeer(t, owner, "old")
 	addPeer(t, jump, "worker")
 	require.NoError(t, owner.UpdatePeers(func(ps []Peer) []Peer { return append(ps, Peer{Name: "worker", Through: []string{"jump"}}) }))
@@ -386,7 +386,7 @@ func TestChatRoleFilesAreOwnerOnlyAndRelayed(t *testing.T) {
 	jump := enroll(t, owner, "jump")
 	worker := enroll(t, owner, "worker")
 	old := enroll(t, owner, "old")
-	addPeer(t, owner, "jump")
+	addRelay(t, owner, "jump")
 	addPeer(t, owner, "old")
 	addPeer(t, jump, "worker")
 	require.NoError(t, owner.UpdatePeers(func(ps []Peer) []Peer { return append(ps, Peer{Name: "worker", Through: []string{"jump"}}) }))

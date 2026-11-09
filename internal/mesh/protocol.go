@@ -537,6 +537,8 @@ func (n *Node) metPeer(cert Cert, told []Peer, caps Peer, now time.Time) error {
 			p.TellReceipts = caps.TellReceipts
 			p.Crews, p.CrewsAt = caps.Crews, now
 		})
+		// Only a relay the owner named may carry: a peer's own claim that it reaches a node is not enough.
+		relay := isRelay(ps, cert.Name)
 
 		for i, t := range told {
 			if i >= toldMax {
@@ -549,7 +551,7 @@ func (n *Node) metPeer(cert Cert, told []Peer, caps Peer, now time.Time) error {
 
 			ps = upsert(ps, *t.Cert, "told", func(p *Peer) {
 				p.Through = slices.DeleteFunc(p.Through, func(s string) bool { return s == cert.Name })
-				if t.Direct {
+				if t.Direct && relay {
 					p.Through = append(p.Through, cert.Name)
 				}
 
@@ -593,7 +595,8 @@ func upsert(ps []Peer, cert Cert, source string, fn func(p *Peer)) []Peer {
 }
 
 // handFor is what this node hands peer: the envelopes for it, and those for a node this node cannot reach itself
-// (no address, or its last try failed) when peer said it reaches that node and has not held the envelope yet.
+// (no address, or its last try failed) when peer said it reaches that node, the owner marked peer a relay in book,
+// and peer has not held the envelope yet.
 func (n *Node) handFor(peer Peer, book []Peer) ([]Envelope, []string) {
 	all, err := n.Outbox()
 	if err != nil {
@@ -607,7 +610,7 @@ func (n *Node) handFor(peer Peer, book []Peer) ([]Envelope, []string) {
 	var problems []string
 	for _, e := range all {
 		d := byName[e.dest()]
-		if e.dest() != peer.Name && (d.direct() || !slices.Contains(d.Through, peer.Name) || e.held(peer.Name) || len(e.Via) >= maxHops) {
+		if e.dest() != peer.Name && (d.direct() || !slices.Contains(d.relays(book), peer.Name) || e.held(peer.Name) || len(e.Via) >= maxHops) {
 			continue
 		}
 		if IsTellReceipt(e.Body) && !peer.TellReceipts {

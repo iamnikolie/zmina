@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -220,8 +221,13 @@ type Peer struct {
 	OK    time.Time `json:"ok,omitzero"`
 	Tried time.Time `json:"tried,omitzero"`
 	Err   string    `json:"err,omitempty"`
-	// Through are the peers that told this node they reach it directly: who may carry an envelope for it.
+	// Through are the relays that told this node they reach it directly: who may carry an envelope or a tunnel for
+	// it. Only a peer the owner marked Relay is ever added (or used).
 	Through []string `json:"through,omitempty"`
+	// Relay is the owner's word that this peer may carry for the nodes it says it reaches (`zmina node peer add
+	// --relay`). Set by hand only: what a peer tells never sets it, so a certified node cannot draw another node's
+	// envelopes or tunnels to itself by claiming it reaches that node.
+	Relay bool `json:"relay,omitempty"`
 	// Direct is what a node tells a peer: it reaches this one itself (only on the wire).
 	Direct bool `json:"direct,omitempty"`
 	// BodyMax is the longest body the peer said it takes in its last hello; 0 for an older zmina, or one not met.
@@ -252,6 +258,23 @@ func (p Peer) StoresLong() bool { return p.BodyMax > 0 }
 
 // direct reports whether this node reaches the peer itself: it has an address and the last try did not fail.
 func (p Peer) direct() bool { return len(p.Addrs) > 0 && p.Err == "" }
+
+// relays is who may carry for p: the peers of its Through that the owner marked Relay in book.
+func (p Peer) relays(book []Peer) []string {
+	var out []string
+	for _, name := range p.Through {
+		if isRelay(book, name) {
+			out = append(out, name)
+		}
+	}
+
+	return out
+}
+
+// isRelay reports whether book marks the peer called name as a relay.
+func isRelay(book []Peer, name string) bool {
+	return slices.ContainsFunc(book, func(b Peer) bool { return b.Name == name && b.Relay })
+}
 
 // Peers reads the address book.
 func (n *Node) Peers() ([]Peer, error) {
