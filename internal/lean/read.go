@@ -145,10 +145,18 @@ func (t Target) String() string {
 // File is a read file with what the reader knows of it.
 type File struct {
 	Path  string
-	Src   []byte
+	Src   []byte   // as UTF-8: a cp1251 file decoded
 	Lines []string // without their newlines
 	Kind  string   // "", "binary", "generated (…)"
+	// Encoding is the one the file was read in when it was not UTF-8 (cp1251), else "".
+	Encoding string
+	// LineMax cuts a longer line on display, with a marker and the command that shows it whole; 0: never.
+	LineMax int
 }
+
+// LineMax is the longest line zmina read shows whole without --full: a Markdown table row or a legacy source row
+// of thousands of characters is cut, the rest of the file still read.
+const LineMax = 2000
 
 // MaxFile is the biggest file zmina read loads: a bigger one (a log of gigabytes) is read in part with sed or tail.
 const MaxFile = 8 << 20
@@ -176,7 +184,8 @@ func Load(path string) (*File, error) {
 
 	f := &File{Path: path, Src: src, Kind: Kind(path, src)}
 	if f.Kind != "binary" {
-		f.Lines = splitLines(src)
+		f.Src, f.Encoding = Decode(src)
+		f.Lines = splitLines(f.Src)
 	}
 
 	return f, nil
@@ -211,14 +220,31 @@ func Kind(path string, src []byte) string {
 		return "generated (Code generated … DO NOT EDIT)"
 	}
 
-	if len(src) > 5000 {
-		lines := bytes.Count(src, []byte("\n")) + 1
-		if len(src)/lines > 500 {
-			return "generated (minified: long lines)"
-		}
+	if minified(path, src) {
+		return "generated (minified: long lines)"
 	}
 
 	return ""
+}
+
+// minifiedExt are the types a build minifies; any other file with long lines (a Markdown table, a legacy source
+// with long rows) is text to read, its long lines cut on display.
+var minifiedExt = map[string]bool{".js": true, ".mjs": true, ".cjs": true, ".css": true, ".json": true, ".svg": true,
+	".html": true, ".xml": true}
+
+// minified: a file of a minifiable type, or of few lines, whose lines average over 500 bytes. Markdown and text are
+// never minified, whatever their rows.
+func minified(path string, src []byte) bool {
+	if len(src) <= 5000 || Lang(path) == "markdown" {
+		return false
+	}
+
+	lines := bytes.Count(src, []byte("\n")) + 1
+	if len(src)/lines <= 500 {
+		return false
+	}
+
+	return minifiedExt[strings.ToLower(filepath.Ext(path))] || lines <= 20
 }
 
 func readOne(b *strings.Builder, t Target, dir string, o Options, left int) {
@@ -235,9 +261,17 @@ func readOne(b *strings.Builder, t Target, dir string, o Options, left int) {
 		header += " · " + l
 	}
 
+	if f.Encoding != "" {
+		header += " · " + f.Encoding
+	}
+
 	if f.Kind == "binary" {
 		fmt.Fprintf(b, "%s · binary, not shown\n", header)
 		return
+	}
+
+	if !o.Full {
+		f.LineMax = LineMax
 	}
 
 	whole := t.Symbol == "" && t.Heading == "" && t.From == 0
@@ -292,7 +326,7 @@ func writeLines(b *strings.Builder, f *File, path string, from, to, left int) {
 
 	for n := from; n <= to && n <= len(f.Lines); n++ {
 		line := f.Lines[n-1]
-		if n == from && len(line)+8 > left-120 {
+		if n == from && min(len(line), lineRoom(f))+8 > left-120 {
 			// One line longer than the room: a pointer to the same line again would loop.
 			room := max(left-240, 80)
 			fmt.Fprintf(b, "%d\t%s…\n… line %d is %s characters, cut; all of it: zmina read %s --full\n", n,
@@ -301,11 +335,21 @@ func writeLines(b *strings.Builder, f *File, path string, from, to, left int) {
 			return
 		}
 
-		if b.Len()-start+len(line)+8 > left-120 {
+		shown := len(line)
+		if f.LineMax > 0 {
+			shown = min(shown, f.LineMax+80)
+		}
+
+		if b.Len()-start+shown+8 > left-120 {
 			fmt.Fprintf(b, "… cut at line %d of %s; next: zmina read %s:%d-%s\n", n-1, thousands(len(f.Lines)), path, n,
 				endOf(to, len(f.Lines)))
 
 			return
+		}
+
+		if f.LineMax > 0 && len(line) > f.LineMax {
+			cut := clipBytes(line, f.LineMax)
+			line = fmt.Sprintf("%s… [+%s chars: zmina read %s:%d-%d --full]", cut, thousands(len(line)-len(cut)), path, n, n)
 		}
 
 		b.WriteString(strconv.Itoa(n))
@@ -313,6 +357,15 @@ func writeLines(b *strings.Builder, f *File, path string, from, to, left int) {
 		b.WriteString(line)
 		b.WriteByte('\n')
 	}
+}
+
+// lineRoom is the most a line takes on display.
+func lineRoom(f *File) int {
+	if f.LineMax > 0 {
+		return f.LineMax + 80
+	}
+
+	return 1 << 40
 }
 
 // clipBytes cuts s to at most n bytes on a rune boundary.

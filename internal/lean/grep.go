@@ -142,6 +142,8 @@ func Grep(pattern string, roots []string, dir string, o GrepOptions) (string, er
 			continue
 		}
 
+		src, _ = Decode(src) // a cp1251 file matches and shows as text
+
 		var hits []hit
 
 		for i, l := range splitLines(src) {
