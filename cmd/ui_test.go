@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/iamnikolie/zmina/internal/cost"
+	"github.com/iamnikolie/zmina/internal/tmux"
 )
 
 // uiHome makes a home with two crews: the default one and ~/.zmina/ops, each with its own tmux server name.
@@ -31,6 +32,7 @@ func uiHome(t *testing.T) string {
 
 	n := time.Now().UnixNano() % 1_000_000_000
 	for _, c := range []struct{ dir, name string }{{".zmina", fmt.Sprintf("uid%d", n)}, {".zmina/ops", fmt.Sprintf("uio%d", n)}} {
+		t.Cleanup(func() { tmux.KillServer("zmina-" + c.name) }) // a test that starts the crew's tmux leaves no socket
 		dir := filepath.Join(home, c.dir)
 		require.NoError(t, os.MkdirAll(dir, 0o700))
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "crew.yaml"), []byte(fmt.Sprintf(

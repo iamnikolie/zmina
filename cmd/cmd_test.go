@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/iamnikolie/zmina/internal/tmux"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -72,7 +73,7 @@ roles:
     boot: hello
 %s`, name, filepath.Join(dir, "ns"), dir, claude, roles)), 0o600))
 
-	t.Cleanup(func() { _ = exec.Command("tmux", "-L", "zmina-"+name, "kill-server").Run() })
+	t.Cleanup(func() { tmux.KillServer("zmina-" + name) })
 
 	// The fake claude keeps no transcripts: a resume test names any session it likes. TestUpResumeThatEndsAtOnce puts
 	// the real check back.

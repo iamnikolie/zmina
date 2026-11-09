@@ -1,6 +1,7 @@
 package shift
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -297,4 +298,79 @@ func TestSaveKeepsThePreviousState(t *testing.T) {
 	now, err := os.ReadFile(filepath.Join(dir, "state.json"))
 	require.NoError(t, err)
 	assert.Contains(t, string(now), `"third"`)
+}
+
+// A beat killed after it typed a line, before its save at the end: the line was flushed with the effect, so the
+// next beat, reading what is on disk, does not type it again.
+func TestTypedLineIsSavedAtOnce(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	require.NoError(t, f.s.Queue("designer", "first"))
+	require.NoError(t, f.s.Queue("designer", "second"))
+	require.NoError(t, f.s.Up("designer"))
+	*f.now = f.now.Add(bootPause)
+	f.status("designer", "idle", *f.now)
+
+	snapshot := func() []byte {
+		raw, err := json.Marshal(f.s.State)
+		require.NoError(t, err)
+
+		return raw
+	}
+
+	disk := snapshot() // what the last save left
+	f.s.Flush = func() error { disk = snapshot(); return nil }
+
+	f.s.Tick()
+	require.Equal(t, []string{"first"}, f.tm.typed["designer"])
+
+	// Killed before the beat's own save: the next beat starts from the disk.
+	st := NewState()
+	require.NoError(t, json.Unmarshal(disk, st))
+	f.s.State = st
+
+	f.s.Tick()
+	assert.Equal(t, []string{"first", "second"}, f.tm.typed["designer"], "first is not typed twice")
+}
+
+// A flush that fails stops the beat's further effects: what is on disk no longer says what was done.
+func TestFailedFlushStopsTheBeat(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	f.s.Tick() // the roles kept up start, saved as usual
+	require.NoError(t, f.s.Up("designer"))
+	if !f.tm.Has("harvester") {
+		require.NoError(t, f.s.Up("harvester"))
+	}
+	require.NoError(t, f.s.Queue("designer", "one"))
+	require.NoError(t, f.s.Queue("harvester", "two"))
+	*f.now = f.now.Add(bootPause)
+	f.status("designer", "idle", *f.now)
+	f.status("harvester", "idle", *f.now)
+
+	var warned []error
+	f.s.Warn = func(err error) { warned = append(warned, err) }
+	f.s.Flush = func() error { return errors.New("no space left on device") }
+
+	f.s.Tick()
+	assert.Len(t, append(f.tm.typed["designer"], f.tm.typed["harvester"]...), 1, "one line, then nothing more")
+	require.Len(t, warned, 1)
+	assert.ErrorContains(t, warned[0], "state not saved, nothing more typed this beat")
+}
+
+func TestFlushWritesAndKeepsTheLock(t *testing.T) {
+	dir := t.TempDir()
+
+	l, err := Lock(dir)
+	require.NoError(t, err)
+	l.Role("dev").LastSession = "flushed"
+	require.NoError(t, l.Flush())
+
+	raw, err := os.ReadFile(filepath.Join(dir, "state.json"))
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"flushed"`, "on disk at once")
+	assert.NotNil(t, l.lock, "still held")
+
+	l.Role("dev").LastSession = "saved"
+	require.NoError(t, l.Save())
+	raw, _ = os.ReadFile(filepath.Join(dir, "state.json"))
+	assert.Contains(t, string(raw), `"saved"`)
 }

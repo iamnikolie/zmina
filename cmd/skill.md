@@ -1399,7 +1399,14 @@ tick.log. A PATH that changes later (claude moved by an upgrade) needs `ticker i
 
 `zmina tick` is one beat, under a lock shared with every other zmina command (a command waits up to
 30 s for it, then fails naming the pid that holds it). A role tmux does not answer about is left
-alone for the beat — never taken as ended; a role being put down is left alone too.
+alone for the beat — never taken as ended; a role being put down is left alone too, for 75 s. A restart or
+release the ticker began is saved with the down (`pending` in the role's state): when the beat that began it died
+during its wait, a later beat finishes it (`restart-late`, `released-late`). A down with nothing saved (a `zmina down`
+or `sleep` whose process died during the wait) stops counting after 150 s (`down-stale`), and the dispatcher hears
+`<role>: went down halfway … stays down`.
+A line typed or posted and a session started are saved at once, under the beat's lock (`state.json` written again):
+a beat killed after them, or a save that fails at its end, does not type or start them twice. A save that fails
+there stops the beat's further typing and starting, and says so.
 
 0. Alarms whose time has come ring, once each (see Alarms): a reminder for the owner becomes a check on the todo,
    a parked item comes back to it, a role is started if down and gets its line queued, another crew is told.
@@ -1539,7 +1546,10 @@ State: `~/.zmina/state.json` (version 2; the first format is read and kept as `s
 on the first save). Part of it is what zmina saw and could see again; most is what it was told or
 decided — holds, broken marks, queues, last session ids, schedule progress, watch fingerprints —
 and exists nowhere else. It is written whole (rename) and never over a file zmina cannot read: see
-`zmina state recover`; the state before each save stays beside it as `state.json.prev`. Watches no longer in
+`zmina state recover`; the state before each save stays beside it as `state.json.prev`. A command that fails saves
+nothing of what it changed (a line it typed or a role it started is saved the moment it happens); one that fails
+after part of its work — several roles of which one would not start, a sleep whose alarm could not be written, a
+watch whose source failed — saves that part. Watches no longer in
 the crew are dropped from it. A role missing from the crew file keeps its state while it is missing for a moment
 (an edit, a merge, a rename and back): the ticker drops it after 10 beats in a row, keeps a copy in
 `pruned/<role>-<time>.json` beside the state and logs `pruned`; a role that comes back starts the count again.

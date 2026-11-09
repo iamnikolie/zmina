@@ -172,6 +172,10 @@ type Shift struct {
 	Rang []Rung
 	// Warn reports a problem that must not fail the command (the event log cannot be written); nil is quiet.
 	Warn func(error)
+	// Flush writes the state at once, keeping the lock (Locked.Flush); nil in tests that keep state in memory.
+	Flush func() error
+	// flushErr is the first flush that failed: the beat then types, posts and starts nothing more.
+	flushErr error
 
 	warned bool
 	// resumed is the conversation each role of this run was last started on ("" fresh): what up checks it lives.
@@ -720,6 +724,7 @@ func (s *Shift) UpWith(name string, o UpOptions) error {
 
 	rs := s.State.Role(name)
 	rs.Held, rs.Broken, rs.QuickEnds = false, false, 0
+	s.flush() // with the start it belongs to, whatever the command does after
 
 	return nil
 }
@@ -822,7 +827,9 @@ func (s *Shift) start(name string, o UpOptions) error {
 		return fmt.Errorf("%s: %w", name, err)
 	}
 
-	rs.Started, rs.Up, rs.Downing, rs.Dir = s.Now(), true, time.Time{}, o.Dir
+	defer s.flush() // the session runs: a beat killed later must not start a second one
+
+	rs.Started, rs.Up, rs.Downing, rs.Pending, rs.Dir = s.Now(), true, time.Time{}, nil, o.Dir
 	rs.Releasing, rs.ReleaseTasks, rs.ReleaseIdle = time.Time{}, nil, 0
 	rs.Sent, rs.NoPrompt, rs.BlockedNoted, rs.Trusted, rs.Booted = nil, time.Time{}, false, false, time.Time{}
 	rs.Instance = isInstance(name)
@@ -1022,7 +1029,7 @@ func joinDetail(a, b string) string {
 // forgets an instance.
 func (s *Shift) FinishDown(name string) error {
 	rs := s.State.Role(name)
-	rs.Up, rs.Downing = false, time.Time{}
+	rs.Up, rs.Downing, rs.Pending = false, time.Time{}, nil
 
 	defer s.forget(name)
 

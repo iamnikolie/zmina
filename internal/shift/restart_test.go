@@ -504,3 +504,68 @@ func TestRestartAfterTheTaskIsDoneHeldByBackground(t *testing.T) {
 	assert.Empty(t, f.s.Restarts)
 	assert.Equal(t, 1, f.ev.count("designer", "restart-held"))
 }
+
+// A beat that dies between beginning a restart and finishing it (the ticker killed during the wait): the next beat
+// past downingFor finishes it from the saved job, once.
+func TestRestartFinishedAfterItsBeatDied(t *testing.T) {
+	f := restarting(t, "", 262_000, 6*time.Minute)
+	f.s.Tick() // asks for the note
+	*f.now = f.now.Add(time.Minute)
+	f.note(t, "T-1", *f.now)
+	f.status("designer", "idle", *f.now)
+	f.s.Tick()
+	require.Len(t, f.s.Restarts, 1)
+
+	rs := f.s.State.Role("designer")
+	require.NotNil(t, rs.Pending, "the job is saved with the down")
+	assert.Equal(t, pendingRestart, rs.Pending.Kind)
+	assert.Equal(t, []string{"T-1"}, rs.Pending.Tasks)
+
+	// The process dies: its in-memory job is gone; the session ended on the /exit.
+	f.s.Restarts = nil
+	f.tm.die("designer")
+
+	*f.now = f.now.Add(30 * time.Second)
+	f.s.Tick()
+	assert.False(t, f.tm.Has("designer"), "inside downingFor the beat that began it may still finish it")
+
+	*f.now = f.now.Add(downingFor)
+	starts := len(f.tm.starts)
+	did := f.s.Tick()
+	assert.Contains(t, strings.Join(did, "|"), "designer: restarted fresh")
+	assert.True(t, f.tm.Has("designer"))
+	assert.Len(t, f.tm.starts, starts+1)
+	assert.Empty(t, f.s.Resumed("designer"), "fresh, as the restart meant")
+	assert.Nil(t, rs.Pending)
+	assert.True(t, rs.Downing.IsZero())
+	require.Len(t, rs.Inbox, 2)
+	assert.True(t, strings.HasPrefix(rs.Inbox[1], "[zmina T-1] Read handoff packet "), rs.Inbox[1])
+	assert.True(t, f.ev.has("designer", "restart-late"))
+
+	*f.now = f.now.Add(downingFor)
+	f.s.Tick()
+	assert.Len(t, f.tm.starts, starts+1, "finished once")
+}
+
+// A down whose own command died during the wait, with nothing saved to finish it: after staleDown the role stops
+// being treated as going down, and the dispatcher hears it stayed down.
+func TestStaleDownIsCleared(t *testing.T) {
+	f := restarting(t, "", 100_000, time.Minute)
+
+	_, err := f.s.BeginDown("designer", DownOptions{})
+	require.NoError(t, err)
+	f.tm.die("designer")
+	rs := f.s.State.Role("designer")
+	require.Nil(t, rs.Pending, "a command's down saves no job")
+
+	*f.now = f.now.Add(downingFor + time.Second)
+	f.s.Tick()
+	assert.False(t, rs.Downing.IsZero(), "not yet stale")
+
+	*f.now = f.now.Add(staleDown)
+	f.s.Tick()
+	assert.True(t, rs.Downing.IsZero())
+	assert.True(t, rs.Held, "it stays down: the owner put it down")
+	assert.Contains(t, strings.Join(f.s.State.Notes, "|"), "designer: went down halfway")
+	assert.True(t, f.ev.has("designer", "down-stale"))
+}

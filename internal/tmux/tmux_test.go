@@ -19,7 +19,7 @@ func server(t *testing.T) *Client {
 		t.Skip(err)
 	}
 
-	t.Cleanup(func() { _, _ = c.run("kill-server") })
+	t.Cleanup(func() { KillServer(c.Socket) })
 
 	return c
 }

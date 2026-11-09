@@ -543,7 +543,7 @@ func onScreen(screen, want string, options ...string) bool {
 }
 
 // answerQuestion answers the question on a role's screen with the owner's choices, if it is still the one shown.
-func answerQuestion(s *shift.Shift, role, raw string, snapshot chat.Snapshot) error {
+func answerQuestion(s *shift.Shift, role, raw string, snapshot chat.Snapshot) (err error) {
 	var a questionAnswer
 	if err := json.Unmarshal([]byte(raw), &a); err != nil {
 		return errors.New("answer:<json>")
@@ -573,6 +573,8 @@ func answerQuestion(s *shift.Shift, role, raw string, snapshot chat.Snapshot) er
 	defer func() {
 		if !pressed {
 			rs.AnsweredQuestions = slices.DeleteFunc(rs.AnsweredQuestions, func(id string) bool { return id == a.ID })
+		} else if err != nil {
+			err = shift.Partial(err) // keys reached the dialog: the never-twice mark is saved with the error
 		}
 	}()
 	for i, step := range steps {

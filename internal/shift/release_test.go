@@ -214,3 +214,27 @@ func TestRunTickFinishesTheReleasedDowns(t *testing.T) {
 	assert.False(t, f.tm.Has("designer"))
 	assert.True(t, f.s.State.Role("designer").Downing.IsZero(), "the down is finished")
 }
+
+// A release whose beat died during the wait is finished by a later beat from what it saved.
+func TestReleaseFinishedAfterItsBeatDied(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	f.s.Tick()
+	require.NoError(t, f.s.Up("designer"))
+
+	f.s.putDown("designer")
+	rs := f.s.State.Role("designer")
+	require.NotNil(t, rs.Pending)
+	assert.Equal(t, pendingRelease, rs.Pending.Kind)
+
+	f.s.Released = nil // the process dies; the session ended on the /exit
+	f.tm.die("designer")
+
+	*f.now = f.now.Add(downingFor + time.Second)
+	out := f.s.Tick()
+	assert.Contains(t, strings.Join(out, "|"), "designer: release finished after its beat ended")
+	assert.True(t, rs.Downing.IsZero())
+	assert.Nil(t, rs.Pending)
+	assert.True(t, rs.Held, "released roles stay down")
+	assert.False(t, f.tm.Has("designer"))
+	assert.True(t, f.ev.has("designer", "released-late"))
+}

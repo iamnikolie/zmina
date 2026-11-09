@@ -87,6 +87,15 @@ func (s *Shift) Tick() []string {
 			continue
 		}
 
+		// Past downingFor a begun down should be over: the process that began it died during its wait.
+		if !rs.Downing.IsZero() {
+			if line := s.finishStale(name, rs, now); line != "" {
+				did = append(did, line)
+
+				continue
+			}
+		}
+
 		p, err := s.probe(name)
 		if err != nil {
 			did = append(did, name+": left alone this beat, tmux did not answer: "+err.Error())
@@ -115,7 +124,7 @@ func (s *Shift) Tick() []string {
 			_ = s.Tmux.Kill(name)
 		}
 
-		if !up && !stopped && r.Keep == crew.KeepAlways && !rs.Held && !rs.Broken &&
+		if !up && !stopped && r.Keep == crew.KeepAlways && !rs.Held && !rs.Broken && s.flushErr == nil &&
 			s.registryFor(name).LiveByName(r.Session) == nil && now.Sub(rs.Started) >= reopenPause {
 			if err := s.start(name, UpOptions{}); err != nil {
 				// Wait the usual pause before the next try, so a role that cannot start does not fill the log.
@@ -189,6 +198,8 @@ func (s *Shift) Tick() []string {
 
 	s.renotify(now)
 
+	// Each line typed or posted is saved at once (flush): a beat killed after it, or a save that fails at its end,
+	// does not type it again. After a failed flush nothing more is typed this beat.
 	typed := map[string]bool{}
 	if line := s.deliver(now); line != "" {
 		typed[s.Crew.Dispatcher] = true
@@ -196,7 +207,7 @@ func (s *Shift) Tick() []string {
 	}
 
 	for _, name := range s.Names() {
-		if typed[name] {
+		if typed[name] || s.flushErr != nil {
 			continue
 		}
 
@@ -758,7 +769,7 @@ func (s *Shift) atPrompt(name string, now time.Time) bool {
 // deliver gives the dispatcher what waits for it: the signals (work, with their ids), the lines of other crews and
 // the health notes. Posted to its own channel, one post takes everything (postDispatcher); typed, it is one line when
 // it is up, booted and idle (typeDispatcher).
-func (s *Shift) deliver(now time.Time) string {
+func (s *Shift) deliverOnce(now time.Time) string {
 	d := s.Crew.Dispatcher
 	s.pruneTaskInbox(d)
 
@@ -1224,7 +1235,7 @@ func (s *Shift) Deliver() string { return s.deliver(s.Now()) }
 // deliverInbox types a role's first waiting line when it is up, booted and idle; one line per beat, so the role
 // reads each before the next. A line tmux refuses is tried typeTries beats, then moves to the failed list (zmina
 // queue), so it never blocks the lines after it. It returns a line for the log.
-func (s *Shift) deliverInbox(name string, now time.Time) string {
+func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 	s.pruneTaskInbox(name)
 	rs := s.State.Role(name)
 
@@ -1381,4 +1392,49 @@ func (s *Shift) archiveRole(name string, rs *RoleState, now time.Time) (string, 
 	path := filepath.Join(dir, safe+"-"+now.UTC().Format("20060102-150405")+".json")
 
 	return path, os.WriteFile(path, raw, 0o600)
+}
+
+// flush writes the state at once after an effect that cannot be taken back (a line typed or posted, a session
+// started). A failed flush is told once and stops the beat's further effects: the state on disk no longer says
+// what was done.
+func (s *Shift) flush() {
+	if s.Flush == nil || s.flushErr != nil {
+		return
+	}
+
+	if err := s.Flush(); err != nil {
+		s.flushErr = err
+		if s.Warn != nil {
+			s.Warn(fmt.Errorf("state not saved, nothing more typed this beat: %w", err))
+		}
+	}
+}
+
+// deliver types or posts the dispatcher's queue (deliverOnce) and saves at once what it did; after a failed flush
+// nothing more is typed this beat.
+func (s *Shift) deliver(now time.Time) string {
+	if s.flushErr != nil {
+		return ""
+	}
+
+	line := s.deliverOnce(now)
+	if line != "" {
+		s.flush()
+	}
+
+	return line
+}
+
+// deliverInbox types or posts a role's first waiting line (deliverInboxOnce) and saves at once what it did.
+func (s *Shift) deliverInbox(name string, now time.Time) string {
+	if s.flushErr != nil {
+		return ""
+	}
+
+	line := s.deliverInboxOnce(name, now)
+	if line != "" {
+		s.flush()
+	}
+
+	return line
 }
