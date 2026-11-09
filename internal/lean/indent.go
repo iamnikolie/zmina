@@ -386,6 +386,8 @@ func stepQuotes(t, quote string, cfam bool) string {
 			} else {
 				i++
 			}
+		case cfam && cssURL(t, i) > 0: // url(//cdn/x.png) starts no comment
+			i = cssURL(t, i)
 		case cfam && strings.HasPrefix(r, "/*"):
 			quote, i = "*/", i+2
 		case cfam && strings.HasPrefix(r, "//"):
@@ -398,6 +400,26 @@ func stepQuotes(t, quote string, cfam bool) string {
 	}
 
 	return quote
+}
+
+// cssURL is the index past the ")" of an unquoted CSS url(…) that starts at i, 0 when there is none on the line: its
+// // or /* is the address's, not a comment's. A quoted url("…") is read as a string.
+func cssURL(t string, i int) int {
+	if !strings.HasPrefix(t[i:], "url(") || i > 0 && (wordByte(t[i-1]) || t[i-1] == '-') {
+		return 0
+	}
+
+	r := strings.TrimLeft(t[i+4:], " \t")
+	if r == "" || r[0] == '"' || r[0] == '\'' {
+		return 0
+	}
+
+	j := strings.IndexByte(t[i+4:], ')')
+	if j < 0 {
+		return 0
+	}
+
+	return i + 4 + j + 1
 }
 
 // verbatimClose is the index past the quote that closes a C# verbatim string whose text goes on at i ("" inside is a
