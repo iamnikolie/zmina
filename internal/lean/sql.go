@@ -93,12 +93,12 @@ const sqlLongStatement = 30
 
 // sqlScan reads the file's statements. A backslash escapes a quote in MySQL ('it\'s'), not in a Postgres standard
 // string ('C:\dir\'), so the file is scanned both ways. sure: both agree on every statement — the backslash makes no
-// difference, and no string's text can have been read as code — or the file is MySQL's (its signs) and the scan with
+// difference, and no string's text can have been read as code — or the file is MySQL's (its signs in code, in both scans) and the scan with
 // escapes, its own rule, closes. Else the scan that closes its strings is taken, the one without escapes when both
 // do; open both ways, nil: cut short or no SQL.
 func sqlScan(src []byte) (stmts []sqlStmt, sections []Symbol, sure bool) {
-	esc, escSec, escOpen := sqlStatements(src, true)
-	raw, rawSec, rawOpen := sqlStatements(src, false)
+	esc, escSec, escOpen, escMy := sqlStatements(src, true)
+	raw, rawSec, rawOpen, rawMy := sqlStatements(src, false)
 
 	switch {
 	case escOpen == rawOpen && sameStatements(esc, raw):
@@ -109,7 +109,7 @@ func sqlScan(src []byte) (stmts []sqlStmt, sections []Symbol, sure bool) {
 		return esc, escSec, true
 	case escOpen && rawOpen:
 		return nil, nil, false
-	case mysqlSigns.Match(src) && !escOpen: // MySQL escapes its quotes with a backslash: that scan is right
+	case escMy && rawMy && !escOpen: // MySQL escapes its quotes with a backslash: that scan is right
 		return esc, escSec, true
 	case rawOpen:
 		return esc, escSec, false
@@ -120,8 +120,8 @@ func sqlScan(src []byte) (stmts []sqlStmt, sections []Symbol, sure bool) {
 	}
 }
 
-// mysqlSigns are what a MySQL file has and a Postgres one has not: backticks, /*! … */, a table's ENGINE=, DELIMITER.
-var mysqlSigns = regexp.MustCompile("(?im)`|/\\*!|\\bengine\\s*=|^\\s*delimiter\\s")
+// mysqlEngine is a table's ENGINE=, a sign of MySQL in a statement's code.
+var mysqlEngine = regexp.MustCompile(`(?i)\bengine\s*=`)
 
 func sameStatements(a, b []sqlStmt) bool {
 	if len(a) != len(b) {
@@ -179,10 +179,12 @@ var (
 )
 
 // sqlStatements scans the file into its statements and its migration sections (Name Up or Down, End set).
-func sqlStatements(src []byte, escapes bool) ([]sqlStmt, []Symbol, bool) {
+//
+// mysql: it met MySQL's signs in code, outside comments and strings — a `name`, a /*! … */, a DELIMITER line, a
+// table's ENGINE=. Both scans must meet one before the file is taken for MySQL: a scan that went wrong reads a
+// string's text as code.
+func sqlStatements(src []byte, escapes bool) (stmts []sqlStmt, sections []Symbol, open, mysql bool) {
 	var (
-		stmts    []sqlStmt
-		sections []Symbol
 		cur      sqlStmt
 		code     strings.Builder
 		have     bool // the statement has code
@@ -192,7 +194,6 @@ func sqlStatements(src []byte, escapes bool) ([]sqlStmt, []Symbol, bool) {
 		block    bool // between StatementBegin and StatementEnd
 		copyData bool // in the data lines of COPY … FROM stdin
 		exec     bool // inside a MySQL /*! … */ that runs
-		open     bool // a string or $$ body ran to the end of the file
 		lineHead = true
 		parts    = sqlParts{open: -1}
 	)
@@ -206,6 +207,7 @@ func sqlStatements(src []byte, escapes bool) ([]sqlStmt, []Symbol, bool) {
 	emit := func(end int) {
 		if have {
 			cur.end, cur.code, cur.parts = end, strings.Join(strings.Fields(code.String()), " "), parts.done(end)
+			mysql = mysql || mysqlEngine.MatchString(cur.code)
 			stmts = append(stmts, cur)
 
 			if sqlCopyStdin(cur.code) {
@@ -265,7 +267,7 @@ func sqlStatements(src []byte, escapes bool) ([]sqlStmt, []Symbol, bool) {
 			}
 
 			if m := sqlDelimiter.FindStringSubmatch(l); m != nil && !have {
-				delim = m[1]
+				delim, mysql = m[1], true
 				i = eol
 
 				continue
@@ -301,7 +303,7 @@ func sqlStatements(src []byte, escapes bool) ([]sqlStmt, []Symbol, bool) {
 					i++
 				}
 
-				exec = true
+				exec, mysql = true, true
 
 				continue
 			}
@@ -325,6 +327,7 @@ func sqlStatements(src []byte, escapes bool) ([]sqlStmt, []Symbol, bool) {
 
 			j, closed := sqlQuoted(src, i, &line, escapes)
 			open = open || !closed
+			mysql = mysql || c == '`'
 			if c == '\'' {
 				add("''")
 			} else {
@@ -405,7 +408,7 @@ func sqlStatements(src []byte, escapes bool) ([]sqlStmt, []Symbol, bool) {
 	emit(lastCode)
 	closeSection(line - boolInt(len(src) > 0 && src[len(src)-1] == '\n'))
 
-	return stmts, sections, open
+	return stmts, sections, open, mysql
 }
 
 func boolInt(b bool) int {

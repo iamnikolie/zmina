@@ -193,6 +193,9 @@ func TestSQLScanEdges(t *testing.T) {
 
 	assert.Equal(t, Decision{}, guard("pg.sql", pg+filler), "a backslash that changes the statements")
 	assert.Equal(t, Decision{}, guard("cut.sql", filler+open), "a string open")
+	assert.Equal(t, Decision{}, guard("signs.sql", "-- loads the `k` table, ENGINE=x, /*! no */\n"+filler+open),
+		"MySQL's signs in a comment do not make the file MySQL's")
+	assert.False(t, sqlSure([]byte("SELECT 'a `b` ENGINE=c';\n"+open)), "nor in a string")
 
 }
 
