@@ -200,7 +200,9 @@ func (s *Shift) ownerChat(name, line string) bool {
 }
 
 // postableFor is postable for a line queued for a role: never the owner's own message (ownerChat), which is typed.
-func (s *Shift) postableFor(name, line string) bool { return postable(line) && !s.ownerChat(name, line) }
+func (s *Shift) postableFor(name, line string) bool {
+	return postable(line) && !s.ownerChat(name, line)
+}
 
 // slashCommand reports a line the session runs as a command (/compact, /clear) rather than reads.
 func slashCommand(line string) bool { return strings.HasPrefix(strings.TrimSpace(line), "/") }

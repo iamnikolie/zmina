@@ -21,12 +21,12 @@ type Options struct {
 	Bin, Name, Dir, Resume, Boot, Model, Effort, Sandbox, Approval string
 	// ServiceTier is the role's service_tier; empty takes the profile's, else DefaultServiceTier.
 	ServiceTier string
-	Role                                                           string
-	Transport                                                      string
-	Profile                                                        string
-	Config                                                         map[string]any
-	Args                                                           []string
-	Registry                                                       Registry
+	Role        string
+	Transport   string
+	Profile     string
+	Config      map[string]any
+	Args        []string
+	Registry    Registry
 }
 
 type message struct {

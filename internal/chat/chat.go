@@ -12,13 +12,13 @@ import (
 type Message struct {
 	Attachments []Attachment `json:"attachments,omitempty"`
 	// Looked are the images the role opened for itself in a turn (D-20): a message of role "looked" is their strip.
-	Looked []Looked `json:"looked,omitempty"`
-	Event       *Event       `json:"event,omitempty"`
-	ID          string       `json:"id"`
-	Role        string       `json:"role"`
-	Text        string       `json:"text"`
-	At          time.Time    `json:"at,omitempty"`
-	State       string       `json:"state,omitempty"`
+	Looked []Looked  `json:"looked,omitempty"`
+	Event  *Event    `json:"event,omitempty"`
+	ID     string    `json:"id"`
+	Role   string    `json:"role"`
+	Text   string    `json:"text"`
+	At     time.Time `json:"at,omitempty"`
+	State  string    `json:"state,omitempty"`
 	// Provisional is a message at the conversation's end that the runtime may still replace or complete: a slash
 	// command as typed, before Claude Code records it as a command; a command's line before its output. A page's
 	// cursor stays before it, and the next page sends it again as it stands then.
@@ -33,19 +33,19 @@ type Snapshot struct {
 	Uploaded             *Attachment `json:"uploaded,omitempty"`
 	File                 *Upload     `json:"file,omitempty"`
 	// Paths are the files a role named that Chat shows (chat/paths).
-	Paths []PathInfo `json:"paths,omitempty"`
-	RetryWindowSeconds   int         `json:"retry_window_seconds,omitempty"`
-	Cursor               string      `json:"cursor,omitempty"`
-	Reset                bool        `json:"reset,omitempty"`
-	More                 bool        `json:"more,omitempty"`
-	HistoryGap           bool        `json:"history_gap,omitempty"`
-	Role                 string      `json:"role"`
-	Runtime              string      `json:"runtime"`
-	Profile              string      `json:"profile,omitempty"`
-	Session              string      `json:"session,omitempty"`
-	State                string      `json:"state"`
-	Status               string      `json:"status,omitempty"`
-	NeedsInput           bool        `json:"needs_input,omitempty"`
+	Paths              []PathInfo `json:"paths,omitempty"`
+	RetryWindowSeconds int        `json:"retry_window_seconds,omitempty"`
+	Cursor             string     `json:"cursor,omitempty"`
+	Reset              bool       `json:"reset,omitempty"`
+	More               bool       `json:"more,omitempty"`
+	HistoryGap         bool       `json:"history_gap,omitempty"`
+	Role               string     `json:"role"`
+	Runtime            string     `json:"runtime"`
+	Profile            string     `json:"profile,omitempty"`
+	Session            string     `json:"session,omitempty"`
+	State              string     `json:"state"`
+	Status             string     `json:"status,omitempty"`
+	NeedsInput         bool       `json:"needs_input,omitempty"`
 	// Question is the question on the role's screen, when it is one Chat can show and answer (AskUserQuestion).
 	Question *Question `json:"question,omitempty"`
 	Active   bool      `json:"active"`

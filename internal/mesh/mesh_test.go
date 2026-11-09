@@ -468,14 +468,14 @@ func TestOwnerCommand(t *testing.T) {
 
 	for line, want := range map[string]string{
 		"ssh -o BatchMode=yes box sudo -n -iu ops zmina": "ssh -o BatchMode=yes -o BatchMode=yes -t box sudo -n -iu ops zmina",
-		"ssh -T box zmina":                       "ssh -o BatchMode=yes -T -t box zmina",
-		"ssh -o BatchMode=no -p 22 box zmina":    "ssh -o BatchMode=yes -o BatchMode=no -p 22 -t box zmina",
-		"ssh -qp 22 -oRequestTTY=no box zmina":   "ssh -o BatchMode=yes -qp 22 -oRequestTTY=no -t box zmina",
-		"ssh -i key -- box zmina":                "ssh -o BatchMode=yes -i key -t -- box zmina",
-		"ssh -i ~/.ssh/k box zmina":              "ssh -o BatchMode=yes -i ~/.ssh/k -t box zmina",
-		"ssh  -T\t box   zmina":                 "ssh -o BatchMode=yes  -T\t -t box   zmina",
-		"/opt/far-zmina":                         "/opt/far-zmina",
-		"sudo -u 'ops x' zmina":                  "sudo -u 'ops x' zmina",
+		"ssh -T box zmina":                     "ssh -o BatchMode=yes -T -t box zmina",
+		"ssh -o BatchMode=no -p 22 box zmina":  "ssh -o BatchMode=yes -o BatchMode=no -p 22 -t box zmina",
+		"ssh -qp 22 -oRequestTTY=no box zmina": "ssh -o BatchMode=yes -qp 22 -oRequestTTY=no -t box zmina",
+		"ssh -i key -- box zmina":              "ssh -o BatchMode=yes -i key -t -- box zmina",
+		"ssh -i ~/.ssh/k box zmina":            "ssh -o BatchMode=yes -i ~/.ssh/k -t box zmina",
+		"ssh  -T\t box   zmina":                "ssh -o BatchMode=yes  -T\t -t box   zmina",
+		"/opt/far-zmina":                       "/opt/far-zmina",
+		"sudo -u 'ops x' zmina":                "sudo -u 'ops x' zmina",
 	} {
 		got, err := ownerLine(line, true)
 		require.NoError(t, err, line)

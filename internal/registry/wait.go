@@ -141,8 +141,8 @@ func toolCalls(raw []byte) []bool {
 // reply after the look that came before it. More calls in a row that are not waits are work again: the chain ends.
 type waitChain struct {
 	waits, since, left int
-	pending             bool
-	by                  string
+	pending            bool
+	by                 string
 }
 
 // prompt is a new turn: the chain ends.

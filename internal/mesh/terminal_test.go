@@ -362,7 +362,9 @@ func TestItemReadIsOwnerOnlyAndRelayed(t *testing.T) {
 	addPeer(t, owner, "old")
 	addPeer(t, jump, "worker")
 	require.NoError(t, owner.UpdatePeers(func(ps []Peer) []Peer { return append(ps, Peer{Name: "worker", Through: []string{"jump"}}) }))
-	service := &TerminalServices{Items: func(crew, ids string) ([]byte, error) { return []byte(`{"crew":"` + crew + `","ids":"` + ids + `"}`), nil }}
+	service := &TerminalServices{Items: func(crew, ids string) ([]byte, error) {
+		return []byte(`{"crew":"` + crew + `","ids":"` + ids + `"}`), nil
+	}}
 	transport := &terminalPipes{nodes: map[string]*Node{"jump": jump, "worker": worker, "old": old},
 		services: map[string]*TerminalServices{"worker": service, "old": {}}}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -392,7 +394,9 @@ func TestChatRoleFilesAreOwnerOnlyAndRelayed(t *testing.T) {
 		ChatPaths: func(crew, role, paths string) (chat.Snapshot, error) {
 			return chat.Snapshot{Paths: []chat.PathInfo{{Path: paths, Name: crew + "/" + role, Size: 3, Type: "image/png"}}}, nil
 		},
-		ChatRoleFile: func(crew, role, path string) (chat.Upload, error) { return chat.Upload{Name: path, Data: []byte("png")}, nil },
+		ChatRoleFile: func(crew, role, path string) (chat.Upload, error) {
+			return chat.Upload{Name: path, Data: []byte("png")}, nil
+		},
 	}
 	transport := &terminalPipes{nodes: map[string]*Node{"jump": jump, "worker": worker, "old": old},
 		services: map[string]*TerminalServices{"worker": service, "old": {}}}
