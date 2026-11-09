@@ -7,6 +7,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -232,7 +233,7 @@ func TestGuardBash(t *testing.T) {
 
 	bash := func(cmd string) Decision {
 		return Guard(HookInput{Cwd: dir, PermissionMode: "bypassPermissions", ToolName: "Bash",
-			ToolInput: map[string]any{"command": cmd}}, "/opt/zmina")
+			ToolInput: map[string]any{"command": cmd}}, "/opt/zmina", nil)
 	}
 
 	d := bash("cat big.go")
@@ -258,11 +259,11 @@ func TestGuardBash(t *testing.T) {
 	}
 
 	assert.Equal(t, Decision{}, Guard(HookInput{Cwd: dir, PermissionMode: "bypassPermissions", ToolName: "Bash",
-		ToolInput: map[string]any{"command": "cat big.go"}}, ""), "no executable known: nothing to rewrite to")
+		ToolInput: map[string]any{"command": "cat big.go"}}, "", nil), "no executable known: nothing to rewrite to")
 
 	for _, mode := range []string{"", "default", "acceptEdits", "plan", "auto"} {
 		assert.Equal(t, Decision{}, Guard(HookInput{Cwd: dir, PermissionMode: mode, ToolName: "Bash",
-			ToolInput: map[string]any{"command": "cat big.go"}}, "/opt/zmina"), "a rewritten command would wait for approval: "+mode)
+			ToolInput: map[string]any{"command": "cat big.go"}}, "/opt/zmina", nil), "a rewritten command would wait for approval: "+mode)
 	}
 }
 
@@ -281,7 +282,7 @@ func TestGuardRead(t *testing.T) {
 	require.NoError(t, os.Symlink(big, filepath.Join(dir, "inside.go")))
 
 	read := func(in map[string]any) Decision {
-		return Guard(HookInput{Cwd: dir, ToolName: "Read", ToolInput: in}, "/opt/zmina")
+		return Guard(HookInput{Cwd: dir, ToolName: "Read", ToolInput: in}, "/opt/zmina", nil)
 	}
 
 	d := read(map[string]any{"file_path": big})
@@ -309,9 +310,9 @@ func TestGuardRead(t *testing.T) {
 		assert.Equal(t, Decision{}, read(in), name)
 	}
 
-	assert.Equal(t, Decision{}, Guard(HookInput{ToolName: "Read", ToolInput: map[string]any{"file_path": big}}, "/opt/zmina"),
+	assert.Equal(t, Decision{}, Guard(HookInput{ToolName: "Read", ToolInput: map[string]any{"file_path": big}}, "/opt/zmina", nil),
 		"no cwd: not sure what is the session's")
-	assert.Equal(t, Decision{}, Guard(HookInput{Cwd: dir, ToolName: "Edit", ToolInput: map[string]any{"file_path": big}}, "/opt/zmina"))
+	assert.Equal(t, Decision{}, Guard(HookInput{Cwd: dir, ToolName: "Edit", ToolInput: map[string]any{"file_path": big}}, "/opt/zmina", nil))
 }
 
 func TestReadNeverLoopsOrHangs(t *testing.T) {
@@ -638,4 +639,91 @@ func TestFoxProFormText(t *testing.T) {
 
 	out := Read([]Target{ParseTarget("price.txt:mylock", dir)}, dir, Options{})
 	assert.Contains(t, out, "· foxpro · 13-15 PROCEDURE mylock\n")
+}
+
+// A role works in a task's worktree, away from where its session started: "cd <worktree> && cat big.go" from another
+// directory is the session's own read when the worktree is one of the crew's roots, with the hidden-part and link
+// checks made against that root.
+func TestGuardTaskWorktree(t *testing.T) {
+	session := t.TempDir()
+	roots := t.TempDir() // the crew's worktrees directory
+	wt := filepath.Join(roots, "acme-T-1")
+	filler := goSrc + strings.Repeat("// filler line for size\n", 800)
+	big := write(t, wt, "big.go", filler)
+	write(t, wt, ".git/big.go", filler)
+
+	elsewhere := t.TempDir()
+	write(t, elsewhere, "big.go", filler)
+
+	outside := t.TempDir()
+	write(t, outside, "secret.go", filler)
+	require.NoError(t, os.Symlink(filepath.Join(outside, "secret.go"), filepath.Join(wt, "link.go")))
+
+	asked := 0
+	rootsOf := func() []string { asked++; return []string{roots} }
+
+	bash := func(cmd string) Decision {
+		return Guard(HookInput{Cwd: session, PermissionMode: "bypassPermissions", ToolName: "Bash",
+			ToolInput: map[string]any{"command": cmd}}, "/opt/zmina", rootsOf)
+	}
+
+	d := bash("cd " + wt + " && cat big.go")
+	assert.Equal(t, "rewrite", d.Kind)
+	assert.Equal(t, "cd "+wt+" && /opt/zmina read --via 'cat big.go' big.go", d.Command)
+	assert.Equal(t, big, d.Path)
+
+	assert.Equal(t, "rewrite", bash("cat "+big).Kind, "an absolute path into the worktree")
+
+	for name, cmd := range map[string]string{
+		"a cd outside the roots":         "cd " + elsewhere + " && cat big.go",
+		"a link out of the worktree":     "cd " + wt + " && cat link.go",
+		"a hidden part under the root":   "cd " + wt + " && cat .git/big.go",
+		"a file outside from a worktree": "cd " + wt + " && cat " + filepath.Join(elsewhere, "big.go"),
+	} {
+		assert.Equal(t, Decision{}, bash(cmd), name)
+	}
+
+	read := Guard(HookInput{Cwd: session, PermissionMode: "bypassPermissions", ToolName: "Read",
+		ToolInput: map[string]any{"file_path": big}}, "/opt/zmina", rootsOf)
+	assert.Equal(t, "outline", read.Kind, "a Read into the worktree is answered with the outline")
+
+	// Elsewhere Claude Code would ask before reading outside the session's directory, or a deny rule would stop it:
+	// no outline goes out past that.
+	for _, mode := range []string{"default", "acceptEdits", "plan", ""} {
+		assert.Equal(t, Decision{}, Guard(HookInput{Cwd: session, PermissionMode: mode, ToolName: "Read",
+			ToolInput: map[string]any{"file_path": big}}, "/opt/zmina", rootsOf), mode)
+	}
+
+	// A root that is /, the home directory or above it is no root.
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	for _, r := range []string{"/", home, filepath.Dir(home), "", "relative/dir"} {
+		assert.False(t, saneRoot(r), r)
+	}
+
+	assert.True(t, saneRoot(roots))
+
+	before := asked
+	write(t, session, "big.go", filler)
+	assert.Equal(t, "rewrite", bash("cat big.go").Kind)
+	assert.Equal(t, before, asked, "a file under the session's directory never asks for the roots")
+
+	assert.Equal(t, Decision{}, Guard(HookInput{Cwd: session, PermissionMode: "bypassPermissions", ToolName: "Bash",
+		ToolInput: map[string]any{"command": "cd " + wt + " && cat big.go"}}, "/opt/zmina", nil), "no roots: as before")
+}
+
+func TestIsBulk(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rate.json")
+	now := time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
+
+	for i := range BulkPerMinute {
+		assert.False(t, IsBulk(path, "s-1", now.Add(time.Duration(i)*time.Second)), i)
+	}
+
+	assert.True(t, IsBulk(path, "s-1", now.Add(40*time.Second)), "the 31st in a minute")
+	assert.False(t, IsBulk(path, "s-2", now.Add(41*time.Second)), "another session counts apart")
+	assert.False(t, IsBulk(path, "s-1", now.Add(61*time.Second)), "a new minute")
+	assert.False(t, IsBulk("", "s-1", now))
+	assert.False(t, IsBulk(path, "", now))
 }

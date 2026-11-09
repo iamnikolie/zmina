@@ -286,6 +286,9 @@ type Crew struct {
 	DayStart string `yaml:"day_start"`
 	// Timezone is the clock the times of reminders are read on (Europe/Warsaw); default this machine's.
 	Timezone string `yaml:"timezone"`
+	// Lessons is the daily triage of the roles' lessons into one draft MR on the crew's agentic-os; off unless
+	// the crew file says lessons: on (or gives a block).
+	Lessons Lessons `yaml:"lessons"`
 
 	bootGrace time.Duration
 	renotify  time.Duration
@@ -580,6 +583,14 @@ func (c *Crew) complete() {
 	c.Namespace = ExpandHome(or(c.Namespace, defaultNamespace))
 	c.Dir = anchor(home, ExpandHome(or(c.Dir, defaultDir)))
 	c.Agents = anchor(home, ExpandHome(or(c.Agents, defaultAgents)))
+
+	if c.Lessons.Repo != "" {
+		c.Lessons.Repo = anchor(home, ExpandHome(c.Lessons.Repo))
+	}
+
+	if c.Lessons.Deny != "" {
+		c.Lessons.Deny = anchor(home, ExpandHome(c.Lessons.Deny))
+	}
 	c.Claude = ExpandHome(or(c.Claude, "claude"))
 	c.Codex = ExpandHome(or(c.Codex, "codex"))
 	c.Dispatcher = or(c.Dispatcher, defaultDispatcher)
@@ -889,6 +900,10 @@ func (c *Crew) resolve(strict bool) error {
 
 	crewRestartDone, err := parseRestartTokens("restart_done", c.RestartDone, DefaultRestartDone)
 	if err != nil {
+		return err
+	}
+
+	if err := c.Lessons.check(); err != nil {
 		return err
 	}
 

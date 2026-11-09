@@ -200,6 +200,10 @@ func (a *app) lsCompact(s *shift.Shift, views []shift.View, all bool) error {
 		fmt.Fprintf(a.out, "later: %d parked (zmina later ls)\n", n)
 	}
 
+	if line := lessonsLine(s.Crew); line != "" {
+		fmt.Fprintln(a.out, line)
+	}
+
 	return nil
 }
 
@@ -310,6 +314,10 @@ func (a *app) lsWide(s *shift.Shift, views []shift.View, now bool) error {
 
 	if n := len(laterStore(s.Crew).Parked()); n > 0 {
 		fmt.Fprintf(a.out, "later: %d parked (zmina later ls)\n", n)
+	}
+
+	if line := lessonsLine(s.Crew); line != "" {
+		fmt.Fprintln(a.out, line)
 	}
 
 	return nil
@@ -1112,6 +1120,7 @@ func (a *app) tickCommand() *cobra.Command {
 			err := shift.RunTick(a.withState, runWatches, a.rang, a.printTick)
 			a.meshTick()
 			a.budgetTick(time.Now())
+			a.lessonsBeat(time.Now())
 
 			return err
 		},

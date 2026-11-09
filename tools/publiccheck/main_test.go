@@ -108,6 +108,7 @@ func TestSSHHostCapsIsAnotherWord(t *testing.T) {
 func TestNoLocalState(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("ZMINA_PUBLIC_DENYLIST", filepath.Join(home, "missing"))
+	t.Setenv("ZMINA_PUSH_DENYLIST", filepath.Join(home, "missing"))
 
 	rules, err := banned(home, "HEAD")
 	if err != nil {
@@ -143,4 +144,54 @@ func writeHome(t *testing.T, sshConfig string) string {
 	t.Setenv("ZMINA_PUBLIC_DENYLIST", filepath.Join(home, "missing"))
 
 	return home
+}
+
+// The pre-push hook's denylist is read too: a word on it is found in any case, as a whole word, a phrase as well; a
+// short word glued by a hyphen to the word before it ("n-qq") is part of that word, one with a hyphen after it is not.
+func TestPushDenylist(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("ZMINA_PUBLIC_DENYLIST", filepath.Join(home, "missing"))
+
+	list := filepath.Join(home, "push-denylist")
+	if err := os.WriteFile(list, []byte("Zorro\n\n  qq  \nfoo bar\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("ZMINA_PUSH_DENYLIST", list)
+
+	rules, err := banned(home, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(rules) != 3 {
+		t.Fatalf("rules = %d, want 3", len(rules))
+	}
+
+	for line, want := range map[string]int{
+		"Zorro 12:40: the list":     1,
+		"zorro's phone":             1,
+		"ZORRO":                     1,
+		"zorrox and xzorro":         0,
+		"up to the n-qq message":    0,
+		"the 4-qq line":             0,
+		"qq-dev is up":              1,
+		"-qq at the start":          1,
+		"a qq here":                 1,
+		"QQ in capitals":            1,
+		"n-qq, then qq":             1,
+		"a foo bar b":               1,
+		"foo  bar, foobar, foo-bar": 0,
+	} {
+		if hits := check(rules, "fixture:1", line); len(hits) != want {
+			t.Errorf("%q: %d hits, want %d: %v", line, len(hits), want, hits)
+		}
+	}
+
+	// No list (CI, another machine): nothing of it is checked.
+	t.Setenv("ZMINA_PUSH_DENYLIST", filepath.Join(home, "missing"))
+
+	if rules, err = banned(home, "HEAD"); err != nil || len(rules) != 0 {
+		t.Fatalf("rules = %d, %v; want none", len(rules), err)
+	}
 }

@@ -44,6 +44,8 @@ type usageReport struct {
 	Missing []string   `json:"missing,omitempty"`
 	// Restarts are the roles' restarts for their context in the window (restart_at, restart_idle).
 	Restarts []usageRestart `json:"restarts,omitempty"`
+	// Lessons are the lessons triage runs in the window and their cost.
+	Lessons []usageLesson `json:"lessons,omitempty"`
 }
 
 // peerCells is what a peer answers usage --cells with.
@@ -51,6 +53,7 @@ type peerCells struct {
 	Cells    []cost.Cell    `json:"cells"`
 	Problems []string       `json:"problems,omitempty"`
 	Restarts []usageRestart `json:"restarts,omitempty"`
+	Lessons  []usageLesson  `json:"lessons,omitempty"`
 }
 
 // peerUsageTimeout is how long --all waits for one peer's answer.
@@ -97,9 +100,11 @@ func (a *app) usageCommand() *cobra.Command {
 
 			got, problems := usageCells(crews, node, from, prices)
 			restarts := usageRestarts(crews, node, from)
+			lessons := usageLessons(crews, node, from)
 
 			if cells {
-				return json.NewEncoder(a.out).Encode(peerCells{Cells: got, Problems: problems, Restarts: restarts})
+				return json.NewEncoder(a.out).Encode(peerCells{Cells: got, Problems: problems, Restarts: restarts,
+					Lessons: lessons})
 			}
 
 			if all && !local {
@@ -108,6 +113,7 @@ func (a *app) usageCommand() *cobra.Command {
 				got = append(got, peers.Cells...)
 				problems = append(problems, peers.Problems...)
 				restarts = append(restarts, peers.Restarts...)
+				lessons = append(lessons, peers.Lessons...)
 			}
 
 			if role != "" {
@@ -124,7 +130,7 @@ func (a *app) usageCommand() *cobra.Command {
 				}
 
 				return a.printJSON(usageReport{By: by, Since: from, Rows: rows, Total: total,
-					Prices: prices.Date + " (" + prices.From + ")", Missing: problems, Restarts: restarts})
+					Prices: prices.Date + " (" + prices.From + ")", Missing: problems, Restarts: restarts, Lessons: lessons})
 			}
 
 			if err := printUsage(a.out, by, rows, total, len(crewsOf(got)) > 1); err != nil {
@@ -132,6 +138,7 @@ func (a *app) usageCommand() *cobra.Command {
 			}
 
 			printRestarts(a.out, restarts, len(crewsOf(got)) > 1)
+			printLessons(a.out, lessons)
 
 			printUsageNotes(a.out, prices, total, problems)
 
@@ -314,6 +321,7 @@ func peersUsage(ctx context.Context, since string) peerCells {
 		out      []cost.Cell
 		missing  []string
 		restarts []usageRestart
+		lessons  []usageLesson
 	)
 
 	for _, p := range peers {
@@ -343,6 +351,7 @@ func peersUsage(ctx context.Context, since string) peerCells {
 
 			out = append(out, cells.Cells...)
 			restarts = append(restarts, cells.Restarts...)
+			lessons = append(lessons, cells.Lessons...)
 			for _, pr := range cells.Problems {
 				missing = append(missing, p.Name+": "+pr)
 			}
@@ -352,7 +361,7 @@ func peersUsage(ctx context.Context, since string) peerCells {
 	wg.Wait()
 	slices.Sort(missing)
 
-	return peerCells{Cells: out, Problems: missing, Restarts: restarts}
+	return peerCells{Cells: out, Problems: missing, Restarts: restarts, Lessons: lessons}
 }
 
 func peerUsage(ctx context.Context, p mesh.Peer, since string) (peerCells, error) {
@@ -383,6 +392,12 @@ func peerUsage(ctx context.Context, p mesh.Peer, since string) (peerCells, error
 		for i := range pc.Restarts {
 			if pc.Restarts[i].Node == "" {
 				pc.Restarts[i].Node = p.Name
+			}
+		}
+
+		for i := range pc.Lessons {
+			if pc.Lessons[i].Node == "" {
+				pc.Lessons[i].Node = p.Name
 			}
 		}
 

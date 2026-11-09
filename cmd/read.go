@@ -6,11 +6,13 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/lean"
+	"github.com/iamnikolie/zmina/internal/task"
 	"github.com/spf13/cobra"
 )
 
@@ -161,7 +163,7 @@ func (a *app) readGuardCommand() *cobra.Command {
 				return nil
 			}
 
-			d := lean.Guard(in, self())
+			d := lean.Guard(in, self(), a.guardRoots)
 			if d.Kind == "" {
 				return nil
 			}
@@ -183,6 +185,27 @@ func (a *app) readGuardCommand() *cobra.Command {
 	c.Flags().StringVar(&role, "role", "", "the role the hook runs for")
 
 	return c
+}
+
+// guardRoots are the directories outside a session's own whose files the read guard takes as the role's: the crew's
+// worktrees directory and the worktrees of its active tasks. Read only when a call names a file outside the session's
+// directory; without a crew file, none.
+func (a *app) guardRoots() []string {
+	path := a.crewPath()
+	if _, err := os.Stat(path); err != nil {
+		return nil
+	}
+
+	l := crew.Layout{Dir: filepath.Dir(path)}
+	roots := []string{l.Worktrees()}
+
+	for _, t := range (&task.Store{Dir: l.Tasks()}).Active() {
+		if t.Worktree != "" && !slices.Contains(roots, t.Worktree) {
+			roots = append(roots, t.Worktree)
+		}
+	}
+
+	return roots
 }
 
 // guardOutput is the hook's answer. A rewrite replaces the whole tool input and leaves the permission decision to
@@ -244,8 +267,10 @@ func (a *app) meterAs(role, session, agent string, r lean.Record) {
 		return
 	}
 
+	l := crew.Layout{Dir: filepath.Dir(path)}
 	r.At, r.Role, r.Session, r.Agent = time.Now().UTC(), role, session, agent
-	lean.Append(crew.Layout{Dir: filepath.Dir(path)}.Reads(), r)
+	r.Bulk = lean.IsBulk(l.ReadsRate(), session, r.At)
+	lean.Append(l.Reads(), r)
 }
 
 func absPath(p, dir string) string {
