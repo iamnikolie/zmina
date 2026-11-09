@@ -881,7 +881,15 @@ until the task changes again (`task set`): the turn is the dispatcher's.
 Every role hears at boot, from zmina itself (`shift.AsksRule`): a question only the owner can answer goes on his list
 with `zmina todo add` (and is named by its A-n when asked in chat); when he answers in chat, the role records it at once
 (`todo answer` / `yes` / `done`), so no question he answered stays open. And how a file reaches him in Talk
-(`shift.FilesRule`, under Browser chat).
+(`shift.FilesRule`, under Browser chat). And how to wait (`shift.WaitRule`): a long command or a wait for a condition
+(a build, CI, a deploy, a file) goes in the background — Bash `run_in_background`, or Monitor with an until-loop — and
+the turn ends; the role is woken once when it ends and looks once. Waiting for another role, it just ends its turn:
+zmina brings it the line. No sleep loops, no repeated status checks: each is a turn that reads the whole conversation
+again (`zmina usage` counts them as `WAITS`). A Codex role, whose runtime has no background command that wakes it,
+hears `shift.CodexWaitRule`: wait inside one command (`until <check>; do sleep 30; done`) with that shell call's own
+timeout set above the wait, never by calling a check again and again. A role started before this hears it at its next
+start. A role whose boot is empty (no `boot:`, no `AGENT.md`, not the dispatcher, no Codex seat in the crew) starts
+with no prompt and hears none of these rules.
 
 Every answer — from these commands or the ui page — closes the ask (a waiting task keeps its state) and queues a
 note for the dispatcher like `zmina note`: `hand: A-3 · yes: <rec> — <text>`, `ui: T-62 · <words>`,
@@ -1098,10 +1106,21 @@ would not load is never saved), and leaves the previous file as `crew.yaml.bak`.
 
 `zmina usage [--since 24h|7d] [--by role|task|model|day|crew|trigger|how] [--role r] [--all] [--json]` — what the
 work cost, from the transcripts: each API reply once, a role's copies (dev#2) with it, a subagent's replies with
-the session that started it (`SUB` counts them). Columns: turns, tokens, `CACHED` (the share of the prompt read
+the session that started it (`SUB` counts them). Columns: turns, `WAITS`, tokens, `CACHED` (the share of the prompt read
 from cache), `$ API`, `$/TURN`, `CTX` (the context a turn carries on average; `!` past 200k — most of such a
 turn's price is reading the conversation again: compact or restart the role), `MODELS` (the model mix by dollars,
 from each reply's own model), and for `--by task` `HOW`. A totals row `all`.
+
+- **Waits** (`WAITS`: turns and their dollars; `waits` and `wait_cost` in `--json`): the turns spent polling. A wait
+  is a Bash call in the foreground that waits — a `sleep` of 20 s or more, an `until`, `while` or `for … do` loop that
+  sleeps, `kubectl rollout status`, `gh run watch`, `gh pr checks --watch`; a here-document's body is not read. Waits
+  with at most three calls between them (the look at whether it is done) and no new prompt are one polling chain. Its
+  first wait and look cost what a background wait costs too (woken once, one look), so from its second wait on the
+  reply after each wait is counted, and the reply after a look of its own that came before it (a look inside the
+  wait's command, `sleep 60; gl pipeline show`, spends none): each read the whole conversation again only to
+  see whether something was done. A call with `run_in_background` and a Monitor are never waits: that is how the
+  boot's wait rule says to wait. The column shows whether the rule is kept. Claude transcripts only (Codex token
+  events carry no tool calls).
 
 - **$ API is API-equivalent**: what the same tokens would cost at API rates; the crews run on a subscription. Each
   reply is priced by its model, its 5-minute and 1-hour cache writes apart, its fast mode and web searches. The

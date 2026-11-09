@@ -450,6 +450,9 @@ type Message struct {
 	// message came from.
 	Trigger string `json:"trigger"`
 	From    string `json:"from,omitempty"`
+	// Wait is set for a reply of a polling chain past its first wait and look (see waitChain): it read the whole
+	// conversation again only to see whether something was done, which a background wait does once.
+	Wait bool `json:"wait,omitempty"`
 }
 
 // Prompt is the tokens the reply read: its input, cache writes and cache reads.
@@ -616,10 +619,29 @@ func readMessages(path string, since time.Time, seen map[string]bool, parent []c
 	current := cue{trigger: TriggerOwner}
 	rd := bufio.NewReaderSize(f, 1<<20)
 
+	var (
+		chain waitChain
+		last  string
+	)
+
 	for {
 		raw, err := rd.ReadBytes('\n')
 		if len(raw) > 0 {
-			if m, c, ok := parseLine(raw); ok && c.trigger != "" && parent == nil {
+			m, c, ok := parseLine(raw)
+
+			wait := false
+			if ok && c.trigger != "" {
+				chain.prompt()
+			} else if ok {
+				if m.ID == "" || m.ID != last {
+					wait = chain.reply(m.ID)
+					last = m.ID
+				}
+
+				chain.calls(m.ID, toolCalls(raw))
+			}
+
+			if ok && c.trigger != "" && parent == nil {
 				current = c
 				cues = append(cues, c)
 			} else if ok && c.trigger == "" && !m.At.Before(since) && (m.ID == "" || !seen[m.ID]) {
@@ -631,7 +653,7 @@ func readMessages(path string, since time.Time, seen map[string]bool, parent []c
 					at = cueAt(parent, m.At)
 				}
 
-				m.Trigger, m.From = at.trigger, at.from
+				m.Trigger, m.From, m.Wait = at.trigger, at.from, wait
 				out = append(out, m)
 			}
 		}
