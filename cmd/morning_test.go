@@ -95,3 +95,11 @@ func TestMorningTick(t *testing.T) {
 	a.morningTick(time.Date(2026, 11, 1, 10, 0, 0, 0, ny))
 	assert.Len(t, state().Notes, 1, "once a day")
 }
+
+func TestMorningTickBrokenCrew(t *testing.T) {
+	crewFile := testCrew(t, "  dev:\n")
+	require.NoError(t, os.WriteFile(crewFile, []byte("roles: [oops\n"), 0o600))
+
+	a := &app{out: io.Discard, err: io.Discard, crew: crewFile}
+	assert.NotPanics(t, func() { a.morningTick(time.Now()) }, "a crew file left broken mid-edit stops no beat")
+}

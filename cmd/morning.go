@@ -32,19 +32,23 @@ func (a *app) morningTick(now time.Time) {
 		loc      *time.Location
 	)
 
-	_ = a.readState(func(s *shift.Shift) error {
+	// A crew file that does not load (left broken mid-edit) sends nothing: the beat goes on.
+	err := a.readState(func(s *shift.Shift) error {
 		h, m, on = s.Crew.MorningAt()
 		done, crewFile, loc = s.State.MorningDay, s.Crew.Path, s.Crew.Location()
 
 		return nil
 	})
+	if err != nil || !on || loc == nil {
+		return
+	}
 
 	// The crew's clock, as the lessons run's: its time zone's midnight and morning, DST days too.
 	local := now.In(loc)
 	today := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
 	day := today.AddDate(0, 0, -1)
 
-	if !on || local.Before(time.Date(local.Year(), local.Month(), local.Day(), h, m, 0, 0, loc)) ||
+	if local.Before(time.Date(local.Year(), local.Month(), local.Day(), h, m, 0, 0, loc)) ||
 		done == day.Format(time.DateOnly) {
 		return
 	}
