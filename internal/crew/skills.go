@@ -15,10 +15,12 @@ type Skills struct {
 	Listing string `yaml:"listing"`
 	// DescMax cuts each skill's description at this many characters (Claude Code's default 1536).
 	DescMax int `yaml:"desc_max"`
-	// Off leaves these skills out of the list; NameOnly lists them without a description. Exact names as the
-	// list shows them (kreida, anthropic-skills:docx): Claude Code takes no pattern.
+	// Off leaves these skills out of the list; NameOnly lists them without a description; UserOnly hides them
+	// from the model while /name still runs them. Exact names as the list shows them (kreida,
+	// anthropic-skills:docx): Claude Code takes no pattern.
 	Off      []string `yaml:"off"`
 	NameOnly []string `yaml:"name_only"`
+	UserOnly []string `yaml:"user_only"`
 }
 
 // SkillList is a role's skills setting resolved: its own fields over the crew's.
@@ -27,11 +29,12 @@ type SkillList struct {
 	DescMax  int // 0: Claude Code's default
 	Off      []string
 	NameOnly []string
+	UserOnly []string
 }
 
 // Empty: nothing to pass, Claude Code's own list.
 func (s SkillList) Empty() bool {
-	return s.Listing == 0 && s.DescMax == 0 && len(s.Off) == 0 && len(s.NameOnly) == 0
+	return s.Listing == 0 && s.DescMax == 0 && len(s.Off) == 0 && len(s.NameOnly) == 0 && len(s.UserOnly) == 0
 }
 
 // Settings are the Claude Code settings it sets: skillListingMaxDescChars and skillOverrides.
@@ -44,6 +47,10 @@ func (s SkillList) Settings() map[string]any {
 	over := map[string]any{}
 	for _, n := range s.NameOnly {
 		over[n] = "name-only"
+	}
+
+	for _, n := range s.UserOnly {
+		over[n] = "user-invocable-only"
 	}
 
 	for _, n := range s.Off {
@@ -103,6 +110,10 @@ func resolveSkills(crew, own *Skills) (SkillList, error) {
 		if s.NameOnly != nil {
 			out.NameOnly = s.NameOnly
 		}
+
+		if s.UserOnly != nil {
+			out.UserOnly = s.UserOnly
+		}
 	}
 
 	seen := map[string]string{}
@@ -110,7 +121,7 @@ func resolveSkills(crew, own *Skills) (SkillList, error) {
 	for _, l := range []struct {
 		key   string
 		names []string
-	}{{"off", out.Off}, {"name_only", out.NameOnly}} {
+	}{{"off", out.Off}, {"name_only", out.NameOnly}, {"user_only", out.UserOnly}} {
 		for _, n := range l.names {
 			switch {
 			case strings.TrimSpace(n) == "":

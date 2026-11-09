@@ -85,3 +85,13 @@ func TestIndentReviewEdges(t *testing.T) {
 
 	assert.False(t, declLine("record(x)"), "a call")
 }
+
+func TestIndentCSSURL(t *testing.T) {
+	for _, u := range []string{"url(//cdn.example.com/x.png)", "url(http://example.com/x.png)", `url("//cdn.example.com/x.png")`} {
+		css := ".hero {\n  background: " + u + "; /* the old one:\n.fake {\n  color: red;\n}\n*/\n}\n\n.btn {\n  margin: 0;\n}\n"
+		assert.Equal(t, []string{"0 1-7 .hero", "0 9-11 .btn"}, names(Outline("x.css", []byte(css))), u)
+	}
+
+	scss := ".a {\n  b: url(//cdn.example.com/x.png); // a note /*\n}\n\n.c {\n  d: 0;\n}\n"
+	assert.Equal(t, []string{"0 1-3 .a", "0 5-7 .c"}, names(Outline("x.scss", []byte(scss))), "// after url() still a comment in SCSS")
+}

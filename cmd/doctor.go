@@ -390,8 +390,5 @@ func (a *app) checkCodex(c *crew.Crew, add func(name, level, format string, args
 				add("codex", "ok", "role %s: profile %s", r.Name, r.Profile)
 			}
 		}
-		if r.IsCodex() && len(c.DropTools) > 0 {
-			add("codex", "warn", "role %s: crew drop_tools applies only to Claude; configure Codex tools in codex_home", r.Name)
-		}
 	}
 }
