@@ -320,7 +320,7 @@ func TestReadNeverLoopsOrHangs(t *testing.T) {
 	write(t, dir, "app.min.js", strings.Repeat("var a=1;", 3000))
 
 	out := Read([]Target{{Path: "one.txt"}}, dir, Options{})
-	assert.Contains(t, out, "… line 1 is 13,000 characters, cut; all of it: zmina read one.txt --full")
+	assert.Contains(t, out, "1\t"+strings.Repeat("x", LineMax)+"… [+11,000 chars: zmina read one.txt:1-1 --full]\n")
 	assert.NotContains(t, out, "next: zmina read one.txt:1-", "never the same command again")
 	assert.LessOrEqual(t, len(out), DefaultMax)
 
@@ -353,3 +353,99 @@ func TestParseTargetColonBeforeHash(t *testing.T) {
 }
 
 func syscallMkfifo(path string) error { return syscall.Mkfifo(path, 0o600) }
+
+// A Markdown file of long table rows is text with headings, never "minified"; its rows are cut on display.
+func TestLongRowMarkdownIsRead(t *testing.T) {
+	dir := t.TempDir()
+
+	var b strings.Builder
+
+	b.WriteString("# Decisions\n\n")
+
+	for i := range 120 {
+		fmt.Fprintf(&b, "## D-%d\n\n| a | %s |\n\n", i, strings.Repeat("cell ", 600))
+	}
+
+	write(t, dir, "DECISIONS.md", b.String())
+	write(t, dir, "notes.prg", strings.Repeat("x := '"+strings.Repeat("y", 700)+"'\n", 30))
+	write(t, dir, "app.js", strings.Repeat("var a=1;", 3000)+"\n"+strings.Repeat("var b=2;", 3000)+"\n")
+	write(t, dir, "data.json", "["+strings.Repeat(`{"a":"`+strings.Repeat("z", 900)+`"},`, 30)+"{}]\n")
+
+	out := Read([]Target{{Path: "DECISIONS.md"}}, dir, Options{})
+	assert.Contains(t, out, "· markdown · outline (lines, size):")
+	assert.Contains(t, out, "\t## D-0\t")
+
+	out = Read([]Target{{Path: "DECISIONS.md", Heading: "D-3"}}, dir, Options{})
+	assert.Contains(t, out, "… [+1,008 chars: zmina read DECISIONS.md:17-17 --full]")
+
+	out = Read([]Target{{Path: "DECISIONS.md", From: 17, To: 17}}, dir, Options{Full: true})
+	assert.NotContains(t, out, "chars: zmina read", "--full: the row whole")
+
+	out = Read([]Target{{Path: "notes.prg"}}, dir, Options{})
+	assert.NotContains(t, out, "minified", "30 lines of 700: a legacy source, not a bundle")
+
+	assert.Contains(t, Read([]Target{{Path: "app.js"}}, dir, Options{}), "generated (minified: long lines)")
+	assert.Contains(t, Read([]Target{{Path: "data.json"}}, dir, Options{}), "generated (minified: long lines)")
+}
+
+// Legacy sources in Windows-1251 read, outline and grep as Cyrillic, not mojibake.
+func TestCP1251(t *testing.T) {
+	cp := func(s string) string {
+		var out []byte
+
+		for _, r := range s {
+			switch {
+			case r < 0x80:
+				out = append(out, byte(r))
+			case r >= 0x0410 && r <= 0x044F:
+				out = append(out, byte(0xC0+r-0x0410))
+			case r == 'Ё':
+				out = append(out, 0xA8)
+			case r == 'ё':
+				out = append(out, 0xB8)
+			case r == '№':
+				out = append(out, 0xB9)
+			}
+		}
+
+		return string(out)
+	}
+
+	dir := t.TempDir()
+	write(t, dir, "costgroup.prg", cp("* Группы затрат\n\nFUNCTION Main()\n   && Резерв\n   ? \"Ёлка №1\"\nRETURN\n"))
+	write(t, dir, "guide.md", cp("# Руководство\n\n## Установка\n\nЗапустить.\n"))
+
+	got, enc := Decode([]byte(cp("&& Резерв")))
+	assert.Equal(t, "&& Резерв", string(got))
+	assert.Equal(t, "cp1251", enc)
+
+	got, enc = Decode([]byte("plain ascii and UTF-8: Резерв"))
+	assert.Equal(t, "plain ascii and UTF-8: Резерв", string(got))
+	assert.Empty(t, enc)
+
+	got, enc = Decode([]byte{'c', 'a', 'f', 0xE9, ' ', 0x80, 0x81, 0x82, 0x83})
+	assert.Equal(t, "caf\uFFFD \uFFFD", string(got), "mostly not letters: not taken for cp1251 (a bad run is one U+FFFD)")
+	assert.Empty(t, enc)
+
+	got, enc = Decode(append([]byte("Привет, это обычный текст в UTF-8.\n"), 0xFF))
+	assert.Equal(t, "Привет, это обычный текст в UTF-8.\n\uFFFD", string(got), "UTF-8 with a stray bad byte stays UTF-8")
+	assert.Empty(t, enc)
+
+	got, enc = Decode([]byte("Caf\xe9 cr\xe8me br\xfbl\xe9e \xe0 la fran\xe7aise"))
+	assert.Empty(t, enc, "Latin-1 accents sit alone between ASCII: not cp1251")
+	assert.Equal(t, "Caf\uFFFD cr\uFFFDme br\uFFFDl\uFFFDe \uFFFD la fran\uFFFDaise", string(got))
+
+	got, enc = Decode([]byte(cp("Резерв на складе в цехе и у поставщика")))
+	assert.Equal(t, "cp1251", enc, "one-letter words are few next to the runs of longer ones")
+	assert.Equal(t, "Резерв на складе в цехе и у поставщика", string(got))
+
+	out := Read([]Target{{Path: "costgroup.prg", From: 4, To: 5}}, dir, Options{})
+	assert.Contains(t, out, "· cp1251 · 4-5\n4\t   && Резерв\n5\t   ? \"Ёлка №1\"\n")
+
+	out = Read([]Target{{Path: "guide.md", Heading: "Установка"}}, dir, Options{})
+	assert.Contains(t, out, "3-5 ## Установка\n3\t## Установка", "the outline of a cp1251 file is readable")
+
+	out, err := Grep("Резерв", nil, dir, GrepOptions{})
+	require.NoError(t, err)
+	assert.Contains(t, out, "costgroup.prg (1)\n    4: && Резерв\n")
+}
