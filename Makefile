@@ -1,4 +1,4 @@
-.PHONY: build install uninstall test vet fmt clean public-check
+.PHONY: build install uninstall test vet fmt fmt-check clean public-check
 
 BIN := zmina
 PREFIX ?= $(HOME)/.local
@@ -20,8 +20,12 @@ install: build
 uninstall:
 	rm -f $(PREFIX)/bin/$(BIN)
 
-test: public-check
+test: public-check fmt-check
 	go test ./...
+
+# CI fails on unformatted files; so does make test, before a push.
+fmt-check:
+	@out=$$(gofmt -l .); if [ -n "$$out" ]; then echo "gofmt needed (make fmt):"; echo "$$out"; exit 1; fi
 
 # Unpushed commits must not carry this machine's crew names, node and ssh host names, live task ids, IPs or
 # private paths into the public repository (tools/publiccheck).
