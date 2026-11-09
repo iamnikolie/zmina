@@ -460,8 +460,9 @@ const ReadRule = "[zmina] Read files lean: zmina read <path> gives a small file 
 	"budget."
 
 // ReadGuardRule follows ReadRule for a Claude role, whose read guard runs as a hook.
-const ReadGuardRule = "A cat, sed -n, head or tail that would print over 12k characters runs as zmina read, and a " +
-	"Read of such a file without offset/limit answers with its outline; `command cat <file>` prints it raw."
+const ReadGuardRule = "Under your working directory, a cat, sed -n, head or tail that would print over 12k characters " +
+	"runs as zmina read, and a Read of such a Go, Markdown, YAML or JSON file without offset/limit answers with its " +
+	"outline; `command cat <file>` prints it raw."
 
 // BootText is a role's first message: its boot, and for the dispatcher the rule about other crews' lines. It names
 // the tag of the role's start, and goes only into the command that starts it.
@@ -483,14 +484,6 @@ func (s *Shift) bootText(r *crew.Role, tagged bool) string {
 	if r.Name != "" && r.Name == s.Crew.Dispatcher {
 		text = strings.TrimSpace(text + "\n\n" + RemoteRule)
 	}
-	if s.Crew.ReadGuardFor(r) {
-		rule := ReadRule
-		if !r.IsCodex() && s.inbound(r) && s.Self != "" {
-			rule += " " + ReadGuardRule
-		}
-
-		text = strings.TrimSpace(text + "\n\n" + rule)
-	}
 	if text != "" {
 		rules := RoleRules
 		if r.IsCodex() {
@@ -498,6 +491,14 @@ func (s *Shift) bootText(r *crew.Role, tagged bool) string {
 		}
 
 		text = strings.TrimSpace(text + "\n\n" + rules)
+	}
+	if s.Crew.ReadGuardFor(r) {
+		rule := ReadRule
+		if !r.IsCodex() && s.inbound(r) && s.Self != "" {
+			rule += " " + ReadGuardRule
+		}
+
+		text = strings.TrimSpace(text + "\n\n" + rule)
 	}
 	// A retired crew tells every role; a crew that stood still tells whoever reads its ledger first.
 	if n := s.Standing(); n != "" && (s.Crew.IsRetired() || r.Name == s.Crew.Dispatcher) {

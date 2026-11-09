@@ -133,8 +133,8 @@ func Grep(pattern string, roots []string, dir string, o GrepOptions) (string, er
 		p := abs(name, dir)
 
 		info, err := os.Stat(p)
-		if err != nil || info.Size() > grepMaxFile {
-			continue
+		if err != nil || !info.Mode().IsRegular() || info.Size() > grepMaxFile {
+			continue // a FIFO in the tree would block a read forever
 		}
 
 		src, err := os.ReadFile(p)

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // DefaultMax is a call's output cap in characters: about 3k tokens, near what one more turn costs to re-read the
@@ -42,10 +43,6 @@ func ParseTarget(arg, dir string) Target {
 		return Target{Path: arg}
 	}
 
-	if i := strings.Index(arg, "#"); i > 0 && exists(abs(arg[:i], dir)) {
-		return Target{Path: arg[:i], Heading: arg[i+1:]}
-	}
-
 	if i := strings.LastIndex(arg, ":"); i > 0 && exists(abs(arg[:i], dir)) {
 		t := Target{Path: arg[:i]}
 
@@ -69,6 +66,10 @@ func ParseTarget(arg, dir string) Target {
 		t.Symbol = rest
 
 		return t
+	}
+
+	if i := strings.Index(arg, "#"); i > 0 && exists(abs(arg[:i], dir)) {
+		return Target{Path: arg[:i], Heading: arg[i+1:]}
 	}
 
 	return Target{Path: arg}
@@ -149,8 +150,25 @@ type File struct {
 	Kind  string   // "", "binary", "generated (…)"
 }
 
-// Load reads a file and tells what kind it is.
+// MaxFile is the biggest file zmina read loads: a bigger one (a log of gigabytes) is read in part with sed or tail.
+const MaxFile = 8 << 20
+
+// Load reads a regular file of at most MaxFile bytes and tells what kind it is. A device, a FIFO or a bigger file is
+// refused before a byte is read: /dev/zero would never end.
 func Load(path string) (*File, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("not a regular file")
+	}
+
+	if info.Size() > MaxFile {
+		return nil, fmt.Errorf("%.1f MB, over zmina read's %d MB: read a part with sed -n or tail", float64(info.Size())/(1<<20), MaxFile>>20)
+	}
+
 	src, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -225,7 +243,13 @@ func readOne(b *strings.Builder, t Target, dir string, o Options, left int) {
 	whole := t.Symbol == "" && t.Heading == "" && t.From == 0
 
 	if f.Kind != "" && whole && !o.Full {
-		fmt.Fprintf(b, "%s · %s, not shown; a range (%s:1-80) or --full reads it\n", header, f.Kind, t.Path)
+		how := "a range (" + t.Path + ":1-80) or --full reads it"
+		if strings.Contains(f.Kind, "minified") {
+			how = "--full reads it"
+		}
+
+		fmt.Fprintf(b, "%s · %s, not shown; %s\n", header, f.Kind, how)
+
 		return
 	}
 
@@ -268,6 +292,15 @@ func writeLines(b *strings.Builder, f *File, path string, from, to, left int) {
 
 	for n := from; n <= to && n <= len(f.Lines); n++ {
 		line := f.Lines[n-1]
+		if n == from && len(line)+8 > left-120 {
+			// One line longer than the room: a pointer to the same line again would loop.
+			room := max(left-240, 80)
+			fmt.Fprintf(b, "%d\t%s…\n… line %d is %s characters, cut; all of it: zmina read %s --full\n", n,
+				clipBytes(line, room), n, thousands(len(line)), path)
+
+			return
+		}
+
 		if b.Len()-start+len(line)+8 > left-120 {
 			fmt.Fprintf(b, "… cut at line %d of %s; next: zmina read %s:%d-%s\n", n-1, thousands(len(f.Lines)), path, n,
 				endOf(to, len(f.Lines)))
@@ -282,6 +315,19 @@ func writeLines(b *strings.Builder, f *File, path string, from, to, left int) {
 	}
 }
 
+// clipBytes cuts s to at most n bytes on a rune boundary.
+func clipBytes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+
+	return s[:n]
+}
+
 func endOf(to, lines int) string {
 	if to >= lines {
 		return ""
@@ -293,7 +339,11 @@ func endOf(to, lines int) string {
 // writeOutline writes the outline with each entry's size, then how to read a piece. A file with no outline gets its
 // first lines instead.
 func writeOutline(b *strings.Builder, f *File, path, header string, left int) {
-	syms := Outline(f.Path, f.Src)
+	writeSyms(b, f, Outline(f.Path, f.Src), path, header, left)
+}
+
+// writeSyms writes an outline already made; with none, the file's first lines.
+func writeSyms(b *strings.Builder, f *File, syms []Symbol, path, header string, left int) {
 	if len(syms) == 0 {
 		fmt.Fprintf(b, "%s · no outline for this type; its start:\n", header)
 		writeLines(b, f, path, 1, len(f.Lines), left)

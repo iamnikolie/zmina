@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -226,9 +227,12 @@ func TestGuardBash(t *testing.T) {
 	dir := t.TempDir()
 	big := write(t, dir, "big.go", goSrc+strings.Repeat("// filler line for size\n", 800))
 	write(t, dir, "small.go", goSrc)
+	write(t, dir, ".hidden/big.go", goSrc+strings.Repeat("// filler line for size\n", 800))
+	out := write(t, t.TempDir(), "big.go", goSrc+strings.Repeat("// filler line for size\n", 800))
 
 	bash := func(cmd string) Decision {
-		return Guard(HookInput{Cwd: dir, ToolName: "Bash", ToolInput: map[string]any{"command": cmd}}, "/opt/zmina")
+		return Guard(HookInput{Cwd: dir, PermissionMode: "bypassPermissions", ToolName: "Bash",
+			ToolInput: map[string]any{"command": cmd}}, "/opt/zmina")
 	}
 
 	d := bash("cat big.go")
@@ -238,36 +242,108 @@ func TestGuardBash(t *testing.T) {
 
 	d = bash("cd " + dir + " && sed -n '1,700p' big.go")
 	assert.Equal(t, "cd "+dir+" && /opt/zmina read --via 'sed -n 1,700p big.go' big.go:1-700", d.Command)
+	assert.Equal(t, big, d.Path)
+
+	d = bash("cat " + big)
+	assert.Equal(t, big, d.Path, "an absolute target")
 
 	assert.True(t, strings.HasSuffix(bash("tail -n 800 big.go").Command, "' big.go:26-825"))
 	assert.True(t, strings.HasSuffix(bash("head -700 big.go").Command, "' big.go:1-700"))
 
 	for _, pass := range []string{"cat small.go", "cat big.go | grep x", "cat big.go > /tmp/x", "sed -n 1,5p big.go",
 		"head big.go", "cat $F", "command cat big.go", "cat nope.go", "cat -A big.go", "cat *.go", "sed -i s/a/b/ big.go",
-		"cat big.go; ls", "tail -f big.go"} {
+		"cat big.go; ls", "tail -f big.go", "cat .hidden/big.go", "cat " + out, "head -n 5 /dev/zero",
+		"head -n 20 /dev/urandom"} {
 		assert.Equal(t, Decision{}, bash(pass), pass)
 	}
 
-	assert.Equal(t, Decision{}, Guard(HookInput{Cwd: dir, ToolName: "Bash", ToolInput: map[string]any{"command": "cat big.go"}}, ""),
-		"no executable known: nothing to rewrite to")
+	assert.Equal(t, Decision{}, Guard(HookInput{Cwd: dir, PermissionMode: "bypassPermissions", ToolName: "Bash",
+		ToolInput: map[string]any{"command": "cat big.go"}}, ""), "no executable known: nothing to rewrite to")
+
+	for _, mode := range []string{"", "default", "acceptEdits", "plan", "auto"} {
+		assert.Equal(t, Decision{}, Guard(HookInput{Cwd: dir, PermissionMode: mode, ToolName: "Bash",
+			ToolInput: map[string]any{"command": "cat big.go"}}, "/opt/zmina"), "a rewritten command would wait for approval: "+mode)
+	}
 }
 
 func TestGuardRead(t *testing.T) {
 	dir := t.TempDir()
-	big := write(t, dir, "big.go", goSrc+strings.Repeat("// filler line for size\n", 800))
+	filler := strings.Repeat("// filler line for size\n", 800)
+	big := write(t, dir, "big.go", goSrc+filler)
 	small := write(t, dir, "small.go", goSrc)
 	img := write(t, dir, "pic.png", strings.Repeat("x", 20000))
+	notes := write(t, dir, "notes.txt", strings.Repeat("SECRET_TOKEN=abc\n", 1000))
+	env := write(t, dir, ".config/app.yaml", "a: 1\n"+strings.Repeat("# filler\n", 3000))
+	log := write(t, dir, "app.log", strings.Repeat("a log line\n", 3000))
+	outside := write(t, t.TempDir(), "big.go", goSrc+filler)
 
-	read := func(in map[string]any) Decision { return Guard(HookInput{ToolName: "Read", ToolInput: in}, "/opt/zmina") }
+	read := func(in map[string]any) Decision {
+		return Guard(HookInput{Cwd: dir, ToolName: "Read", ToolInput: in}, "/opt/zmina")
+	}
 
 	d := read(map[string]any{"file_path": big})
 	assert.Equal(t, "outline", d.Kind)
 	assert.Contains(t, d.Reason, "read-guard: this file is 19.5k characters, so here is its outline")
 	assert.Contains(t, d.Reason, "18-23\tfunc (s *Shop) Open(day string) error")
+	assert.NotContains(t, d.Reason, "filler line", "names and ranges, never the file's lines")
 
-	assert.Equal(t, Decision{}, read(map[string]any{"file_path": big, "limit": 50.0}))
-	assert.Equal(t, Decision{}, read(map[string]any{"file_path": big, "offset": 10.0}))
-	assert.Equal(t, Decision{}, read(map[string]any{"file_path": small}))
-	assert.Equal(t, Decision{}, read(map[string]any{"file_path": img}), "Read shows images itself")
-	assert.Equal(t, Decision{}, Guard(HookInput{ToolName: "Edit", ToolInput: map[string]any{"file_path": big}}, "/opt/zmina"))
+	assert.Equal(t, "outline", read(map[string]any{"file_path": "big.go"}).Kind, "relative to the session's directory")
+
+	for name, in := range map[string]map[string]any{
+		"limit":                  {"file_path": big, "limit": 50.0},
+		"offset":                 {"file_path": big, "offset": 10.0},
+		"small":                  {"file_path": small},
+		"image":                  {"file_path": img},
+		"a .txt with no outline": {"file_path": notes},
+		"hidden":                 {"file_path": env},
+		"no outline type":        {"file_path": log},
+		"outside the cwd":        {"file_path": outside},
+		"a device":               {"file_path": "/dev/zero"},
+	} {
+		assert.Equal(t, Decision{}, read(in), name)
+	}
+
+	assert.Equal(t, Decision{}, Guard(HookInput{ToolName: "Read", ToolInput: map[string]any{"file_path": big}}, "/opt/zmina"),
+		"no cwd: not sure what is the session's")
+	assert.Equal(t, Decision{}, Guard(HookInput{Cwd: dir, ToolName: "Edit", ToolInput: map[string]any{"file_path": big}}, "/opt/zmina"))
 }
+
+func TestReadNeverLoopsOrHangs(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "one.txt", strings.Repeat("x", 13000)+"\n"+strings.Repeat(strings.Repeat("y", 99)+"\n", 100))
+	write(t, dir, "app.min.js", strings.Repeat("var a=1;", 3000))
+
+	out := Read([]Target{{Path: "one.txt"}}, dir, Options{})
+	assert.Contains(t, out, "… line 1 is 13,000 characters, cut; all of it: zmina read one.txt --full")
+	assert.NotContains(t, out, "next: zmina read one.txt:1-", "never the same command again")
+	assert.LessOrEqual(t, len(out), DefaultMax)
+
+	out = Read([]Target{{Path: "one.txt", From: 1}}, dir, Options{})
+	assert.Contains(t, out, "--full")
+
+	out = Read([]Target{{Path: "app.min.js"}}, dir, Options{})
+	assert.Contains(t, out, "generated (lock, minified or generated file), not shown; --full reads it")
+
+	out = Read([]Target{{Path: "/dev/zero"}}, dir, Options{})
+	assert.Contains(t, out, "not a regular file")
+
+	require.NoError(t, syscallMkfifo(filepath.Join(dir, "pipe.txt")))
+
+	got, err := Grep("x", nil, dir, GrepOptions{})
+	require.NoError(t, err, "a FIFO in the tree is skipped, not read")
+	assert.Contains(t, got, "one.txt (1)")
+}
+
+func TestParseTargetColonBeforeHash(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "x", "x")
+	write(t, dir, "x#y.md", "# Y\n")
+
+	assert.Equal(t, Target{Path: "x#y.md", From: 1, To: 5}, ParseTarget("x#y.md:1-5", dir), "the guard's sed target")
+
+	only := t.TempDir()
+	write(t, only, "x", "x")
+	assert.Equal(t, Target{Path: "x", Heading: "y.md"}, ParseTarget("x#y.md", only))
+}
+
+func syscallMkfifo(path string) error { return syscall.Mkfifo(path, 0o600) }

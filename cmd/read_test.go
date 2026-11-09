@@ -60,14 +60,14 @@ func TestReadGuardCommand(t *testing.T) {
 	big := filepath.Join(dir, "big.md")
 	require.NoError(t, os.WriteFile(big, []byte("# Big\n\n"+strings.Repeat("words words words words\n", 1000)), 0o644))
 
-	guard := func(in map[string]any, args ...string) string {
+	guard := func(in map[string]any) string {
 		raw, _ := json.Marshal(in)
 
 		var out, errb bytes.Buffer
 
 		root := NewRoot(&out, &errb)
 		root.SetIn(bytes.NewReader(raw))
-		root.SetArgs(append([]string{"--crew", crewFile, "_read-guard", "--role", "dev"}, args...))
+		root.SetArgs([]string{"--crew", crewFile, "_read-guard", "--role", "dev"})
 		require.NoError(t, root.Execute())
 		assert.Empty(t, errb.String())
 
@@ -78,7 +78,7 @@ func TestReadGuardCommand(t *testing.T) {
 		Spec map[string]any `json:"hookSpecificOutput"`
 	}
 
-	out := guard(map[string]any{"session_id": "s-2", "cwd": dir, "tool_name": "Bash",
+	out := guard(map[string]any{"session_id": "s-2", "cwd": dir, "permission_mode": "bypassPermissions", "tool_name": "Bash",
 		"tool_input": map[string]any{"command": "cat big.md", "description": "show it", "timeout": 5000.0}})
 	require.NoError(t, json.Unmarshal([]byte(out), &got))
 	input := got.Spec["updatedInput"].(map[string]any)
@@ -87,10 +87,8 @@ func TestReadGuardCommand(t *testing.T) {
 	assert.Contains(t, input["command"], " read --via 'cat big.md' big.md")
 	assert.NotContains(t, got.Spec, "permissionDecision", "the usual permission rules judge the new command")
 
-	got.Spec = nil
-	out = guard(map[string]any{"cwd": dir, "tool_name": "shell", "tool_input": map[string]any{"command": "cat big.md"}}, "--codex")
-	require.NoError(t, json.Unmarshal([]byte(out), &got))
-	assert.Equal(t, "allow", got.Spec["permissionDecision"], "Codex takes updatedInput only with allow")
+	assert.Empty(t, guard(map[string]any{"cwd": dir, "permission_mode": "default", "tool_name": "Bash",
+		"tool_input": map[string]any{"command": "cat big.md"}}), "a rewritten cat would wait for approval")
 
 	got.Spec = nil
 	out = guard(map[string]any{"cwd": dir, "tool_name": "Read", "tool_input": map[string]any{"file_path": big}})
@@ -110,7 +108,7 @@ func TestReadGuardCommand(t *testing.T) {
 
 	raw, err := os.ReadFile(filepath.Join(dir, "reads.jsonl"))
 	require.NoError(t, err)
-	assert.Equal(t, 3, strings.Count(string(raw), "\n"), "each step the guard took")
+	assert.Equal(t, 2, strings.Count(string(raw), "\n"), "each step the guard took")
 	assert.Contains(t, string(raw), `"kind":"guard-rewrite","what":"cat"`)
 	assert.Contains(t, string(raw), `"session":"s-2"`)
 }

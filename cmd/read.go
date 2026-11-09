@@ -136,10 +136,7 @@ key they sit in; 5 a file, 4k characters in all, then how many were left out and
 // readGuardCommand is the PreToolUse hook of a role with read_guard (roleSettings): it reads the hook's JSON and
 // answers only when it steps in. Any error, any doubt: no output, exit 0, the call goes as typed.
 func (a *app) readGuardCommand() *cobra.Command {
-	var (
-		role  string
-		codex bool
-	)
+	var role string
 
 	c := &cobra.Command{
 		Use:           "_read-guard",
@@ -148,6 +145,9 @@ func (a *app) readGuardCommand() *cobra.Command {
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			// A Go panic exits 2, which a PreToolUse hook reads as "block this call": the guard fails open instead.
+			defer func() { _ = recover() }()
+
 			raw, err := io.ReadAll(io.LimitReader(cmd.InOrStdin(), 4<<20))
 			if err != nil {
 				return nil
@@ -163,7 +163,7 @@ func (a *app) readGuardCommand() *cobra.Command {
 				return nil
 			}
 
-			out := guardOutput(in, d, codex)
+			out := guardOutput(in, d)
 			if out == nil {
 				return nil
 			}
@@ -178,15 +178,14 @@ func (a *app) readGuardCommand() *cobra.Command {
 	}
 
 	c.Flags().StringVar(&role, "role", "", "the role the hook runs for")
-	c.Flags().BoolVar(&codex, "codex", false, "answer the way Codex reads a hook (allow with updatedInput)")
 
 	return c
 }
 
 // guardOutput is the hook's answer. A rewrite replaces the whole tool input and leaves the permission decision to
-// the usual rules, which Claude Code applies to the new command; Codex wants allow with it. An outline is a deny
-// whose reason — the outline — is what the model reads.
-func guardOutput(in lean.HookInput, d lean.Decision, codex bool) []byte {
+// the usual rules, which Claude Code applies to the new command. An outline is a deny whose reason — the outline —
+// is what the model reads.
+func guardOutput(in lean.HookInput, d lean.Decision) []byte {
 	spec := map[string]any{"hookEventName": "PreToolUse"}
 
 	switch d.Kind {
@@ -198,10 +197,6 @@ func guardOutput(in lean.HookInput, d lean.Decision, codex bool) []byte {
 
 		input["command"] = d.Command
 		spec["updatedInput"] = input
-
-		if codex {
-			spec["permissionDecision"] = "allow"
-		}
 	case "outline":
 		spec["permissionDecision"] = "deny"
 		spec["permissionDecisionReason"] = d.Reason
