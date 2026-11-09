@@ -1155,7 +1155,8 @@ characters — below that a whole read is cheaper than an outline and a second t
   one with no outline, goes to Read as asked.
 
 Both only for regular files of at most 8 MB under the session's working directory — or under the crew's
-`worktrees/` or an active task's worktree, where a role works after `cd <worktree> &&` or names a file by its path —
+`worktrees/` or an active task's worktree, where a role works after `cd <worktree> &&` or names a file by its path
+(a Read there only in a session that bypasses permissions: elsewhere Claude Code would ask first) —
 with no hidden part in their path below that directory (`.env`, `.git/`, `.ssh/`), judged by where the file really is
 (links resolved: one out of the worktree is not the guard's): the hook runs before Claude Code's permission rules, so what those usually guard
 is left to them. Any error, panic or doubt (unparsable input, a device, a FIFO): no output, exit 0, the call goes as

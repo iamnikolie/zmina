@@ -37,7 +37,8 @@ type rate struct {
 }
 
 // IsBulk counts a session's call in the rate file (one small JSON object for the crew) and says whether it is past
-// BulkPerMinute in its minute. Sessions not seen for an hour are dropped from the file. A file that cannot be read or
+// BulkPerMinute in its minute. The read-modify-write takes no lock and writers share one temporary name, so hooks
+// running at once can lose a count: good enough for a measurement mark, nothing more. Sessions not seen for an hour are dropped from the file. A file that cannot be read or
 // written counts nothing: the meter never fails a read.
 func IsBulk(path, session string, now time.Time) bool {
 	if path == "" || session == "" {

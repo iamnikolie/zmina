@@ -49,6 +49,12 @@ var noOutlineExt = map[string]bool{".png": true, ".jpg": true, ".jpeg": true, ".
 func Guard(in HookInput, self string, roots func() []string) Decision {
 	switch in.ToolName {
 	case "Read":
+		// Outside the session's directory Claude Code would ask before a Read, or a deny rule would stop it: only a
+		// session that bypasses permissions gets an outline of a worktree's file.
+		if in.PermissionMode != "bypassPermissions" {
+			roots = nil
+		}
+
 		return guardRead(in, roots)
 	case "Bash":
 		if in.PermissionMode != "bypassPermissions" {
@@ -75,12 +81,33 @@ func ownFile(p, session string, roots func() []string) bool {
 	}
 
 	for _, r := range roots() {
-		if r != "" && guardable(p, r) {
+		if saneRoot(r) && guardable(p, r) {
 			return true
 		}
 	}
 
 	return false
+}
+
+// saneRoot: a root is a directory of its own, never "/", the home directory or one of its parents (a task record
+// that named one would make every file the session's).
+func saneRoot(r string) bool {
+	if r == "" || !filepath.IsAbs(r) {
+		return false
+	}
+
+	r = filepath.Clean(r)
+	if r == "/" {
+		return false
+	}
+
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if rel, err := filepath.Rel(r, filepath.Clean(home)); err == nil && (rel == "." || !strings.HasPrefix(rel, "..")) {
+			return false
+		}
+	}
+
+	return true
 }
 
 // guardRead answers a Read of a big file without offset or limit with its outline. The hook runs before Claude Code's

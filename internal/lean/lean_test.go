@@ -493,8 +493,26 @@ func TestGuardTaskWorktree(t *testing.T) {
 		assert.Equal(t, Decision{}, bash(cmd), name)
 	}
 
-	read := Guard(HookInput{Cwd: session, ToolName: "Read", ToolInput: map[string]any{"file_path": big}}, "/opt/zmina", rootsOf)
+	read := Guard(HookInput{Cwd: session, PermissionMode: "bypassPermissions", ToolName: "Read",
+		ToolInput: map[string]any{"file_path": big}}, "/opt/zmina", rootsOf)
 	assert.Equal(t, "outline", read.Kind, "a Read into the worktree is answered with the outline")
+
+	// Elsewhere Claude Code would ask before reading outside the session's directory, or a deny rule would stop it:
+	// no outline goes out past that.
+	for _, mode := range []string{"default", "acceptEdits", "plan", ""} {
+		assert.Equal(t, Decision{}, Guard(HookInput{Cwd: session, PermissionMode: mode, ToolName: "Read",
+			ToolInput: map[string]any{"file_path": big}}, "/opt/zmina", rootsOf), mode)
+	}
+
+	// A root that is /, the home directory or above it is no root.
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	for _, r := range []string{"/", home, filepath.Dir(home), "", "relative/dir"} {
+		assert.False(t, saneRoot(r), r)
+	}
+
+	assert.True(t, saneRoot(roots))
 
 	before := asked
 	write(t, session, "big.go", filler)
