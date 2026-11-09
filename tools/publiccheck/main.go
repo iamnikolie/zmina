@@ -9,6 +9,9 @@
 //   - ssh hosts: the Host lines of ~/.ssh/config, wildcards left out;
 //   - live task ids: T-<n> of every ledger under ~/.zmina (n >= 10), unless the base tree already has that id;
 //   - extra patterns, one extended regular expression a line: $ZMINA_PUBLIC_DENYLIST, else ~/.zmina/public-denylist;
+//   - the push denylist the pre-push hook reads, one word or phrase a line, matched as whole words in any case:
+//     $ZMINA_PUSH_DENYLIST, else ~/.config/zmina-push-denylist — so a name the hook would refuse is found before the
+//     history is tagged, not at the push;
 //   - always: IPv4 addresses outside loopback and the documentation ranges, paths under /Users/<name> or
 //     /home/<name> other than the neutral alex.
 //
@@ -37,6 +40,9 @@ type rule struct {
 	// lower: a short word (three letters at most) with no capital, so its all-caps spelling is another word, an
 	// abbreviation (host "gb", the unit "GB"); a longer name in capitals is still the name.
 	lower bool
+	// glued: a short word (three letters at most) joined by a hyphen to a letter or digit before it is part of a
+	// longer word, not the name (n-th, 4-th); a hyphen after it still counts (a crew "ab" in "ab-dev" is named).
+	glued bool
 }
 
 var (
@@ -178,7 +184,7 @@ func banned(home, base string) ([]rule, error) {
 
 	for _, w := range keys {
 		re := regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9_-])(` + regexp.QuoteMeta(w) + `)(?:$|[^A-Za-z0-9_])`)
-		rules = append(rules, rule{words[w] + " " + w, re, len(w) <= 3 && w == strings.ToLower(w) && w != strings.ToUpper(w)})
+		rules = append(rules, rule{what: words[w] + " " + w, re: re, lower: len(w) <= 3 && w == strings.ToLower(w) && w != strings.ToUpper(w)})
 	}
 
 	deny := os.Getenv("ZMINA_PUBLIC_DENYLIST")
@@ -199,6 +205,23 @@ func banned(home, base string) ([]rule, error) {
 			}
 
 			rules = append(rules, rule{what: "denylist pattern", re: re})
+		}
+	}
+
+	push := os.Getenv("ZMINA_PUSH_DENYLIST")
+	if push == "" {
+		push = filepath.Join(home, ".config", "zmina-push-denylist")
+	}
+
+	if raw, err := os.ReadFile(push); err == nil {
+		for _, line := range strings.Split(string(raw), "\n") {
+			w := strings.TrimSpace(line)
+			if w == "" {
+				continue
+			}
+
+			re := regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9_])(` + regexp.QuoteMeta(w) + `)(?:$|[^A-Za-z0-9_])`)
+			rules = append(rules, rule{what: "push denylist word " + w, re: re, glued: len(w) <= 3})
 		}
 	}
 
@@ -300,9 +323,10 @@ func sshWord(in []rune, i int) (string, int, bool) {
 var neutral = map[string]bool{"alex": true, "acme": true, "box": true, "box-ops": true, "ops": true, "laptop": true,
 	"dev": true, "web": true, "localhost": true, "github.com": true, "gitlab.com": true}
 
-// matches says whether line names the rule's word; for a short lowercase word its all-caps spelling does not count.
+// matches says whether line names the rule's word; for a short lowercase word its all-caps spelling does not count,
+// and a glued short word joined to the word before it by a hyphen is part of that word.
 func (r rule) matches(line string) bool {
-	if !r.lower {
+	if !r.lower && !r.glued {
 		return r.re.MatchString(line)
 	}
 
@@ -313,14 +337,24 @@ func (r rule) matches(line string) bool {
 			return false
 		}
 
-		if w := line[pos+m[2] : pos+m[3]]; w != strings.ToUpper(w) {
+		start, end := pos+m[2], pos+m[3]
+		w := line[start:end]
+
+		switch {
+		case r.lower && w == strings.ToUpper(w):
+		case r.glued && start >= 2 && line[start-1] == '-' && alnum(line[start-2]):
+		default:
 			return true
 		}
 
-		pos += m[3]
+		pos = end
 	}
 
 	return false
+}
+
+func alnum(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
 }
 
 // scan checks each unpushed commit's message and added lines.
