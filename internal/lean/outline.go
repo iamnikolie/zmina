@@ -10,6 +10,8 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -27,41 +29,82 @@ type Symbol struct {
 	Label string
 }
 
-// Lang names the outliner for a path: go, markdown, yaml, json, or "" (none: ranges and the cap only).
+// outliner reads one type of file into its outline, or writes its summary (a table: what a row holds, how many, the
+// first). A file of any other type is outlined by its indentation (indentOutline); one without blocks shows its
+// start, and ranges and the cap work on every file.
+type outliner struct {
+	lang  string
+	exts  []string
+	parse func(src []byte, lines int) []Symbol
+	// summary, for a type without an outline, is what zmina read shows of a big file instead. It shows the file's
+	// rows, so the read guard never answers with it.
+	summary func(b *strings.Builder, f *File, path, header string, left int)
+	// hint is how the outline footer names a piece of this type (after the path).
+	hint string
+}
+
+// whole adapts an outliner that needs no line count.
+func whole(parse func(src []byte) []Symbol) func(src []byte, lines int) []Symbol {
+	return func(src []byte, _ int) []Symbol { return parse(src) }
+}
+
+var outliners = []outliner{
+	{lang: "go", exts: []string{".go"}, parse: whole(goOutline), hint: ":Name (Func, Type.Method)"},
+	{lang: "markdown", exts: []string{".md", ".markdown", ".mdx", ".txt"}, parse: whole(mdOutline), hint: "#Heading"},
+	{lang: "yaml", exts: []string{".yaml", ".yml"}, parse: yamlOutline, hint: ":key (a.b below the top)"},
+	{lang: "json", exts: []string{".json"}, parse: jsonOutline, hint: ":key (a.b below the top)"},
+	{lang: "foxpro", exts: []string{".prg"}, parse: whole(foxOutline), hint: ":Name (PROCEDURE, FUNCTION, Class.Method)"},
+	{lang: "sql", exts: []string{".sql", ".pgsql", ".psql", ".mysql", ".ddl"}, parse: whole(sqlOutline),
+		hint: ":name (every statement on a table or object; Up, Down)"},
+	{lang: "csv", exts: []string{".csv"}, summary: writeCSVSummary},
+	{lang: "tsv", exts: []string{".tsv", ".tab"}, summary: writeCSVSummary},
+	{lang: "jsonl", exts: []string{".jsonl", ".ndjson"}, summary: writeJSONLSummary},
+}
+
+func outlinerFor(path string) *outliner {
+	ext := strings.ToLower(filepath.Ext(path))
+	for i := range outliners {
+		if slices.Contains(outliners[i].exts, ext) {
+			return &outliners[i]
+		}
+	}
+
+	return nil
+}
+
+// Lang names the outliner for a path: go, markdown, yaml, json, foxpro, sql, csv, tsv, jsonl, or "" (outlined by
+// indentation).
 func Lang(path string) string {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".go":
-		return "go"
-	case ".md", ".markdown", ".mdx", ".txt":
-		return "markdown"
-	case ".yaml", ".yml":
-		return "yaml"
-	case ".json":
-		return "json"
+	if o := outlinerFor(path); o != nil {
+		return o.lang
 	}
 
 	return ""
 }
 
-// Outline is the file's outline by its language; nil when it has none or cannot be parsed.
+// Outline is the file's outline by its type, by indentation for a type without an outliner of its own; nil when it
+// has none or cannot be parsed. A text file without headings that holds FoxPro blocks (a form exported as text) gets
+// the FoxPro outline.
 func Outline(path string, src []byte) []Symbol {
-	lines := countLines(src)
+	o := outlinerFor(path)
+	if o == nil {
+		return indentOutline(src)
+	}
 
-	var out []Symbol
+	if o.parse == nil {
+		return nil
+	}
 
-	switch Lang(path) {
-	case "go":
-		out = goOutline(src)
-	case "markdown":
-		out = mdOutline(src)
-	case "yaml":
-		out = yamlOutline(src, lines)
-	case "json":
-		out = jsonOutline(src, lines)
+	out := o.parse(src, countLines(src))
+	if len(out) == 0 && o.lang == "markdown" && foxEnds.Match(src) {
+		out = foxOutline(src)
 	}
 
 	return out
 }
+
+// foxEnds finds a line that ends a FoxPro block: the sign that a text file is FoxPro code.
+var foxEnds = regexp.MustCompile(`(?im)^\s*(ENDPROC|ENDFUNC|ENDDEFINE)\s*$`)
 
 func countLines(src []byte) int {
 	n := bytes.Count(src, []byte("\n"))

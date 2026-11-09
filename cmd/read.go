@@ -28,9 +28,12 @@ func (a *app) readCommand() *cobra.Command {
 		Short: "Read files lean: a small file whole, a big one as an outline; then a function, section or lines",
 		Long: `Read files lean. Several targets go in one call, under one cap (default 12k characters).
 
-  path            up to the cap: the file, numbered; bigger: its outline (line ranges and sizes)
-  path:Name       a Go func, type or method (Type.Method), a YAML/JSON key (a.b below the top)
-  path#Heading    a Markdown section with its subsections
+  path            up to the cap: the file, numbered; bigger: its outline (line ranges and sizes); a CSV,
+                  TSV or JSON Lines file: its columns or keys, row count, first rows
+  path:Name       a Go func, type or method (Type.Method), a YAML/JSON key (a.b below the top), a FoxPro
+                  PROCEDURE/FUNCTION/class, every SQL statement on a table (Up, Down, a CTE); any other
+                  code: a function, class or block by its name (Class.method)
+  path#Heading    a Markdown section with its subsections (path:#Heading is read the same)
   path:120-180    lines; path:412- to the end; path:120 the lines around 120
 
 A cut says how to go on (next: zmina read path:N-). Lock, minified and generated files are named, not shown.`,
@@ -102,7 +105,8 @@ func (a *app) grepCommand() *cobra.Command {
 		Short: "Search lean: hits grouped by file and by the function or section they sit in, within a budget",
 		Long: `Search files (default: this directory, without .git, node_modules, vendor, dist, build and hidden
 directories) for a Go regexp. Hits are grouped by file and under the Go function, Markdown section or YAML/JSON
-key they sit in; 5 a file, 4k characters in all, then how many were left out and how to see them.`,
+key they sit in, each with how many hits it holds; 5 a file, 4k characters in all, then how many were left out and
+how to see them. -c counts instead: a line a file, and under it a line a section that holds a hit.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			n, err := chars(max)
@@ -131,6 +135,7 @@ key they sit in; 5 a file, 4k characters in all, then how many were left out and
 	c.Flags().BoolVarP(&o.IgnoreCase, "ignore-case", "i", false, "ignore case")
 	c.Flags().BoolVarP(&o.Fixed, "fixed", "F", false, "the pattern is a plain string")
 	c.Flags().StringVarP(&o.Glob, "glob", "g", "", "only files whose name matches (*.go)")
+	c.Flags().BoolVarP(&o.Count, "count", "c", false, "counts only: a file's hits and, where it has an outline, each section's")
 
 	return c
 }

@@ -1,0 +1,211 @@
+package lean
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+const gooseSrc = `-- +goose Up
+-- Users of the shop.
+CREATE TABLE IF NOT EXISTS "public"."users" (
+  id bigserial PRIMARY KEY,
+  email text NOT NULL -- login; never empty
+);
+CREATE UNIQUE INDEX users_email ON users (email);
+INSERT INTO users (email) VALUES ('a;b@acme.test');
+INSERT INTO users (email) VALUES ('it''s');
+INSERT INTO users (email) VALUES ('c');
+
+-- +goose StatementBegin
+CREATE OR REPLACE FUNCTION touch() RETURNS trigger AS $$
+BEGIN
+  NEW.updated := now();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+-- +goose StatementEnd
+ALTER TABLE ONLY public.users ADD CONSTRAINT positive CHECK (id > 0);
+
+-- +goose Down
+DROP TABLE users;
+`
+
+func TestSQLOutline(t *testing.T) {
+	assert.Equal(t, []Symbol{
+		{1, 21, 0, "Up", "-- +goose Up"},
+		{2, 6, 1, "users", "CREATE TABLE public.users"},
+		{7, 7, 1, "users_email", "CREATE INDEX users_email ON users"},
+		{8, 10, 1, "users", "INSERT INTO users ×3"},
+		{13, 18, 1, "touch", "CREATE FUNCTION touch"},
+		{20, 20, 1, "users", "ALTER TABLE public.users"},
+		{22, 23, 0, "Down", "-- +goose Down"},
+		{23, 23, 1, "users", "DROP TABLE users"},
+	}, Outline("001_users.sql", []byte(gooseSrc)))
+
+	dir := t.TempDir()
+	write(t, dir, "001_users.sql", gooseSrc)
+
+	out := Read([]Target{ParseTarget("001_users.sql:users", dir)}, dir, Options{})
+	for _, want := range []string{"· 2-6 CREATE TABLE public.users\n2\t-- Users of the shop.\n", "· 8-10 INSERT INTO users ×3\n",
+		"· 20-20 ALTER TABLE public.users\n", "· 23-23 DROP TABLE users\n"} {
+		assert.Contains(t, out, want, "every statement on users, the schema-qualified one too")
+	}
+
+	out = Read([]Target{ParseTarget("001_users.sql:Down", dir)}, dir, Options{})
+	assert.Contains(t, out, "· 22-23 -- +goose Down\n22\t-- +goose Down\n23\tDROP TABLE users;\n")
+
+	out = Read([]Target{{Path: "001_users.sql"}}, dir, Options{Outline: true})
+	assert.Contains(t, out, "· sql · outline (lines, size):\n1-21\t-- +goose Up\t")
+	assert.Contains(t, out, "zmina read 001_users.sql:name (every statement on a table or object; Up, Down)")
+}
+
+const dumpSrc = "/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;\n" + // 1
+	"/*!40101 SET NAMES utf8mb4 */;\n" +
+	"--\n" +
+	"-- Table structure for table `orders`\n" +
+	"--\n" + // 5
+	"DROP TABLE IF EXISTS `orders`;\n" +
+	"CREATE TABLE `orders` (\n" +
+	"  `id` int NOT NULL,\n" +
+	"  `note` varchar(20) DEFAULT 'it\\'s; fine'\n" +
+	") ENGINE=InnoDB;\n" + // 10
+	"LOCK TABLES `orders` WRITE;\n" +
+	"INSERT INTO `orders` VALUES (1,'a'),(2,'b');\n" +
+	"INSERT INTO `orders` VALUES (3,'c\\\\');\n" +
+	"UNLOCK TABLES;\n" +
+	"DELIMITER ;;\n" + // 15
+	"CREATE PROCEDURE p1()\n" +
+	"BEGIN\n" +
+	"  SELECT 1; SELECT 2;\n" +
+	"END ;;\n" +
+	"DELIMITER ;\n" + // 20
+	"COPY public.items (id, name) FROM stdin;\n" +
+	"1\ta;b\n" +
+	"2\tc\n" +
+	"\\.\n" +
+	"SELECT count(*) FROM orders\n" + // 25
+	"GO\n" +
+	"MERGE stock AS s USING incoming AS i ON s.id = i.id WHEN MATCHED THEN UPDATE SET qty = i.qty;\n"
+
+// A dump: MySQL's comments that run, quotes escaped by a backslash, a DELIMITER, pg_dump's COPY data, T-SQL's GO.
+func TestSQLDumpOutline(t *testing.T) {
+	assert.Equal(t, []Symbol{
+		{1, 2, 0, "SET", "SET ×2"},
+		{3, 6, 0, "orders", "DROP TABLE orders"},
+		{7, 10, 0, "orders", "CREATE TABLE orders"},
+		{11, 11, 0, "orders", "LOCK TABLES orders"},
+		{12, 13, 0, "orders", "INSERT INTO orders ×2"},
+		{14, 14, 0, "UNLOCK", "UNLOCK"},
+		{16, 19, 0, "p1", "CREATE PROCEDURE p1"},
+		{21, 24, 0, "items", "COPY public.items"},
+		{25, 25, 0, "orders", "SELECT … FROM orders"},
+		{27, 27, 0, "stock", "MERGE INTO stock"},
+	}, Outline("dump.sql", []byte(dumpSrc)))
+}
+
+// A long query shows its CTEs and the query after them; a short one does not.
+func TestSQLLongQueryParts(t *testing.T) {
+	cte := func(name string, n int) string {
+		return "-- " + name + " rows\n" + name + " AS (\n" + strings.Repeat("    SELECT 1 AS x -- (a, b)\n", n) + "),\n"
+	}
+	src := "WITH\n" + cte("orders", 12) + cte("paid", 12) + strings.TrimSuffix(cte("late", 4), ",\n") + "\n" +
+		"SELECT o.x\nFROM orders o\nJOIN paid p ON p.x = o.x;\n" +
+		"WITH a AS (SELECT 1) SELECT * FROM a;\n"
+
+	got := Outline("report.sql", []byte(src))
+	assert.Equal(t, []Symbol{
+		{1, 41, 0, "WITH", "WITH: 3 CTEs, then SELECT"},
+		{2, 16, 1, "orders", "orders AS (…)"},
+		{17, 31, 1, "paid", "paid AS (…)"},
+		{32, 38, 1, "late", "late AS (…)"},
+		{39, 41, 1, "main", "SELECT … (the main query)"},
+		{42, 42, 0, "WITH", "WITH: 1 CTE, then SELECT"},
+	}, got)
+}
+
+// A file that names the generator's marker in its code is not generated; the marker on a comment line is.
+func TestGeneratedMark(t *testing.T) {
+	assert.Equal(t, "", Kind("read.go", []byte("package lean\n\nvar s = []byte(\"Code generated\") // DO NOT EDIT is checked too\n")))
+	assert.Equal(t, "generated (Code generated … DO NOT EDIT)",
+		Kind("x.go", []byte("// Code generated by protoc-gen-go. DO NOT EDIT.\n\npackage x\n")))
+	assert.Equal(t, "generated (Code generated … DO NOT EDIT)", Kind("x.py", []byte("# Code generated by tool; DO NOT EDIT\n")))
+}
+
+// Review cases: a DELIMITER $$ ended by "END $$"; a string ended by a backslash (Postgres) or one with \" (MySQL);
+// a $tag$ with digits; an outline never past the last line; data never a label, so never in the guard's reason.
+func TestSQLScanEdges(t *testing.T) {
+	names := func(src string) []string {
+		var out []string
+		for _, s := range Outline("x.sql", []byte(src)) {
+			out = append(out, fmt.Sprintf("%d-%d %s", s.Start, s.End, s.Label))
+		}
+
+		return out
+	}
+
+	assert.Equal(t, []string{"2-5 CREATE PROCEDURE p1", "8-8 CREATE TABLE users", "9-9 INSERT INTO users"},
+		names("DELIMITER $$\nCREATE PROCEDURE p1()\nBEGIN\n  SELECT 1;\nEND $$\nDELIMITER ;\n\nCREATE TABLE users (id int);\nINSERT INTO users VALUES (1);\n"))
+
+	secret := "INSERT INTO k VALUES ('note; ghp_SeCrEtToKeN0123456789 and more');\n"
+	pg := "SELECT 1 FROM t WHERE a LIKE 'x' ESCAPE '\\';\nINSERT INTO k VALUES ('x');\n" + secret
+	assert.Equal(t, []string{"1-1 SELECT … FROM t", "2-3 INSERT INTO k ×2"}, names(pg), "a Postgres string may end with a backslash")
+
+	assert.Equal(t, []string{"1-1 INSERT INTO t", "2-2 CREATE TABLE users", "3-3 INSERT INTO users"},
+		names("INSERT INTO t VALUES (\"5\\\" pipe\");\nCREATE TABLE users (id int);\nINSERT INTO users VALUES ('x');\n"),
+		"MySQL escapes a quote in a double-quoted string too")
+
+	assert.Equal(t, []string{"1-6 CREATE FUNCTION f", "7-7 CREATE TABLE users"},
+		names("CREATE FUNCTION f() RETURNS int AS $body1$\nBEGIN\n  INSERT INTO a VALUES (1);\n  RETURN 1;\nEND;\n$body1$ LANGUAGE plpgsql;\nCREATE TABLE users (id int);\n"))
+
+	assert.Equal(t, []string{"1-1 CREATE TABLE a", "2-2 statement"}, names("CREATE TABLE a (id int);\nghp_token;\n"),
+		"an unknown first word is no label")
+	assert.Nil(t, names("SELECT 1 FROM t;\nghp_token $$\n x\n"), "a body open to the end: cut short, no outline")
+
+	open := "SELECT 1 FROM t WHERE a LIKE 'x' ESCAPE '\\';\nINSERT INTO k VALUES ('note; use ghp_TOKEN99 x; call ghp_TOKEN98');\n" +
+		"SELECT 'never closed\n"
+	assert.False(t, sqlSure([]byte(open)), "its backslash changes its statements: the guard never answers with it")
+	assert.False(t, sqlSure([]byte(pg)))
+	assert.True(t, sqlSure([]byte(dumpSrc)), "MySQL's own escapes")
+	assert.True(t, sqlSure([]byte(gooseSrc)), "no backslash")
+
+	// over the guard's size: the reason names statements, never a value; a file it is not sure of goes to Read
+	dir := t.TempDir()
+	guard := func(name, body string) Decision {
+		p := write(t, dir, name, body)
+		return Guard(HookInput{Cwd: dir, ToolName: "Read", ToolInput: map[string]any{"file_path": p}}, "/opt/zmina", nil)
+	}
+	filler := strings.Repeat("INSERT INTO k VALUES ('filler row value');\n", 400)
+
+	d := guard("plain.sql", filler+secret)
+	assert.Equal(t, "outline", d.Kind)
+	assert.Contains(t, d.Reason, "INSERT INTO k ×401")
+	assert.NotContains(t, strings.ToLower(d.Reason), "ghp_")
+	assert.NotContains(t, d.Reason, "filler")
+
+	d = guard("dump.sql", dumpSrc+filler+secret)
+	assert.Equal(t, "outline", d.Kind, "a MySQL dump")
+	assert.NotContains(t, strings.ToLower(d.Reason), "ghp_")
+	assert.NotContains(t, d.Reason, "fine")
+
+	assert.Equal(t, Decision{}, guard("pg.sql", pg+filler), "a backslash that changes the statements")
+	assert.Equal(t, Decision{}, guard("cut.sql", filler+open), "a string open")
+	assert.Equal(t, Decision{}, guard("signs.sql", "-- loads the `k` table, ENGINE=x, /*! no */\n"+filler+open),
+		"MySQL's signs in a comment do not make the file MySQL's")
+	assert.False(t, sqlSure([]byte("SELECT 'a `b` ENGINE=c';\n"+open)), "nor in a string")
+
+}
+
+// A long query and its first CTE start on one line: grep counts each apart.
+func TestGrepCountSameStart(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "q.sql", "WITH a AS (\n  SELECT hit\n)\n"+strings.Repeat("SELECT 1\n", 30)+"SELECT hit FROM a;\n")
+
+	out, err := Grep("hit", nil, dir, GrepOptions{Count: true})
+	require.NoError(t, err)
+	assert.Contains(t, out, "  1\ta AS (…) · 1-3\n")
+	assert.Contains(t, out, "  1\tSELECT … (the main query) · 4-34\n")
+}

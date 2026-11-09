@@ -136,6 +136,11 @@ func guardRead(in HookInput, roots func() []string) Decision {
 		return Decision{}
 	}
 
+	// A SQL file whose backslashes change its statements may have a string's text in its labels.
+	if Lang(p) == "sql" && !sqlSure(f.Src) {
+		return Decision{}
+	}
+
 	syms := Outline(p, f.Src)
 	if len(syms) == 0 {
 		return Decision{}
