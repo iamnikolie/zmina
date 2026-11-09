@@ -779,19 +779,41 @@ func TestPeekDeadSession(t *testing.T) {
 	assert.Equal(t, "last words", out)
 }
 
-func TestPrune(t *testing.T) {
+func TestPruneAbsent(t *testing.T) {
 	f := fixtureWith(t, crewYAML)
 	f.s.State.Role("gone").Held = true
+	f.s.State.Role("gone").Inbox = []string{"left in the queue"}
 	f.s.State.Role("gone#2").Instance = true
 	f.s.State.Role("designer#2").Instance = true
 	f.s.State.Role("designer").Up = true
 
-	f.s.State.Prune(f.s.Known)
+	for range pruneAfterBeats - 1 {
+		f.s.pruneAbsent(*f.now)
+	}
+
+	assert.Contains(t, f.s.State.Roles, "gone", "missing for a moment (an edit, a merge): kept")
+	assert.Equal(t, pruneAfterBeats-1, f.s.State.Role("gone").AbsentBeats)
+
+	f.s.pruneAbsent(*f.now)
 
 	assert.NotContains(t, f.s.State.Roles, "gone")
 	assert.NotContains(t, f.s.State.Roles, "gone#2", "an instance of a role that left goes with it")
 	assert.Contains(t, f.s.State.Roles, "designer#2")
 	assert.True(t, f.s.State.Role("designer").Up)
+	assert.Zero(t, f.s.State.Role("designer").AbsentBeats)
+
+	files, err := filepath.Glob(filepath.Join(f.s.Crew.StateDir(), "pruned", "gone-*.json"))
+	require.NoError(t, err)
+	require.Len(t, files, 1, "the dropped state is archived")
+	raw, err := os.ReadFile(files[0])
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), "left in the queue")
+
+	// A role that comes back starts the count again.
+	f.s.State.Role("back").AbsentBeats = pruneAfterBeats - 1
+	f.s.Crew.Roles["back"] = f.s.Crew.Roles["designer"]
+	f.s.pruneAbsent(*f.now)
+	assert.Zero(t, f.s.State.Role("back").AbsentBeats)
 }
 
 func TestDownOfDeadRoleHoldsIt(t *testing.T) {

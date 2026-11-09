@@ -95,6 +95,9 @@ type RoleState struct {
 	Up bool `json:"up,omitempty"`
 	// Started is when zmina last started (or tried to start) it.
 	Started time.Time `json:"started,omitzero"`
+	// AbsentBeats counts the ticker's beats in a row that found the role missing from the crew file; at
+	// pruneAfterBeats its state is archived and dropped (Shift.pruneAbsent).
+	AbsentBeats int `json:"absent_beats,omitempty"`
 	// Booted is when this start's boot turn was seen over: once set, the role stays booted until its next start,
 	// whatever its later turns are doing.
 	Booted time.Time `json:"booted,omitzero"`
@@ -444,6 +447,12 @@ func (l *Locked) Save() error {
 		return fmt.Errorf("state: %w", err)
 	}
 
+	// The state before this save stays beside it as state.json.prev: a link to the old file, so the rename below
+	// leaves it whole.
+	prev := l.path + ".prev"
+	_ = os.Remove(prev)
+	_ = os.Link(l.path, prev)
+
 	return os.Rename(tmp, l.path)
 }
 
@@ -474,15 +483,6 @@ func (s *State) init() {
 
 	for name, r := range s.Roles {
 		if r == nil {
-			delete(s.Roles, name)
-		}
-	}
-}
-
-// Prune drops what is remembered of roles that are no longer in the crew.
-func (s *State) Prune(keep func(name string) bool) {
-	for name := range s.Roles {
-		if !keep(name) {
 			delete(s.Roles, name)
 		}
 	}

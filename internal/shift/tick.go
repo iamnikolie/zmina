@@ -1,7 +1,9 @@
 package shift
 
 import (
+	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -68,6 +70,7 @@ func (s *Shift) Tick() []string {
 	stopped := !s.State.Stopped.IsZero() || s.Crew.IsRetired()
 	s.lastBeat = s.State.LastTick
 	s.State.LastTick = now
+	s.pruneAbsent(now)
 
 	// Alarms first: a role an alarm starts is up for the rest of the beat.
 	did, notes := s.ring(now, stopped)
@@ -1327,3 +1330,53 @@ func (s *Shift) postInbox(name string, sess *registry.Session, now time.Time) st
 // FlushInbox attempts the ordinary safe idle delivery path for one role, without starting any roles.
 // Call under the crew state lock. Busy roles, dialogs, drafts and unlanded messages retain their queue.
 func (s *Shift) FlushInbox(name string) string { return s.deliverInbox(name, s.Now()) }
+
+// pruneAfterBeats is how many beats in a row a role must be missing from the crew file before its state is dropped:
+// long enough for an edit, a merge or a rename and back to finish.
+const pruneAfterBeats = 10
+
+// pruneAbsent drops the state of a role the crew file no longer has, once it has been missing for pruneAfterBeats
+// beats in a row, and keeps a copy in <state dir>/pruned/<role>-<time>.json. A role that comes back starts the
+// count again.
+func (s *Shift) pruneAbsent(now time.Time) {
+	for _, name := range slices.Sorted(maps.Keys(s.State.Roles)) {
+		rs := s.State.Roles[name]
+		if s.Known(name) {
+			rs.AbsentBeats = 0
+
+			continue
+		}
+
+		if rs.AbsentBeats++; rs.AbsentBeats < pruneAfterBeats {
+			continue
+		}
+
+		path, err := s.archiveRole(name, rs, now)
+		if err != nil {
+			s.log(name, "prune-failed", "", err.Error())
+
+			continue
+		}
+
+		delete(s.State.Roles, name)
+		s.log(name, "pruned", "", "missing from the crew file for "+strconv.Itoa(rs.AbsentBeats)+" beats; state kept in "+path)
+	}
+}
+
+// archiveRole writes a role's state to <state dir>/pruned/<role>-<time>.json.
+func (s *Shift) archiveRole(name string, rs *RoleState, now time.Time) (string, error) {
+	dir := filepath.Join(s.Crew.StateDir(), "pruned")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+
+	raw, err := json.MarshalIndent(rs, "", "  ")
+	if err != nil {
+		return "", err
+	}
+
+	safe := strings.NewReplacer("/", "_", "#", "_", string(filepath.Separator), "_").Replace(name)
+	path := filepath.Join(dir, safe+"-"+now.UTC().Format("20060102-150405")+".json")
+
+	return path, os.WriteFile(path, raw, 0o600)
+}

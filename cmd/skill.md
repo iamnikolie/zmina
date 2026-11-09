@@ -1505,7 +1505,10 @@ State: `~/.zmina/state.json` (version 2; the first format is read and kept as `s
 on the first save). Part of it is what zmina saw and could see again; most is what it was told or
 decided — holds, broken marks, queues, last session ids, schedule progress, watch fingerprints —
 and exists nowhere else. It is written whole (rename) and never over a file zmina cannot read: see
-`zmina state recover`. Roles and watches no longer in the crew are dropped from it.
+`zmina state recover`; the state before each save stays beside it as `state.json.prev`. Watches no longer in
+the crew are dropped from it. A role missing from the crew file keeps its state while it is missing for a moment
+(an edit, a merge, a rename and back): the ticker drops it after 10 beats in a row, keeps a copy in
+`pruned/<role>-<time>.json` beside the state and logs `pruned`; a role that comes back starts the count again.
 
 ## For the dispatcher
 

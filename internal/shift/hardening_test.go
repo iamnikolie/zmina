@@ -272,3 +272,29 @@ func TestStaleWatchResultIsDiscarded(t *testing.T) {
 	assert.Empty(t, f.s.State.Signals)
 	assert.False(t, slices.Contains(f.s.Names(), "ci-red"))
 }
+
+func TestSaveKeepsThePreviousState(t *testing.T) {
+	dir := t.TempDir()
+
+	save := func(session string) {
+		l, err := Lock(dir)
+		require.NoError(t, err)
+		l.Role("dev").LastSession = session
+		require.NoError(t, l.Save())
+	}
+
+	save("first")
+	_, err := os.Stat(filepath.Join(dir, "state.json.prev"))
+	assert.ErrorIs(t, err, os.ErrNotExist, "nothing before the first save")
+
+	save("second")
+	save("third")
+
+	prev, err := os.ReadFile(filepath.Join(dir, "state.json.prev"))
+	require.NoError(t, err)
+	assert.Contains(t, string(prev), `"second"`, "the state before the last save")
+
+	now, err := os.ReadFile(filepath.Join(dir, "state.json"))
+	require.NoError(t, err)
+	assert.Contains(t, string(now), `"third"`)
+}
