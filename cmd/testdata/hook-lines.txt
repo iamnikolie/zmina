@@ -1,0 +1,10 @@
+# The command lines released zminas wrote into a role's start, as the words after the zmina executable: a Claude
+# role's hooks (--settings) and a Codex role's bridge. A role keeps its line for its whole life and runs it with
+# every zmina installed after it, so each line here must keep resolving. Append only: never edit or remove a line;
+# a release that writes a new line or flag adds it with its version (TestHookCommandsResolve says which).
+# Values are placeholders; the first word is the first release that wrote the line.
+v0.6.0  _codex --bin codex --session zm-rev --role rev --state-dir /crew/state/codex --transport stdio --profile p --resume thread-1 --boot hi --model m --effort high --sandbox read-only --approval on-request -- --flag
+v0.8.0  --crew /crew/crew.yaml pending --role dev --brief
+v0.8.0  --crew /crew/crew.yaml _turn-end --role dev
+v0.10.0 --crew /crew/crew.yaml _read-guard --role dev
+v0.10.0 _codex --bin codex --session zm-rev --role rev --state-dir /crew/state/codex --transport shared --profile p --resume thread-1 --boot hi --model m --effort high --service-tier priority --sandbox read-only --approval on-request -- --flag

@@ -640,7 +640,7 @@ const turnEndTimeout = 5
 // pending --brief), and a Stop hook that has what waits for it posted once the turn is over instead of at the next
 // beat (zmina _turn-end). That one is silent and always exits 0, so a turn's end puts nothing into the context.
 // The commands and flags these hooks name are an API: a session keeps them for its life and runs them with every
-// later zmina (TestHookCommandsResolve).
+// later zmina: a new line or flag goes into cmd/testdata/hook-lines.txt (TestHookCommandsResolve).
 func (s *Shift) roleSettings(name string) string {
 	settings := map[string]any{"crossSessionInbound": "accept"}
 

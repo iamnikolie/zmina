@@ -3,19 +3,22 @@ package cmd
 import (
 	"encoding/json"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/spf13/pflag"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // TestHookCommandsResolve: the command lines zmina writes into a role's start — the hooks in a Claude role's
 // --settings, a Codex role's bridge — are an API. A role keeps them for its whole life and runs them with whatever
-// zmina is installed later, so each command and flag they name must exist in this zmina. A rename keeps the old
-// name as an alias; this test fails when one goes. The lines are read from the start command itself, so the list
-// cannot drift from what roles run.
+// zmina is installed later. Every line a released zmina wrote is frozen in testdata/hook-lines.txt and must keep
+// resolving: a rename keeps the old name as an alias. The lines this zmina writes are read from the start command
+// itself and must be in that list too, so a new line or flag is frozen with the release that writes it.
 func TestHookCommandsResolve(t *testing.T) {
 	crewFile := testCrew(t, "  dev:\n    boot: hi\n    read_guard: true\n  rev:\n    runtime: codex\n    boot: hi\n")
 
@@ -65,14 +68,56 @@ func TestHookCommandsResolve(t *testing.T) {
 	require.Equal(t, "_codex", bridge[1])
 	lines = append(lines, bridge[1:])
 
-	for _, args := range lines {
-		root := newRoot(&app{out: io.Discard, err: io.Discard})
-		c, rest, err := root.Find(args)
-		require.NoError(t, err, "%v", args)
-		require.NotSame(t, root, c, "%v names a command", args)
+	// What released zminas wrote: each resolves, command and flags.
+	frozen := map[string]map[string]bool{}
+	raw, err := os.ReadFile(filepath.Join("testdata", "hook-lines.txt"))
+	require.NoError(t, err)
 
-		require.NoError(t, c.ParseFlags(rest), "%v: every flag exists", args)
+	for _, line := range strings.Split(string(raw), "\n") {
+		if line = strings.TrimSpace(line); line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		_, words, _ := strings.Cut(line, " ")
+		path, flags := resolveLine(t, strings.Fields(words))
+		if frozen[path] == nil {
+			frozen[path] = map[string]bool{}
+		}
+
+		for _, f := range flags {
+			frozen[path][f] = true
+		}
 	}
+
+	require.NotEmpty(t, frozen)
+
+	// What this zmina writes: frozen too, so the next release keeps it.
+	for _, args := range lines {
+		path, flags := resolveLine(t, args)
+		require.Contains(t, frozen, path, "%v: a new hook line; append it to testdata/hook-lines.txt", args)
+
+		for _, f := range flags {
+			assert.True(t, frozen[path][f], "%v: --%s is new; append the line to testdata/hook-lines.txt", args, f)
+		}
+	}
+}
+
+// resolveLine finds the command a line names in this zmina and parses its flags: the command's path and the flags
+// the line sets. A name or flag this zmina does not know fails the test.
+func resolveLine(t *testing.T, args []string) (string, []string) {
+	t.Helper()
+
+	root := newRoot(&app{out: io.Discard, err: io.Discard})
+	c, rest, err := root.Find(args)
+	require.NoError(t, err, "%v", args)
+	require.NotSame(t, root, c, "%v names a command", args)
+	require.NoError(t, c.ParseFlags(rest), "%v: every flag exists", args)
+
+	var flags []string
+
+	c.Flags().Visit(func(f *pflag.Flag) { flags = append(flags, f.Name) })
+
+	return c.CommandPath(), flags
 }
 
 // shellSplit splits a command line zmina quoted (single quotes) the way sh does.
