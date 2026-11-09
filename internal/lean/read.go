@@ -450,8 +450,11 @@ func pieceHint(path string) string {
 		return o.hint
 	}
 
-	return ":Name (a function, class or block by its name; Class.method below the top)"
+	return indentHint
 }
+
+// indentHint names a piece of a file the indentation outline reads.
+const indentHint = ":Name (a function, class or block by its name; Class.method below the top)"
 
 func span(f *File, s Symbol) int {
 	n := 0

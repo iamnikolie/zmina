@@ -586,7 +586,7 @@ func TestIndentOutline(t *testing.T) {
 
 	vb := "Public Class UnionsDC\n\n    Public Function InsertSQL(\n    ByVal ID As Integer,\n    ByVal Name As String) As String\n" +
 		"        Dim s As String\n' a comment at column 0\n        Return s\n    End Function\n\n    Public Sub New()\n        x = 1\n    End Sub\nEnd Class\n"
-	assert.Equal(t, []string{"0 1-14 UnionsDC"}, names(Outline("dc.vb", []byte(vb))), "small: members not listed")
+	assert.Equal(t, []string{"0 1-14 UnionsDC", "1 3-9 UnionsDC.InsertSQL", "1 11-13 UnionsDC.New"}, names(Outline("dc.vb", []byte(vb))), "a class's members whatever its size")
 	assert.Equal(t, []string{"0 1-54 UnionsDC", "1 3-49 UnionsDC.InsertSQL", "1 51-53 UnionsDC.New"},
 		names(Outline("dc.vb", []byte(strings.Replace(vb, "        Return s\n", strings.Repeat("        Return s\n", 41), 1)))),
 		"a signature over lines at one indent is one statement; End Function closes it")
@@ -596,14 +596,14 @@ func TestIndentOutline(t *testing.T) {
 	assert.Equal(t, []string{"0 1-4 uk", "0 6-11 sum"}, names(Outline("m.ts", []byte(ts))), "quoted keys are no comments")
 
 	sql := "-- the sheets\nCREATE TABLE IF NOT EXISTS sheets (\n  id BIGINT,\n  name TEXT,\n  a INT,\n  b INT,\n  c INT\n);\n\nCREATE INDEX ix ON sheets (id);\n"
-	assert.Equal(t, []string{"0 1-8 sheets"}, names(indentOutline([]byte(sql))), "a statement over lines is a block")
+	assert.Equal(t, []string{"0 1-8 sheets"}, names(indentOutline([]byte(sql), ".txt")), "a statement over lines is a block")
 	assert.Equal(t, []string{"0 1-8 sheets", "0 10-10 ix"}, names(Outline("x.sql", []byte(sql))), ".sql: by statement")
 
 	css := "#main {\n  color: red;\n}\n\n.btn,\n.link {\n  margin: 0;\n}\n"
 	assert.Equal(t, []string{"0 1-3 #main", "0 6-8 .link"}, names(Outline("x.css", []byte(css))), "a selector list: its last line")
 
 	php := "<?php\nclass Account\n{\n    public function fetch($id)\n    {\n        return $id;\n    }\n}\n"
-	assert.Equal(t, []string{"0 2-8 Account"}, names(Outline("a.php", []byte(php))), "a brace on its own line opens the class")
+	assert.Equal(t, []string{"0 2-8 Account", "1 4-7 Account.fetch"}, names(Outline("a.php", []byte(php))), "a brace on its own line opens the class")
 
 	xml := "<Report>\n  <DataSets>\n    <DataSet Name=\"Orders\">\n      <Query>x</Query>\n    </DataSet>\n  </DataSets>\n</Report>\n"
 	assert.Equal(t, []string{"0 1-7 Report"}, names(Outline("r.rdl", []byte(xml))))
@@ -615,6 +615,23 @@ func TestIndentOutline(t *testing.T) {
 	assert.Equal(t, []string{"0 1-51 Report", "1 2-50 Report.DataSets", "2 3-49 Report.DataSets.Orders"}, names(Outline("r.rdl", []byte(big))),
 		"elements are containers: their members are listed")
 
+	pyUnder := "from x import (\n    a,\n    b,\n)\nfrom y import c\nfrom z import gettext as _\n\n\nclass Deferred:\n    def name(self):\n        return 1\n"
+	assert.Equal(t, []string{"0 1-6 imports", "0 9-11 Deferred", "1 10-11 Deferred.name"}, names(Outline("m.py", []byte(pyUnder))),
+		"imports in a row are one entry; \" _\" goes on to the next line only in Visual Basic")
+
+	vbLabel := "Public Sub Send()\n    On Error GoTo send_Err\n    x = 1\nsend_Err:\n    With conn\n        .Close\n    End With\nEnd Sub\n\nPublic Sub Done()\n    y = 2\nEnd Sub\n"
+	assert.Equal(t, []string{"0 1-8 Send", "0 10-12 Done"}, names(Outline("m.bas", []byte(vbLabel))), "a label at column 0 stays inside its Sub")
+
+	sh := "usage() {\n  cat <<'EOF'\nUsage: run\n  deploy() {\nEOF\n}\n\nrun() {\n  echo $((1 << 2))\n}\n"
+	assert.Equal(t, []string{"0 1-6 usage", "0 8-10 run"}, names(Outline("x.sh", []byte(sh))), "a here-document is no code; << alone opens none")
+
+	shq := "#!/usr/bin/env bash\nlist() {\n  case \"$1\" in\n    *) OUT=\"${1%%\nv*}\" ;;\n  esac\n  echo \"$(which \"$1\") ($(sed -e \"s/\\`|'//g\"))\"\n}\n\n" +
+		"if [ -t 1 ]; then\n  is_tty() {\n    true\n  }\nfi\n\nusage() {\n  echo \"Usage: run\n  deploy() {\n\"\n}\n"
+	assert.Equal(t, []string{"0 2-8 list", "0 11-13 is_tty", "0 16-20 usage"}, names(Outline("x.sh", []byte(shq))),
+		"quotes inside $( ) in a string, a string over lines, a case pattern; a function under a top-level if")
+	assert.True(t, shSure([]byte(shq)))
+	assert.False(t, shSure([]byte("run() {\n  echo \"open\n}\n")), "a string left open")
+
 	dir := t.TempDir()
 	write(t, dir, "shop.py", py)
 
@@ -622,7 +639,32 @@ func TestIndentOutline(t *testing.T) {
 	assert.Contains(t, out, "· 55-60 def close(self):\n55\t    def close(self):\n")
 
 	out = Read([]Target{{Path: "shop.py"}}, dir, Options{Outline: true})
-	assert.Contains(t, out, "read a piece: zmina read shop.py:Name (a function, class or block by its name; Class.method below the top)")
+	assert.Contains(t, out, "read a piece: zmina read shop.py:Name (def, class, Class.method)")
+
+	write(t, dir, "shop.rb", "class Shop\n  def open\n  end\nend\n")
+	out = Read([]Target{{Path: "shop.rb"}}, dir, Options{Outline: true})
+	assert.Contains(t, out, "read a piece: zmina read shop.rb:Name (a function, class or block by its name; Class.method below the top)")
+
+	deco := "\"\"\"Shop.\n\nclass Fake:\n\"\"\"\n\n\n@pytest.mark.parametrize(\n    \"day\",\n    [\"mon\", \"tue\"],\n)\ndef test_open(day):\n    assert day\n"
+	assert.Equal(t, []string{"0 7-12 test_open"}, names(Outline("t.py", []byte(deco))),
+		"a docstring is no block; a decorator over lines heads the def")
+	assert.True(t, pySure([]byte(deco)))
+	assert.False(t, pySure([]byte("def f():\n    \"\"\"Open.\n    return 1\n")), "a docstring left open")
+
+	stubs := "import sys\n\nif sys.platform == \"win32\":\n    def home() -> str:\n        return \"C:\"\nelse:\n    def home() -> str:\n        return \"/\"\n\n\n" +
+		"@overload\ndef get(key: str) -> str: ...\n@overload\ndef get(key: int) -> int: ...\n\nclass Box:\n    size: int\n    def open(self) -> None: ...\n"
+	assert.Equal(t, []string{"0 4-5 home", "0 7-8 home", "0 11-12 get", "0 13-14 get", "0 16-18 Box", "1 18-18 Box.open"},
+		names(Outline("s.pyi", []byte(stubs))), "defs under a top-level if, and one-line defs, are listed")
+
+	quoted := "SEP = '\"\"\"'  # three quotes\nEND = '\"\"\"'\n\n\ndef f():\n    \"\"\"Doc.\n\nclass Fake:\n    \"\"\"\n    return 1\n"
+	assert.Equal(t, []string{"0 5-10 f"}, names(Outline("q.py", []byte(quoted))), "quotes inside a string open nothing")
+	assert.True(t, pySure([]byte(quoted)))
+
+	vbq := "Public Function Esc(s As String) As String\n    Esc = \"say \"\"\" & s & \"\"\"\" ' a ` and a \"\"\"\nEnd Function\n\nPublic Sub Done()\n    y = 2\nEnd Sub\n"
+	assert.Equal(t, []string{"0 1-3 Esc", "0 5-7 Done"}, names(Outline("m.bas", []byte(vbq))), "Visual Basic's \"\" opens no string over lines")
+
+	cs := "class A\n{\n    string q = @\"say \"\"\"\" \";\n    void B()\n    {\n    }\n}\n"
+	assert.Equal(t, []string{"0 1-7 A"}, names(Outline("a.cs", []byte(cs))), "C#'s @\"…\"\" opens no string over lines")
 }
 
 // A FoxPro form exported as text: each object is a class, its methods the procedures in it.

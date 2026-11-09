@@ -41,6 +41,16 @@ type outliner struct {
 	summary func(b *strings.Builder, f *File, path, header string, left int)
 	// hint is how the outline footer names a piece of this type (after the path).
 	hint string
+	// sure, when set, says whether the outline of this file is sure enough for the read guard to answer with: its
+	// labels are code, never a string's or a comment's text read as code.
+	sure func(src []byte) bool
+}
+
+func indentShell(src []byte, _ int) []Symbol { return indentOutline(src, ".sh") }
+
+// indentAs is the indentation outline read with the quoting of a type (ext).
+func indentAs(ext string) func(src []byte, _ int) []Symbol {
+	return func(src []byte, _ int) []Symbol { return indentOutline(src, ext) }
 }
 
 // whole adapts an outliner that needs no line count.
@@ -54,8 +64,23 @@ var outliners = []outliner{
 	{lang: "yaml", exts: []string{".yaml", ".yml"}, parse: yamlOutline, hint: ":key (a.b below the top)"},
 	{lang: "json", exts: []string{".json"}, parse: jsonOutline, hint: ":key (a.b below the top)"},
 	{lang: "foxpro", exts: []string{".prg"}, parse: whole(foxOutline), hint: ":Name (PROCEDURE, FUNCTION, Class.Method)"},
-	{lang: "sql", exts: []string{".sql", ".pgsql", ".psql", ".mysql", ".ddl"}, parse: whole(sqlOutline),
+	{lang: "sql", exts: []string{".sql", ".pgsql", ".psql", ".mysql", ".ddl"}, parse: whole(sqlOutline), sure: sqlSure,
 		hint: ":name (every statement on a table or object; Up, Down)"},
+	{lang: "typescript", exts: []string{".ts", ".tsx", ".mts", ".cts"}, parse: whole(jsOutline), sure: jsSure,
+		hint: ":Name (function, Class.method, a test's title)"},
+	{lang: "javascript", exts: []string{".js", ".jsx", ".mjs", ".cjs"}, parse: whole(jsOutline), sure: jsSure,
+		hint: ":Name (function, Class.method, a test's title)"},
+	{lang: "python", exts: []string{".py", ".pyi"}, parse: func(src []byte, _ int) []Symbol { return indentOutline(src, ".py") },
+		sure: pySure, hint: ":Name (def, class, Class.method)"},
+	{lang: "shell", exts: []string{".sh", ".bash", ".zsh", ".ksh"}, parse: indentShell, sure: shSure,
+		hint: ":Name (a function by its name)"},
+	{lang: "csharp", exts: []string{".cs"}, parse: indentAs(".cs"), sure: csSure, hint: indentHint},
+	{lang: "java", exts: []string{".java"}, parse: indentAs(".java"), sure: csSure, hint: indentHint},
+	{lang: "php", exts: []string{".php"}, parse: indentAs(".php"), sure: phpSure, hint: indentHint},
+	{lang: "vb", exts: []string{".vb", ".bas", ".cls", ".frm", ".ctl", ".vbs", ".dsr"}, parse: indentAs(".vb"), sure: vbSure,
+		hint: indentHint},
+	{lang: "rust", exts: []string{".rs"}, parse: whole(rustOutline), sure: rustSure,
+		hint: ":Name (fn, Type.method, a struct, trait or mod)"},
 	{lang: "csv", exts: []string{".csv"}, summary: writeCSVSummary},
 	{lang: "tsv", exts: []string{".tsv", ".tab"}, summary: writeCSVSummary},
 	{lang: "jsonl", exts: []string{".jsonl", ".ndjson"}, summary: writeJSONLSummary},
@@ -72,8 +97,8 @@ func outlinerFor(path string) *outliner {
 	return nil
 }
 
-// Lang names the outliner for a path: go, markdown, yaml, json, foxpro, sql, csv, tsv, jsonl, or "" (outlined by
-// indentation).
+// Lang names the outliner for a path: go, markdown, yaml, json, foxpro, sql, typescript, javascript, python, shell, csharp,
+// java, php, vb, rust, csv, tsv, jsonl, or "" (outlined by indentation).
 func Lang(path string) string {
 	if o := outlinerFor(path); o != nil {
 		return o.lang
@@ -88,7 +113,7 @@ func Lang(path string) string {
 func Outline(path string, src []byte) []Symbol {
 	o := outlinerFor(path)
 	if o == nil {
-		return indentOutline(src)
+		return indentOutline(src, strings.ToLower(filepath.Ext(path)))
 	}
 
 	if o.parse == nil {
