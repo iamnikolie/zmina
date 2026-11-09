@@ -1258,12 +1258,18 @@ would not load is never saved), and leaves the previous file as `crew.yaml.bak`.
 
 ## Usage
 
-`zmina usage [--since 24h|7d] [--by role|task|model|day|crew|trigger|how] [--role r] [--all] [--json]` — what the
+`zmina usage [--since 24h|7d] [--by role|task|model|day|crew|trigger|how|ctx] [--role r] [--all] [--json]` — what the
 work cost, from the transcripts: each API reply once, a role's copies (dev#2) with it, a subagent's replies with
 the session that started it (`SUB` counts them). Columns: turns, `WAITS`, tokens, `CACHED` (the share of the prompt read
-from cache), `$ API`, `$/TURN`, `CTX` (the context a turn carries on average; `!` past 200k — most of such a
+from cache), `REREAD` (cache reads over cache writes: how many times a token put in context was read again), `$ API`, `$/TURN`, `CTX` (the context a turn carries on average; `!` past 200k — most of such a
 turn's price is reading the conversation again: compact or restart the role), `MODELS` (the model mix by dollars,
-from each reply's own model), and for `--by task` `HOW`. A totals row `all`.
+from each reply's own model), and for `--by task` `HOW`. A totals row `all`. Under the table, the cost by what it
+paid for: `Of the cost: cache reads 60%, cache writes 17%, output 18%, input 5%.`
+
+- **Context bands** (`--by ctx`): rows by the context a turn carried (`0-100k`, `100-200k`, `200-350k`, `350-500k`,
+  `500-700k`, `700k+`), in that order, with `%TURNS` and `%COST`: what share of the cost the long turns take, so what a
+  lower `context_max` or restart threshold would save. Mixed models make the bands uneven; `--role r` reads one role.
+  A peer older than this has no bands: its turns are `?`.
 
 - **Waits** (`WAITS`: turns and their dollars; `waits` and `wait_cost` in `--json`): the turns spent polling. A wait
   is a Bash call in the foreground that waits — a `sleep` of 20 s or more, an `until`, `while` or `for … do` loop that

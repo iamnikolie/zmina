@@ -419,7 +419,7 @@ func firstLine(err error) error {
 
 // usageHead names the key column of a view.
 var usageHead = map[string]string{"role": "ROLE", "task": "TASK", "model": "MODEL", "day": "DAY", "crew": "CREW",
-	"trigger": "TRIGGER", "how": "HOW"}
+	"trigger": "TRIGGER", "how": "HOW", "ctx": "BAND"}
 
 // contextFlag is the context a role's turns carry on average past which the table marks it: most of such a
 // turn's price is reading the conversation again.
@@ -435,7 +435,17 @@ func printUsage(out io.Writer, by string, rows []cost.Row, total cost.Row, manyC
 		head = append(head, "CREW")
 	}
 
-	head = append(head, "TURNS", "SUB", "WAITS", "TOKENS", "CACHED", "$ API", "$/TURN", "CTX", "MODELS")
+	head = append(head, "TURNS")
+	if by == "ctx" {
+		head = append(head, "%TURNS")
+	}
+
+	head = append(head, "SUB", "WAITS", "TOKENS", "CACHED", "REREAD", "$ API")
+	if by == "ctx" {
+		head = append(head, "%COST")
+	}
+
+	head = append(head, "$/TURN", "CTX", "MODELS")
 	if by == "task" {
 		head = append(head, "HOW")
 	}
@@ -466,9 +476,18 @@ func printUsage(out io.Writer, by string, rows []cost.Row, total cost.Row, manyC
 			waits = strconv.Itoa(r.Waits) + " " + dollars(r.WaitCost)
 		}
 
-		cols = append(cols, strconv.Itoa(r.Turns), strconv.Itoa(r.Sub), waits, shift.Tokens(r.Tokens()),
-			fmt.Sprintf("%.0f%%", 100*cached), dollars(r.Cost), dollars(r.Cost/float64(max(r.Turns-r.Unpriced, 1))),
-			shift.Tokens(perTurn)+mark, r.Mix())
+		cols = append(cols, strconv.Itoa(r.Turns))
+		if by == "ctx" {
+			cols = append(cols, share(float64(r.Turns), float64(total.Turns)))
+		}
+
+		cols = append(cols, strconv.Itoa(r.Sub), waits, shift.Tokens(r.Tokens()), fmt.Sprintf("%.0f%%", 100*cached),
+			reread(r.Cell), dollars(r.Cost))
+		if by == "ctx" {
+			cols = append(cols, share(r.Cost, total.Cost))
+		}
+
+		cols = append(cols, dollars(r.Cost/float64(max(r.Turns-r.Unpriced, 1))), shift.Tokens(perTurn)+mark, r.Mix())
 
 		if by == "task" {
 			cols = append(cols, r.HowMix())
@@ -484,6 +503,26 @@ func printUsage(out io.Writer, by string, rows []cost.Row, total cost.Row, manyC
 	line(total, "")
 
 	return w.Flush()
+}
+
+// share is part of whole in percent, "-" of nothing.
+func share(part, whole float64) string {
+	if whole <= 0 {
+		return "-"
+	}
+
+	return fmt.Sprintf("%.0f%%", 100*part/whole)
+}
+
+// reread is how many times a token written to the cache was read from it: each turn reads the whole context
+// again, so a long conversation reads what it wrote once many times over. "-" without cache writes.
+func reread(c cost.Cell) string {
+	w := c.Write + c.Write5m + c.Write1h
+	if w == 0 {
+		return "-"
+	}
+
+	return fmt.Sprintf("%.0fx", float64(c.Read)/float64(w))
 }
 
 func crewLabel(node, c string) string {
@@ -511,6 +550,12 @@ const staleAfter = 120 * 24 * time.Hour
 func printUsageNotes(out io.Writer, prices cost.Table, total cost.Row, problems []string) {
 	fmt.Fprintf(out, "\n$ API is API-equivalent: what these tokens would cost at API rates — the crews run on a "+
 		"subscription. Prices of %s (%s).\n", prices.Date, prices.From)
+
+	if t := total.Cost; t > 0 {
+		in := max(t-total.WriteCost-total.ReadCost-total.OutputCost, 0)
+		fmt.Fprintf(out, "Of the cost: cache reads %s, cache writes %s, output %s, input %s.\n", share(total.ReadCost, t),
+			share(total.WriteCost, t), share(total.OutputCost, t), share(in, t))
+	}
 
 	if age := prices.Age(time.Now()); age > staleAfter {
 		fmt.Fprintf(out, "The prices are %d days old: check them, newer ones go in %s.\n", int(age.Hours()/24),

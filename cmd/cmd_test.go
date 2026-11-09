@@ -465,10 +465,16 @@ func TestUsage(t *testing.T) {
 	out, _, err := zm(t, crewFile, "usage")
 	require.NoError(t, err)
 	// 4 in, 1000 1h writes, 200k reads, 500 out at opus-5.5: $0.000016 + $0.008 + $0.04 + $0.01.
-	assert.Regexp(t, `(?m)^dev\s+3\s+0\s+0\s+604k\s+100%\s+\$0\.116\s+\$0\.058\s+201k !\s+opus-5\.5 100% · opus-9 unpriced$`,
+	assert.Regexp(t, `(?m)^dev\s+3\s+0\s+0\s+604k\s+100%\s+200x\s+\$0\.116\s+\$0\.058\s+201k !\s+opus-5\.5 100% · opus-9 unpriced$`,
 		out, "a copy counts with its role; the unknown model is shown, not priced")
 	assert.Contains(t, out, "API-equivalent")
 	assert.Contains(t, out, "1 turns unpriced, models claude-opus-9")
+	assert.Contains(t, out, "Of the cost: cache reads 69%, cache writes 14%, output 17%, input 0%.")
+
+	out, _, err = zm(t, crewFile, "usage", "--by", "ctx")
+	require.NoError(t, err)
+	assert.Regexp(t, `(?m)^BAND\s+TURNS\s+%TURNS\s.*\$ API\s+%COST\s`, out)
+	assert.Regexp(t, `(?m)^200-350k\s+3\s+100%\s.*\$0\.116\s+100%\s`, out, "every turn carried 201k")
 
 	out, _, err = zm(t, crewFile, "usage", "--by", "task")
 	require.NoError(t, err)
