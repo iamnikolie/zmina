@@ -46,6 +46,7 @@ context_max: 400k                        # every role's, unless it sets its own 
 context_action: compact                  # every role's, unless it sets its own (default compact)
 restart_at: 250k                         # a role holding a task this full restarts fresh from its note (default 250k; off)
 restart_idle: 1h                         # ... and one idle this long over 100k (default 1h, 20m at least; off)
+restart_done: 150k                       # a role whose task is done, holding none, this full restarts fresh (default 150k; off)
 notify: [push-cli, send, --title, zmina] # a reminder for you also goes through this (text last; a string: sh -c, $1)
 timezone: Europe/Warsaw                  # the clock reminder times are read on (default: this machine's)
 day_start: "09:00"                       # when morning, tomorrow, thu or a date rings (default 09:00)
@@ -73,7 +74,7 @@ roles:
     context_max: 200k                    # conversation fuller than this -> trimmed once idle (150k, 1m; 50k at least; off)
     context_action: clear                # compact (default: /compact) | clear (/clear, then the boot line again)
     release_idle_minutes: 120            # its own (minutes; off: never released)
-    restart_at: 300k                     # its own (off: never restarted for its context); restart_idle too
+    restart_at: 300k                     # its own (off: never restarted for its context); restart_idle, restart_done too
     budget: 20                           # API-equivalent $ a day it (its copies with it) may spend (default none)
   scribe:
     schedule: "0 19 * * 1-5"             # cron: minute hour day-of-month month day-of-week
@@ -1137,7 +1138,7 @@ are measured from transcripts, not from these lines.
 | Command | Does |
 |---|---|
 | `zmina seat add <role> [--about … --dir … --boot … --model … --keep … --args=--chrome,--x --resume always --schedule "…" --prompt "…" --expires 3d]` | add a role. `--expires` takes `12h`, `3d`, a date or a date and time. |
-| `zmina seat set <role> key=value …` | change keys; `key=` removes one. Keys: runtime, profile, codex_transport, codex_home, reasoning_effort, service_tier (`default`/`priority`), sandbox, approval_policy, session, dir, boot, keep, model, args (`[--a, --b]` or `--a,--b`), about, remote_control, read_guard (`true`/`false`), delivery (`native`/`tmux`), resume, schedule, prompt, expires, context_max, context_action, drop_tools, keep_tools (lists, like args), release_idle_minutes, restart_at, restart_idle, budget (dollars a day, a number: `budget=20`, written unquoted). |
+| `zmina seat set <role> key=value …` | change keys; `key=` removes one. Keys: runtime, profile, codex_transport, codex_home, reasoning_effort, service_tier (`default`/`priority`), sandbox, approval_policy, session, dir, boot, keep, model, args (`[--a, --b]` or `--a,--b`), about, remote_control, read_guard (`true`/`false`), delivery (`native`/`tmux`), resume, schedule, prompt, expires, context_max, context_action, drop_tools, keep_tools (lists, like args), release_idle_minutes, restart_at, restart_idle, restart_done, budget (dollars a day, a number: `budget=20`, written unquoted). |
 | `zmina seat rm <role>` | remove a role that is down and holds no active task (`--force` despite tasks). |
 
 Every edit keeps the file's comments, is checked by loading it before it is written (a crew that
@@ -1191,9 +1192,9 @@ from each reply's own model), and for `--by task` `HOW`. A totals row `all`.
   crossing: `budget: dev spent $23.10 today (API-equivalent), over its $20.00 a day`, `budget: T-5 (dev) cost
   $52.00 so far (API-equivalent), over its $50.00`. A note, never a stop. `task show` says `within` or `over its
   $50.00 budget`.
-- **Restarts**: under the table, how often roles were restarted fresh from their note in the window (see The ticker,
-  Restart), by role, a copy's with its role's, and what for: `Restarted fresh with their note 3 times: dev 2
-  (context 1, idle 1), backend 1 (context 1, idle 0).` `--json` has them as `restarts` (role, when, task, why);
+- **Restarts**: under the table, how often roles were restarted fresh in the window (see The ticker, Restart), by
+  role, a copy's with its role's, and what for: `Restarted fresh 4 times: backend 2 (context 1, idle 0, task done
+  1), dev 2 (context 1, idle 1).` (`task done` only when there is one) `--json` has them as `restarts` (role, when, task, why);
   `--all` asks the peers for theirs.
 - Not counted: transcripts Claude Code no longer keeps, and headless runs outside every task's worktree.
 
@@ -1288,7 +1289,7 @@ alone for the beat — never taken as ended; a role being put down is left alone
    compaction is a turn like any other. Never a role that shows a dialog. Release and trims still wait for a
    plain idle, so a role with a background process running is never put down or cleared under it.
 7. **Restart** (before trims): a role holding an active task (never the dispatcher: its recovery pack and
-   `context_max` do that job; a role holding none is trimmed as below) is restarted fresh from its own note instead
+   `context_max` do that job; a role holding none is trimmed as below, or restarted after its task) is restarted fresh from its own note instead
    of carrying a large conversation, when its last turn's context is at or over `restart_at` (default 250k) and it
    has sat idle 5 min, or when it has sat idle `restart_idle` (default 1h) less 10 min with over 100k: the note is
    asked for while the conversation's cache is still warm, so the restart spares the cold wake that would write the
@@ -1314,6 +1315,20 @@ alone for the beat — never taken as ended; a role being put down is left alone
    starts it by hand); `zmina usage` counts the restarts. A role asked for its note is not trimmed or released
    meanwhile. A peer's `SendMessage` that reaches the old session in the seconds between its `/exit` and its end
    is lost with it: the fresh session never sees it (zmina's own lines wait in its queue).
+   **After a task** (`restart_done`, default 150k, the role's own, else the crew's; `off`): a role that holds no
+   active task, whose own task was closed `done` (`task done`, a result accepted) after its current start, and whose
+   last turn's context is at or over `restart_done`, is restarted fresh once it has sat 10 min since that close and
+   since its last turn, plainly idle as above (so the owner's line in the last 15 min holds it too), and it got
+   no line after the close (a peer's message, the owner's line or Chat, a zmina line, a background report; read in
+   its transcript, and its queue): it went on with other work then, a review loop paused mid-way perhaps, its
+   conversation is that work's, and `context_max` bounds it. No note is
+   asked for: the result is in the ledger. It starts in its own dir (the task's worktree may be removed once
+   merged); its first line: `[zmina] restarted fresh: task done: T-5, context 180k over restart_done 150k. You hold
+   no task; what it ended with: zmina task show T-5.` Only the ledger tells: a role that closed no task of its own
+   in this run (one the owner talks to directly) is never restarted by it, whatever its conversation says; a
+   dropped or parked task does not count. A task reopened or handed to it in the 10 min makes it hold one again, so
+   this no longer applies. Once restarted its start is later than the close: once a task. Logged as `restarted`
+   with the task and `task done: …`.
 8. Context: a role with `context_max` (its own, else the crew's; `off` opts out) whose
    conversation fills more than that (the last turn's tokens in its transcript,
    `<namespace>/projects/*/<session id>.jsonl`), idle for 5 min, its input line on screen and empty

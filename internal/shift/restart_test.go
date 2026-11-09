@@ -380,3 +380,127 @@ func TestRestartACopy(t *testing.T) {
 	assert.True(t, strings.HasPrefix(rs.Inbox[1], "[zmina T-7] Read handoff packet "), rs.Inbox[1])
 	assert.Contains(t, rs.Inbox[1], "--role 'designer#2'")
 }
+
+// doneRestarting is restarting with designer's T-1 closed done 5 minutes after its start, then the given time
+// passed with designer idle since the close and its conversation at the given size.
+func doneRestarting(t *testing.T, extra string, context int, after time.Duration) fix {
+	t.Helper()
+
+	f := restarting(t, extra, context, 0)
+	closed := f.now.UTC()
+	f.tk.list = []task.Task{{ID: "T-1", Role: "designer", State: task.Done, Title: "draw the logo", Updated: closed,
+		Closed: &task.Closure{By: "dispatcher", At: closed, State: task.Done}}}
+	*f.now = f.now.Add(after)
+	f.idle("designer", context, after)
+
+	return f
+}
+
+// A role whose task is done and that holds none is restarted fresh once restartDoneGrace has passed: no note is
+// asked for, it starts in its own dir, its first line says why, and it is restarted once for that task.
+func TestRestartAfterTheTaskIsDone(t *testing.T) {
+	f := doneRestarting(t, "", 180_000, 11*time.Minute)
+
+	did := f.s.Tick()
+	require.Len(t, f.s.Restarts, 1, "%v", did)
+	job := f.s.Restarts[0]
+	assert.Equal(t, "T-1", job.Done)
+	assert.Empty(t, job.Tasks)
+	assert.Empty(t, job.Opts.Dir, "its own dir, not the closed task's worktree")
+	assert.True(t, job.Opts.Fresh)
+	assert.Contains(t, did, "designer: task done: T-1, context 180k over restart_done 150k; restarting fresh")
+	assert.False(t, f.ev.has("designer", "restart-asked"), "no note is asked for")
+	assert.Contains(t, f.tm.typed["designer"], "/exit")
+
+	out := f.finish(t)
+	require.Len(t, out, 1)
+	assert.Equal(t, "designer: restarted fresh (task done: T-1, context 180k over restart_done 150k)", out[0])
+	rs := f.s.State.Role("designer")
+	require.Len(t, rs.Inbox, 1, "no task packet: it holds none")
+	assert.Equal(t, "[zmina] restarted fresh: task done: T-1, context 180k over restart_done 150k. You hold no "+
+		"task; what it ended with: zmina task show T-1.", rs.Inbox[0])
+
+	var restarted []string
+	for _, e := range f.ev.list {
+		if e.Role == "designer" && e.Event == "restarted" {
+			restarted = append(restarted, e.Task+" "+e.Detail)
+		}
+	}
+	assert.Equal(t, []string{"T-1 task done: T-1, context 180k over restart_done 150k"}, restarted)
+
+	// The fresh conversation grows past restart_done again: it started after the close, so no second restart.
+	*f.now = f.now.Add(30 * time.Minute)
+	rs.Inbox = nil
+	f.idle("designer", 200_000, 20*time.Minute)
+	f.s.Tick()
+	assert.Empty(t, f.s.Restarts, "once a task")
+}
+
+func TestRestartAfterTheTaskIsDoneWaits(t *testing.T) {
+	for name, c := range map[string]struct {
+		extra   string
+		context int
+		after   time.Duration
+		change  func(f fix)
+	}{
+		"within the grace":    {context: 180_000, after: 9 * time.Minute},
+		"under restart_done":  {context: 140_000, after: 11 * time.Minute},
+		"restart_done off":    {extra: "restart_done: \"off\"\n", context: 400_000, after: 30 * time.Minute},
+		"a turn in the grace": {context: 180_000, after: 11 * time.Minute, change: func(f fix) { f.status("designer", "idle", f.now.Add(-5*time.Minute)) }},
+		"the owner wrote": {context: 180_000, after: 30 * time.Minute, change: func(f fix) {
+			f.rg.activity["sid-designer"] = registry.Activity{Prompt: f.now.Add(-20 * time.Minute), Owner: f.now.Add(-10 * time.Minute)}
+		}},
+		"reopened": {context: 180_000, after: 11 * time.Minute, change: func(f fix) {
+			f.tk.list[0].State, f.tk.list[0].Closed = task.Open, nil
+		}},
+		"a new task": {context: 180_000, after: 11 * time.Minute, change: func(f fix) {
+			f.tk.list = append(f.tk.list, task.Task{ID: "T-2", Role: "designer", State: task.Open, Title: "the icon"})
+		}},
+		"closed before its start": {context: 180_000, after: 11 * time.Minute, change: func(f fix) {
+			f.tk.list[0].Closed.At = f.now.Add(-3 * time.Hour)
+			f.tk.list[0].Updated = f.tk.list[0].Closed.At
+		}},
+		"dropped, not done": {context: 180_000, after: 11 * time.Minute, change: func(f fix) {
+			f.tk.list[0].State, f.tk.list[0].Closed.State = task.Dropped, task.Dropped
+		}},
+		"another role's task": {context: 180_000, after: 11 * time.Minute, change: func(f fix) {
+			f.tk.list[0].Role = "harvester"
+		}},
+		"a draft": {context: 180_000, after: 11 * time.Minute, change: func(f fix) { f.tm.drafts["designer"] = "and the" }},
+		"a line after the close": {context: 180_000, after: 30 * time.Minute, change: func(f fix) {
+			// A peer's line 30 s after the close began a turn (a review loop); it has sat 29 minutes since.
+			f.rg.activity["sid-designer"] = registry.Activity{Prompt: f.now.Add(-30*time.Minute + 30*time.Second)}
+		}},
+		"the owner's Chat after the close": {context: 180_000, after: 40 * time.Minute, change: func(f fix) {
+			f.s.State.Role("designer").ChatReceipts = []chat.Receipt{{ID: "c1", At: f.now.Add(-20 * time.Minute)}}
+		}},
+		"a line queued for it": {context: 180_000, after: 11 * time.Minute, change: func(f fix) {
+			f.s.State.Role("designer").Inbox = []string{"[zmina] a line from the dispatcher"}
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := doneRestarting(t, c.extra, c.context, c.after)
+			if c.change != nil {
+				c.change(f)
+			}
+
+			did := f.s.Tick()
+			assert.Empty(t, f.s.Restarts, "%v", did)
+			assert.NotContains(t, f.tm.typed["designer"], "/exit")
+		})
+	}
+}
+
+// Background work holds the restart after a task off, and the log says so once.
+func TestRestartAfterTheTaskIsDoneHeldByBackground(t *testing.T) {
+	f := doneRestarting(t, "", 180_000, 11*time.Minute)
+	act := f.rg.activity["sid-designer"]
+	act.Background = []string{"b7"}
+	f.rg.activity["sid-designer"] = act
+
+	f.s.Tick()
+	*f.now = f.now.Add(time.Minute)
+	f.s.Tick()
+	assert.Empty(t, f.s.Restarts)
+	assert.Equal(t, 1, f.ev.count("designer", "restart-held"))
+}

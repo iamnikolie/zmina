@@ -12,7 +12,8 @@ import (
 	"github.com/iamnikolie/zmina/internal/events"
 )
 
-// usageRestart is one restart of a role for its context (restart_at, restart_idle), from the crew's event log.
+// usageRestart is one restart of a role for its context (restart_at, restart_idle, restart_done), from the crew's
+// event log.
 type usageRestart struct {
 	Node string    `json:"node,omitempty"`
 	Crew string    `json:"crew,omitempty"`
@@ -47,13 +48,13 @@ func usageRestarts(crews []uiCrew, node string, since time.Time) []usageRestart 
 	return out
 }
 
-// printRestarts says how often roles were restarted fresh with their note, by role, and what for.
+// printRestarts says how often roles were restarted fresh, by role, and what for.
 func printRestarts(out io.Writer, rs []usageRestart, manyCrews bool) {
 	if len(rs) == 0 {
 		return
 	}
 
-	type count struct{ all, context, idle int }
+	type count struct{ all, context, idle, done int }
 
 	by := map[string]*count{}
 
@@ -79,6 +80,8 @@ func printRestarts(out io.Writer, rs []usageRestart, manyCrews bool) {
 			c.context++
 		case strings.HasPrefix(r.Why, "idle"):
 			c.idle++
+		case strings.HasPrefix(r.Why, "task done"):
+			c.done++
 		}
 	}
 
@@ -93,15 +96,23 @@ func printRestarts(out io.Writer, rs []usageRestart, manyCrews bool) {
 	parts := make([]string, 0, len(keys))
 	for _, k := range keys {
 		c := by[k]
-		parts = append(parts, fmt.Sprintf("%s %d (context %d, idle %d)", k, c.all, c.context, c.idle))
+		what := fmt.Sprintf("context %d, idle %d", c.context, c.idle)
+		if c.done > 0 {
+			what += fmt.Sprintf(", task done %d", c.done)
+		}
+
+		parts = append(parts, fmt.Sprintf("%s %d (%s)", k, c.all, what))
 	}
 
-	fmt.Fprintf(out, "\nRestarted fresh with their note %s: %s.\n", times(len(rs)), strings.Join(parts, ", "))
+	fmt.Fprintf(out, "\nRestarted fresh %s: %s.\n", times(len(rs)), strings.Join(parts, ", "))
 }
 
 func times(n int) string {
-	if n == 1 {
+	switch n {
+	case 1:
 		return "once"
+	case 2:
+		return "twice"
 	}
 
 	return strconv.Itoa(n) + " times"
