@@ -151,6 +151,10 @@ func (n *Node) ServeTerminals(ctx context.Context, rw io.ReadWriter, deliver Del
 		return fail(err)
 	}
 
+	if err := n.current(*hi.Cert); err != nil {
+		return fail(err)
+	}
+
 	mine, err := nonce()
 	if err != nil {
 		return fail(err)
@@ -369,6 +373,10 @@ func (n *Node) open(c *conn, want string, now func() time.Time) (string, error) 
 	}
 
 	if err := hi.Cert.Verify(n.Owner); err != nil {
+		return "", err
+	}
+
+	if err := n.current(*hi.Cert); err != nil {
 		return "", err
 	}
 
@@ -745,10 +753,31 @@ func (n *Node) admit(e Envelope, book []Peer, now time.Time) error {
 		return fmt.Errorf("%s: written %s, too old or from the future", e.ID, e.At)
 	}
 
-	for _, p := range book {
-		if p.Name == e.Cert.Name && p.Cert != nil && p.Cert.Newer(e.Cert) && !p.Cert.Key.Equal(e.Cert.Key) {
-			return fmt.Errorf("%s: signed with a replaced key of %s", e.ID, p.Name)
-		}
+	if replaced(book, e.Cert) {
+		return fmt.Errorf("%s: signed with a replaced key of %s", e.ID, e.Cert.Name)
+	}
+
+	return nil
+}
+
+// replaced reports whether book holds a newer certificate for c's node with another key: the owner re-certified
+// that node, and c's key no longer speaks for it.
+func replaced(book []Peer, c Cert) bool {
+	return slices.ContainsFunc(book, func(p Peer) bool {
+		return p.Name == c.Name && p.Cert != nil && p.Cert.Newer(c) && !p.Cert.Key.Equal(c.Key)
+	})
+}
+
+// current refuses a session with a certificate the book knows was replaced: a retired or stolen key of a node the
+// owner re-certified opens no session, so it neither pulls that node's envelopes nor reaches its terminals.
+func (n *Node) current(c Cert) error {
+	book, err := n.Peers()
+	if err != nil {
+		return err
+	}
+
+	if replaced(book, c) {
+		return fmt.Errorf("the key of %s was replaced: its owner certified a newer one", c.Name)
 	}
 
 	return nil

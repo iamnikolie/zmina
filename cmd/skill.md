@@ -398,7 +398,11 @@ in `/opt/homebrew/bin` or `/usr/local/bin` when PATH is `/usr/bin:/bin`. Pass th
 A **node** is one `~/.zmina` (one machine, or one user on a shared server) with every crew under it. Nodes reach
 each other without a hub: each keeps its own address book (`~/.zmina/mesh/`), and a message waits on the node that
 has it until the next node takes it. A node is known by its key, never by its address: the owner's key (on one
-node, `owner.key`) signs every node's certificate once, and a node talks only to nodes this owner signed. The
+node, `owner.key`) signs every node's certificate once, and a node talks only to nodes this owner signed. A node
+re-certified with a new key (enrolled again under its name) retires the old one: a node that has met the newer
+certificate — from that node or told by another — opens no session with the old key, either way, and takes no
+envelope it signed. Certificates do not expire yet and there is no revocation list: a key that leaked before any
+newer certificate is known keeps its rights. The
 network under it is a transport and an address: today ssh, or any command line that reaches the peer's zmina.
 
 | Command | What it does |

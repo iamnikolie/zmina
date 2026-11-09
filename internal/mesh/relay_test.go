@@ -2,6 +2,7 @@ package mesh
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -73,4 +74,46 @@ func TestTerminalRouteSkipsAPeerNotARelay(t *testing.T) {
 	transport := &terminalPipes{nodes: map[string]*Node{"jump": jump, "worker": worker}}
 	_, err := owner.TerminalList(context.Background(), transport, "worker")
 	require.ErrorContains(t, err, "no address or relay")
+}
+
+// TestReplacedCertificateOpensNoSession: once the owner re-certified a node with a new key and a node learnt the
+// newer certificate, the old key completes no hello there, either side of it: it neither pulls the envelopes
+// addressed to that node's name nor is called as that node.
+func TestReplacedCertificateOpensNoSession(t *testing.T) {
+	p, laptop, old, _ := trio(t)
+
+	tell(t, laptop, "default", "box-ops/ops", "the token for box-ops")
+
+	time.Sleep(2 * time.Millisecond) // the new certificate is issued later
+	fresh := enroll(t, laptop, "box-ops")
+	require.NoError(t, laptop.met(fresh.Cert, nil, BodyMax, time.Now()))
+
+	// The old key calls in.
+	addPeer(t, old, "laptop")
+	ss := sync1(old, p)
+	require.Len(t, ss, 1)
+	require.Error(t, ss[0].Err)
+	assert.Contains(t, ss[0].Err.Error(), "replaced")
+
+	// The old key answers when this node calls box-ops.
+	called := false
+	for _, s := range sync1(laptop, p) {
+		if strings.Contains(s.Addr, "box-ops") {
+			called = true
+			require.Error(t, s.Err)
+			assert.Contains(t, s.Err.Error(), "replaced")
+		}
+	}
+	require.True(t, called)
+
+	assert.Empty(t, p.inboxes["box-ops"].list(), "the old key took nothing")
+
+	out, err := laptop.Outbox()
+	require.NoError(t, err)
+	assert.Len(t, out, 1, "the envelope waits for the new key")
+
+	// The new key gets it.
+	p.nodes["box-ops"] = fresh
+	sync1(laptop, p)
+	assert.Equal(t, []string{"ops ← laptop/default: the token for box-ops"}, p.inboxes["box-ops"].list())
 }
