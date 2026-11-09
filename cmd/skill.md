@@ -698,7 +698,7 @@ no mesh enrollment. The UI's token and Host guard still apply; WebSocket upgrade
 exact same-origin browser. For Tailscale, bind the UI to its tailnet address with `--token` (or
 `ZMINA_UI_TOKEN`), or keep it on loopback behind a private reverse proxy that preserves Host/Origin and
 supports WebSocket upgrades. For the latter use `--allow-host <exact-hostname[:port]>` with the token to
-allow that proxy hostname through the loopback Host guard (repeat or comma-separate for multiple hosts). Open `?token=...` once to set the HttpOnly, SameSite Strict cookie. It lasts 90 days and renews on each authenticated HTML page load. Secure is set for native TLS or HTTPS forwarded by a loopback proxy on an explicitly allowed hostname. Missing authentication returns an uncached HTML sign-in hint. With `--code-command <shell command>` (or `$ZMINA_UI_CODE_COMMAND`; needs a token) a device that is not signed in gets a sign-in page instead: **Send code** runs the command with the message on its stdin (never in its argv; its output is dropped), so it reaches the owner through their own notifier — e.g. a Telegram bot's send command reading the text from stdin; the chat and the bot stay in that command, not in zmina. The code is six digits, single use, 5 minutes, ended by 5 wrong tries; one may be asked for a minute, 10 an hour (a failed send counts). A right code sets the same cookie as `?token=`. Every send, refusal and wrong try is logged to the server's stderr without the code. `?token=` keeps working.
+allow that proxy hostname through the loopback Host guard (repeat or comma-separate for multiple hosts). Open `?token=...` once to set the HttpOnly, SameSite Strict cookie. It lasts 90 days and renews on each authenticated HTML page load. Secure is set for native TLS or HTTPS forwarded by a loopback proxy on an explicitly allowed hostname. Missing authentication returns an uncached HTML sign-in hint; with a token, a device that is not signed in gets a sign-in page that takes a six-digit code instead: one `zmina connect` printed on this machine (see Connect a phone), or, with `--code-command <shell command>` (or `$ZMINA_UI_CODE_COMMAND`; needs a token), one sent when the page asks: **Send code** runs the command with the message on its stdin (never in its argv; its output is dropped), so it reaches the owner through their own notifier — e.g. a Telegram bot's send command reading the text from stdin; the chat and the bot stay in that command, not in zmina. The code is six digits, single use, 5 minutes, ended by 5 wrong tries; one may be asked for a minute, 10 an hour (a failed send counts). A sent code and a `zmina connect` code live apart: asking for one never replaces the other, a wrong code counts as a try on each live one, a right one spends only its own. A right code sets the same cookie as `?token=`. Every send, refusal and wrong try is logged to the server's stderr without the code. `?token=` keeps working.
 
 The mesh uses its existing SSH/command addresses, not a separate terminal port on each worker. If the destination
 has no direct address, a learned `Through` route opens authenticated live tunnels through intermediary nodes;
@@ -1040,6 +1040,36 @@ write through the browser. Writes need the page's own header. A non-loopback `--
 Live over server-sent events; the files are inside the binary. Each update is patched in: what did not change stays
 the very element it was, so its focus, its scroll and an agent's reference to it hold; an element with a handler is
 always the one just drawn, so it acts on what it shows (`testdata/patch.html` checks it in a browser).
+
+### Connect a phone
+
+`zmina connect [--qr]`, run by the owner in his own terminal on the machine where `zmina ui` runs (not through a
+role: the code would land in its transcript), prints the addresses the cockpit answers on
+(tailnet first, then the local network, the `--allow-host` proxies as `https://`, and this machine's own address
+last) and a fresh one-time six-digit code to type on the sign-in page: single use, 5 minutes, 5 wrong tries, one a
+minute and 10 an hour; the code is the last line, `Code: 123456`, the addresses above it. It needs no notifier. The cockpit makes the code and keeps it in its memory only; zmina
+connect asks for it with the handoff secret of `~/.zmina/ui.json`, from this machine only (loopback, or the
+cockpit's own address), and the code is in no file, log line, argv or environment. `--qr` also draws the first
+address a phone reaches as a QR code — the address, never the code. No cockpit running, one with no token
+(open on this machine only, nothing to sign in to) or an older one: it says so, exit 1, with the line that starts
+one. Anyone who reaches the sign-in page can spend a live code with 5 wrong guesses, and, guessing on, keep
+`zmina connect` short of codes for the hour: keep the cockpit on a tailnet or behind a private proxy (`?token=`
+signs in regardless). A recorded cockpit is asked only while its process runs and at an address of this machine,
+and the handoff secret is taken only from this machine — not through a proxy (an `--allow-host` Host or any
+forwarding header), where every request looks local. The cockpit is per machine, so no crew is named; `zmina connect <node>` runs it on that node over this
+node's address for it (as `zmina ls <node>/<crew>`), the code coming back over ssh.
+
+In 5 minutes, with Tailscale on this machine and the phone:
+
+```
+export ZMINA_UI_TOKEN=$(openssl rand -hex 24)   # once; keep it in the launchd plist's environment, not in argv
+zmina ui --addr "$(tailscale ip -4)":7517 --no-open
+zmina connect --qr                              # scan the address, type the code
+```
+
+The phone keeps the cookie for 90 days. To have the page send codes as well, a `--code-command` reads the message
+on its stdin, e.g. ntfy: `--code-command 'curl -fsS -d @- ntfy.sh/<private topic>'`; mail:
+`--code-command 'mail -s "zmina code" alex@example.com'`.
 
 ## Later — the parked list
 

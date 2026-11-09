@@ -160,6 +160,11 @@ func recordedCockpit() (uiRunning, bool) {
 		return uiRunning{}, false
 	}
 
+	// The handoff secret goes only to a cockpit still running, at an address of this machine.
+	if !alive(r.PID) || !localURL(r.URL) {
+		return uiRunning{}, false
+	}
+
 	return r, true
 }
 
@@ -217,7 +222,13 @@ func serveLogin(w http.ResponseWriter, r *http.Request, l *uiLogins, token strin
 			return true
 		}
 
-		code, ok := l.mint(r.Header.Get("X-Zmina-Handoff"))
+		// The secret is taken only from this machine, as by zmina connect.
+		secret := r.Header.Get("X-Zmina-Handoff")
+		if !fromThisMachine(r, allowHosts) {
+			secret = ""
+		}
+
+		code, ok := l.mint(secret)
 		if !ok && token != "" {
 			// A zmina ui that knows the token (--addr of a cockpit it did not record) signs in the same way.
 			if c, err := r.Cookie(uiCookie); err == nil && subtle.ConstantTimeCompare([]byte(c.Value), []byte(token)) == 1 {

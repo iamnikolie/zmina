@@ -15,13 +15,14 @@
 <main class="box">
   <svg class="mark" viewBox="0 0 24 24" aria-hidden="true"><path class="z" d="M5.6 7.6C5.4 3.9 18.6 3.7 18.1 7.4L6.2 16.8C5.4 20.4 18.6 20.2 18.4 16.4"/><circle cx="5.6" cy="7.6" r="1.6"/><circle cx="18.4" cy="16.4" r="1.6"/></svg>
   <h1 id="head">Sign in on this device</h1>
-  <p class="lead" id="lead">zmina sends a one-time code to your Telegram.</p>
+  <p class="lead" id="lead">zmina sends a one-time code to you. Or run <code>zmina connect</code> on the machine where zmina runs.</p>
   <form id="ask">
     <button type="submit" class="primary" id="send">Send code</button>
+    <button type="button" class="link" id="have">I have a code</button>
     <p class="status" id="ask-status" role="status" aria-live="polite"></p>
   </form>
   <form id="enter" hidden>
-    <label for="code">Code from Telegram</label>
+    <label for="code">Code</label>
     <input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required aria-describedby="status">
     <p class="status" id="status" role="status" aria-live="polite"></p>
     <button type="submit" class="primary" id="go">Sign in</button>
