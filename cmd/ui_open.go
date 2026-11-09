@@ -261,7 +261,8 @@ func serveLogin(w http.ResponseWriter, r *http.Request, l *uiLogins, token strin
 	q := r.URL.Query()
 	q.Del("login")
 
-	target := r.URL.Path
+	// Always a path on this cockpit: "//host/x" or "/\\host/x" would send the browser to another site.
+	target := "/" + strings.TrimLeft(r.URL.Path, "/\\")
 	if len(q) > 0 {
 		target += "?" + q.Encode()
 	}

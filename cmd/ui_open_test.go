@@ -105,6 +105,13 @@ func TestHandoffSignsInWithoutTheToken(t *testing.T) {
 	_ = state.Body.Close()
 	assert.Equal(t, http.StatusOK, state.StatusCode)
 
+	for _, path := range []string{"//example.invalid/x", "/\\example.invalid/x", "///example.invalid/x"} {
+		away, err := noRedirect().Get(srv.URL + path + "?login=nope&tab=2")
+		require.NoError(t, err)
+		_ = away.Body.Close()
+		assert.Equal(t, "/example.invalid/x?tab=2", away.Header.Get("Location"), "%s: a path on this cockpit, never another site", path)
+	}
+
 	again, err := noRedirect().Get(srv.URL + "/?login=" + got.Code)
 	require.NoError(t, err)
 	_ = again.Body.Close()
