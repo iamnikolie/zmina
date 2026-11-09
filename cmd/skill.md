@@ -882,12 +882,14 @@ Every role hears at boot, from zmina itself (`shift.AsksRule`): a question only 
 with `zmina todo add` (and is named by its A-n when asked in chat); when he answers in chat, the role records it at once
 (`todo answer` / `yes` / `done`), so no question he answered stays open. And how a file reaches him in Talk
 (`shift.FilesRule`, under Browser chat). And how to wait (`shift.WaitRule`): a long command or a wait for a condition
-(a build, CI, a deploy, a file, another role) goes in the background — Bash `run_in_background`, or Monitor with an
-until-loop — and the turn ends; the role is woken once when it ends and looks once. No sleep loops, no repeated status
-checks: each is a turn that reads the whole conversation again (`zmina usage` counts them as `WAITS`). A Codex role,
-whose runtime has no background command that wakes it, hears `shift.CodexWaitRule`: wait inside one command (`until
-<check>; do sleep 30; done` under a timeout), never by calling a check again and again. A role started before this
-hears it at its next start.
+(a build, CI, a deploy, a file) goes in the background — Bash `run_in_background`, or Monitor with an until-loop — and
+the turn ends; the role is woken once when it ends and looks once. Waiting for another role, it just ends its turn:
+zmina brings it the line. No sleep loops, no repeated status checks: each is a turn that reads the whole conversation
+again (`zmina usage` counts them as `WAITS`). A Codex role, whose runtime has no background command that wakes it,
+hears `shift.CodexWaitRule`: wait inside one command (`until <check>; do sleep 30; done`) with that shell call's own
+timeout set above the wait, never by calling a check again and again. A role started before this hears it at its next
+start. A role whose boot is empty (no `boot:`, no `AGENT.md`, not the dispatcher, no Codex seat in the crew) starts
+with no prompt and hears none of these rules.
 
 Every answer — from these commands or the ui page — closes the ask (a waiting task keeps its state) and queues a
 note for the dispatcher like `zmina note`: `hand: A-3 · yes: <rec> — <text>`, `ui: T-62 · <words>`,
@@ -1109,13 +1111,15 @@ from cache), `$ API`, `$/TURN`, `CTX` (the context a turn carries on average; `!
 turn's price is reading the conversation again: compact or restart the role), `MODELS` (the model mix by dollars,
 from each reply's own model), and for `--by task` `HOW`. A totals row `all`.
 
-- **Waits** (`WAITS`: turns and their dollars; `waits` and `wait_cost` in `--json`): replies that came right after a
-  Bash call that waited in the foreground — a `sleep N`, an `until …; do` / `while …; do` loop, `kubectl rollout
-  status`, `gh run watch` — or after a CI or deploy status check (`gl`/`glab` pipeline, ci or job, `gh run`, `gh pr
-  checks`, `helm status`, `argocd app get|wait`) that repeats the session's previous check word for word (one look is
-  not a poll). A call with `run_in_background` and a Monitor are never counted: that is how the boot's wait rule says
-  to wait. Each such reply read the whole conversation again only to see whether something was done; the column
-  shows whether the rule is kept. Claude transcripts only (Codex token events carry no tool calls).
+- **Waits** (`WAITS`: turns and their dollars; `waits` and `wait_cost` in `--json`): the turns spent polling. A wait
+  is a Bash call in the foreground that waits — a `sleep` of 20 s or more, an `until …; do` / `while …; do` loop that
+  sleeps, `kubectl rollout status`, `gh run watch`, `gh pr checks --watch`; a here-document's body is not read. Waits
+  with at most three calls between them (the look at whether it is done) and no new prompt are one polling chain. Its
+  first wait and look cost what a background wait costs too (woken once, one look), so from its second wait on the
+  reply after each wait and the reply after its first look are counted: each read the whole conversation again only to
+  see whether something was done. A call with `run_in_background` and a Monitor are never waits: that is how the
+  boot's wait rule says to wait. The column shows whether the rule is kept. Claude transcripts only (Codex token
+  events carry no tool calls).
 
 - **$ API is API-equivalent**: what the same tokens would cost at API rates; the crews run on a subscription. Each
   reply is priced by its model, its 5-minute and 1-hour cache writes apart, its fast mode and web searches. The

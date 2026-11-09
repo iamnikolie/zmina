@@ -560,15 +560,17 @@ const OwnerRules = AsksRule + "\n\n" + FilesRule
 // loop of checks — each check is a turn that reads the whole conversation again (thousands of such turns a month
 // across the crews).
 const WaitRule = "[zmina] Waiting: start a command that runs long or waits for something (a build, CI, a deploy, a " +
-	"file, another role) in the background — Bash with run_in_background, or Monitor with an until-loop for a " +
-	"condition — and end your turn: you are woken once when it ends. Never sleep in a loop or check a status again " +
-	"and again: each check is a turn that reads your whole conversation again. Look once after the wake."
+	"file) in the background — Bash with run_in_background, or Monitor with an until-loop for a condition — and end " +
+	"your turn: you are woken once when it ends. Waiting for another role, just end your turn: zmina brings you its " +
+	"line. Never sleep in a loop or check a status again and again: each check is a turn that reads your whole " +
+	"conversation again. Look once after the wake."
 
 // CodexWaitRule is the same rule for a Codex role, whose runtime has no background command that wakes it: it waits
-// inside one command instead of in a series of calls.
-const CodexWaitRule = "[zmina] Waiting: wait for a build, CI, a deploy, a file or another role inside one command " +
-	"— `until <check>; do sleep 30; done` under a timeout — never by running a status check again and again: each " +
-	"call is a model turn that reads your whole conversation again. Look once when it returns."
+// inside one command instead of in a series of calls, and that call's own timeout must outlast the wait.
+const CodexWaitRule = "[zmina] Waiting: wait for a build, CI, a deploy or a file inside one command — `until <check>; " +
+	"do sleep 30; done` — with that shell call's own timeout set above the wait, or it is cut short; never by running " +
+	"a status check again and again: each call is a model turn that reads your whole conversation again. Waiting for " +
+	"another role, just end your turn: zmina brings you its line. Look once when it returns."
 
 // RoleRules are the rules every Claude role hears at boot; CodexRoleRules every Codex role's.
 const (

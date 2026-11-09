@@ -4,39 +4,108 @@ import (
 	"bytes"
 	"encoding/json"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
 var (
-	// waitRe are commands that wait in the foreground: a sleep, a shell loop until something is so, a watch on a
-	// rollout or a CI run.
-	waitRe = regexp.MustCompile(`\bsleep\s+\d|\b(until|while)\b[^\n]*\bdo\b|\bkubectl\s+rollout\s+status\b|` +
-		`\bgh\s+run\s+watch\b|\bgh\s+pr\s+checks\b[^\n]*--watch`)
-	// checkRe are status checks of CI and deploys: one is a look, the same one again is a poll.
-	checkRe = regexp.MustCompile(`\b(gl|glab)\b[^\n]*\b(pipeline|ci|job)s?\b|\bgh\s+(run|pr\s+checks)\b|` +
-		`\bhelm\s+status\b|\bargocd\s+app\s+(get|wait)\b`)
+	// sleepRe is a sleep with its length; a short one (under minSleep) is a settle pause, not a wait.
+	sleepRe = regexp.MustCompile(`\bsleep\s+(\d+(?:\.\d+)?)([smh]?)\b`)
+	// loopRe is a shell loop; it waits only when it sleeps.
+	loopRe = regexp.MustCompile(`\b(until|while)\b[^\n]*\bdo\b`)
+	// watchRe are commands that wait on a rollout or a CI run.
+	watchRe = regexp.MustCompile(`\bkubectl\s+rollout\s+status\b|\bgh\s+run\s+watch\b|\bgh\s+pr\s+checks\b[^\n]*--watch`)
+	// heredocRe opens a here-document; its body is text for another program, not shell.
+	heredocRe = regexp.MustCompile(`<<-?\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?`)
 )
 
-// WaitCall reads a Bash command run in the foreground: whether it waits (a sleep, a wait loop, a watch), and the
-// status check it is, if any (CI, a deploy). A command run in the background or a Monitor ends the turn and wakes
-// it once: never a wait here.
-func WaitCall(command string) (waits bool, check string) {
-	if waitRe.MatchString(command) {
-		return true, ""
+// maxLooks is how many calls may stand between two waits of one polling chain: a look at whether it is done may take
+// a few (a status, a log, a queue). More are work again.
+const maxLooks = 3
+
+// minSleep is the shortest sleep that is a wait (seconds): shorter ones let a server start or a page settle.
+const minSleep = 20
+
+// WaitCall reports whether a Bash command run in the foreground waits: a sleep of minSleep or more, a loop that
+// sleeps, a watch on a rollout or a CI run. A here-document's body is not read. A command run in the background or a
+// Monitor ends the turn and wakes it once: never a wait here.
+func WaitCall(command string) bool {
+	command = stripHeredocs(command)
+
+	if watchRe.MatchString(command) {
+		return true
 	}
 
-	if checkRe.MatchString(command) {
-		return false, strings.Join(strings.Fields(command), " ")
+	sleeps := false
+	for _, m := range sleepRe.FindAllStringSubmatch(command, -1) {
+		n, err := strconv.ParseFloat(m[1], 64)
+		if err != nil {
+			continue
+		}
+
+		switch m[2] {
+		case "m":
+			n *= 60
+		case "h":
+			n *= 3600
+		}
+
+		if n >= minSleep {
+			return true
+		}
+
+		sleeps = true
 	}
 
-	return false, ""
+	return sleeps && loopRe.MatchString(command)
 }
 
-// waitCalls reads the tool calls of an assistant line: whether one waits in the foreground, and the last status
-// check among them.
-func waitCalls(raw []byte) (waits bool, check string) {
-	if !bytes.Contains(raw, []byte(`"tool_use"`)) || !bytes.Contains(raw, []byte(`"Bash"`)) {
-		return false, ""
+// stripHeredocs drops the bodies of a command's here-documents.
+func stripHeredocs(command string) string {
+	for {
+		loc := heredocRe.FindStringSubmatchIndex(command)
+		if loc == nil {
+			return command
+		}
+
+		word := command[loc[2]:loc[3]]
+		start := strings.IndexByte(command[loc[1]:], '\n')
+		if start < 0 {
+			return command[:loc[0]]
+		}
+
+		body := command[loc[1]+start+1:]
+		end := len(body)
+
+		for i := 0; i < len(body); {
+			j := strings.IndexByte(body[i:], '\n')
+			line := body[i:]
+			if j >= 0 {
+				line = body[i : i+j]
+			}
+
+			if strings.TrimLeft(line, "\t") == word {
+				end = i + len(line)
+
+				break
+			}
+
+			if j < 0 {
+				break
+			}
+
+			i += j + 1
+		}
+
+		command = command[:loc[0]] + " " + body[min(end, len(body)):]
+	}
+}
+
+// toolCalls reads the tool calls of an assistant line, in order: for each, whether it waits (a foreground Bash call,
+// see WaitCall). Any other call — another tool, a background command, a Monitor — is false.
+func toolCalls(raw []byte) []bool {
+	if !bytes.Contains(raw, []byte(`"tool_use"`)) {
+		return nil
 	}
 
 	var l struct {
@@ -52,21 +121,71 @@ func waitCalls(raw []byte) (waits bool, check string) {
 		} `json:"message"`
 	}
 	if json.Unmarshal(raw, &l) != nil {
-		return false, ""
+		return nil
 	}
 
+	var out []bool
+
 	for _, b := range l.Message.Content {
-		if b.Type != "tool_use" || b.Name != "Bash" || b.Input.Background {
+		if b.Type == "tool_use" {
+			out = append(out, b.Name == "Bash" && !b.Input.Background && WaitCall(b.Input.Command))
+		}
+	}
+
+	return out
+}
+
+// waitChain follows polling in a conversation: foreground waits with at most maxLooks calls between them (the look
+// at whether it is done), with no new prompt between. The first wait and its look cost what a background wait costs
+// too (woken once, one look); from the second wait of a chain on, the reply after each wait and the reply after its
+// first look are wait turns. More calls in a row that are not waits are work again: the chain ends.
+type waitChain struct {
+	waits, since, left int
+	pending             bool
+	by                  string
+}
+
+// prompt is a new turn: the chain ends.
+func (w *waitChain) prompt() { *w = waitChain{} }
+
+// reply is a reply seen for the first time: whether it is a wait turn.
+func (w *waitChain) reply(id string) bool {
+	if !w.pending || id == w.by {
+		return false
+	}
+
+	w.pending = false
+	if w.left == 0 {
+		return false
+	}
+
+	w.left--
+
+	return true
+}
+
+// calls are the tool calls a reply made.
+func (w *waitChain) calls(id string, waiting []bool) {
+	for _, wait := range waiting {
+		w.pending, w.by = true, id
+
+		if !wait {
+			if w.since++; w.since > maxLooks {
+				w.waits, w.left = 0, 0
+			}
+
 			continue
 		}
 
-		w, c := WaitCall(b.Input.Command)
-		waits = waits || w
+		if w.waits > 0 && w.since <= maxLooks {
+			w.waits++
+		} else {
+			w.waits = 1
+		}
 
-		if c != "" {
-			check = c
+		w.since = 0
+		if w.waits >= 2 {
+			w.left = 2
 		}
 	}
-
-	return waits, check
 }

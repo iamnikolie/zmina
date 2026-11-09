@@ -450,8 +450,8 @@ type Message struct {
 	// message came from.
 	Trigger string `json:"trigger"`
 	From    string `json:"from,omitempty"`
-	// Wait is set for a reply that came after a call that waited in the foreground (see WaitCall): it read the
-	// whole conversation again only to see whether something was done.
+	// Wait is set for a reply of a polling chain past its first wait and look (see waitChain): it read the whole
+	// conversation again only to see whether something was done, which a background wait does once.
 	Wait bool `json:"wait,omitempty"`
 }
 
@@ -619,27 +619,26 @@ func readMessages(path string, since time.Time, seen map[string]bool, parent []c
 	current := cue{trigger: TriggerOwner}
 	rd := bufio.NewReaderSize(f, 1<<20)
 
-	// waited is the reply that made a waiting call: the next reply is the one that came after it. polled is the
-	// last status check, so a second one alike is a poll.
-	var waited, polled string
+	var (
+		chain waitChain
+		last  string
+	)
 
 	for {
 		raw, err := rd.ReadBytes('\n')
 		if len(raw) > 0 {
 			m, c, ok := parseLine(raw)
-			if ok && c.trigger == "" {
-				if waits, check := waitCalls(raw); waits || check != "" {
-					if waits || check == polled {
-						waited = m.ID
-						if waited == "" {
-							waited = "-"
-						}
-					}
 
-					if check != "" {
-						polled = check
-					}
+			wait := false
+			if ok && c.trigger != "" {
+				chain.prompt()
+			} else if ok {
+				if m.ID == "" || m.ID != last {
+					wait = chain.reply(m.ID)
+					last = m.ID
 				}
+
+				chain.calls(m.ID, toolCalls(raw))
 			}
 
 			if ok && c.trigger != "" && parent == nil {
@@ -654,14 +653,8 @@ func readMessages(path string, since time.Time, seen map[string]bool, parent []c
 					at = cueAt(parent, m.At)
 				}
 
-				m.Trigger, m.From = at.trigger, at.from
-				if waited != "" && waited != m.ID {
-					m.Wait, waited = true, ""
-				}
-
+				m.Trigger, m.From, m.Wait = at.trigger, at.from, wait
 				out = append(out, m)
-			} else if ok && c.trigger == "" && waited != "" && waited != m.ID && (m.ID == "" || !seen[m.ID]) {
-				waited = "" // the reply after the wait is before the window
 			}
 		}
 
