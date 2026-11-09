@@ -110,7 +110,16 @@ var forwardHeaders = []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Host"
 // is not, though it arrives over loopback: one naming a --allow-host host, or carrying a forwarding header — a
 // local reverse proxy makes every remote request look local.
 func fromThisMachine(r *http.Request, proxyHosts []string) bool {
-	if slices.Contains(proxyHosts, r.Host) {
+	// A proxy may add a port to the Host it forwards: hosts are compared without one.
+	bare := func(h string) string {
+		if host, _, err := net.SplitHostPort(h); err == nil {
+			return host
+		}
+
+		return h
+	}
+
+	if slices.ContainsFunc(proxyHosts, func(h string) bool { return strings.EqualFold(bare(h), bare(r.Host)) }) {
 		return false
 	}
 

@@ -200,8 +200,10 @@ func TestConnectNeedsTheSecretAndThisMachine(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, call(logins.handoff, "127.0.0.1:5000", "").Code, "forwarded")
 	extra = func(r *http.Request) { r.Header.Set("Forwarded", "for="+tailB) }
 	assert.Equal(t, http.StatusForbidden, call(logins.handoff, "127.0.0.1:5000", "").Code, "forwarded")
-	extra = func(r *http.Request) { r.Host = "zmina.example.ts.net" }
-	assert.Equal(t, http.StatusForbidden, call(logins.handoff, "127.0.0.1:5000", "").Code, "an --allow-host host")
+	for _, host := range []string{"zmina.example.ts.net", "zmina.example.ts.net:8443", "Zmina.Example.ts.net"} {
+		extra = func(r *http.Request) { r.Host = host }
+		assert.Equal(t, http.StatusForbidden, call(logins.handoff, "127.0.0.1:5000", "").Code, "an --allow-host host: %s", host)
+	}
 	extra = nil
 
 	// The handoff secret mints a login code only from this machine too.
