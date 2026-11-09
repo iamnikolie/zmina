@@ -164,6 +164,15 @@ type RoleState struct {
 	Releasing    time.Time     `json:"releasing,omitzero"`
 	ReleaseTasks []string      `json:"release_tasks,omitempty"`
 	ReleaseIdle  time.Duration `json:"release_idle,omitempty"`
+	// RestartAsked is when the ticker asked the role for its note before a restart (restart_at, restart_idle), in
+	// conversation RestartSession, for RestartTasks, and why (RestartWhy). RestartOff is when the last ask was called
+	// off; RestartGaveUp the conversation no note came in: it is not asked again, context_max trims it as before.
+	RestartAsked   time.Time `json:"restart_asked,omitzero"`
+	RestartSession string    `json:"restart_session,omitempty"`
+	RestartTasks   []string  `json:"restart_tasks,omitempty"`
+	RestartWhy     string    `json:"restart_why,omitempty"`
+	RestartOff     time.Time `json:"restart_off,omitzero"`
+	RestartGaveUp  string    `json:"restart_gave_up,omitempty"`
 	// Sent is the last line typed into the role, until the role shows it took it.
 	Sent *Sent `json:"sent,omitempty"`
 	// Posted are lines posted to its inbox socket not yet seen in its conversation; Inbound that it was started

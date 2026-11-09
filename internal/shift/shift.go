@@ -160,6 +160,9 @@ type Shift struct {
 	// Released are the roles this shift's tick began to put down (BeginDown); the caller waits for them outside
 	// the lock and finishes the downs.
 	Released []string
+	// Restarts are the roles this shift's tick began to restart fresh with their note (restart_at, restart_idle):
+	// the caller waits for them to end outside the lock, then FinishRestart starts each again.
+	Restarts []Restart
 	// Rang are the alarms this shift's tick rang with a part left for the caller outside the lock: a notify
 	// command to run, a crew on another node to tell.
 	Rang []Rung

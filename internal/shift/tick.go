@@ -151,6 +151,11 @@ func (s *Shift) Tick() []string {
 			notes = append(notes, note)
 		}
 
+		if line := s.restart(name, r, now, held[name]); line != "" {
+			did = append(did, line)
+			up = up && rs.Downing.IsZero()
+		}
+
 		if line, note := s.release(name, r, now); line != "" {
 			did = append(did, line)
 
@@ -165,7 +170,7 @@ func (s *Shift) Tick() []string {
 			notes = append(notes, note)
 		}
 
-		notes = append(notes, s.unstarted(name, now, up || stopped, held[name])...)
+		notes = append(notes, s.unstarted(name, now, up || stopped || !rs.Downing.IsZero(), held[name])...)
 
 		if up {
 			notes = append(notes, s.watchScreen(name, now)...)
@@ -223,6 +228,11 @@ func (s *Shift) Tick() []string {
 func (s *Shift) trim(name string, r *crew.Role, now time.Time, tasks []string) string {
 	limit := r.ContextLimit()
 	rs := s.State.Role(name)
+
+	// A role asked for its note before a restart, or being restarted, is left to that.
+	if !rs.RestartAsked.IsZero() || !rs.Downing.IsZero() {
+		return ""
+	}
 
 	do := r.ContextDo()
 	if do == crew.ContextClear && len(tasks) > 0 {

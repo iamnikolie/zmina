@@ -42,12 +42,15 @@ type usageReport struct {
 	Total   cost.Row   `json:"total"`
 	Prices  string     `json:"prices"`
 	Missing []string   `json:"missing,omitempty"`
+	// Restarts are the roles' restarts for their context in the window (restart_at, restart_idle).
+	Restarts []usageRestart `json:"restarts,omitempty"`
 }
 
 // peerCells is what a peer answers usage --cells with.
 type peerCells struct {
-	Cells    []cost.Cell `json:"cells"`
-	Problems []string    `json:"problems,omitempty"`
+	Cells    []cost.Cell    `json:"cells"`
+	Problems []string       `json:"problems,omitempty"`
+	Restarts []usageRestart `json:"restarts,omitempty"`
 }
 
 // peerUsageTimeout is how long --all waits for one peer's answer.
@@ -93,20 +96,23 @@ func (a *app) usageCommand() *cobra.Command {
 			}
 
 			got, problems := usageCells(crews, node, from, prices)
+			restarts := usageRestarts(crews, node, from)
 
 			if cells {
-				return json.NewEncoder(a.out).Encode(peerCells{Cells: got, Problems: problems})
+				return json.NewEncoder(a.out).Encode(peerCells{Cells: got, Problems: problems, Restarts: restarts})
 			}
 
 			if all && !local {
 				// The parsed duration goes into the peer's command line, never the flag's text.
-				peers, missing := peersUsage(cmd.Context(), d.String())
-				got = append(got, peers...)
-				problems = append(problems, missing...)
+				peers := peersUsage(cmd.Context(), d.String())
+				got = append(got, peers.Cells...)
+				problems = append(problems, peers.Problems...)
+				restarts = append(restarts, peers.Restarts...)
 			}
 
 			if role != "" {
 				got = slices.DeleteFunc(got, func(c cost.Cell) bool { return c.Role != role })
+				restarts = slices.DeleteFunc(restarts, func(r usageRestart) bool { return r.Role != role })
 			}
 
 			rows := cost.Group(got, by)
@@ -118,12 +124,14 @@ func (a *app) usageCommand() *cobra.Command {
 				}
 
 				return a.printJSON(usageReport{By: by, Since: from, Rows: rows, Total: total,
-					Prices: prices.Date + " (" + prices.From + ")", Missing: problems})
+					Prices: prices.Date + " (" + prices.From + ")", Missing: problems, Restarts: restarts})
 			}
 
 			if err := printUsage(a.out, by, rows, total, len(crewsOf(got)) > 1); err != nil {
 				return err
 			}
+
+			printRestarts(a.out, restarts, len(crewsOf(got)) > 1)
 
 			printUsageNotes(a.out, prices, total, problems)
 
@@ -289,22 +297,23 @@ func worktreeDirs(c *crew.Crew, tasks []task.Task) map[string]bool {
 
 // peersUsage asks every peer with an address for its crews' cells, all at once; a peer that does not answer is
 // missing, with why.
-func peersUsage(ctx context.Context, since string) ([]cost.Cell, []string) {
+func peersUsage(ctx context.Context, since string) peerCells {
 	me, err := openNode()
 	if err != nil {
-		return nil, nil
+		return peerCells{}
 	}
 
 	peers, err := me.Peers()
 	if err != nil {
-		return nil, []string{"mesh: " + err.Error()}
+		return peerCells{Problems: []string{"mesh: " + err.Error()}}
 	}
 
 	var (
-		mu      sync.Mutex
-		wg      sync.WaitGroup
-		out     []cost.Cell
-		missing []string
+		mu       sync.Mutex
+		wg       sync.WaitGroup
+		out      []cost.Cell
+		missing  []string
+		restarts []usageRestart
 	)
 
 	for _, p := range peers {
@@ -333,6 +342,7 @@ func peersUsage(ctx context.Context, since string) ([]cost.Cell, []string) {
 			}
 
 			out = append(out, cells.Cells...)
+			restarts = append(restarts, cells.Restarts...)
 			for _, pr := range cells.Problems {
 				missing = append(missing, p.Name+": "+pr)
 			}
@@ -342,7 +352,7 @@ func peersUsage(ctx context.Context, since string) ([]cost.Cell, []string) {
 	wg.Wait()
 	slices.Sort(missing)
 
-	return out, missing
+	return peerCells{Cells: out, Problems: missing, Restarts: restarts}
 }
 
 func peerUsage(ctx context.Context, p mesh.Peer, since string) (peerCells, error) {
@@ -367,6 +377,12 @@ func peerUsage(ctx context.Context, p mesh.Peer, since string) (peerCells, error
 		for i := range pc.Cells {
 			if pc.Cells[i].Node == "" {
 				pc.Cells[i].Node = p.Name
+			}
+		}
+
+		for i := range pc.Restarts {
+			if pc.Restarts[i].Node == "" {
+				pc.Restarts[i].Node = p.Name
 			}
 		}
 
