@@ -41,6 +41,9 @@ type outliner struct {
 	summary func(b *strings.Builder, f *File, path, header string, left int)
 	// hint is how the outline footer names a piece of this type (after the path).
 	hint string
+	// sure, when set, says whether the outline of this file is sure enough for the read guard to answer with: its
+	// labels are code, never a string's or a comment's text read as code.
+	sure func(src []byte) bool
 }
 
 // whole adapts an outliner that needs no line count.
@@ -54,8 +57,12 @@ var outliners = []outliner{
 	{lang: "yaml", exts: []string{".yaml", ".yml"}, parse: yamlOutline, hint: ":key (a.b below the top)"},
 	{lang: "json", exts: []string{".json"}, parse: jsonOutline, hint: ":key (a.b below the top)"},
 	{lang: "foxpro", exts: []string{".prg"}, parse: whole(foxOutline), hint: ":Name (PROCEDURE, FUNCTION, Class.Method)"},
-	{lang: "sql", exts: []string{".sql", ".pgsql", ".psql", ".mysql", ".ddl"}, parse: whole(sqlOutline),
+	{lang: "sql", exts: []string{".sql", ".pgsql", ".psql", ".mysql", ".ddl"}, parse: whole(sqlOutline), sure: sqlSure,
 		hint: ":name (every statement on a table or object; Up, Down)"},
+	{lang: "typescript", exts: []string{".ts", ".tsx", ".mts", ".cts"}, parse: whole(jsOutline), sure: jsSure,
+		hint: ":Name (function, Class.method, a test's title)"},
+	{lang: "javascript", exts: []string{".js", ".jsx", ".mjs", ".cjs"}, parse: whole(jsOutline), sure: jsSure,
+		hint: ":Name (function, Class.method, a test's title)"},
 	{lang: "csv", exts: []string{".csv"}, summary: writeCSVSummary},
 	{lang: "tsv", exts: []string{".tsv", ".tab"}, summary: writeCSVSummary},
 	{lang: "jsonl", exts: []string{".jsonl", ".ndjson"}, summary: writeJSONLSummary},
@@ -72,8 +79,8 @@ func outlinerFor(path string) *outliner {
 	return nil
 }
 
-// Lang names the outliner for a path: go, markdown, yaml, json, foxpro, sql, csv, tsv, jsonl, or "" (outlined by
-// indentation).
+// Lang names the outliner for a path: go, markdown, yaml, json, foxpro, sql, typescript, javascript, csv, tsv, jsonl,
+// or "" (outlined by indentation).
 func Lang(path string) string {
 	if o := outlinerFor(path); o != nil {
 		return o.lang
