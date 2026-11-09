@@ -13,6 +13,13 @@ in the reader's context for every turn after it. Ask for detail only when the co
 `zmina ls <role>` and `zmina task show <id>` look at one thing. Notifications carry the gist and the command that
 shows the rest.
 
+**Any id in words**: `zmina show <id>...` reads every family zmina prints — `T-` task, `A-` question or check for the
+owner, `L-` parked item, `S-` a line waiting for (or given) its ack, `R-` reminder or alarm, `LS-` lesson; any case,
+the dash optional (`t14`, `ls-2`); several at once — as a head line (the id and its title or text), where it stands
+(who has it, state, age; a task or parked item also the chain it belongs to, `L-3 → T-9 (this)`) and `act:`, the one
+command to act on it. An id it does not find is said so, never an error; a word that is no id names the families.
+When you name an id to the owner, name what it is too.
+
 ## The crew file
 
 `~/.zmina/crew.yaml`; another crew is `--config <name>` (`~/.zmina/<name>/crew.yaml`; such a
@@ -1372,7 +1379,8 @@ paid for: `Of the cost: cache reads 60%, cache writes 17%, output 18%, input 5%.
 
 `zmina log [--since 12h|3d] [--role r] [--task T-14] [-n 50] [--full] [--json]` — ups, downs, ends, broken
 roles, stuck/idle/expired notes, lines told or typed, keys, sends, tasks, seats, scheduled runs, restarts,
-each with who did it (`hand`, `ticker`, `schedule`, or the role); one line of at most 160 characters per event,
+each with who did it (`hand`, `ticker`, `schedule`, or the role) and, after a task's or parked item's id, its title
+(`accepted T-14 (fix the login)`); one line of at most 160 characters per event,
 `--full` whole. File `~/.zmina/events.jsonl`,
 rotated at 10 MB into `events.jsonl.1` (log reads both).
 
