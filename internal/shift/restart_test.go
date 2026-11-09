@@ -326,3 +326,57 @@ func (f *fakeEvents) count(role, event string) int {
 
 	return n
 }
+
+// Background work whose end never came holds the restart; the log says so once, not every beat.
+func TestRestartHeldByBackgroundSaidOnce(t *testing.T) {
+	f := restarting(t, "", 262_000, 6*time.Minute)
+	act := f.rg.activity["sid-designer"]
+	act.Background = []string{"b1"}
+	f.rg.activity["sid-designer"] = act
+
+	did := f.s.Tick()
+	assert.Contains(t, did, "designer: restart held: background b1 running")
+	*f.now = f.now.Add(time.Minute)
+	f.idle("designer", 262_000, 7*time.Minute)
+	f.rg.activity["sid-designer"] = registry.Activity{Prompt: act.Prompt, Background: []string{"b1"}}
+	did = f.s.Tick()
+	assert.NotContains(t, did, "designer: restart held: background b1 running")
+	assert.Equal(t, 1, f.ev.count("designer", "restart-held"))
+	assert.Empty(t, f.s.Restarts)
+
+	// Another launch is said again; once it all ended the restart goes on.
+	f.rg.activity["sid-designer"] = registry.Activity{Prompt: act.Prompt, Background: []string{"b1", "m2"}}
+	f.s.Tick()
+	assert.Equal(t, 2, f.ev.count("designer", "restart-held"))
+
+	f.rg.activity["sid-designer"] = registry.Activity{Prompt: act.Prompt}
+	f.s.Tick()
+	assert.True(t, f.ev.has("designer", "restart-asked"))
+}
+
+// A copy of a role holding its own task is restarted as itself: the same copy, fresh, with its task's packet.
+func TestRestartACopy(t *testing.T) {
+	f := restarting(t, "", 100, time.Minute)
+	f.tk.list = nil
+	require.NoError(t, f.s.Up("designer#2"))
+	*f.now = f.now.Add(5 * time.Minute)
+	f.idle("designer#2", 300_000, 10*time.Minute)
+	f.tk.list = []task.Task{{ID: "T-7", Role: "designer#2", State: task.Open, Title: "draw the icon"}}
+	f.note(t, "T-7", f.now.Add(-10*time.Minute))
+
+	did := f.s.Tick()
+	require.Len(t, f.s.Restarts, 1, "%v", did)
+	assert.Equal(t, "designer#2", f.s.Restarts[0].Name)
+	assert.Contains(t, f.tm.typed["designer#2"], "/exit")
+	assert.NotContains(t, f.tm.typed["designer"], "/exit", "the base role stays up")
+
+	out := f.finish(t)
+	require.Len(t, out, 1)
+	assert.Contains(t, out[0], "designer#2: restarted fresh (context 300k over restart_at 250k); note T-7 ")
+	assert.True(t, f.tm.Has("designer#2"))
+	assert.True(t, f.ev.has("designer#2", "restarted"))
+	rs := f.s.State.Role("designer#2")
+	require.Len(t, rs.Inbox, 2)
+	assert.True(t, strings.HasPrefix(rs.Inbox[1], "[zmina T-7] Read handoff packet "), rs.Inbox[1])
+	assert.Contains(t, rs.Inbox[1], "--role 'designer#2'")
+}
