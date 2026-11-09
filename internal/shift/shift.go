@@ -172,6 +172,10 @@ type Shift struct {
 	Rang []Rung
 	// Warn reports a problem that must not fail the command (the event log cannot be written); nil is quiet.
 	Warn func(error)
+	// Flush writes the state at once, keeping the lock (Locked.Flush); nil in tests that keep state in memory.
+	Flush func() error
+	// flushErr is the first flush that failed: the beat then types, posts and starts nothing more.
+	flushErr error
 
 	warned bool
 	// resumed is the conversation each role of this run was last started on ("" fresh): what up checks it lives.
@@ -804,6 +808,8 @@ func (s *Shift) start(name string, o UpOptions) error {
 	if err := s.Tmux.Start(name, dir, s.Env(r), s.Command(r, resume)); err != nil {
 		return fmt.Errorf("%s: %w", name, err)
 	}
+
+	defer s.flush() // the session runs: a beat killed later must not start a second one
 
 	rs.Started, rs.Up, rs.Downing, rs.Pending, rs.Dir = s.Now(), true, time.Time{}, nil, o.Dir
 	rs.Releasing, rs.ReleaseTasks, rs.ReleaseIdle = time.Time{}, nil, 0

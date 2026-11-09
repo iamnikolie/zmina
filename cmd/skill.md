@@ -1370,6 +1370,9 @@ release the ticker began is saved with the down (`pending` in the role's state):
 during its wait, a later beat finishes it (`restart-late`, `released-late`). A down with nothing saved (a `zmina down`
 or `sleep` whose process died during the wait) stops counting after 150 s (`down-stale`), and the dispatcher hears
 `<role>: went down halfway … stays down`.
+A line typed or posted and a session started are saved at once, under the beat's lock (`state.json` written again):
+a beat killed after them, or a save that fails at its end, does not type or start them twice. A save that fails
+there stops the beat's further typing and starting, and says so.
 
 0. Alarms whose time has come ring, once each (see Alarms): a reminder for the owner becomes a check on the todo,
    a parked item comes back to it, a role is started if down and gets its line queued, another crew is told.

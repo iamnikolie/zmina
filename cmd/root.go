@@ -234,6 +234,7 @@ func (a *app) withState(fn func(s *shift.Shift) error) error {
 	}
 
 	s.State = l.State
+	s.Flush = l.Flush
 	s.CommittedMessageStages = map[string]map[string]time.Time{}
 	for key, stages := range s.State.MessageStages {
 		copy := map[string]time.Time{}

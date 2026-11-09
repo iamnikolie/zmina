@@ -414,6 +414,14 @@ func takeLock(dir string) (*os.File, error) {
 func (l *Locked) Save() error {
 	defer l.Release()
 
+	return l.write()
+}
+
+// Flush writes the state and keeps the lock: a beat saves what it did after each effect it cannot take back.
+func (l *Locked) Flush() error { return l.write() }
+
+// write puts the state on disk whole: a temporary file, synced, renamed over the old one (kept as state.json.prev).
+func (l *Locked) write() error {
 	if l.legacy != nil {
 		bak := l.path + ".v1.bak"
 		if _, err := os.Stat(bak); errors.Is(err, os.ErrNotExist) {

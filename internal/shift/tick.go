@@ -124,7 +124,7 @@ func (s *Shift) Tick() []string {
 			_ = s.Tmux.Kill(name)
 		}
 
-		if !up && !stopped && r.Keep == crew.KeepAlways && !rs.Held && !rs.Broken &&
+		if !up && !stopped && r.Keep == crew.KeepAlways && !rs.Held && !rs.Broken && s.flushErr == nil &&
 			s.registryFor(name).LiveByName(r.Session) == nil && now.Sub(rs.Started) >= reopenPause {
 			if err := s.start(name, UpOptions{}); err != nil {
 				// Wait the usual pause before the next try, so a role that cannot start does not fill the log.
@@ -198,20 +198,24 @@ func (s *Shift) Tick() []string {
 
 	s.renotify(now)
 
+	// Each line typed or posted is saved at once (flush): a beat killed after it, or a save that fails at its end,
+	// does not type it again. After a failed flush nothing more is typed this beat.
 	typed := map[string]bool{}
 	if line := s.deliver(now); line != "" {
 		typed[s.Crew.Dispatcher] = true
 		did = append(did, "told the dispatcher: "+line)
+		s.flush()
 	}
 
 	for _, name := range s.Names() {
-		if typed[name] {
+		if typed[name] || s.flushErr != nil {
 			continue
 		}
 
 		if line := s.deliverInbox(name, now); line != "" {
 			typed[name] = true
 			did = append(did, line)
+			s.flush()
 		}
 	}
 
@@ -1390,4 +1394,20 @@ func (s *Shift) archiveRole(name string, rs *RoleState, now time.Time) (string, 
 	path := filepath.Join(dir, safe+"-"+now.UTC().Format("20060102-150405")+".json")
 
 	return path, os.WriteFile(path, raw, 0o600)
+}
+
+// flush writes the state at once after an effect that cannot be taken back (a line typed or posted, a session
+// started). A failed flush is told once and stops the beat's further effects: the state on disk no longer says
+// what was done.
+func (s *Shift) flush() {
+	if s.Flush == nil || s.flushErr != nil {
+		return
+	}
+
+	if err := s.Flush(); err != nil {
+		s.flushErr = err
+		if s.Warn != nil {
+			s.Warn(fmt.Errorf("state not saved, nothing more typed this beat: %w", err))
+		}
+	}
 }
