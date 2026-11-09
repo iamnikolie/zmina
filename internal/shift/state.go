@@ -80,6 +80,8 @@ type State struct {
 	// it when it leaves the todo. PushFrom is when the ticker began pushing: asks older than that are not new.
 	Pushed   map[string]time.Time `json:"pushed,omitempty"`
 	PushFrom time.Time            `json:"push_from,omitzero"`
+	// PushFailed is when the last push could not be sent; the next waits a while after it.
+	PushFailed time.Time `json:"push_failed,omitzero"`
 
 	// Legacy is set when the file read was in the first format (converted in memory, written as this one on
 	// the next save).

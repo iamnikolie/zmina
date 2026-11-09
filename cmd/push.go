@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -14,13 +15,18 @@ import (
 // command, as one message: an item that holds a role up (notify_on: blocking) the first time it does and again every
 // notify_again while it still does, a new ask (notify_on: ask) once — not one a reminder made, whose text went with
 // the reminder. Nothing goes in quiet_hours; what is due then goes on the first beat after them, if it is still
-// there. The state keeps when each item went (pushed).
+// there. The state keeps when each item went (pushed); a send that fails leaves them due and is tried again after
+// pushRetry.
+
+// pushRetry is how long after a failed send the next one is tried.
+const pushRetry = 15 * time.Minute
 
 // pushTick sends this beat's push, outside the beat's lock.
 func (a *app) pushTick(now time.Time) {
 	var (
-		c   *crew.Crew
-		due []todoItem
+		c    *crew.Crew
+		due  []todoItem
+		prev map[string]time.Time
 	)
 
 	// A crew that pushes nothing, and has no record of pushing, takes no lock for it. A crew file that does not load
@@ -45,6 +51,7 @@ func (a *app) pushTick(now time.Time) {
 		}
 
 		items, _ := todo(c, now, s.Views())
+		prev = maps.Clone(s.State.Pushed)
 		due = pushDue(c, s.State, items, now)
 
 		return nil
@@ -68,6 +75,21 @@ func (a *app) pushTick(now time.Time) {
 
 	_ = a.withState(func(s *shift.Shift) error {
 		if sendErr != nil {
+			// Not sent: each item is due again as it was, after pushRetry, so a broken command is not run every beat.
+			for _, it := range due {
+				if !s.State.Pushed[it.ID].Equal(now) {
+					continue
+				}
+
+				if last, ok := prev[it.ID]; ok {
+					s.State.Pushed[it.ID] = last
+				} else {
+					delete(s.State.Pushed, it.ID)
+				}
+			}
+
+			s.State.PushFailed = now
+
 			line := strings.Join(ids, " ") + ": notify: " + sendErr.Error()
 			_ = s.Events.Add(events.Event{TS: now, Event: "notify-failed", By: "ticker", Detail: line})
 			a.printTick([]string{"push: " + line})
@@ -75,6 +97,7 @@ func (a *app) pushTick(now time.Time) {
 			return nil
 		}
 
+		s.State.PushFailed = time.Time{}
 		s.Log("", "pushed", "", text)
 		a.printTick([]string{"push: " + strings.Join(ids, " ")})
 
@@ -101,6 +124,10 @@ func pushDue(c *crew.Crew, st *shift.State, items []todoItem, now time.Time) []t
 	}
 
 	if quiet, _ := c.QuietAt(now); quiet {
+		return nil
+	}
+
+	if !st.PushFailed.IsZero() && now.Sub(st.PushFailed) < pushRetry {
 		return nil
 	}
 
@@ -133,21 +160,22 @@ func pushDue(c *crew.Crew, st *shift.State, items []todoItem, now time.Time) []t
 	return due
 }
 
-// pushText is a push in plain words: each item's id with its title, what it holds up; several in one message.
+// pushText is a push in plain words: each item's id with the title someone gave it, else its kind, and the role it
+// holds up; several in one message. Nothing else of an item leaves the machine: not its text, not a recommendation.
 func pushText(items []todoItem) string {
 	one := func(it todoItem) string {
-		title := it.Title
-		if title == "" {
-			title = it.Text
+		line := it.ID
+		switch {
+		case strings.TrimSpace(it.named) != "":
+			line += " " + clip(oneLine(it.named), 80)
+		case it.Kind == "waiting":
+			line += " task"
+		default:
+			line += " " + it.Kind
 		}
 
-		line := it.ID + " " + clip(oneLine(title), 100)
-
-		switch {
-		case it.Blocks != "":
+		if it.Blocks != "" {
 			line += " (blocks " + it.Blocks + ")"
-		case it.Kind == "decision" && it.Rec != "":
-			line += " (recommended: " + clip(oneLine(it.Rec), 60) + ")"
 		}
 
 		return line

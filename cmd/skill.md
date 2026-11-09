@@ -949,15 +949,18 @@ until the task changes again (`task set`): the turn is the dispatcher's.
 
 **Pushes.** With a `notify` command in the crew file the ticker pushes what waits on the owner, so it reaches his
 phone without anyone remembering to: each beat it reads the todo and sends what is due as one message
-(`waits on you: A-3 log in on the box (blocks dev)`, several as `2 wait on you: …; …` — the id with the title, never
-an id alone). `notify_on: blocking` (default, with `reminder`): an item that holds a role up (an ask with `--blocks`,
+(`waits on you: A-3 log in on the box (blocks dev)`, several as `2 wait on you: …; …`). An item goes as its id with
+the title it was given (an ask's `--title`, a task's `--title`), else with its kind (`A-7 decision`, `T-12 task`),
+and the role it holds up: never its text, note or recommendation, which stay on the todo. `notify_on: blocking` (default, with `reminder`): an item that holds a role up (an ask with `--blocks`,
 a task waiting on him while its role sits idle) the first time it does and again every `notify_again` (default 24h;
 `off`: once) while it still does. `notify_on: ask`: every new ask, decision or check, once (not those open when
 pushing began, not the check a reminder made: its text already went). Nothing is pushed in `quiet_hours` (the crew's
 `timezone:`); what was due then goes on the first beat after, if it is still there. Reminders are not held: their time
 is the one set. The command gets `$ZMINA_EVENT` (`blocking` when any item in the message blocks, else `ask`;
-`reminder` for a reminder) and `$ZMINA_ALARM` (the item ids). The log has `pushed`, a failure `notify-failed`; the
-state keeps when each item went (`pushed`) until it leaves the todo. Without `notify` doctor warns: nothing that waits
+`reminder` for a reminder) and `$ZMINA_ALARM` (the item ids). The text is written by roles: a notify command passes
+it on as data and never evaluates it (no `eval "$1"`). The log has `pushed`, a failure `notify-failed`: a send that
+fails leaves its items due and is tried again 15 minutes later. The state keeps when each item went (`pushed`) until
+it leaves the todo. Without `notify` doctor warns: nothing that waits
 on the owner reaches his phone.
 
 Every role hears at boot, from zmina itself (`shift.AsksRule`): a question only the owner can answer goes on his list

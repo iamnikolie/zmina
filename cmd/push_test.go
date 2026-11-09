@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -89,13 +90,19 @@ func TestPushDue(t *testing.T) {
 	assert.Empty(t, ids(pushDue(c, st, []todoItem{waiting}, start.Add(8*time.Hour))), "blocking not on")
 }
 
+// A push says an item's id with the title someone gave it, else its kind: never its text or a recommendation.
 func TestPushText(t *testing.T) {
-	one := todoItem{ID: "A-2", Kind: "check", Title: "log in on the box", Blocks: "dev"}
+	one := todoItem{ID: "A-2", Kind: "check", Title: "log in on the box", named: "log in on the box", Blocks: "dev"}
 	assert.Equal(t, "waits on you: A-2 log in on the box (blocks dev)", pushText([]todoItem{one}))
 
-	two := todoItem{ID: "A-3", Kind: "decision", Text: "Which name?\nLong text", Rec: "acme"}
-	assert.Equal(t, "2 wait on you: A-2 log in on the box (blocks dev); A-3 Which name? Long text (recommended: acme)",
-		pushText([]todoItem{one, two}))
+	untitled := todoItem{ID: "A-3", Kind: "decision", Text: "Which name? The secret plan", Rec: "acme"}
+	task := todoItem{ID: "T-12", Kind: "waiting", Title: "Merge the branch with the key", Text: "Merge the branch with " +
+		"the key", Blocks: "rev"}
+	got := pushText([]todoItem{one, untitled, task})
+	assert.Equal(t, "3 wait on you: A-2 log in on the box (blocks dev); A-3 decision; T-12 task (blocks rev)", got)
+	assert.NotContains(t, got, "acme")
+	assert.NotContains(t, got, "secret")
+	assert.NotContains(t, got, "key", "a task's headline made from its text is not a title")
 }
 
 // The ticker pushes a blocking ask through the notify command once, with its event; todo ls says when it went.
@@ -133,10 +140,56 @@ func TestTickPushesBlockingAsk(t *testing.T) {
 	require.NoError(t, err)
 	_, _, err = zm(t, crewFile, "tick")
 	require.NoError(t, err)
-	assert.Contains(t, string(mustRead(t, pushed)),
-		"--title zmina waits on you: A-2 Which name for the site? (recommended: acme)|ask|A-2\n")
+	assert.Contains(t, string(mustRead(t, pushed)), "--title zmina waits on you: A-2 decision|ask|A-2\n",
+		"no title: its kind, not its text")
 
 	out, _, err = zm(t, crewFile, "log")
 	require.NoError(t, err)
 	assert.Contains(t, out, "waits on you: A-1 log in (blocks dev)")
+}
+
+// A send that fails leaves the item due: it is tried again after pushRetry, not every beat, and goes once it works.
+func TestPushFailedSendStaysDue(t *testing.T) {
+	dir := t.TempDir()
+	pushed := filepath.Join(dir, "pushed")
+	broken := filepath.Join(dir, "broken")
+	script := filepath.Join(dir, "push")
+	require.NoError(t, os.WriteFile(script, []byte("#!/bin/sh\n[ -e "+broken+" ] && { echo down >&2; exit 1; }\n"+
+		"printf '%s\\n' \"$*\" >> "+pushed+"\n"), 0o700))
+	require.NoError(t, os.WriteFile(broken, nil, 0o600))
+
+	crewFile := testCrew(t, "notify: ["+script+"]\nnotify_on: [ask]\n")
+
+	_, _, err := zm(t, crewFile, "tick")
+	require.NoError(t, err)
+	_, _, err = zm(t, crewFile, "todo", "add", "Pick one", "--title", "pick a name")
+	require.NoError(t, err)
+
+	out, _, err := zm(t, crewFile, "tick")
+	require.NoError(t, err)
+	assert.Contains(t, out, "push: A-1: notify: exit status 1: down")
+
+	a := &app{out: io.Discard, err: io.Discard, crew: crewFile}
+	require.NoError(t, a.readState(func(s *shift.Shift) error {
+		assert.NotContains(t, s.State.Pushed, "A-1", "not sent: not marked")
+		assert.False(t, s.State.PushFailed.IsZero())
+
+		return nil
+	}))
+
+	require.NoError(t, os.Remove(broken))
+	out, _, err = zm(t, crewFile, "tick")
+	require.NoError(t, err)
+	assert.NotContains(t, out, "push:", "waits pushRetry after a failure")
+
+	// pushRetry later (the failure moved back), it goes.
+	require.NoError(t, a.withState(func(s *shift.Shift) error {
+		s.State.PushFailed = s.State.PushFailed.Add(-pushRetry)
+
+		return nil
+	}))
+	out, _, err = zm(t, crewFile, "tick")
+	require.NoError(t, err)
+	assert.Contains(t, out, "push: A-1")
+	assert.Equal(t, "waits on you: A-1 pick a name\n", string(mustRead(t, pushed)))
 }
