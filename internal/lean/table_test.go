@@ -77,3 +77,12 @@ not json
 		"rows: 4; 1 not a JSON object (first at line 3)\n"+
 		"first rows:\n1\t{\"id\":1,")
 }
+
+func TestCSVByteOrderMark(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "x.csv", "\ufeffid,name\n1,alex\n")
+	write(t, dir, "x.jsonl", "\ufeff{\"id\":1}\n")
+
+	assert.Contains(t, Read([]Target{{Path: "x.csv"}}, dir, Options{Outline: true}), "\n  1 id\tint\n")
+	assert.Contains(t, Read([]Target{{Path: "x.jsonl"}}, dir, Options{Outline: true}), "keys (1, of the objects on each line):\n  id\tint\nrows: 1\n")
+}

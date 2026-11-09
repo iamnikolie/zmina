@@ -14,7 +14,15 @@ import (
 // data lines up to "\.". A statement's Name is its object without its schema, so file.sql:users reads every
 // statement on users.
 func sqlOutline(src []byte) []Symbol {
-	stmts, sections := sqlStatements(src)
+	// A backslash escapes a quote in MySQL, not in a Postgres standard string ('C:\dir\'): when the scan with
+	// escapes leaves a string open to the end, the one without them is taken if it closes them all.
+	stmts, sections, open := sqlStatements(src, true)
+	if open {
+		if s2, sec2, open2 := sqlStatements(src, false); !open2 {
+			stmts, sections = s2, sec2
+		}
+	}
+
 	if len(stmts) == 0 {
 		return nil
 	}
@@ -77,6 +85,10 @@ func sqlOutline(src []byte) []Symbol {
 		out = append(out, sections[sec])
 	}
 
+	for k := range out { // a string or body open to the end of the file ends there
+		out[k].End = max(min(out[k].End, len(lines)), out[k].Start)
+	}
+
 	return out
 }
 
@@ -118,7 +130,7 @@ var (
 )
 
 // sqlStatements scans the file into its statements and its migration sections (Name Up or Down, End set).
-func sqlStatements(src []byte) ([]sqlStmt, []Symbol) {
+func sqlStatements(src []byte, escapes bool) ([]sqlStmt, []Symbol, bool) {
 	var (
 		stmts    []sqlStmt
 		sections []Symbol
@@ -131,6 +143,7 @@ func sqlStatements(src []byte) ([]sqlStmt, []Symbol) {
 		block    bool // between StatementBegin and StatementEnd
 		copyData bool // in the data lines of COPY … FROM stdin
 		exec     bool // inside a MySQL /*! … */ that runs
+		open     bool // a string or $$ body ran to the end of the file
 		lineHead = true
 		parts    = sqlParts{open: -1}
 	)
@@ -187,7 +200,8 @@ func sqlStatements(src []byte) ([]sqlStmt, []Symbol) {
 				case "up", "down":
 					emit(lastCode)
 					closeSection(line - 1)
-					sections = append(sections, Symbol{Start: line, Name: strings.ToUpper(w[:1]) + w[1:], Label: clip(l, 110)})
+					// the directive alone: the rest of a comment line is the file's text
+					sections = append(sections, Symbol{Start: line, Name: strings.ToUpper(w[:1]) + w[1:], Label: strings.TrimSpace(m[0])})
 				case "statementbegin":
 					emit(lastCode)
 					block = true
@@ -260,7 +274,8 @@ func sqlStatements(src []byte) ([]sqlStmt, []Symbol) {
 
 			at := line
 
-			j := sqlQuoted(src, i, &line)
+			j, closed := sqlQuoted(src, i, &line, escapes)
+			open = open || !closed
 			if c == '\'' {
 				add("''")
 			} else {
@@ -270,6 +285,10 @@ func sqlStatements(src []byte) ([]sqlStmt, []Symbol) {
 
 			lastCode = line
 			i = j
+		// before a $$ body: a DELIMITER $$ ends a statement with "END $$" or "$$" on its own line
+		case !block && strings.HasPrefix(string(src[i:min(len(src), i+len(delim))]), delim):
+			emit(line)
+			i += len(delim)
 		case c == '$' && (i == 0 || !identByte(src[i-1])):
 			tag := sqlDollarTag(src[i:])
 			if tag == "" {
@@ -292,12 +311,11 @@ func sqlStatements(src []byte) ([]sqlStmt, []Symbol) {
 				i++
 			}
 
+			open = open || i >= len(src)
+
 			i += len(tag)
 			add("$$")
 			lastCode = line
-		case !block && strings.HasPrefix(string(src[i:min(len(src), i+len(delim))]), delim):
-			emit(line)
-			i += len(delim)
 		case c == ' ' || c == '\t' || c == '\r':
 			add(" ")
 			i++
@@ -338,7 +356,7 @@ func sqlStatements(src []byte) ([]sqlStmt, []Symbol) {
 	emit(lastCode)
 	closeSection(line - boolInt(len(src) > 0 && src[len(src)-1] == '\n'))
 
-	return stmts, sections
+	return stmts, sections, open
 }
 
 func boolInt(b bool) int {
@@ -349,9 +367,9 @@ func boolInt(b bool) int {
 	return 0
 }
 
-// sqlQuoted is the index after the string or quoted name that starts at i: a quote doubled or after a backslash
-// stays inside.
-func sqlQuoted(src []byte, i int, line *int) int {
+// sqlQuoted is the index after the string or quoted name that starts at i, and whether it closed: a quote doubled
+// stays inside, and with escapes (MySQL) one after a backslash in a '…' or "…" string.
+func sqlQuoted(src []byte, i int, line *int, escapes bool) (int, bool) {
 	q := src[i]
 
 	j := i + 1
@@ -360,7 +378,7 @@ func sqlQuoted(src []byte, i int, line *int) int {
 		case '\n':
 			*line++
 		case '\\':
-			if q == '\'' {
+			if escapes && q != '`' {
 				j++
 				if j < len(src) && src[j] == '\n' {
 					*line++
@@ -370,17 +388,17 @@ func sqlQuoted(src []byte, i int, line *int) int {
 			if j+1 < len(src) && src[j+1] == q {
 				j++
 			} else {
-				return j + 1
+				return j + 1, true
 			}
 		}
 
 		j++
 	}
 
-	return j
+	return j, false
 }
 
-var dollarTagRe = regexp.MustCompile(`^\$[A-Za-z_]*\$`)
+var dollarTagRe = regexp.MustCompile(`^\$(?:[A-Za-z_][A-Za-z_0-9]*)?\$`)
 
 func sqlDollarTag(b []byte) string {
 	return string(dollarTagRe.Find(b[:min(len(b), 64)]))
@@ -480,12 +498,23 @@ func sqlLabel(code string) (label, name string) {
 		}
 	}
 
-	if kind == "" {
-		kind = "?"
+	if !sqlKeywords[kind] { // never a word of the file's data, even when a bad scan takes a string for code
+		kind = "statement"
 	}
 
 	return kind, kind
 }
+
+// sqlKeywords start the statements without an object that the outline names by their first word.
+var sqlKeywords = map[string]bool{"SET": true, "BEGIN": true, "COMMIT": true, "ROLLBACK": true, "START": true,
+	"END": true, "RETURN": true, "DECLARE": true, "IF": true, "ELSE": true, "WHILE": true, "LOOP": true, "SAVEPOINT": true,
+	"RELEASE": true, "UNLOCK": true, "SHOW": true, "DESCRIBE": true, "DESC": true, "EXPLAIN": true, "PRAGMA": true,
+	"FLUSH": true, "PREPARE": true, "DEALLOCATE": true, "LISTEN": true, "NOTIFY": true, "DO": true, "VALUES": true,
+	"CHECKPOINT": true, "DISCARD": true, "RESET": true, "LOAD": true, "SOURCE": true, "PRINT": true, "OPEN": true,
+	"CLOSE": true, "FETCH": true, "SELECT": true, "WITH": true, "CREATE": true, "ALTER": true, "DROP": true,
+	"INSERT": true, "UPDATE": true, "DELETE": true, "MERGE": true, "GRANT": true, "REVOKE": true, "COPY": true,
+	"TRUNCATE": true, "LOCK": true, "USE": true, "COMMENT": true, "ANALYZE": true, "VACUUM": true, "CALL": true,
+	"EXEC": true, "EXECUTE": true, "RAISERROR": true, "THROW": true, "TRY": true, "CATCH": true, "GO": true}
 
 // sqlWithLabel says what a WITH statement holds: "WITH: 52 CTEs, then INSERT".
 func sqlWithLabel(parts []Symbol) string {

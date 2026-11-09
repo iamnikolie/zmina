@@ -233,20 +233,21 @@ func grepBlock(name, path string, src []byte, hits []hit, perFile int) string {
 
 	fmt.Fprintf(&b, "%s (%d)\n", name, len(hits))
 
-	last := ""
+	last := -1
 
 	for i, h := range hits {
 		if i == perFile {
 			break
 		}
 
-		if s, ok := enclosing(syms, h.line); ok {
-			if s.Label != last {
-				fmt.Fprintf(&b, "  %s · %d-%d (%d)\n", s.Label, s.Start, s.End, in[s.Start])
-				last = s.Label
+		if k := enclosing(syms, h.line); k >= 0 {
+			if k != last {
+				s := syms[k]
+				fmt.Fprintf(&b, "  %s · %d-%d (%d)\n", s.Label, s.Start, s.End, in[k])
+				last = k
 			}
-		} else if last != "" {
-			last = ""
+		} else {
+			last = -1
 		}
 
 		fmt.Fprintf(&b, "    %d: %s\n", h.line, clip(strings.TrimSpace(h.text), 160))
@@ -317,28 +318,29 @@ func countSections(path string, src []byte, hits []hit) string {
 	)
 
 	for _, h := range hits {
-		s, ok := enclosing(syms, h.line)
-		if !ok {
+		k := enclosing(syms, h.line)
+		if k < 0 {
 			outside++
 			continue
 		}
 
-		if seen[s.Start] {
+		if seen[k] {
 			continue
 		}
 
-		seen[s.Start] = true
+		seen[k] = true
 
 		if rows == countRows {
 			restN++
-			restHits += in[s.Start]
+			restHits += in[k]
 
 			continue
 		}
 
 		rows++
 
-		fmt.Fprintf(&b, "  %d\t%s · %d-%d\n", in[s.Start], s.Label, s.Start, s.End)
+		s := syms[k]
+		fmt.Fprintf(&b, "  %d\t%s · %d-%d\n", in[k], s.Label, s.Start, s.End)
 	}
 
 	if restN > 0 {
@@ -352,33 +354,32 @@ func countSections(path string, src []byte, hits []hit) string {
 	return b.String()
 }
 
-// sectionCounts is how many hits each innermost section holds, by its start line.
+// sectionCounts is how many hits each innermost section holds, by its index in syms: a long query and its first
+// CTE can start on one line.
 func sectionCounts(syms []Symbol, hits []hit) map[int]int {
 	in := map[int]int{}
 
 	for _, h := range hits {
-		if s, ok := enclosing(syms, h.line); ok {
-			in[s.Start]++
+		if k := enclosing(syms, h.line); k >= 0 {
+			in[k]++
 		}
 	}
 
 	return in
 }
 
-// enclosing is the innermost outline entry holding the line (the deepest one that starts last).
-func enclosing(syms []Symbol, line int) (Symbol, bool) {
-	var (
-		best Symbol
-		ok   bool
-	)
+// enclosing is the index of the innermost outline entry holding the line (the deepest one that starts last), -1:
+// none.
+func enclosing(syms []Symbol, line int) int {
+	best := -1
 
-	for _, s := range syms {
-		if s.Start <= line && line <= s.End && (!ok || s.Depth >= best.Depth) {
-			best, ok = s, true
+	for k, s := range syms {
+		if s.Start <= line && line <= s.End && (best < 0 || s.Depth >= syms[best].Depth) {
+			best = k
 		}
 	}
 
-	return best, ok
+	return best
 }
 
 func listFew(list []string, n int) string {

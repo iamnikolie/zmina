@@ -39,6 +39,10 @@ func writeCSVSummary(b *strings.Builder, f *File, path, header string, left int)
 	row := func(rec []string, line int) {
 		if cols == nil {
 			cols = append([]string(nil), rec...)
+			if len(cols) > 0 {
+				cols[0] = strings.TrimPrefix(cols[0], "\ufeff") // a spreadsheet's byte order mark
+			}
+
 			kinds = make([]colKind, len(cols))
 
 			return
@@ -127,7 +131,7 @@ func writeJSONLSummary(b *strings.Builder, f *File, path, header string, left in
 	)
 
 	for n, l := range f.Lines {
-		l = strings.TrimSpace(l)
+		l = strings.TrimSpace(strings.TrimPrefix(l, "\ufeff"))
 		if l == "" {
 			continue
 		}
