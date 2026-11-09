@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -608,4 +609,25 @@ func matches(name string, patterns []string) bool {
 	}
 
 	return false
+}
+
+// SocketPath is where tmux keeps the socket of the server named socket (tmux -L): $TMUX_TMPDIR, else /tmp, in
+// tmux-<uid>.
+func SocketPath(socket string) string {
+	dir := os.Getenv("TMUX_TMPDIR")
+	if dir == "" {
+		dir = "/tmp"
+	}
+
+	return filepath.Join(dir, "tmux-"+strconv.Itoa(os.Getuid()), socket)
+}
+
+// KillServer ends the server named socket and removes its socket file, which tmux leaves behind.
+func KillServer(socket string) {
+	bin, err := exec.LookPath("tmux")
+	if err == nil {
+		_ = exec.Command(bin, "-L", socket, "kill-server").Run()
+	}
+
+	_ = os.Remove(SocketPath(socket))
 }

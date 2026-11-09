@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/iamnikolie/zmina/internal/tmux"
 	"github.com/stretchr/testify/require"
 )
 
@@ -24,7 +25,7 @@ func TestDisconnectKeepsTmuxSessionAlive(t *testing.T) {
 		return string(out)
 	}
 	run("new-session", "-d", "-s", "dev", "-x", "80", "-y", "24", "cat")
-	defer func() { _ = exec.Command(bin, "-L", socket, "kill-server").Run() }()
+	defer tmux.KillServer(socket)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	tty, err := Attach(ctx, []string{bin, "-L", socket, "attach-session", "-t", "=dev"}, 80, 24)
