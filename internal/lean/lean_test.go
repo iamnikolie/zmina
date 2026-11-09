@@ -596,7 +596,7 @@ func TestIndentOutline(t *testing.T) {
 	assert.Equal(t, []string{"0 1-4 uk", "0 6-11 sum"}, names(Outline("m.ts", []byte(ts))), "quoted keys are no comments")
 
 	sql := "-- the sheets\nCREATE TABLE IF NOT EXISTS sheets (\n  id BIGINT,\n  name TEXT,\n  a INT,\n  b INT,\n  c INT\n);\n\nCREATE INDEX ix ON sheets (id);\n"
-	assert.Equal(t, []string{"0 1-8 sheets"}, names(indentOutline([]byte(sql))), "a statement over lines is a block")
+	assert.Equal(t, []string{"0 1-8 sheets"}, names(indentOutline([]byte(sql), ".txt")), "a statement over lines is a block")
 	assert.Equal(t, []string{"0 1-8 sheets", "0 10-10 ix"}, names(Outline("x.sql", []byte(sql))), ".sql: by statement")
 
 	css := "#main {\n  color: red;\n}\n\n.btn,\n.link {\n  margin: 0;\n}\n"
@@ -614,6 +614,16 @@ func TestIndentOutline(t *testing.T) {
 	big := "<Report>\n  <DataSets>\n    <DataSet Name=\"Orders\">\n" + strings.Repeat("      <Field>x</Field>\n", 45) + "    </DataSet>\n  </DataSets>\n</Report>\n"
 	assert.Equal(t, []string{"0 1-51 Report", "1 2-50 Report.DataSets", "2 3-49 Report.DataSets.Orders"}, names(Outline("r.rdl", []byte(big))),
 		"elements are containers: their members are listed")
+
+	pyUnder := "from x import (\n    a,\n    b,\n)\nfrom y import c\nfrom z import gettext as _\n\n\nclass Deferred:\n    def name(self):\n        return 1\n"
+	assert.Equal(t, []string{"0 1-6 imports", "0 9-11 Deferred"}, names(Outline("m.py", []byte(pyUnder))),
+		"imports in a row are one entry; \" _\" goes on to the next line only in Visual Basic")
+
+	vbLabel := "Public Sub Send()\n    On Error GoTo send_Err\n    x = 1\nsend_Err:\n    With conn\n        .Close\n    End With\nEnd Sub\n\nPublic Sub Done()\n    y = 2\nEnd Sub\n"
+	assert.Equal(t, []string{"0 1-8 Send", "0 10-12 Done"}, names(Outline("m.bas", []byte(vbLabel))), "a label at column 0 stays inside its Sub")
+
+	sh := "usage() {\n  cat <<'EOF'\nUsage: run\n  deploy() {\nEOF\n}\n\nrun() {\n  echo $((1 << 2))\n}\n"
+	assert.Equal(t, []string{"0 1-6 usage", "0 8-10 run"}, names(Outline("x.sh", []byte(sh))), "a here-document is no code; << alone opens none")
 
 	dir := t.TempDir()
 	write(t, dir, "shop.py", py)

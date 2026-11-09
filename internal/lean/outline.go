@@ -88,7 +88,7 @@ func Lang(path string) string {
 func Outline(path string, src []byte) []Symbol {
 	o := outlinerFor(path)
 	if o == nil {
-		return indentOutline(src)
+		return indentOutline(src, strings.ToLower(filepath.Ext(path)))
 	}
 
 	if o.parse == nil {

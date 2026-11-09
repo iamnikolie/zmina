@@ -6,19 +6,20 @@ import (
 )
 
 // indentOutline is the outline of a file no outliner of its own reads: Python, TypeScript and JavaScript, Java,
-// C#, Visual Basic, Swift, PHP, shell, SQL, CSS, pretty-printed XML and HTML. A block is a line whose next code line
+// C#, Visual Basic, Swift, PHP, shell, SQL, CSS, pretty-printed XML and HTML; ext is the file's extension. A block is a line whose next code line
 // is indented deeper; it runs while the lines stay deeper, through closing lines at its own indent (}, ), End Sub,
 // else:, </tag>). The top-level blocks are listed, and the blocks inside a big one, or inside one that wraps the whole
 // file (a class, a namespace) one level further. A block starts at the comments and decorators right above it; its
 // name is what a target names it by: Class.method below the top. A statement over several lines (a signature, a
-// call, a list: brackets left open, a line ending in " _" or a backslash) counts as its first line.
-func indentOutline(src []byte) []Symbol {
+// call, a list: brackets left open, a backslash at its end, " _" in Visual Basic) counts as its first line. Imports
+// in a row are one entry, "imports (n)", when they take five lines or more.
+func indentOutline(src []byte, ext string) []Symbol {
 	lines := splitLines(src)
 	if len(lines) == 0 {
 		return nil
 	}
 
-	in := codeLines(lines)
+	in := codeLines(lines, vbExts[ext])
 	if len(in) == 0 {
 		return nil
 	}
@@ -32,6 +33,22 @@ func indentOutline(src []byte) []Symbol {
 
 			// A line that starts by closing something, or a bare brace, opens no block of its own.
 			if closer(c.text) || c.text == "{" {
+				continue
+			}
+
+			if isImport(c.text) {
+				n, end := 0, k
+				for j := k; j < to && in[j].indent == c.indent && isImport(in[j].text); j = end + 1 {
+					n, end = n+1, blockEnd(in, j, to)
+				}
+
+				if start, last := headStart(lines, c.n), in[end].last; last-start >= 4 {
+					out = append(out, Symbol{Start: start, End: last, Depth: depth, Name: "imports",
+						Label: "imports (" + itoa(n) + ")"})
+				}
+
+				k = end
+
 				continue
 			}
 
@@ -103,21 +120,40 @@ func container(t string) bool {
 	return false
 }
 
-func codeLines(lines []string) []codeLine {
+// vbExts are Visual Basic's: " _" at a line's end goes on to the next line, and a word with a colon alone on a line
+// is a label inside a procedure (at column 0 too), not a statement.
+var vbExts = map[string]bool{".vb": true, ".bas": true, ".cls": true, ".frm": true, ".ctl": true, ".vbs": true,
+	".dsr": true}
+
+// codeLines are the file's statements. vb: Visual Basic's line continuation and labels.
+func codeLines(lines []string, vb bool) []codeLine {
 	var (
-		out   []codeLine
-		quote string // the open multi-line string's delimiter: """, ''' or `
-		open  int    // ( and [ the statement has left open so far
-		cont  bool   // the statement goes on to the next line
-		tail  string // this code line, for the next
-		prev  string // the code line before this one
+		out     []codeLine
+		quote   string // the open multi-line string's delimiter: """, ''' or `
+		heredoc string // the open here-document's closing word
+		open    int    // ( and [ the statement has left open so far
+		cont    bool   // the statement goes on to the next line
+		tail    string // this code line, for the next
+		prev    string // the code line before this one
 	)
 
 	for i, l := range lines {
 		t := strings.TrimSpace(l)
 
+		if heredoc != "" {
+			if len(out) > 0 {
+				out[len(out)-1].last = i + 1
+			}
+
+			if hereEnds(t, heredoc) {
+				heredoc = ""
+			}
+
+			continue
+		}
+
 		inside := quote != ""
-		if !inside && (t == "" || isComment(t)) {
+		if !inside && (t == "" || isComment(t) || vb && vbLabel.MatchString(t)) {
 			continue // a quote in a comment opens no string
 		}
 
@@ -164,11 +200,54 @@ func codeLines(lines []string) []codeLine {
 		}
 
 		open = max(open+delta, 0)
-		cont = strings.HasSuffix(t, " _") || strings.HasSuffix(t, `\`)
+		cont = vb && strings.HasSuffix(t, " _") || strings.HasSuffix(t, `\`)
+
+		if quote == "" {
+			heredoc = hereStart(t, lines[i+1:])
+		}
 	}
 
 	return out
 }
+
+var (
+	vbLabel = regexp.MustCompile(`^[\p{L}_][\p{L}\p{N}_]*:\s*(?:'.*)?$`)
+	hereRe  = regexp.MustCompile(`<<<?[-~]?\s*(?:'([A-Za-z_]\w*)'|"([A-Za-z_]\w*)"|([A-Z_][A-Z0-9_]*)\b)`)
+)
+
+// hereStart is the closing word of a here-document the line opens (shell <<EOF, <<-'EOF', PHP <<<EOT, Ruby <<~SQL),
+// "" when it opens none: a word in capitals or quoted, closed by a line of its own further down (so "x << MAX" in C
+// opens nothing).
+func hereStart(t string, rest []string) string {
+	if !strings.Contains(t, "<<") {
+		return ""
+	}
+
+	m := hereRe.FindStringSubmatch(t)
+	if m == nil {
+		return ""
+	}
+
+	w := m[1] + m[2] + m[3]
+	for _, l := range rest {
+		if hereEnds(strings.TrimSpace(l), w) {
+			return w
+		}
+	}
+
+	return ""
+}
+
+// hereEnds: the line closes a here-document opened with word w (PHP lets ; , or ) follow it).
+func hereEnds(t, w string) bool {
+	return t == w || len(t) > len(w) && strings.HasPrefix(t, w) && strings.ContainsRune(";,)", rune(t[len(w)]))
+}
+
+var importRe = regexp.MustCompile(`^(?:import\b|from\s+\S+\s+import\b|use\s+[\w\\:{]|using\s+[\w.]+(?:\s*=\s*[\w.<>]+)?\s*;|` +
+	`(?i:imports)\s+\w|require(?:_once)?\b|include(?:_once)?\b|(?:const|let|var)\s+[\w{}\s,:]+=\s*require\()`)
+
+// isImport: the statement imports (import, from … import, use, using, Imports, require).
+func isImport(t string) bool { return importRe.MatchString(t) }
 
 func indentOf(l string) int {
 	n := 0
