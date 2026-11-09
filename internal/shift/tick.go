@@ -1353,7 +1353,9 @@ func (s *Shift) pruneAbsent(now time.Time) {
 
 		path, err := s.archiveRole(name, rs, now)
 		if err != nil {
-			s.log(name, "prune-failed", "", err.Error())
+			if rs.AbsentBeats == pruneAfterBeats { // once, not every beat it keeps failing
+				s.log(name, "prune-failed", "", err.Error())
+			}
 
 			continue
 		}
