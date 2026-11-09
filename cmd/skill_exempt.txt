@@ -1,0 +1,2 @@
+# Commands and flags cmd/skill.md need not name, one a line: `zmina a b` or `zmina a b --flag`, then # and why.
+# TestSkillNamesEveryCommandAndFlag reads it; an entry that names nothing any more fails it.

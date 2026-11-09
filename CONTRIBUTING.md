@@ -16,7 +16,7 @@ Before opening one:
 ```bash
 make fmt           # gofmt -w .
 make vet           # go vet ./...
-make test          # go test ./... (needs tmux 3.2+ on PATH)
+make test          # publiccheck, gofmt check, go test ./... (needs tmux 3.2+ on PATH)
 golangci-lint run  # config in .golangci.yml
 ```
 
@@ -37,7 +37,9 @@ House rules:
 - **Update the docs in the same commit.** Any change to the commands or the
   crew file must also update `cmd/skill.md` (embedded in the binary, printed by
   `zmina skill`, and the single source of truth for command UX) and, where it
-  shows, `README.md`.
+  shows, `README.md`. A test fails when a command or flag is missing from it
+  (`cmd/skill_coverage_test.go`; a deliberate gap goes in `cmd/skill_exempt.txt`
+  with its reason).
 - **Conventional commit subjects** — `feat:`, `fix:`, `docs:`, `refactor:`,
   `test:`, `chore:`. Release notes are generated from them.
 
