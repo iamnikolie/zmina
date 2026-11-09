@@ -17,6 +17,8 @@ type GrepOptions struct {
 	IgnoreCase bool   // -i
 	Fixed      bool   // -F: the pattern is a plain string
 	Glob       string // -g: only files whose base name matches
+	// Count (-c): no hit lines, the number a file and, in a file with an outline, a section.
+	Count bool
 }
 
 // skipDirs are never walked into unless named as a root.
@@ -127,6 +129,7 @@ func Grep(pattern string, roots []string, dir string, o GrepOptions) (string, er
 		cutFiles   []string
 		budgetHit  bool
 		moreInFile int
+		counts     []countFile
 	)
 
 	for _, name := range files {
@@ -159,6 +162,11 @@ func Grep(pattern string, roots []string, dir string, o GrepOptions) (string, er
 		total += len(hits)
 		inFiles++
 
+		if o.Count {
+			counts = append(counts, countFile{name, len(hits), countSections(p, src, hits)})
+			continue
+		}
+
 		if budgetHit {
 			cutFiles = append(cutFiles, name)
 			continue
@@ -184,7 +192,18 @@ func Grep(pattern string, roots []string, dir string, o GrepOptions) (string, er
 		return fmt.Sprintf("no match for %q\n", pattern), nil
 	}
 
-	fmt.Fprintf(&b, "— %d hits in %d files; shown %d", total, inFiles, shown)
+	var bare int // files whose sections did not fit
+
+	if o.Count {
+		cutFiles, bare = writeCounts(&b, counts, o.Max)
+		fmt.Fprintf(&b, "— %d hits in %d files", total, inFiles)
+
+		if bare > 0 {
+			fmt.Fprintf(&b, "; sections of %d files left out (-c on one file shows them)", bare)
+		}
+	} else {
+		fmt.Fprintf(&b, "— %d hits in %d files; shown %d", total, inFiles, shown)
+	}
 
 	if moreInFile > 0 {
 		fmt.Fprintf(&b, "; %d more in the files above (--per-file %d)", moreInFile, o.PerFile*4)
@@ -204,9 +223,11 @@ func Grep(pattern string, roots []string, dir string, o GrepOptions) (string, er
 	return b.String(), nil
 }
 
-// grepBlock is one file's hits: under the function or section each sits in, numbered, clipped to one short line.
+// grepBlock is one file's hits: under the function or section each sits in (with how many hits it holds), numbered,
+// clipped to one short line.
 func grepBlock(name, path string, src []byte, hits []hit, perFile int) string {
 	syms := Outline(path, src)
+	in := sectionCounts(syms, hits)
 
 	var b strings.Builder
 
@@ -221,7 +242,7 @@ func grepBlock(name, path string, src []byte, hits []hit, perFile int) string {
 
 		if s, ok := enclosing(syms, h.line); ok {
 			if s.Label != last {
-				fmt.Fprintf(&b, "  %s · %d-%d\n", s.Label, s.Start, s.End)
+				fmt.Fprintf(&b, "  %s · %d-%d (%d)\n", s.Label, s.Start, s.End, in[s.Start])
 				last = s.Label
 			}
 		} else if last != "" {
@@ -232,6 +253,116 @@ func grepBlock(name, path string, src []byte, hits []hit, perFile int) string {
 	}
 
 	return b.String()
+}
+
+// countRows is the most section rows grep -c shows a file.
+const countRows = 12
+
+// countFile is one file of grep -c: its count and its section rows.
+type countFile struct {
+	name     string
+	n        int
+	sections string
+}
+
+// writeCounts writes a line a file, then each file's section rows while they fit: the files' counts come first. It
+// returns the files left out (their lines over the budget) and how many files went without their sections.
+func writeCounts(b *strings.Builder, files []countFile, budget int) (cut []string, bare int) {
+	lines := make([]string, len(files))
+	room := budget
+
+	for i, f := range files {
+		lines[i] = fmt.Sprintf("%s %d\n", f.name, f.n)
+		room -= len(lines[i])
+	}
+
+	for i, f := range files {
+		if b.Len()+len(lines[i]) > budget || len(cut) > 0 {
+			cut = append(cut, f.name)
+			continue
+		}
+
+		b.WriteString(lines[i])
+
+		if f.sections == "" {
+			continue
+		}
+
+		if len(f.sections) <= room {
+			b.WriteString(f.sections)
+			room -= len(f.sections)
+		} else {
+			bare++
+		}
+	}
+
+	return cut, bare
+}
+
+// countSections is the count in each section of the file that holds a hit, in the file's order; "" for a file
+// without an outline.
+func countSections(path string, src []byte, hits []hit) string {
+	syms := Outline(path, src)
+	if len(syms) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+
+	in := sectionCounts(syms, hits)
+
+	var (
+		rows, outside, restN, restHits int
+		seen                           = map[int]bool{}
+	)
+
+	for _, h := range hits {
+		s, ok := enclosing(syms, h.line)
+		if !ok {
+			outside++
+			continue
+		}
+
+		if seen[s.Start] {
+			continue
+		}
+
+		seen[s.Start] = true
+
+		if rows == countRows {
+			restN++
+			restHits += in[s.Start]
+
+			continue
+		}
+
+		rows++
+
+		fmt.Fprintf(&b, "  %d\t%s · %d-%d\n", in[s.Start], s.Label, s.Start, s.End)
+	}
+
+	if restN > 0 {
+		fmt.Fprintf(&b, "  %d\tin %d more sections\n", restHits, restN)
+	}
+
+	if outside > 0 {
+		fmt.Fprintf(&b, "  %d\toutside any section\n", outside)
+	}
+
+	return b.String()
+}
+
+// sectionCounts is how many hits each innermost section holds, by its start line.
+func sectionCounts(syms []Symbol, hits []hit) map[int]int {
+	in := map[int]int{}
+
+	for _, h := range hits {
+		if s, ok := enclosing(syms, h.line); ok {
+			in[s.Start]++
+		}
+	}
+
+	return in
 }
 
 // enclosing is the innermost outline entry holding the line (the deepest one that starts last).

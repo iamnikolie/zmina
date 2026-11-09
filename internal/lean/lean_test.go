@@ -194,11 +194,11 @@ func TestGrep(t *testing.T) {
 	out, err := Grep("Open|Use", nil, dir, GrepOptions{})
 	require.NoError(t, err)
 	assert.Equal(t, "a.go (2)\n"+
-		"  func (s *Shop) Open(day string) error · 18-23\n"+
+		"  func (s *Shop) Open(day string) error · 18-23 (2)\n"+
 		"    18: // Open opens the shop.\n"+
 		"    19: func (s *Shop) Open(day string) error {\n"+
 		"d.md (1)\n"+
-		"  ## Usage · 17-19\n"+
+		"  ## Usage · 17-19 (1)\n"+
 		"    19: Use it.\n"+
 		"— 3 hits in 2 files; shown 3\n", out, "skips node_modules and hidden directories")
 
@@ -447,5 +447,195 @@ func TestCP1251(t *testing.T) {
 
 	out, err := Grep("Резерв", nil, dir, GrepOptions{})
 	require.NoError(t, err)
-	assert.Contains(t, out, "costgroup.prg (1)\n    4: && Резерв\n")
+	assert.Contains(t, out, "costgroup.prg (1)\n  FUNCTION Main() · 3-6 (1)\n    4: && Резерв\n", "a cp1251 .prg has its outline")
+}
+
+const foxSrc = `* Main program
+DO Setup
+
+*-- Opens the books.
+* Two lines of header.
+PROCEDURE OpenBooks(tcYear)
+   LOCAL lcSql
+   TEXT TO lcSql NOSHOW
+      PROCEDURE NotABlock
+   ENDTEXT
+   func = 5 && a variable, not a block
+   DO Work WITH ;
+      "PROCEDURE NotEither"
+ENDPROC
+
+func CloseBooks
+   RETURN .T.
+
+
+DEFINE CLASS Ledger AS Custom
+   nYear = 0
+
+   * Posts one entry.
+   PROTECTED PROCEDURE Post(tnSum)
+      RETURN tnSum
+   ENDPROC
+
+   procedure Command1.Click
+      THIS.Post(1)
+ENDDEFINE
+
+Defi Clas Report as Form
+   PROC Init
+ENDDEF
+`
+
+func TestFoxProOutline(t *testing.T) {
+	syms := Outline("books.prg", []byte(foxSrc))
+
+	type row = Symbol
+
+	got := syms
+
+	assert.Equal(t, []row{
+		{4, 14, 0, "OpenBooks", "PROCEDURE OpenBooks(tcYear)"},
+		{16, 17, 0, "CloseBooks", "func CloseBooks"},
+		{20, 30, 0, "Ledger", "DEFINE CLASS Ledger AS Custom"},
+		{23, 26, 1, "Ledger.Post", "PROTECTED PROCEDURE Post(tnSum)"},
+		{28, 29, 1, "Ledger.Command1.Click", "procedure Command1.Click"},
+		{32, 34, 0, "Report", "Defi Clas Report as Form"},
+		{33, 33, 1, "Report.Init", "PROC Init"},
+	}, got)
+
+	dir := t.TempDir()
+	write(t, dir, "books.prg", foxSrc)
+
+	out := Read([]Target{ParseTarget("books.prg:command1.click", dir)}, dir, Options{})
+	assert.Contains(t, out, "· 28-29 procedure Command1.Click\n28\t   procedure Command1.Click\n")
+
+	out = Read([]Target{ParseTarget("books.prg:Post", dir)}, dir, Options{})
+	assert.Contains(t, out, "23\t   * Posts one entry.\n", "a method by its name alone, with its header comment")
+
+	out = Read([]Target{{Path: "books.prg"}}, dir, Options{Outline: true})
+	assert.Contains(t, out, "· foxpro · outline (lines, size):\n4-14\tPROCEDURE OpenBooks(tcYear)\t")
+	assert.Contains(t, out, "zmina read books.prg:Name (PROCEDURE, FUNCTION, Class.Method)")
+}
+
+// path:#Heading is read as the section, with a line that gives the form.
+func TestReadColonHeading(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "d.md", mdSrc)
+
+	tg := ParseTarget("d.md:#From source", dir)
+	assert.Equal(t, Target{Path: "d.md", Heading: "From source", Colon: true}, tg)
+
+	out := Read([]Target{tg}, dir, Options{})
+	assert.Contains(t, out, "(read as d.md#From source; a section is path#Heading, without the colon)\n")
+	assert.Contains(t, out, "13-16 ### From source\n")
+}
+
+func TestGrepCount(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "a.go", goSrc)
+	write(t, dir, "d.md", mdSrc)
+	write(t, dir, "n.txt", "it\nit\n")
+	write(t, dir, "big.md", "it before\n"+func() string {
+		var b strings.Builder
+		for i := range 14 {
+			fmt.Fprintf(&b, "## S%02d\nit\nit\n", i)
+		}
+
+		return b.String()
+	}())
+
+	out, err := Grep("fmt|Use|it", nil, dir, GrepOptions{Count: true})
+	require.NoError(t, err)
+	assert.True(t, strings.HasPrefix(out, "a.go 3\n"+
+		"  1\timports (2) · 3-6\n"+
+		"  1\tfunc (s *Shop) Open(day string) error · 18-23\n"+
+		"  1\tfunc Close() · 25-25\n"+
+		"big.md 29\n"+
+		"  2\t## S00 · 2-4\n"), out)
+	assert.Contains(t, out, "  2\t## S11 · 35-37\n  4\tin 2 more sections\n  1\toutside any section\n"+
+		"d.md 2\n  1\t## Install · 5-16\n  1\t## Usage · 17-19\n"+
+		"n.txt 2\n"+
+		"— 36 hits in 4 files\n", "a file without an outline: its count alone")
+	assert.NotContains(t, out, "S12")
+
+	// The files' counts come first; sections only while they fit.
+	out, err = Grep("it", nil, dir, GrepOptions{Count: true, Max: 200})
+	require.NoError(t, err)
+	assert.Equal(t, "big.md 29\nd.md 2\n  1\t## Install · 5-16\n  1\t## Usage · 17-19\nn.txt 2\n"+
+		"— 33 hits in 3 files; sections of 1 files left out (-c on one file shows them)\n", out)
+}
+
+// names lists an outline as "depth start-end Name".
+func names(syms []Symbol) []string {
+	var out []string
+	for _, s := range syms {
+		out = append(out, fmt.Sprintf("%d %d-%d %s", s.Depth, s.Start, s.End, s.Name))
+	}
+
+	return out
+}
+
+func TestIndentOutline(t *testing.T) {
+	py := "import os\n\n\n# Shop sells.\n@dataclass\nclass Shop:\n    name: str\n\n    def open(\n        self,\n        day: str,\n    ) -> None:\n" +
+		"        print(day)\n" + strings.Repeat("        pass\n", 40) + "\n    def close(self):\n        \"\"\"Closes.\n\nAt night.\n\"\"\"\n        pass\n\n\n" +
+		"ROWS = [\n    1,\n    2,\n    3,\n    4,\n    5,\n]\n\n\ndef main():\n    Shop('x').open('mon')\n"
+	assert.Equal(t, []string{
+		"0 4-60 Shop", "1 9-53 Shop.open", "1 55-60 Shop.close", "0 63-69 ROWS", "0 72-73 main",
+	}, names(Outline("shop.py", []byte(py))), "a decorator and comment head the class; a docstring at column 0 stays inside")
+
+	vb := "Public Class UnionsDC\n\n    Public Function InsertSQL(\n    ByVal ID As Integer,\n    ByVal Name As String) As String\n" +
+		"        Dim s As String\n' a comment at column 0\n        Return s\n    End Function\n\n    Public Sub New()\n        x = 1\n    End Sub\nEnd Class\n"
+	assert.Equal(t, []string{"0 1-14 UnionsDC"}, names(Outline("dc.vb", []byte(vb))), "small: members not listed")
+	assert.Equal(t, []string{"0 1-54 UnionsDC", "1 3-49 UnionsDC.InsertSQL", "1 51-53 UnionsDC.New"},
+		names(Outline("dc.vb", []byte(strings.Replace(vb, "        Return s\n", strings.Repeat("        Return s\n", 41), 1)))),
+		"a signature over lines at one indent is one statement; End Function closes it")
+
+	ts := "export const uk = {\n  'common.cancel': 'Cancel',\n  'common.ok': 'OK',\n}\n\nexport function sum(\n  a: number,\n  b: number,\n): number {\n" +
+		"  return a + b\n}\n"
+	assert.Equal(t, []string{"0 1-4 uk", "0 6-11 sum"}, names(Outline("m.ts", []byte(ts))), "quoted keys are no comments")
+
+	sql := "-- the sheets\nCREATE TABLE IF NOT EXISTS sheets (\n  id BIGINT,\n  name TEXT,\n  a INT,\n  b INT,\n  c INT\n);\n\nCREATE INDEX ix ON sheets (id);\n"
+	assert.Equal(t, []string{"0 1-8 sheets"}, names(Outline("x.sql", []byte(sql))))
+
+	css := "#main {\n  color: red;\n}\n\n.btn,\n.link {\n  margin: 0;\n}\n"
+	assert.Equal(t, []string{"0 1-3 #main", "0 6-8 .link"}, names(Outline("x.css", []byte(css))), "a selector list: its last line")
+
+	php := "<?php\nclass Account\n{\n    public function fetch($id)\n    {\n        return $id;\n    }\n}\n"
+	assert.Equal(t, []string{"0 2-8 Account"}, names(Outline("a.php", []byte(php))), "a brace on its own line opens the class")
+
+	xml := "<Report>\n  <DataSets>\n    <DataSet Name=\"Orders\">\n      <Query>x</Query>\n    </DataSet>\n  </DataSets>\n</Report>\n"
+	assert.Equal(t, []string{"0 1-7 Report"}, names(Outline("r.rdl", []byte(xml))))
+
+	vue := "<template>\n  <XSlideout\n    :open=\"open\"\n  >\n    <div>hi</div>\n  </XSlideout>\n</template>\n"
+	assert.Equal(t, []string{"0 1-7 template"}, names(Outline("c.vue", []byte(vue))))
+
+	big := "<Report>\n  <DataSets>\n    <DataSet Name=\"Orders\">\n" + strings.Repeat("      <Field>x</Field>\n", 45) + "    </DataSet>\n  </DataSets>\n</Report>\n"
+	assert.Equal(t, []string{"0 1-51 Report", "1 2-50 Report.DataSets", "2 3-49 Report.DataSets.Orders"}, names(Outline("r.rdl", []byte(big))),
+		"elements are containers: their members are listed")
+
+	dir := t.TempDir()
+	write(t, dir, "shop.py", py)
+
+	out := Read([]Target{ParseTarget("shop.py:close", dir)}, dir, Options{})
+	assert.Contains(t, out, "· 55-60 def close(self):\n55\t    def close(self):\n")
+
+	out = Read([]Target{{Path: "shop.py"}}, dir, Options{Outline: true})
+	assert.Contains(t, out, "read a piece: zmina read shop.py:Name (a function, class or block by its name; Class.method below the top)")
+}
+
+// A FoxPro form exported as text: each object is a class, its methods the procedures in it.
+func TestFoxProFormText(t *testing.T) {
+	form := "FORM: price\n\n===== OBJECT =====\nOBJNAME: Dataenvironment\nCLASS: dataenvironment\nMETHODS:\n===== END OBJECT =====\n\n" +
+		"===== OBJECT =====\nOBJNAME: PRICE\nCLASS: kform\nMETHODS:\nPROCEDURE mylock\nThisForm.x = 1\nENDPROC\nPROCEDURE Init\nDODEFAULT()\nENDPROC\n===== END OBJECT =====\n"
+
+	assert.Equal(t, []string{"0 3-7 Dataenvironment", "0 9-19 PRICE", "1 13-15 PRICE.mylock", "1 16-18 PRICE.Init"},
+		names(Outline("price.txt", []byte(form))))
+	assert.Empty(t, Outline("notes.txt", []byte("Procedure for the night shift\nfunction keys are F1-F12\n")),
+		"prose without ENDPROC is no FoxPro")
+
+	dir := t.TempDir()
+	write(t, dir, "price.txt", form)
+
+	out := Read([]Target{ParseTarget("price.txt:mylock", dir)}, dir, Options{})
+	assert.Contains(t, out, "· foxpro · 13-15 PROCEDURE mylock\n")
 }

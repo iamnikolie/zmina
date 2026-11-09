@@ -33,6 +33,8 @@ type Target struct {
 	Heading string
 	From    int // 0: none
 	To      int // 0: to the end
+	// Colon: a section named path:#Heading, read as path#Heading with a line that says the form.
+	Colon bool
 }
 
 var rangeRe = regexp.MustCompile(`^(\d+)(?:-(\d*))?$`)
@@ -60,6 +62,11 @@ func ParseTarget(arg, dir string) Target {
 				t.From, t.To = a, b
 			}
 
+			return t
+		}
+
+		if h, ok := strings.CutPrefix(rest, "#"); ok && h != "" {
+			t.Heading, t.Colon = h, true
 			return t
 		}
 
@@ -258,6 +265,10 @@ func readOne(b *strings.Builder, t Target, dir string, o Options, left int) {
 
 	header := fmt.Sprintf("== %s · %s lines · %s", t.Path, thousands(len(f.Lines)), kchars(len(f.Src)))
 	if l := Lang(p); l != "" {
+		if l == "markdown" && foxEnds.Match(f.Src) && len(mdOutline(f.Src)) == 0 {
+			l = "foxpro" // a form or program exported as text
+		}
+
 		header += " · " + l
 	}
 
@@ -289,6 +300,10 @@ func readOne(b *strings.Builder, t Target, dir string, o Options, left int) {
 
 	switch {
 	case t.Symbol != "" || t.Heading != "":
+		if t.Colon {
+			fmt.Fprintf(b, "(read as %s; a section is path#Heading, without the colon)\n", t)
+		}
+
 		readSymbol(b, f, t, header, left)
 	case t.From > 0:
 		to := t.To
@@ -418,20 +433,15 @@ func writeSyms(b *strings.Builder, f *File, syms []Symbol, path, header string, 
 		b.WriteString(row)
 	}
 
-	fmt.Fprintf(b, "read a piece: zmina read %s%s | %s:120-180 · all of it: --full\n", path, pieceHint(Lang(f.Path)), path)
+	fmt.Fprintf(b, "read a piece: zmina read %s%s | %s:120-180 · all of it: --full\n", path, pieceHint(f.Path), path)
 }
 
-func pieceHint(lang string) string {
-	switch lang {
-	case "go":
-		return ":Name (Func, Type.Method)"
-	case "markdown":
-		return "#Heading"
-	case "yaml", "json":
-		return ":key (a.b below the top)"
+func pieceHint(path string) string {
+	if o := outlinerFor(path); o != nil {
+		return o.hint
 	}
 
-	return ""
+	return ":Name (a function, class or block by its name; Class.method below the top)"
 }
 
 func span(f *File, s Symbol) int {
