@@ -224,3 +224,38 @@ func TestTodoAnswerRecordedByARoleSaysSo(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, strings.Join(bodies(st.Signals), "\n"), id+" · yes: yes — Ship it? (the owner's answer in chat, recorded by dev)")
 }
+
+// The dispatcher recording the owner's answer gets no note of its own back; the log and a waiting task's mark stay.
+func TestTodoAnswerByTheDispatcherIsNotEchoed(t *testing.T) {
+	file := testCrew(t, "  dev: {}\n")
+	out, _, err := zm(t, file, "todo", "add", "Ship it?", "--rec", "yes", "--reason", "green")
+	require.NoError(t, err)
+	id := strings.TrimSpace(out)
+
+	t.Setenv("ZMINA_ROLE", "dispatcher")
+	out, _, err = zm(t, file, "todo", "answer", id, "ship it")
+	require.NoError(t, err)
+	assert.Equal(t, id+" · answer · recorded\n", out)
+
+	st, err := shift.Read(filepath.Dir(file))
+	require.NoError(t, err)
+	assert.NotContains(t, strings.Join(bodies(st.Signals), "\n"), id+" · ship it", "nothing queued for itself")
+
+	out, _, err = zm(t, file, "log", "--full")
+	require.NoError(t, err)
+	assert.Contains(t, out, "answered")
+	assert.Contains(t, out, id+" · ship it — Ship it? (the owner's answer in chat, recorded by dispatcher)")
+
+	t.Setenv("ZMINA_ROLE", "")
+	out, _, err = zm(t, file, "todo", "add", "Tag it?")
+	require.NoError(t, err)
+	id2 := strings.TrimSpace(out)
+
+	out, _, err = zm(t, file, "todo", "answer", id2, "later")
+	require.NoError(t, err)
+	assert.Equal(t, id2+" · answer · queued for the dispatcher\n", out, "by hand: the dispatcher hears it")
+
+	st, err = shift.Read(filepath.Dir(file))
+	require.NoError(t, err)
+	assert.Contains(t, strings.Join(bodies(st.Signals), "\n"), id2+" · later — Tag it?")
+}

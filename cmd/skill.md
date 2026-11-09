@@ -896,7 +896,7 @@ until the task changes again (`task set`): the turn is the dispatcher's.
 | `zmina todo ls [--full] [--json]` | what waits, in that order, one line each (its title when it has one); the parked list's count last. `--full`: the whole text. `--json`: `{items, later}`. |
 | `zmina todo yes <id>` | take a decision's recommendation. |
 | `zmina todo done <id>` | a check (or a decision) is dealt with. |
-| `zmina todo answer <id> <text...>` | answer an ask or a waiting task (`T-62`) in the owner's words. Run by a role (`$ZMINA_ROLE`), it records what the owner said in chat, and the dispatcher's note says so: `(the owner's answer in chat, recorded by <role>)`. |
+| `zmina todo answer <id> <text...>` | answer an ask or a waiting task (`T-62`) in the owner's words. Run by a role (`$ZMINA_ROLE`), it records what the owner said in chat, and the dispatcher's note says so: `(the owner's answer in chat, recorded by <role>)`. Run by the dispatcher itself (yes, done, park and ignore too), nothing is queued back to it — it prints `recorded`; the log line and a waiting task's answered mark stay. |
 | `zmina todo park <id>` | put it on the parked list (an ask becomes `L-n`, "from A-3"); for a waiting task the dispatcher hears `T-62 · later`. |
 | `zmina todo done L-3` / `todo park L-3` | a parked item its alarm brought back (`later add --until`): done closes it (the dispatcher hears `L-3 · done`); park puts it back on the list, off the todo, quietly. |
 | `zmina todo ignore <id>` | set it aside for good: an ask closes with no parked entry; a waiting task only leaves the todo (until it changes), the task stays as it is. The dispatcher hears `A-3 · ignored`. |
