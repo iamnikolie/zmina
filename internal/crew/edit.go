@@ -13,7 +13,7 @@ import (
 )
 
 // SeatKeys are the role keys 'zmina seat set' may change.
-var SeatKeys = []string{"runtime", "profile", "codex_transport", "codex_home", "reasoning_effort", "service_tier", "sandbox", "approval_policy", "session", "dir", "boot", "keep", "model", "args", "about", "remote_control", "delivery", "resume",
+var SeatKeys = []string{"runtime", "profile", "codex_transport", "codex_home", "reasoning_effort", "service_tier", "sandbox", "approval_policy", "session", "dir", "boot", "keep", "model", "args", "about", "remote_control", "read_guard", "delivery", "resume",
 	"handoff", "schedule", "prompt", "expires", "context_max", "context_action", "drop_tools", "keep_tools",
 	"release_idle_minutes", "restart_at", "restart_idle", "budget"}
 
@@ -236,7 +236,7 @@ func setKey(body *yaml.Node, key, value string) error {
 }
 
 // valueNode is a string for every key but the list keys (args, drop_tools, keep_tools: [--chrome] or
-// --chrome,--verbose), remote_control, a bool, and budget, a number.
+// --chrome,--verbose), remote_control and read_guard, bools, and budget, a number.
 func valueNode(key, value string) (*yaml.Node, error) {
 	if key == "budget" {
 		f, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
@@ -259,9 +259,9 @@ func valueNode(key, value string) (*yaml.Node, error) {
 		return doc.Content[0], nil
 	}
 
-	if key == "remote_control" {
+	if key == "remote_control" || key == "read_guard" {
 		if value != "true" && value != "false" {
-			return nil, fmt.Errorf("remote_control: true or false, not %q", value)
+			return nil, fmt.Errorf("%s: true or false, not %q", key, value)
 		}
 
 		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: value}, nil

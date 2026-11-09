@@ -569,3 +569,27 @@ func TestRestartKeys(t *testing.T) {
 	assert.Equal(t, 300_000, c.Roles["dev"].RestartContext())
 	assert.Equal(t, 2*time.Hour, c.Roles["dev"].RestartAfter())
 }
+
+func TestReadGuard(t *testing.T) {
+	dir := t.TempDir()
+	path := write(t, "dir: "+dir+"\nread_guard: true\nroles:\n  dispatcher:\n  dev:\n  ops:\n    read_guard: false\n")
+
+	c, err := Load(path)
+	require.NoError(t, err)
+	assert.True(t, c.ReadGuardFor(c.Roles["dev"]), "the crew's")
+	assert.False(t, c.ReadGuardFor(c.Roles["ops"]), "the role's own wins")
+
+	e, err := Open(path)
+	require.NoError(t, err)
+	require.NoError(t, e.Set("dev", map[string]string{"read_guard": "false"}))
+	require.ErrorContains(t, e.Set("dev", map[string]string{"read_guard": "yes"}), "read_guard: true or false")
+	require.NoError(t, e.Save())
+
+	c, err = Load(path)
+	require.NoError(t, err)
+	assert.False(t, c.ReadGuardFor(c.Roles["dev"]))
+
+	c, err = Load(write(t, "dir: "+dir+"\nroles:\n  dispatcher:\n"))
+	require.NoError(t, err)
+	assert.False(t, c.ReadGuardFor(c.Roles["dispatcher"]), "off unless asked")
+}

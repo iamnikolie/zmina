@@ -36,6 +36,7 @@ idle_minutes: 30                         # idle longer with no active task -> th
 release_idle_minutes: 30                 # a keep: manual role idle longer is released: tasks to later, down (default off)
 boot_grace: 2m                           # the longest a started role is left to boot: its lines go once its boot turn is over, at most this long after the start
 remote_control: true                     # open roles to Remote Control (per role too); default true
+read_guard: true                         # big cat/sed/Read become zmina read (per role too; Claude roles); default false
 delivery: native                         # how lines reach roles: native (default: the agent's own channel) | tmux (per role too)
 delivery_mid_turn: true                  # the dispatcher's acked lines may go into a turn it is in (default true; false: at its end)
 renotify: 30m                            # an unacked line is said again this often (default 30m; off)
@@ -1094,12 +1095,49 @@ owner and for a parked item back (`back from later: <text>`) — never for a rol
 the log (`alarm-failed`), and the todo item is there all the same. Without `notify` a reminder only lands on the
 todo. The log has `alarm` (set, moved, off, rang) and `sleep`.
 
+## Reading files — zmina read, zmina grep, the read guard
+
+What fills a role's context most is file output: cat, sed, head and tail are 39% of all tool-result volume, and
+every character in the context is re-read with every reply after it (~100 times). These read a file the way an agent
+should pay for it. Neither needs a crew file; a role's call (`$ZMINA_ROLE`) is metered in its crew's `reads.jsonl`.
+
+| Command | Does |
+|---|---|
+| `zmina read <target>... [--max 30k] [--outline] [--full]` | several targets in one call, under one cap (12k characters by default). `path`: a file that fits whole, numbered; a bigger one as its outline — Go declarations, Markdown headings, YAML/JSON keys (two levels), each with its line range and size, so a read is priced before it is made. `path:Name`: a Go func, type or method (`Type.Method`, or the method name alone), a YAML/JSON key (`a.b` below the top). `path#Heading`: a Markdown section with its subsections (any case, then a part of the heading; a miss names the near ones). `path:120-180`, `path:412-` (to the end), `path:120` (the lines around 120). A cut names the next command (`… cut at line 812 of 1,494; next: zmina read cmd/skill.md:813-`); a single line longer than the cap is shown cut, with its length and `--full`. Regular files up to 8 MB only: a bigger one (a log) is read in part with `sed -n` or `tail`. Lock, minified, generated (`Code generated … DO NOT EDIT`) and binary files are named, not shown; a range or `--full` reads them. `--full`: no cap, no outline. Lines are numbered `N<tab>`. |
+| `zmina grep <regex> [path...] [-i] [-F] [-g '*.go'] [--per-file 5] [--max 4k]` | Go regexp over the paths (default `.`; skips `.git`, `node_modules`, `vendor`, `dist`, `build` and hidden directories, binary files, files that are not regular (a FIFO) and files over 2 MB). Hits grouped by file and under the Go func, Markdown section or key they sit in; 5 a file and 4k characters in all, then how many were left out and the flag that shows them. |
+
+**The read guard** (`read_guard: true` in the crew file or on a role; Claude roles started with zmina's settings, so
+not one with `delivery: tmux` or its own `--settings`). zmina adds a `PreToolUse` hook (matcher `Bash|Read`,
+`zmina _read-guard`, 3 s) to the role's settings and one paragraph to its boot. It steps in only above 12k
+characters — below that a whole read is cheaper than an outline and a second turn:
+
+- in a session that bypasses permissions (`permission_mode` `bypassPermissions`; elsewhere a `cat` allowed as
+  read-only would become a command that waits for approval), a Bash call that is one plain command — `cat f…` (`-n`
+  too), `sed -n 'A,Bp' f`, `head`/`tail` (`-n N`, `-N`) of one file, optionally after `cd <dir> &&` — runs as
+  `zmina read --via '<command>' <target>` (`updatedInput`, the rest of the tool input unchanged, no permission
+  decision: the usual rules judge the new command, so a deny rule written for `cat` of a file does not hold for
+  `zmina read` of it — name both). Its output says so on its first line, and that `command cat <file>` prints the
+  raw file. Pipes, redirects, `;`, `$`, globs, quotes with expansions, other flags and other commands pass untouched;
+- a `Read` without offset or limit of a Go, Markdown (.md, .txt), YAML or JSON file over 12k is denied with its
+  outline — names and line ranges, never its lines — as the reason, which is what the model reads: a Read with
+  offset/limit (which also counts as read for Edit) or a `zmina read` target follows. A file of another type, or
+  one with no outline, goes to Read as asked.
+
+Both only for regular files of at most 8 MB under the session's working directory with no hidden part in their
+path (`.env`, `.git/`, `.ssh/`): the hook runs before Claude Code's permission rules, so what those usually guard
+is left to them. Any error, panic or doubt (unparsable input, a device, a FIFO): no output, exit 0, the call goes as
+typed. A copy
+(`dev#2`) has its role's setting; a Codex seat gets the boot paragraph without the guard. A change applies at the
+role's next start. Each step goes to `reads.jsonl` (`guard-rewrite` / `guard-outline`, what, path, size), each
+`zmina read`/`grep` of a role too (`read`/`grep`, path, lines, size, mtime, session) — the trial's meter; savings
+are measured from transcripts, not from these lines.
+
 ## Seats — editing the crew file
 
 | Command | Does |
 |---|---|
 | `zmina seat add <role> [--about … --dir … --boot … --model … --keep … --args=--chrome,--x --resume always --schedule "…" --prompt "…" --expires 3d]` | add a role. `--expires` takes `12h`, `3d`, a date or a date and time. |
-| `zmina seat set <role> key=value …` | change keys; `key=` removes one. Keys: runtime, profile, codex_transport, codex_home, reasoning_effort, service_tier (`default`/`priority`), sandbox, approval_policy, session, dir, boot, keep, model, args (`[--a, --b]` or `--a,--b`), about, remote_control (`true`/`false`), delivery (`native`/`tmux`), resume, schedule, prompt, expires, context_max, context_action, drop_tools, keep_tools (lists, like args), release_idle_minutes, restart_at, restart_idle, budget (dollars a day, a number: `budget=20`, written unquoted). |
+| `zmina seat set <role> key=value …` | change keys; `key=` removes one. Keys: runtime, profile, codex_transport, codex_home, reasoning_effort, service_tier (`default`/`priority`), sandbox, approval_policy, session, dir, boot, keep, model, args (`[--a, --b]` or `--a,--b`), about, remote_control, read_guard (`true`/`false`), delivery (`native`/`tmux`), resume, schedule, prompt, expires, context_max, context_action, drop_tools, keep_tools (lists, like args), release_idle_minutes, restart_at, restart_idle, budget (dollars a day, a number: `budget=20`, written unquoted). |
 | `zmina seat rm <role>` | remove a role that is down and holds no active task (`--force` despite tasks). |
 
 Every edit keeps the file's comments, is checked by loading it before it is written (a crew that

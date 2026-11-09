@@ -34,6 +34,9 @@ func (l Layout) Inbox() string { return filepath.Join(l.Dir, "inbox") }
 // Events is the event log.
 func (l Layout) Events() string { return filepath.Join(l.Dir, "events.jsonl") }
 
+// Reads is the read meter: one line per zmina read or grep of a role, and per step of its read guard.
+func (l Layout) Reads() string { return filepath.Join(l.Dir, "reads.jsonl") }
+
 // Screens holds the last screens of ended roles.
 func (l Layout) Screens() string { return filepath.Join(l.Dir, "screens") }
 

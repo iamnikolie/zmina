@@ -346,3 +346,39 @@ func TestAckInRecoveryPackAndBootRule(t *testing.T) {
 	assert.Contains(t, f.s.BootText(r), "run `zmina ack S-12 S-14`")
 	assert.Contains(t, f.s.BootText(r), "said again after 30m")
 }
+
+// A role with read_guard starts with the PreToolUse hook that runs zmina _read-guard, and is told of it at boot.
+func TestReadGuardHookInSettings(t *testing.T) {
+	f, _ := nativeFixture(t, strings.Replace(crewYAML, "  designer:\n", "  designer:\n    read_guard: true\n", 1))
+	f.s.Self = "/opt/zmina"
+
+	var got struct {
+		Hooks struct {
+			PreToolUse []struct {
+				Matcher string `json:"matcher"`
+				Hooks   []struct {
+					Type, Command string
+					Timeout       int
+				} `json:"hooks"`
+			}
+		} `json:"hooks"`
+	}
+
+	require.NoError(t, json.Unmarshal([]byte(f.s.roleSettings("designer")), &got))
+	require.Len(t, got.Hooks.PreToolUse, 1)
+	assert.Equal(t, "Bash|Read", got.Hooks.PreToolUse[0].Matcher)
+	assert.Equal(t, "'/opt/zmina' --crew '"+f.s.Crew.Path+"' _read-guard --role 'designer'", got.Hooks.PreToolUse[0].Hooks[0].Command)
+	assert.Equal(t, readGuardTimeout, got.Hooks.PreToolUse[0].Hooks[0].Timeout)
+
+	got.Hooks.PreToolUse = nil
+	require.NoError(t, json.Unmarshal([]byte(f.s.roleSettings("designer#2")), &got))
+	assert.Len(t, got.Hooks.PreToolUse, 1, "a copy has its role's guard")
+
+	got.Hooks.PreToolUse = nil
+	require.NoError(t, json.Unmarshal([]byte(f.s.roleSettings("harvester")), &got))
+	assert.Empty(t, got.Hooks.PreToolUse, "off unless asked")
+
+	boot := f.s.BootText(f.s.Crew.Roles["designer"])
+	assert.Contains(t, boot, ReadRule+" "+ReadGuardRule)
+	assert.NotContains(t, f.s.BootText(f.s.Crew.Roles["harvester"]), ReadRule)
+}
