@@ -260,7 +260,7 @@ type Crew struct {
 	// into zmina read and answers a Read of a big file without offset/limit with its outline. Default false.
 	ReadGuard *bool `yaml:"read_guard"`
 	// Skills trims the skill list every Claude role is sent with each request (listing budget, desc_max, off,
-	// name_only); a role's own skills override it field by field.
+	// name_only, user_only); a role's own skills override it field by field.
 	Skills *Skills `yaml:"skills"`
 	// Renotify is how long a delivered line waits for its reader's ack before it is said again (default 30m; off).
 	Renotify string `yaml:"renotify"`
@@ -969,8 +969,8 @@ func (c *Crew) resolve(strict bool) error {
 		case r.IsCodex():
 			r.skills = SkillList{}
 		case r.ownsSettings() && len(r.skills.Settings()) > 0:
-			c.Warnings = append(c.Warnings, fmt.Sprintf("role %s: args has --settings, so skills desc_max, off and "+
-				"name_only are not passed to it (listing is)", name))
+			c.Warnings = append(c.Warnings, fmt.Sprintf("role %s: args has --settings, so skills desc_max, off, "+
+				"name_only and user_only are not passed to it (listing is)", name))
 			r.skills = SkillList{Listing: r.skills.Listing}
 		}
 

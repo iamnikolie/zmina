@@ -47,6 +47,7 @@ skills:                                  # the skill list Claude roles are sent 
   desc_max: 250                          # each description cut at this many characters (Claude Code's default 1536)
   off: [anthropic-skills:docx]           # skills left out; exact names as the list shows them, no patterns
   name_only: [kreida]                    # skills listed by name, without a description
+  user_only: [harvest]                   # hidden from the model; /harvest still runs it
 context_max: 400k                        # every role's, unless it sets its own (default: none)
 context_action: compact                  # every role's, unless it sets its own (default compact)
 restart_at: 250k                         # a role holding a task this full restarts fresh from its note (default 250k; off)
@@ -313,8 +314,10 @@ to 1% of the context window in characters (a server flag often raises it; descri
 is over it). `skills` trims it for the Claude roles: `listing` (characters, `9k`; passed as
 `SLASH_COMMAND_TOOL_CHAR_BUDGET`) is the lever that saves — a listing of ~30k characters cut to 9k took ~7k tokens
 off every request; `desc_max` cuts each description (`skillListingMaxDescChars`); `off` and `name_only` take
-skills out or list them by name (`skillOverrides`, exact names as the list shows them; no patterns). Turning skills
-off saves only where the list is under its budget: at the budget the room freed goes to the other descriptions.
+skills out or list them by name, `user_only` hides them from the model while the owner's `/name` still runs them
+(`skillOverrides` `off`, `name-only`, `user-invocable-only`; exact names as the list shows them; no patterns).
+Turning skills off saves only where the list is under its budget: at the budget the room freed goes to the other
+descriptions.
 A short description can make a role miss a skill: watch which skills a role calls before and after. A role's
 `skills` go over the crew's field by field (a list it sets replaces the crew's; `off: []` clears it). A change
 applies at the role's next start. A role whose `args` pass `--settings` gets the `listing` only, with a warning.
