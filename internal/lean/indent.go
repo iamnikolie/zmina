@@ -9,8 +9,9 @@ import (
 // C#, Visual Basic, Swift, PHP, shell, SQL, CSS, pretty-printed XML and HTML; ext is the file's extension. A block is a line whose next code line
 // is indented deeper; it runs while the lines stay deeper, through closing lines at its own indent (}, ), End Sub,
 // else:, </tag>). The top-level blocks are listed, and the blocks inside a big one, or inside one that wraps the whole
-// file (a class, a namespace) one level further. A block starts at the comments and decorators right above it; its
-// name is what a target names it by: Class.method below the top. A statement over several lines (a signature, a
+// file one level further; a class's or a namespace's members whatever its size, unless the whole outline would pass
+// the cap (fitMembers). A block starts at the comments and decorators right above it; its name is what a target names
+// it by: Class.method below the top. A statement over several lines (a signature, a
 // call, a list: brackets left open, a backslash at its end, " _" in Visual Basic) counts as its first line. Imports
 // in a row are one entry, "imports (n)", when they take five lines or more.
 func indentOutline(src []byte, ext string) []Symbol {
@@ -66,9 +67,20 @@ func indentOutline(src []byte, ext string) []Symbol {
 				continue
 			}
 
-			// A block, or a statement of many lines (CREATE TABLE x ( … ), a big literal).
+			// A block, or a statement of many lines (CREATE TABLE x ( … ), a big literal), or a declaration on one
+			// line (def f(): ...).
 			end := blockEnd(in, k, to)
-			if end == k && c.last-c.n < 5 {
+			if end == k && c.last-c.n < 5 && !declLine(c.text) {
+				continue
+			}
+
+			// Definitions under a top-level condition (if sys.platform == "win32":, try: … except ImportError:) are
+			// listed as the top level's.
+			if depth == 0 && end > k && strings.HasSuffix(c.text, ":") && condWords[firstWord(c.text)] && holdsDecl(in, k+1, end) {
+				walk(k+1, end+1, depth, parent)
+
+				k = end
+
 				continue
 			}
 
@@ -85,10 +97,11 @@ func indentOutline(src []byte, ext string) []Symbol {
 			last := in[end].last
 			out = append(out, Symbol{Start: start, End: last, Depth: depth, Name: name, Label: clip(c.text, 110)})
 
-			// Inside a class, a namespace, an element, or a block that is most of the file: its members. Inside a
-			// function: nothing (its ifs and loops are no outline).
+			// Inside a class, a namespace (whatever its size), a big element or a block that is most of the file:
+			// its members. Inside a function: nothing (its ifs and loops are no outline).
 			span := last - start + 1
-			if span > 40 && depth < 3 && (container(c.text) || span*5 >= len(lines)*4) {
+			code := container(c.text) && !strings.HasPrefix(c.text, "<") && !strings.HasPrefix(c.text, "@")
+			if depth < 3 && end > k && (code || span > 40 && (container(c.text) || span*5 >= len(lines)*4)) {
 				walk(k+1, end+1, depth+1, name)
 			}
 
@@ -97,7 +110,7 @@ func indentOutline(src []byte, ext string) []Symbol {
 	}
 	walk(0, len(in), 0, "")
 
-	return out
+	return fitMembers(out)
 }
 
 // codeLine is a statement that counts for blocks: not blank, not only a comment, not inside a multi-line string.
@@ -484,6 +497,38 @@ func blockName(t string) string {
 	}
 
 	return clip(t, 40)
+}
+
+var condWords = map[string]bool{"if": true, "try:": true, "with": true}
+
+// declLine: the statement declares a function or a class (def, class, function, fn, func, Sub …) after its modifiers.
+func declLine(t string) bool {
+	for _, w := range strings.Fields(t) {
+		w = strings.ToLower(w)
+		if modifiers[w] {
+			continue
+		}
+
+		switch strings.TrimSuffix(w, ":") {
+		case "def", "class", "function", "fn", "func", "sub", "procedure":
+			return true
+		}
+
+		return false
+	}
+
+	return false
+}
+
+// holdsDecl: a statement of the block's first level, from code line a to b, declares a function or a class.
+func holdsDecl(in []codeLine, a, b int) bool {
+	for j := a; j <= b; j++ {
+		if in[j].indent == in[a].indent && declLine(in[j].text) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func identStart(t string) bool {

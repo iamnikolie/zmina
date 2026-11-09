@@ -586,7 +586,7 @@ func TestIndentOutline(t *testing.T) {
 
 	vb := "Public Class UnionsDC\n\n    Public Function InsertSQL(\n    ByVal ID As Integer,\n    ByVal Name As String) As String\n" +
 		"        Dim s As String\n' a comment at column 0\n        Return s\n    End Function\n\n    Public Sub New()\n        x = 1\n    End Sub\nEnd Class\n"
-	assert.Equal(t, []string{"0 1-14 UnionsDC"}, names(Outline("dc.vb", []byte(vb))), "small: members not listed")
+	assert.Equal(t, []string{"0 1-14 UnionsDC", "1 3-9 UnionsDC.InsertSQL", "1 11-13 UnionsDC.New"}, names(Outline("dc.vb", []byte(vb))), "a class's members whatever its size")
 	assert.Equal(t, []string{"0 1-54 UnionsDC", "1 3-49 UnionsDC.InsertSQL", "1 51-53 UnionsDC.New"},
 		names(Outline("dc.vb", []byte(strings.Replace(vb, "        Return s\n", strings.Repeat("        Return s\n", 41), 1)))),
 		"a signature over lines at one indent is one statement; End Function closes it")
@@ -603,7 +603,7 @@ func TestIndentOutline(t *testing.T) {
 	assert.Equal(t, []string{"0 1-3 #main", "0 6-8 .link"}, names(Outline("x.css", []byte(css))), "a selector list: its last line")
 
 	php := "<?php\nclass Account\n{\n    public function fetch($id)\n    {\n        return $id;\n    }\n}\n"
-	assert.Equal(t, []string{"0 2-8 Account"}, names(Outline("a.php", []byte(php))), "a brace on its own line opens the class")
+	assert.Equal(t, []string{"0 2-8 Account", "1 4-7 Account.fetch"}, names(Outline("a.php", []byte(php))), "a brace on its own line opens the class")
 
 	xml := "<Report>\n  <DataSets>\n    <DataSet Name=\"Orders\">\n      <Query>x</Query>\n    </DataSet>\n  </DataSets>\n</Report>\n"
 	assert.Equal(t, []string{"0 1-7 Report"}, names(Outline("r.rdl", []byte(xml))))
@@ -616,7 +616,7 @@ func TestIndentOutline(t *testing.T) {
 		"elements are containers: their members are listed")
 
 	pyUnder := "from x import (\n    a,\n    b,\n)\nfrom y import c\nfrom z import gettext as _\n\n\nclass Deferred:\n    def name(self):\n        return 1\n"
-	assert.Equal(t, []string{"0 1-6 imports", "0 9-11 Deferred"}, names(Outline("m.py", []byte(pyUnder))),
+	assert.Equal(t, []string{"0 1-6 imports", "0 9-11 Deferred", "1 10-11 Deferred.name"}, names(Outline("m.py", []byte(pyUnder))),
 		"imports in a row are one entry; \" _\" goes on to the next line only in Visual Basic")
 
 	vbLabel := "Public Sub Send()\n    On Error GoTo send_Err\n    x = 1\nsend_Err:\n    With conn\n        .Close\n    End With\nEnd Sub\n\nPublic Sub Done()\n    y = 2\nEnd Sub\n"
@@ -643,6 +643,11 @@ func TestIndentOutline(t *testing.T) {
 		"a docstring is no block; a decorator over lines heads the def")
 	assert.True(t, pySure([]byte(deco)))
 	assert.False(t, pySure([]byte("def f():\n    \"\"\"Open.\n    return 1\n")), "a docstring left open")
+
+	stubs := "import sys\n\nif sys.platform == \"win32\":\n    def home() -> str:\n        return \"C:\"\nelse:\n    def home() -> str:\n        return \"/\"\n\n\n" +
+		"@overload\ndef get(key: str) -> str: ...\n@overload\ndef get(key: int) -> int: ...\n\nclass Box:\n    size: int\n    def open(self) -> None: ...\n"
+	assert.Equal(t, []string{"0 4-5 home", "0 7-8 home", "0 11-12 get", "0 13-14 get", "0 16-18 Box", "1 18-18 Box.open"},
+		names(Outline("s.pyi", []byte(stubs))), "defs under a top-level if, and one-line defs, are listed")
 
 	quoted := "SEP = '\"\"\"'  # three quotes\nEND = '\"\"\"'\n\n\ndef f():\n    \"\"\"Doc.\n\nclass Fake:\n    \"\"\"\n    return 1\n"
 	assert.Equal(t, []string{"0 5-10 f"}, names(Outline("q.py", []byte(quoted))), "quotes inside a string open nothing")
