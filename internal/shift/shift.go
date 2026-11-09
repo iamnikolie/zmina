@@ -460,9 +460,9 @@ const ReadRule = "[zmina] Read files lean: zmina read <path> gives a small file 
 	"budget."
 
 // ReadGuardRule follows ReadRule for a Claude role, whose read guard runs as a hook.
-const ReadGuardRule = "Under your working directory, a cat, sed -n, head or tail that would print over 12k characters " +
-	"runs as zmina read, and a Read of such a Go, Markdown, YAML or JSON file without offset/limit answers with its " +
-	"outline; `command cat <file>` prints it raw."
+const ReadGuardRule = "Under your working directory, a Read of a Go, Markdown, YAML or JSON file over 12k characters " +
+	"without offset/limit answers with its outline, and in a session that bypasses permissions a cat, sed -n, head " +
+	"or tail that would print over 12k characters runs as zmina read; `command cat <file>` prints it raw."
 
 // BootText is a role's first message: its boot, and for the dispatcher the rule about other crews' lines. It names
 // the tag of the role's start, and goes only into the command that starts it.

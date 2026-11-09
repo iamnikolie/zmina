@@ -344,14 +344,24 @@ func fileSize(f, dir string) (int, bool) {
 	return int(info.Size()), true
 }
 
-// guardable: the file is under the session's directory and no part of its path there is hidden (.env, .git, .ssh):
-// what permission rules usually guard is left to them.
+// guardable: the file, its links resolved, is under the session's directory and no part of its path there is hidden
+// (.env, .git, .ssh): what permission rules usually guard is left to them.
 func guardable(p, cwd string) bool {
 	if cwd == "" {
 		return false
 	}
 
-	rel, err := filepath.Rel(cwd, p)
+	// By where the file really is: a link under cwd may point outside it or into a hidden directory.
+	real, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return false
+	}
+
+	if c, err := filepath.EvalSymlinks(cwd); err == nil {
+		cwd = c
+	}
+
+	rel, err := filepath.Rel(cwd, real)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, "../") || filepath.IsAbs(rel) {
 		return false
 	}

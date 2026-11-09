@@ -1124,7 +1124,7 @@ characters — below that a whole read is cheaper than an outline and a second t
   one with no outline, goes to Read as asked.
 
 Both only for regular files of at most 8 MB under the session's working directory with no hidden part in their
-path (`.env`, `.git/`, `.ssh/`): the hook runs before Claude Code's permission rules, so what those usually guard
+path (`.env`, `.git/`, `.ssh/`), judged by where the file really is (links resolved): the hook runs before Claude Code's permission rules, so what those usually guard
 is left to them. Any error, panic or doubt (unparsable input, a device, a FIFO): no output, exit 0, the call goes as
 typed. A copy
 (`dev#2`) has its role's setting; a Codex seat gets the boot paragraph without the guard. A change applies at the

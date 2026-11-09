@@ -276,6 +276,9 @@ func TestGuardRead(t *testing.T) {
 	env := write(t, dir, ".config/app.yaml", "a: 1\n"+strings.Repeat("# filler\n", 3000))
 	log := write(t, dir, "app.log", strings.Repeat("a log line\n", 3000))
 	outside := write(t, t.TempDir(), "big.go", goSrc+filler)
+	require.NoError(t, os.Symlink(outside, filepath.Join(dir, "link.go")))
+	require.NoError(t, os.Symlink(filepath.Dir(env), filepath.Join(dir, "conf")))
+	require.NoError(t, os.Symlink(big, filepath.Join(dir, "inside.go")))
 
 	read := func(in map[string]any) Decision {
 		return Guard(HookInput{Cwd: dir, ToolName: "Read", ToolInput: in}, "/opt/zmina")
@@ -288,6 +291,7 @@ func TestGuardRead(t *testing.T) {
 	assert.NotContains(t, d.Reason, "filler line", "names and ranges, never the file's lines")
 
 	assert.Equal(t, "outline", read(map[string]any{"file_path": "big.go"}).Kind, "relative to the session's directory")
+	assert.Equal(t, "outline", read(map[string]any{"file_path": filepath.Join(dir, "inside.go")}).Kind, "a link that stays inside")
 
 	for name, in := range map[string]map[string]any{
 		"limit":                  {"file_path": big, "limit": 50.0},
@@ -298,6 +302,8 @@ func TestGuardRead(t *testing.T) {
 		"hidden":                 {"file_path": env},
 		"no outline type":        {"file_path": log},
 		"outside the cwd":        {"file_path": outside},
+		"a link to outside":      {"file_path": filepath.Join(dir, "link.go")},
+		"a link to a hidden dir": {"file_path": filepath.Join(dir, "conf", "app.yaml")},
 		"a device":               {"file_path": "/dev/zero"},
 	} {
 		assert.Equal(t, Decision{}, read(in), name)
