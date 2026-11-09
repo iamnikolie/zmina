@@ -65,7 +65,10 @@ context_action: compact                  # every role's, unless it sets its own 
 restart_at: 250k                         # a role holding a task this full restarts fresh from its note (default 250k; off)
 restart_idle: 1h                         # ... and one idle this long over 100k (default 1h, 20m at least; off)
 restart_done: 150k                       # a role whose task is done, holding none, this full restarts fresh (default 150k; off)
-notify: [push-cli, send, --title, zmina] # a reminder for you also goes through this (text last; a string: sh -c, $1)
+notify: [push-cli, send, --title, zmina] # a push to you goes through this (text last; a string: sh -c, $1)
+notify_on: [reminder, blocking]          # what is pushed: reminder, blocking (an item that holds a role up), ask (every new ask); default reminder, blocking
+quiet_hours: 23:00-08:00                 # in timezone:; blocking and ask pushes wait until it is over (default none)
+notify_again: 24h                        # an item that still blocks is pushed again this often (default 24h, 1h at least; off)
 timezone: Europe/Warsaw                  # the clock reminder times are read on (default: this machine's)
 lessons: on                              # daily triage of the roles' lessons into one draft MR on the crew's agentic-os (default off; see Lessons)
 day_start: "09:00"                       # when morning, tomorrow, thu or a date rings (default 09:00)
@@ -271,6 +274,14 @@ gone (…): its lines wait for the next beat after each turn …; restart it …
 also works from the dispatcher's own session): zmina records the hooks each start
 gets, and asks the process (`ps`) of a role an earlier zmina started.
 
+A start also records the zmina version that made it. After an install the roles keep the hook command lines the
+earlier zmina wrote and run them with the new executable: the hidden commands and flags those lines name
+(`pending --brief`, `_turn-end`, `_read-guard`, the `_codex` bridge's flags) stay valid across versions, a renamed one
+keeps its old name. A Codex role's bridge and a running `zmina ui` keep the earlier zmina's code until they are started
+again. `zmina doctor` says which (`versions`): a cockpit or a Codex bridge of another version warns, Claude roles
+started by another version are listed without a warning; `zmina restart <role> --continue` starts one with this
+zmina. A `zmina ui` that finds the cockpit running says so when that one is of another version.
+
 Typed into the input line as before: a slash command (a posted one is plain text), the owner's own message from Chat
 (below: his own turn, never another session's message), a role whose `args`
 pass their own `--settings` (zmina's are not passed: a warning), a role with `delivery: tmux`, a role started by an
@@ -373,7 +384,7 @@ goes over the crew's field by field; a change applies at the role's next start. 
 | `zmina stop` | the ticker starts nothing any more (no keep: always role, no scheduled run), then every role goes down, the dispatcher too; a role with a draft or a dialog stays up and is named (`--clear` as with `down`). `ls` shows `STOPPED`. |
 | `zmina start` | lifts the stop and starts the dispatcher. A retired crew refuses it, naming the live one. |
 | `zmina retire [--moved-to <node>/<crew>] [--clear]` / `retire --off` | the owner's word that this crew is no longer the live one: `retired:` and `moved_to:` in the crew file (a state file recovered or a stop lifted does not lose them), then as `zmina stop`. `--off` takes the mark off; the shift stays stopped until `zmina start`. Only this mark says one crew went on as another: two crews with one name are never taken for one. |
-| `zmina doctor [--json]` | checks crew file, tmux (3.2 or newer), claude as roles find it (their PATH; a binary in a temp dir fails) and the flags zmina passes, Claude Code's session registry (zmina reads it to tell idle from busy; it is not a public interface — doctor says when its shape changed), ticker beat, state, lock holder, task files, crews sharing a tmux server; what zmina's own rules add to a fresh role's prefix (`boot`: characters on average and the role with most, by what read_guard, lessons, delivery and Codex seats turn on) and whether `skills:` trims the skill list. Exit 1 on a fail. |
+| `zmina doctor [--json]` | checks crew file, tmux (3.2 or newer), claude as roles find it (their PATH; a binary in a temp dir fails) and the flags zmina passes, Claude Code's session registry (zmina reads it to tell idle from busy; it is not a public interface — doctor says when its shape changed), ticker beat, state, lock holder, task files, crews sharing a tmux server, versions (this zmina's; a cockpit, a Codex bridge or Claude roles that another zmina started); what zmina's own rules add to a fresh role's prefix (`boot`: characters on average and the role with most, by what read_guard, lessons, delivery and Codex seats turn on) and whether `skills:` trims the skill list. Exit 1 on a fail. |
 | `zmina queue ls [--full] [--json]` | what waits to be typed: the dispatcher's signals and health notes, each role's inbox, lines posted to its inbox socket not yet seen in its conversation, and its failed lines (a line tmux refused three beats in a row); each line clipped to 160 characters, `--full` whole. |
 | `zmina queue retry <role>` / `queue drop <role> [--all]` | put failed lines back at the head of the inbox / drop them (`--all`: the inbox too; for the dispatcher its signals and notes). Without `--all`, any retained inbox count and the command needed to drop it are printed. The hint includes the resolved `--crew` path and shell-quotes both path and role, so it still targets this crew when pasted into another shell. |
 | `zmina state show` | the state as zmina reads it (JSON). |
@@ -928,13 +939,29 @@ until the task changes again (`task set`): the turn is the dispatcher's.
 |---|---|
 | `zmina todo add <text...> [--title "<few words>"] [--rec "<answer>" --reason "<why>"] [--kind decision\|check] [--from <role>] [--task T-n] [--blocks <role>] [--project <p>]` | ask the owner; prints `A-3`. With `--rec` it is a decision, else a check. `--from` defaults to `$ZMINA_ROLE`; `--project` to the `--task`'s. The page shows the title, the text on expand. |
 | `zmina todo edit <id> [--title …] [--text …] [--rec …] [--reason …] [--blocks …] [--project …]` | change an open ask's words (`-` clears one; clearing `--rec` makes it a check). |
-| `zmina todo ls [--full] [--json]` | what waits, in that order, one line each (its title when it has one); the parked list's count last. `--full`: the whole text. `--json`: `{items, later}`. |
+| `zmina todo ls [--full] [--json]` | what waits, in that order, one line each (its title when it has one; `pushed Mon 14:02` when it last went to the owner's phone); the parked list's count last. `--full`: the whole text. `--json`: `{items, later}` (an item's `pushed` time too). |
 | `zmina todo yes <id>` | take a decision's recommendation. |
 | `zmina todo done <id>` | a check (or a decision) is dealt with. |
 | `zmina todo answer <id> <text...>` | answer an ask or a waiting task (`T-62`) in the owner's words. Run by a role (`$ZMINA_ROLE`), it records what the owner said in chat, and the dispatcher's note says so: `(the owner's answer in chat, recorded by <role>)`. Run by the dispatcher itself (yes, done, park and ignore too), nothing is queued back to it — it prints `recorded`; the log line and a waiting task's answered mark stay. |
 | `zmina todo park <id>` | put it on the parked list (an ask becomes `L-n`, "from A-3"); for a waiting task the dispatcher hears `T-62 · later`. |
 | `zmina todo done L-3` / `todo park L-3` | a parked item its alarm brought back (`later add --until`): done closes it (the dispatcher hears `L-3 · done`); park puts it back on the list, off the todo, quietly. |
 | `zmina todo ignore <id>` | set it aside for good: an ask closes with no parked entry; a waiting task only leaves the todo (until it changes), the task stays as it is. The dispatcher hears `A-3 · ignored`. |
+
+**Pushes.** With a `notify` command in the crew file the ticker pushes what waits on the owner, so it reaches his
+phone without anyone remembering to: each beat it reads the todo and sends what is due as one message
+(`waits on you: A-3 log in on the box (blocks dev)`, several as `2 wait on you: …; …`). An item goes as its id with
+the title it was given (an ask's `--title`, a task's `--title`), else with its kind (`A-7 decision`, `T-12 task`),
+and the role it holds up: never its text, note or recommendation, which stay on the todo. `notify_on: blocking` (default, with `reminder`): an item that holds a role up (an ask with `--blocks`,
+a task waiting on him while its role sits idle) the first time it does and again every `notify_again` (default 24h;
+`off`: once) while it still does. `notify_on: ask`: every new ask, decision or check, once (not those open when
+pushing began, not the check a reminder made: its text already went). Nothing is pushed in `quiet_hours` (the crew's
+`timezone:`); what was due then goes on the first beat after, if it is still there. Reminders are not held: their time
+is the one set. The command gets `$ZMINA_EVENT` (`blocking` when any item in the message blocks, else `ask`;
+`reminder` for a reminder) and `$ZMINA_ALARM` (the item ids). The text is written by roles: a notify command passes
+it on as data and never evaluates it (no `eval "$1"`). The log has `pushed`, a failure `notify-failed`: a send that
+fails leaves its items due and is tried again 15 minutes later. The state keeps when each item went (`pushed`) until
+it leaves the todo. Without `notify` doctor warns: nothing that waits
+on the owner reaches his phone.
 
 Every role hears at boot, from zmina itself (`shift.AsksRule`): a question only the owner can answer goes on his list
 with `zmina todo add` (and is named by its A-n when asked in chat); when he answers in chat, the role records it at once
@@ -1235,7 +1262,8 @@ A time that has passed is refused. Several words are one argument: quote them.
 
 `notify` in the crew file: a list is argv and the reminder's text goes last (`[push-cli, send, --title, zmina]` runs
 `push-cli send --title zmina "<text>"`); a string runs with `/bin/sh -c`, the text as `$1`. Both get `$ZMINA_REMIND`
-(the text), `$ZMINA_ALARM` (the id) and `$ZMINA_CREW`. It runs outside the lock, 30 s at most, for a reminder for the
+(the text), `$ZMINA_ALARM` (the id), `$ZMINA_EVENT` (`reminder`) and `$ZMINA_CREW`. A crew whose `notify_on` leaves
+out `reminder` pushes no reminders; the same command pushes what blocks on the owner (Pushes, under Todo). It runs outside the lock, 30 s at most, for a reminder for the
 owner and for a parked item back (`back from later: <text>`) — never for a role's alarm. A failure is in tick.log and
 the log (`alarm-failed`), and the todo item is there all the same. Without `notify` a reminder only lands on the
 todo. The log has `alarm` (set, moved, off, rang) and `sleep`.

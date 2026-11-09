@@ -76,6 +76,12 @@ type State struct {
 	Budgeted []string  `json:"budgeted,omitempty"`
 	// MorningDay is the day (2006-01-02) the morning line last told the dispatcher of.
 	MorningDay string `json:"morning_day,omitempty"`
+	// Pushed is when each item on the owner's todo (A-3, T-12) last went through the notify command; an item leaves
+	// it when it leaves the todo. PushFrom is when the ticker began pushing: asks older than that are not new.
+	Pushed   map[string]time.Time `json:"pushed,omitempty"`
+	PushFrom time.Time            `json:"push_from,omitzero"`
+	// PushFailed is when the last push could not be sent; the next waits a while after it.
+	PushFailed time.Time `json:"push_failed,omitzero"`
 
 	// Legacy is set when the file read was in the first format (converted in memory, written as this one on
 	// the next save).
@@ -197,6 +203,10 @@ type RoleState struct {
 	// session the dispatcher was told runs without working hooks.
 	Hooks        string `json:"hooks,omitempty"`
 	HooksFlagged string `json:"hooks_flagged,omitempty"`
+	// Version is the version of the zmina that started the role (zmina version): the command lines its hooks run
+	// and a Codex role's bridge stay those of that zmina until the role is started again; doctor compares it with
+	// the zmina installed now. Empty for a start by a zmina that did not record it.
+	Version string `json:"zmina_version,omitempty"`
 	// QueuedBoot is the boot line a clear queued for the role: it goes alone, before anything else waiting for it.
 	QueuedBoot string `json:"queued_boot,omitempty"`
 	// QueuedIDs are the S-ids each queued line carries, by the line: a tracked line's own id from the moment it is

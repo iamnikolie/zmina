@@ -86,6 +86,7 @@ func (a *app) uiCommand() *cobra.Command {
 			if !cmd.Flags().Changed("addr") {
 				if url, ok := runningCockpit(); ok {
 					fmt.Fprintln(a.out, "zmina ui already runs on", strings.SplitN(url, "?", 2)[0])
+					a.noteCockpitSkew()
 
 					if !noOpen {
 						openBrowser(url)
@@ -100,6 +101,7 @@ func (a *app) uiCommand() *cobra.Command {
 				// One page for every crew: a second zmina ui opens the one that runs, signed in.
 				if url, ok := runningCockpitAt(addr, token); ok {
 					fmt.Fprintln(a.out, "zmina ui already runs on", strings.SplitN(url, "?", 2)[0])
+					a.noteCockpitSkew()
 
 					if !noOpen {
 						openBrowser(url)
@@ -986,6 +988,7 @@ func (a *app) readCrew(s *shift.Shift, key string, cv *uiCrewView, snap *uiSnaps
 	}
 
 	items, _ := todo(s.Crew, now, views)
+	withPushed(items, s.State)
 	needs := map[string]todoItem{}
 
 	for _, it := range items {

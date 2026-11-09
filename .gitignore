@@ -1,5 +1,6 @@
 # Build artifacts
 /zmina
+/zmina.new
 /dist/
 
 # Local tooling state

@@ -120,6 +120,7 @@ func (a *app) diagnose() []check {
 	st, err := shift.Read(c.StateDir())
 	if err != nil {
 		add("state", "fail", "%v", err)
+		st = nil
 	} else {
 		format := fmt.Sprintf("version %d", st.Version)
 		if st.Legacy {
@@ -175,11 +176,13 @@ func (a *app) diagnose() []check {
 		}
 
 		if c.Notify.Empty() {
-			add("alarms", "ok", "no notify command: a reminder for you only lands on the todo")
+			add("alarms", "warn", "no notify command: a reminder for you and an ask that holds a role up only land on "+
+				"the todo; nothing reaches your phone (notify: in the crew file)")
 		}
 	}
 
 	a.checkSockets(c, add)
+	checkVersions(c, st, add)
 
 	return out
 }

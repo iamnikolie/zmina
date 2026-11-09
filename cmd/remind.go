@@ -402,8 +402,8 @@ func (a *app) rang(rungs []shift.Rung) []string {
 
 	for _, r := range rungs {
 		switch {
-		case r.Notify != "" && !c.Notify.Empty():
-			if err := notify(c, r.ID, r.Notify); err != nil {
+		case r.Notify != "" && c.NotifiesOn(crew.NotifyReminder):
+			if err := notify(c, crew.NotifyReminder, r.ID, r.Notify); err != nil {
 				fail(r.ID, "notify", err)
 			} else {
 				lines = append(lines, r.ID+": notified")
@@ -420,9 +420,10 @@ func (a *app) rang(rungs []shift.Rung) []string {
 	return lines
 }
 
-// notify runs the crew's notify command for one reminder: the text is its last argument (for a shell string, $1)
-// and $ZMINA_REMIND; $ZMINA_ALARM is the alarm's id.
-func notify(c *crew.Crew, id, text string) error {
+// notify runs the crew's notify command for one event (crew.NotifyReminder, NotifyBlocking, NotifyAsk, in
+// $ZMINA_EVENT): the text is its last argument (for a shell string, $1) and $ZMINA_REMIND; $ZMINA_ALARM is the id of
+// what it is about (the alarm's, the todo items' separated by spaces).
+func notify(c *crew.Crew, event, id, text string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), notifyWait)
 	defer cancel()
 
@@ -435,7 +436,8 @@ func notify(c *crew.Crew, id, text string) error {
 
 	cmd := exec.CommandContext(ctx, line[0], line[1:]...)
 	cmd.Dir = c.Dir
-	cmd.Env = append(os.Environ(), "ZMINA_REMIND="+text, "ZMINA_ALARM="+id, "ZMINA_CREW="+c.Path)
+	cmd.Env = append(os.Environ(), "ZMINA_REMIND="+text, "ZMINA_ALARM="+id, "ZMINA_EVENT="+event,
+		"ZMINA_CREW="+c.Path)
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {

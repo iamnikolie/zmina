@@ -1125,6 +1125,7 @@ func (a *app) tickCommand() *cobra.Command {
 			a.meshTick()
 			a.budgetTick(time.Now())
 			a.morningTick(time.Now())
+			a.pushTick(time.Now())
 			a.lessonsBeat(time.Now())
 
 			return err

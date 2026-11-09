@@ -45,6 +45,13 @@ type todoItem struct {
 	Holds   bool      `json:"holds,omitempty"`
 	Created time.Time `json:"created"`
 	Overdue bool      `json:"overdue,omitempty"`
+	// Pushed is when it last went through the notify command (see pushTick).
+	Pushed time.Time `json:"pushed,omitzero"`
+	// byAlarm: an ask a reminder made when it rang (its push went with the reminder).
+	byAlarm bool
+	// named is the title someone gave it (an ask's --title, a task's title), never one made from its text: the only
+	// words of it a push sends.
+	named string
 }
 
 // todo is what waits on the owner, in the order it is shown: blocking first, then overdue, then the rest, oldest
@@ -74,7 +81,8 @@ func todo(c *crew.Crew, now time.Time, views []shift.View) ([]todoItem, []string
 			}
 
 			items = append(items, todoItem{ID: a.ID, Kind: string(a.Kind), Text: a.Text, Title: a.Title, Rec: a.Rec,
-				Reason: a.Reason, Role: a.Role, Task: a.Task, Blocks: a.Blocks, Project: a.Project, Created: a.Created})
+				Reason: a.Reason, Role: a.Role, Task: a.Task, Blocks: a.Blocks, Project: a.Project, Created: a.Created,
+				byAlarm: a.By == "alarm", named: a.Title})
 		}
 	}
 
@@ -105,7 +113,7 @@ func todo(c *crew.Crew, now time.Time, views []shift.View) ([]todoItem, []string
 		}
 
 		it := todoItem{ID: t.ID, Kind: "waiting", Text: t.Asked, Title: t.Headline(), Note: t.Note, Role: t.Role,
-			Task: t.ID, Project: t.Where(), URL: t.URL, Created: t.Updated}
+			Task: t.ID, Project: t.Where(), URL: t.URL, Created: t.Updated, named: t.Title}
 		if idle[t.Role] {
 			it.Blocks = t.Role
 		}
@@ -306,6 +314,7 @@ func (a *app) todoLsCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.readState(func(s *shift.Shift) error {
 				items, problems := todo(s.Crew, s.Now(), s.Views())
+				withPushed(items, s.State)
 				for _, p := range problems {
 					fmt.Fprintln(a.err, "zmina: warning:", p)
 				}
@@ -341,6 +350,10 @@ func (a *app) todoLsCommand() *cobra.Command {
 
 					if it.Blocks != "" {
 						meta += " · blocks " + it.Blocks
+					}
+
+					if !it.Pushed.IsZero() {
+						meta += " · pushed " + it.Pushed.In(s.Crew.Location()).Format("Mon 15:04")
 					}
 
 					line := it.Text

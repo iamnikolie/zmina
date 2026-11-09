@@ -183,6 +183,7 @@ func (a *app) newShift() (*shift.Shift, error) {
 		Peer:              peer.Inbox{},
 		CodexInbox:        codex.Inbox{},
 		Self:              self(),
+		Version:           version,
 		ProcArgs:          procArgs,
 		Parent:            a.parentOf(),
 		State:             shift.NewState(),

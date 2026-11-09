@@ -316,6 +316,12 @@ type Crew struct {
 	// text as the last argument and in $ZMINA_REMIND; a list is argv, a string runs with /bin/sh -c. Empty: the
 	// reminder only lands on the todo.
 	Notify Command `yaml:"notify"`
+	// NotifyOn are the events that go through notify (reminder, blocking, ask); default reminder and blocking.
+	// QuietHours (HH:MM-HH:MM in the crew's time zone) holds blocking and ask pushes until it is over;
+	// NotifyAgain is how long an item that still blocks waits before it is pushed again (default 24h; off).
+	NotifyOn    []string `yaml:"notify_on"`
+	QuietHours  string   `yaml:"quiet_hours"`
+	NotifyAgain string   `yaml:"notify_again"`
 	// DayStart is when a day named without a time rings (morning, tomorrow, thu, a date): HH:MM, default 09:00.
 	DayStart string `yaml:"day_start"`
 	// Timezone is the clock the times of reminders are read on (Europe/Warsaw); default this machine's.
@@ -327,6 +333,7 @@ type Crew struct {
 	bootGrace time.Duration
 	renotify  time.Duration
 	morning   time.Duration // past midnight; -1 off
+	notify    notifyRules
 	loc       *time.Location
 	// Roles are keyed by role name.
 	Roles map[string]*Role `yaml:"roles"`
@@ -918,6 +925,10 @@ func (c *Crew) resolve(strict bool) error {
 		}
 
 		c.morning = time.Duration(t.Hour())*time.Hour + time.Duration(t.Minute())*time.Minute
+	}
+
+	if err := c.parseNotify(); err != nil {
+		return err
 	}
 
 	c.loc = nil

@@ -134,6 +134,8 @@ type Shift struct {
 	Peer Peer
 	// CodexInbox queues lines for a Codex role's bridge; nil types them into its console.
 	CodexInbox Peer
+	// Version is this zmina's version (zmina version), recorded with each role it starts.
+	Version string
 	// Self is the zmina executable, for the hook a socket role runs after its context is trimmed (zmina pending).
 	Self string
 	// ProcArgs reads a process's command line (ps), to tell which hooks a role an earlier zmina started runs; nil
@@ -836,6 +838,7 @@ func (s *Shift) start(name string, o UpOptions) error {
 	rs.RecoverySession, rs.RecoveryContext, rs.RecoveryDrops = "", 0, 0
 	rs.Inbound = s.inbound(r)
 	rs.Hooks, rs.HooksFlagged, rs.QueuedBoot = s.startHooks(r), "", ""
+	rs.Version = s.Version
 
 	// A Claude conversation resumed under a name it was not started under keeps its stored title (Remote Control shows
 	// the old one): /rename gives it the new one, typed once the role is booted. A start whose name is not known yet

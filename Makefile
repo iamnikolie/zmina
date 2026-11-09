@@ -9,8 +9,11 @@ PKG := github.com/iamnikolie/zmina/cmd
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X $(PKG).version=$(VERSION)
 
+# Built next to the old binary and renamed over it: a role's hook or a tick that starts during the build runs the
+# old zmina or the new one, never a half-written file.
 build:
-	go build -ldflags "$(LDFLAGS)" -o $(BIN) .
+	go build -ldflags "$(LDFLAGS)" -o $(BIN).new .
+	mv -f $(BIN).new $(BIN)
 
 install: build
 	mkdir -p $(PREFIX)/bin
@@ -39,5 +42,5 @@ fmt:
 	gofmt -l -w .
 
 clean:
-	rm -f $(BIN)
+	rm -f $(BIN) $(BIN).new
 	rm -rf dist
