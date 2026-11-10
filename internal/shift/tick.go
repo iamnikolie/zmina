@@ -493,7 +493,7 @@ func (s *Shift) saveScreen(name string, now time.Time) string {
 	base := strings.ReplaceAll(name, "#", "-")
 	file := filepath.Join(dir, base+"-"+now.Format("20060102-150405")+".txt")
 
-	if err := os.WriteFile(file, []byte(text+"\n"), 0o600); err != nil {
+	if err := fsx.WriteFile(file, []byte(text+"\n"), 0o600); err != nil {
 		return ""
 	}
 

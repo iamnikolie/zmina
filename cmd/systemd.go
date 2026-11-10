@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/iamnikolie/zmina/internal/crew"
+	"github.com/iamnikolie/zmina/internal/fsx"
 )
 
 // The Linux ticker: a oneshot user service that runs one tick, and a timer that starts it every minute.
@@ -23,11 +24,11 @@ func systemdInstall(w io.Writer, c *crew.Crew, bin string) error {
 		return err
 	}
 
-	if err := os.WriteFile(filepath.Join(dir, unit+".service"), systemdService(bin, c.Path, tickLog(c)), 0o644); err != nil {
+	if err := fsx.WriteFile(filepath.Join(dir, unit+".service"), systemdService(bin, c.Path, tickLog(c)), 0o644); err != nil {
 		return err
 	}
 
-	if err := os.WriteFile(filepath.Join(dir, unit+".timer"), systemdTimer(c.Path), 0o644); err != nil {
+	if err := fsx.WriteFile(filepath.Join(dir, unit+".timer"), systemdTimer(c.Path), 0o644); err != nil {
 		return err
 	}
 

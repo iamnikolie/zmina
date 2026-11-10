@@ -7,14 +7,17 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/iamnikolie/zmina/internal/chat"
 	"github.com/iamnikolie/zmina/internal/codex"
 	"github.com/iamnikolie/zmina/internal/fsx"
+	"github.com/iamnikolie/zmina/internal/handoff"
 	"github.com/iamnikolie/zmina/internal/inbox"
 	"github.com/iamnikolie/zmina/internal/lesson"
 	"github.com/iamnikolie/zmina/internal/message"
 	"github.com/iamnikolie/zmina/internal/recovery"
 	"github.com/iamnikolie/zmina/internal/registry"
 	"github.com/iamnikolie/zmina/internal/shift"
+	"github.com/iamnikolie/zmina/internal/task"
 )
 
 // Every kept file is written through fsx, so each one is synced with its directory and never seen half written.
@@ -40,6 +43,15 @@ func TestStoresWriteThroughFsx(t *testing.T) {
 		},
 		"recovery":      func(dir string) error { return recovery.Save(dir, recovery.State{Version: 1}) },
 		"lessons state": func(dir string) error { return lesson.SaveState(dir, lesson.RunState{}) },
+		"handoff": func(dir string) error {
+			_, err := handoff.Write(dir, handoff.Packet{Task: task.Task{ID: "T-1"}})
+			return err
+		},
+		"chat upload": func(dir string) error {
+			_, err := chat.FileStore{Dir: dir, Role: "dev"}.Put(chat.Upload{ID: "abcdefab-1234-1234-1234-123456789abc",
+				Name: "image.png", Data: []byte{0, 255, 1, 2}})
+			return err
+		},
 	}
 
 	for name, write := range writers {

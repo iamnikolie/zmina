@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 
 	"github.com/iamnikolie/zmina/internal/crew"
+	"github.com/iamnikolie/zmina/internal/fsx"
 	"github.com/iamnikolie/zmina/internal/task"
 )
 
@@ -61,23 +62,7 @@ func publish(dir string, value any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	tmp, err := os.CreateTemp(dir, ".packet-*")
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = os.Remove(tmp.Name()) }()
-	if _, err := tmp.Write(append(raw, '\n')); err != nil {
-		_ = tmp.Close()
-		return "", err
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return "", err
-	}
-	if err := tmp.Close(); err != nil {
-		return "", err
-	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
+	if err := fsx.WriteFile(path, append(raw, '\n'), 0o600); err != nil {
 		return "", err
 	}
 	return path, nil
