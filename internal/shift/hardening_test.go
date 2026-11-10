@@ -308,6 +308,48 @@ func TestSaveKeepsThePreviousStateThroughALink(t *testing.T) {
 	assert.NotContains(t, string(prev), `"second"`)
 }
 
+// state.json linked to a file on another file system (tmpfs here): no hard link reaches it, and .prev is a copy.
+func TestSaveKeepsThePreviousStateAcrossFileSystems(t *testing.T) {
+	other := "/dev/shm"
+	if fi, err := os.Stat(other); err != nil || !fi.IsDir() {
+		t.Skip("no /dev/shm")
+	}
+
+	dir := t.TempDir()
+
+	far, err := os.MkdirTemp(other, "zmina-state-")
+	if err != nil {
+		t.Skip(err)
+	}
+
+	t.Cleanup(func() { _ = os.RemoveAll(far) })
+
+	if a, b := devOf(t, dir), devOf(t, far); a == b {
+		t.Skip("the temp dir and /dev/shm are one file system")
+	}
+
+	save := func(session string) {
+		l, err := Lock(dir)
+		require.NoError(t, err)
+		l.Role("dev").LastSession = session
+		require.NoError(t, l.Save())
+	}
+
+	save("first")
+	raw, err := os.ReadFile(filepath.Join(dir, "state.json"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(far, "state.json"), raw, 0o600))
+	require.NoError(t, os.Remove(filepath.Join(dir, "state.json")))
+	require.NoError(t, os.Symlink(filepath.Join(far, "state.json"), filepath.Join(dir, "state.json")))
+
+	save("second")
+	save("third")
+
+	prev, err := os.ReadFile(filepath.Join(dir, "state.json.prev"))
+	require.NoError(t, err, "a backup across file systems")
+	assert.Contains(t, string(prev), `"second"`)
+}
+
 func TestSaveKeepsThePreviousState(t *testing.T) {
 	dir := t.TempDir()
 

@@ -190,3 +190,50 @@ func MkdirAll(dir string, perm os.FileMode) error {
 
 	return nil
 }
+
+// Backup makes dst a copy of src as src is now (src's link target when src is a symbolic link): a hard link when
+// the file system allows one, else a synced copy of its bytes. dst is replaced only once the new copy is whole, so a
+// failed backup leaves the old one. A src that does not exist is no error and leaves dst as it is.
+func Backup(src, dst string) error {
+	src, err := Resolve(src)
+	if err != nil {
+		return err
+	}
+
+	fi, err := os.Stat(src)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+
+	if err != nil {
+		return err
+	}
+
+	// A free temporary name beside dst for the hard link, renamed over dst once it is there.
+	f, err := os.CreateTemp(filepath.Dir(dst), "."+filepath.Base(dst)+".*.tmp")
+	if err != nil {
+		return err
+	}
+
+	tmp := f.Name()
+	_ = f.Close()
+	_ = os.Remove(tmp)
+
+	if err := link(src, tmp); err == nil {
+		if err := os.Rename(tmp, dst); err != nil {
+			_ = os.Remove(tmp)
+
+			return err
+		}
+
+		return SyncDir(filepath.Dir(dst))
+	}
+
+	// No hard link (another file system, or none at all): copy the bytes.
+	raw, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+
+	return WriteFile(dst, raw, fi.Mode().Perm())
+}
