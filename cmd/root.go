@@ -76,7 +76,7 @@ keep: always roles again, and types its health notes into the dispatcher.
   zmina ticker install       the ticker (launchd on macOS, systemd on Linux)
   zmina doctor               check the setup
 
-Run 'zmina skill' for the full agent reference.`,
+Run 'zmina skill' for the agent reference: its topics and the dispatcher's part; 'zmina skill <topic>' for one.`,
 		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: false,
