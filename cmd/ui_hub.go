@@ -22,6 +22,8 @@ type uiHub struct {
 	mu   sync.Mutex
 	raw  []byte
 	at   time.Time
+	// gen counts drops: a snapshot whose computing began before a drop is not kept, it may predate the change.
+	gen int
 	// made counts snapshots computed, for the tests.
 	made int
 }
@@ -44,10 +46,17 @@ func (h *uiHub) get() []byte {
 		return raw
 	}
 
+	h.mu.Lock()
+	gen := h.gen
+	h.mu.Unlock()
+
 	raw, _ := json.Marshal(h.compute())
 
 	h.mu.Lock()
-	h.raw, h.at, h.made = raw, h.now(), h.made+1
+	h.made++
+	if h.gen == gen {
+		h.raw, h.at = raw, h.now()
+	}
 	h.mu.Unlock()
 
 	return raw
@@ -64,6 +73,7 @@ func (h *uiHub) cached() ([]byte, bool) {
 func (h *uiHub) drop() {
 	h.mu.Lock()
 	h.raw = nil
+	h.gen++
 	h.mu.Unlock()
 }
 

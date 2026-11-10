@@ -58,3 +58,40 @@ func TestUIHubDropsTheSnapshotAfterAChange(t *testing.T) {
 	hub.get()
 	assert.Equal(t, 2, computed, "a write drops it")
 }
+
+// A snapshot that was being made when a change came in is not kept: the next tick makes one after the change.
+func TestUIHubKeepsNoSnapshotBegunBeforeAChange(t *testing.T) {
+	var mu sync.Mutex
+	state := "old"
+	started, release := make(chan struct{}), make(chan struct{})
+	first := true
+
+	hub := newUIHub(func() uiSnapshot {
+		mu.Lock()
+		seen, wait := state, first
+		first = false
+		mu.Unlock()
+
+		if wait {
+			close(started)
+			<-release
+		}
+
+		return uiSnapshot{Version: seen}
+	})
+	changes := hub.dropAfterChanges(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		mu.Lock()
+		state = "new"
+		mu.Unlock()
+	}))
+
+	done := make(chan []byte)
+	go func() { done <- hub.get() }()
+
+	<-started
+	changes.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/x", nil))
+	close(release)
+	assert.Contains(t, string(<-done), `"version":"old"`, "the tick that began before the change")
+
+	assert.Contains(t, string(hub.get()), `"version":"new"`, "the next tick")
+}
