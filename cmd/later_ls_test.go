@@ -40,3 +40,16 @@ func TestLaterLsMarksTheDayAndOldItems(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, out, "parked over", "JSON stays the items alone")
 }
+
+// The day an item comes back reads in the crew's time zone, as later add printed it, whatever the machine's zone.
+func TestLaterLsBackInTheCrewsZone(t *testing.T) {
+	crewFile := testCrew(t, "timezone: Asia/Kathmandu\n") // +05:45, no machine's zone by accident
+
+	out, _, err := zm(t, crewFile, "later", "add", "the one-pager", "--until", "2030-01-02 09:00")
+	require.NoError(t, err)
+	assert.Contains(t, out, "09:00")
+
+	out, _, err = zm(t, crewFile, "later", "ls")
+	require.NoError(t, err)
+	assert.Contains(t, out, "[back 01-02 09:00] the one-pager")
+}

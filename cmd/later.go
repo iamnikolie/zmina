@@ -126,8 +126,8 @@ func (a *app) laterLsCommand() *cobra.Command {
 					}
 
 					text := it.Text
-					if at, ok := back[it.ID]; ok && it.Open() {
-						text = "[back " + at.Local().Format("01-02 15:04") + "] " + text
+					if when, ok := back[it.ID]; ok && it.Open() {
+						text = "[back " + when.In(s.Crew.Location()).Format("01-02 15:04") + "] " + text
 					}
 					if it.Note != "" {
 						text += " · " + it.Note
