@@ -116,3 +116,52 @@ func TestSkillLongSectionNamesItsParts(t *testing.T) {
 	_, err = ref.find("part")
 	require.ErrorContains(t, err, "part-a, part-b")
 }
+
+// The boundaries are CommonMark's: a longer or tilde fence holds a shorter fence line and a heading-like line; an
+// indented or tab-separated heading is a heading; an indented code line is not. Expected keys are written out here,
+// not taken from the parser.
+func TestSkillParsesMarkdownBoundaries(t *testing.T) {
+	cases := map[string]struct {
+		doc  string
+		keys []string
+	}{
+		"four-backtick fence holding three": {"## Alpha\n````md\n```\n## Fake\n````\n## Beta\n", []string{"alpha", "beta"}},
+		"tilde fence":                       {"## Alpha\n~~~\n## Fake\n~~~\n## Beta\n", []string{"alpha", "beta"}},
+		"indented fence":                    {"## Alpha\n  ```\n## Fake\n  ```\n## Beta\n", []string{"alpha", "beta"}},
+		"a tilde line does not close backticks": {"## Alpha\n```\n~~~\n## Fake\n```\n## Beta\n",
+			[]string{"alpha", "beta"}},
+		"a closer with text after it does not close": {"## Alpha\n```\n``` x\n## Fake\n```\n## Beta\n",
+			[]string{"alpha", "beta"}},
+		"indented and tab headings":   {"## Alpha\n  ## Beta\n##\tGamma\n   ### Delta ###\n", []string{"alpha", "beta", "gamma", "delta"}},
+		"indented code is no heading": {"## Alpha\n    ## Fake\n", []string{"alpha"}},
+		"no space after hashes":       {"## Alpha\n##Fake\n", []string{"alpha"}},
+		"CRLF":                        {"## Alpha\r\n```\r\n## Fake\r\n```\r\n## Beta\r\n", []string{"alpha", "beta"}},
+		"backtick in a backtick info": {"## Alpha\n``` a`b\n## Beta\n", []string{"alpha", "beta"}},
+	}
+
+	for name, c := range cases {
+		var keys []string
+		for _, topic := range parseSkill("# ref\n\n" + c.doc).Topics {
+			keys = append(keys, topic.Key)
+		}
+
+		assert.Equal(t, c.keys, keys, name)
+	}
+}
+
+// Every heading line of the real reference is a topic: counted with a plain scan of unindented `## ` / `### ` lines
+// outside ``` fences (the only forms the file uses), not with the parser.
+func TestSkillEveryHeadingOfTheReferenceIsATopic(t *testing.T) {
+	want, fenced := 0, false
+
+	for _, line := range strings.Split(skillDoc, "\n") {
+		switch {
+		case strings.HasPrefix(line, "```"):
+			fenced = !fenced
+		case !fenced && (strings.HasPrefix(line, "## ") || strings.HasPrefix(line, "### ")):
+			want++
+		}
+	}
+
+	assert.Len(t, parseSkill(skillDoc).Topics, want)
+}

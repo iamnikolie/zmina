@@ -99,6 +99,16 @@ func skillKey(heading string) string {
 	return strings.Trim(skillKeyCut.ReplaceAllString(h, "-"), "-")
 }
 
+// Markdown boundaries as CommonMark draws them: a fence opens with three or more backticks or tildes indented at
+// most three spaces (a backtick fence's info string has no backtick) and closes with a run of the same character at
+// least as long and nothing after it; an ATX heading is indented at most three spaces, its hashes followed by a space
+// or a tab, an optional closing run of hashes dropped.
+var (
+	skillFenceOpen  = regexp.MustCompile("^ {0,3}(`{3,}|~{3,})(.*)$")
+	skillFenceClose = regexp.MustCompile("^ {0,3}(`{3,}|~{3,})[ \t]*$")
+	skillHeading    = regexp.MustCompile(`^ {0,3}(#{2,3})[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$`)
+)
+
 // parseSkill splits the reference at its `##` and `###` headings. Lines inside code fences are never headings.
 func parseSkill(doc string) skillRef {
 	type mark struct {
@@ -108,18 +118,25 @@ func parseSkill(doc string) skillRef {
 
 	var marks []mark
 
-	fenced, at := false, 0
+	fence, at := "", 0
 
 	for _, line := range strings.SplitAfter(doc, "\n") {
-		trimmed := strings.TrimRight(line, "\n")
+		trimmed := strings.TrimRight(line, "\r\n")
 
 		switch {
-		case strings.HasPrefix(trimmed, "```"):
-			fenced = !fenced
-		case !fenced && strings.HasPrefix(trimmed, "### "):
-			marks = append(marks, mark{at, 3, strings.TrimPrefix(trimmed, "### ")})
-		case !fenced && strings.HasPrefix(trimmed, "## "):
-			marks = append(marks, mark{at, 2, strings.TrimPrefix(trimmed, "## ")})
+		case fence != "":
+			if m := skillFenceClose.FindStringSubmatch(trimmed); m != nil && m[1][0] == fence[0] && len(m[1]) >= len(fence) {
+				fence = ""
+			}
+		case skillFenceOpen.MatchString(trimmed):
+			m := skillFenceOpen.FindStringSubmatch(trimmed)
+			if m[1][0] != '`' || !strings.Contains(m[2], "`") {
+				fence = m[1]
+			}
+		default:
+			if m := skillHeading.FindStringSubmatch(trimmed); m != nil && m[2] != "" {
+				marks = append(marks, mark{at, len(m[1]), m[2]})
+			}
 		}
 
 		at += len(line)
