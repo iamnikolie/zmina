@@ -13,7 +13,7 @@ import (
 func (a *app) contextCommand() *cobra.Command {
 	c := &cobra.Command{Use: "context", Short: "Dispatcher recovery packets and explicit follow-ups"}
 	var asJSON bool
-	pack := &cobra.Command{Use: "pack [role]", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+	pack := &cobra.Command{Use: "pack [role]", Short: "Write the dispatcher's recovery packet: tasks, asks, parked work, alarms, queues, follow-ups", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		return a.withState(func(s *shift.Shift) error {
 			if len(args) > 0 && args[0] != s.Crew.Dispatcher {
 				return fmt.Errorf("recovery packs are for dispatcher %s", s.Crew.Dispatcher)
@@ -36,7 +36,7 @@ func (a *app) contextCommand() *cobra.Command {
 	pack.Flags().BoolVar(&asJSON, "json", false, "bounded projection, counts and full index locator")
 	follow := &cobra.Command{Use: "followup", Short: "Record unresolved promises explicitly, without transcript inference"}
 	var taskID, source string
-	add := &cobra.Command{Use: "add <text...>", Args: cobra.MinimumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+	add := &cobra.Command{Use: "add <text...>", Short: "Record a promise the dispatcher has not kept yet (F-n)", Args: cobra.MinimumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		return a.withState(func(s *shift.Shift) error {
 			st, err := recovery.Load(s.Crew.StateDir())
 			if err != nil {
@@ -72,7 +72,7 @@ func (a *app) contextCommand() *cobra.Command {
 	}}
 	add.Flags().StringVar(&taskID, "task", "", "related task ID")
 	add.Flags().StringVar(&source, "source", "", "owner message or other provenance")
-	resolve := &cobra.Command{Use: "resolve <id>", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+	resolve := &cobra.Command{Use: "resolve <id>", Short: "Mark a follow-up kept", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		return a.withState(func(s *shift.Shift) error {
 			st, err := recovery.Load(s.Crew.StateDir())
 			if err != nil {
@@ -88,7 +88,7 @@ func (a *app) contextCommand() *cobra.Command {
 		})
 	}}
 	var all bool
-	ls := &cobra.Command{Use: "ls", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
+	ls := &cobra.Command{Use: "ls", Short: "List open follow-ups (--all: kept ones too)", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
 		return a.readState(func(s *shift.Shift) error {
 			st, err := recovery.Load(s.Crew.StateDir())
 			if err != nil {

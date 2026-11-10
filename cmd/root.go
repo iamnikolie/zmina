@@ -94,8 +94,47 @@ Run 'zmina skill' for the agent reference: its topics and the dispatcher's part;
 		a.launchdCommand(), a.doctorCommand(), a.usageCommand(), a.skillCommand(), a.versionCommand(), a.uiCommand(),
 		a.messageCommand(), a.contextCommand(), a.reportCommand(), a.nodeCommand(), a.tellCommand(), a.codexCommand(), a.terminalCommand(),
 		a.ackCommand(), a.pendingCommand(), a.turnEndCommand(), a.readCommand(), a.grepCommand(), a.readGuardCommand())
+	groupCommands(root)
 
 	return root
+}
+
+// commandGroups sorts zmina --help by who types a command: the owner, the dispatcher, the roles' plumbing, setup.
+var commandGroups = []struct {
+	id, title string
+	names     []string
+}{
+	{"owner", "For the owner: what waits, who works, what it costs:", []string{"ui", "todo", "later", "remind", "ls", "show",
+		"peek", "attach", "log", "usage"}},
+	{"dispatcher", "For the dispatcher: tasks, seats, lines:", []string{"task", "up", "down", "restart", "sleep", "stop",
+		"start", "retire", "seat", "send", "tell", "note", "queue"}},
+	{"plumbing", "Plumbing (roles, hooks and the ticker run these):", []string{"ack", "pending", "inbox", "report",
+		"message", "context", "keys", "read", "grep", "state", "watch", "lesson", "terminal", "tick"}},
+	{"setup", "Setup:", []string{"init", "doctor", "ticker", "node", "connect", "skill", "version"}},
+}
+
+// groupCommands puts every top-level command in its help group; one in none is listed under Setup.
+func groupCommands(root *cobra.Command) {
+	group := map[string]string{}
+
+	for _, g := range commandGroups {
+		root.AddGroup(&cobra.Group{ID: g.id, Title: g.title})
+
+		for _, n := range g.names {
+			group[n] = g.id
+		}
+	}
+
+	for _, c := range root.Commands() {
+		if id, ok := group[c.Name()]; ok {
+			c.GroupID = id
+		} else {
+			c.GroupID = "setup"
+		}
+	}
+
+	root.SetHelpCommandGroupID("setup")
+	root.SetCompletionCommandGroupID("setup")
 }
 
 func (a *app) versionCommand() *cobra.Command {

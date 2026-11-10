@@ -441,7 +441,7 @@ func (a *app) messageCommand() *cobra.Command {
 	c := &cobra.Command{Use: "message", Short: "Inspect end-to-end typed report observations, explicit read/relay receipts, and the receipts of plain lines sent"}
 	var revision string
 	var asJSON bool
-	show := &cobra.Command{Use: "show <id>", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+	show := &cobra.Command{Use: "show <id>", Short: "Show one sent line or report with every stage of its receipts", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		return a.readState(func(s *shift.Shift) error {
 			if t, err := tells(s).LoadOut(args[0]); err == nil {
 				if asJSON {
@@ -495,7 +495,7 @@ func (a *app) messageCommand() *cobra.Command {
 	}}
 	show.Flags().StringVar(&revision, "revision", "", "specific report revision (default: latest)")
 	show.Flags().BoolVar(&asJSON, "json", false, "all revisions, counters, observations and transport intents")
-	ls := &cobra.Command{Use: "ls", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
+	ls := &cobra.Command{Use: "ls", Short: "List the lines this crew sent to other crews and the reports it got, with their stage", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
 		return a.readState(func(s *shift.Shift) error {
 			all, err := messages(s).All()
 			if err != nil {
@@ -512,7 +512,7 @@ func (a *app) messageCommand() *cobra.Command {
 	for _, action := range []string{"read", "relayed", "retry"} {
 		action := action
 		var rev string
-		sub := &cobra.Command{Use: action + " <id>", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		sub := &cobra.Command{Use: action + " <id>", Short: messageActionShort[action], Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 			err := a.withState(func(s *shift.Shift) error {
 				store := messages(s)
 				m, err := store.Load(args[0])
@@ -648,4 +648,11 @@ func removeReportNotice(s *shift.Shift, marker string) {
 	}
 	delete(s.State.MessageLines, marker)
 	delete(s.State.MessageIDs, marker)
+}
+
+// messageActionShort is the help line of message read, relayed and retry.
+var messageActionShort = map[string]string{
+	"read":    "Record that the dispatcher read a report from another crew",
+	"relayed": "Record that the dispatcher passed a read report on to the owner",
+	"retry":   "Send a report again in a fresh envelope (at the crew that sent it)",
 }
