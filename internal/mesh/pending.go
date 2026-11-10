@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/iamnikolie/zmina/internal/fsx"
 )
 
 // TypedReportPrefix reserves the signed body format that requires reports_v1 on every transport hop.
@@ -75,28 +77,12 @@ func (n *Node) setPendingError(id, problem string) error {
 		}
 		return err
 	}
-	if err := os.MkdirAll(n.path("pending"), 0700); err != nil {
+	if err := fsx.MkdirAll(n.path("pending"), 0700); err != nil {
 		return err
 	}
 	raw, err := json.Marshal(problem)
 	if err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(n.path("pending"), ".pending-*")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = os.Remove(f.Name()) }()
-	if _, err = f.Write(append(raw, '\n')); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err = f.Sync(); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err = f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(f.Name(), path)
+	return fsx.WriteFile(path, append(raw, '\n'), 0o600)
 }

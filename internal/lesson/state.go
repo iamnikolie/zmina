@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/iamnikolie/zmina/internal/fsx"
 )
 
 // Open is the lessons merge request that waits on the owner; while one is open, new lessons wait.
@@ -68,7 +70,7 @@ func LoadState(dir string) (RunState, error) {
 
 // SaveState writes the record whole.
 func SaveState(dir string, st RunState) error {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := fsx.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("lessons state: %w", err)
 	}
 
@@ -77,12 +79,7 @@ func SaveState(dir string, st RunState) error {
 		return fmt.Errorf("lessons state: %w", err)
 	}
 
-	tmp := statePath(dir) + ".tmp"
-	if err := os.WriteFile(tmp, append(raw, '\n'), 0o600); err != nil {
-		return fmt.Errorf("lessons state: %w", err)
-	}
-
-	if err := os.Rename(tmp, statePath(dir)); err != nil {
+	if err := fsx.WriteFile(statePath(dir), append(raw, '\n'), 0o600); err != nil {
 		return fmt.Errorf("lessons state: %w", err)
 	}
 

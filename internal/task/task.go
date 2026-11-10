@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/iamnikolie/zmina/internal/record"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,6 +14,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/iamnikolie/zmina/internal/fsx"
+	"github.com/iamnikolie/zmina/internal/record"
 )
 
 // State is where a task is.
@@ -234,7 +236,7 @@ func (s *Store) write(t Task, fresh bool) error {
 		return fmt.Errorf("task: bad id %q", t.ID)
 	}
 
-	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
+	if err := fsx.MkdirAll(s.Dir, 0o700); err != nil {
 		return fmt.Errorf("task: %w", err)
 	}
 
@@ -246,9 +248,8 @@ func (s *Store) write(t Task, fresh bool) error {
 	path := filepath.Join(s.Dir, t.ID+".json")
 
 	if fresh {
-		// Claim the name first: O_EXCL fails if anything is there.
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err != nil {
+		// A new task takes its name with its content, and only when the name is free.
+		if err := fsx.CreateFile(path, raw, 0o600); err != nil {
 			if errors.Is(err, os.ErrExist) {
 				return fmt.Errorf("task %s: %w", t.ID, ErrExists)
 			}
@@ -256,14 +257,14 @@ func (s *Store) write(t Task, fresh bool) error {
 			return fmt.Errorf("task: %w", err)
 		}
 
-		_ = f.Close()
+		return nil
 	}
 
-	if err := os.WriteFile(path+".tmp", raw, 0o600); err != nil {
+	if err := fsx.WriteFile(path, raw, 0o600); err != nil {
 		return fmt.Errorf("task: %w", err)
 	}
 
-	return os.Rename(path+".tmp", path)
+	return nil
 }
 
 // Remove deletes a task's file.
@@ -313,13 +314,27 @@ func readTask(path string) (Task, error) {
 // Scan reads every task, oldest first, and says what it could not read: damaged files, a file whose id does not
 // match its name, a state this zmina does not know.
 func (s *Store) Scan() (tasks []Task, problems []string, err error) {
+	tasks, problems, _, err = s.scan()
+
+	return tasks, problems, err
+}
+
+// Unreadable names each task file that does not read (by its file name) with why. Such a task is in no list: not
+// active, not holding its role; the ticker tells the dispatcher and doctor names it.
+func (s *Store) Unreadable() (map[string]string, error) {
+	_, _, bad, err := s.scan()
+
+	return bad, err
+}
+
+func (s *Store) scan() (tasks []Task, problems []string, unreadable map[string]string, err error) {
 	entries, err := os.ReadDir(s.Dir)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 
 	if err != nil {
-		return nil, nil, fmt.Errorf("task: %w", err)
+		return nil, nil, nil, fmt.Errorf("task: %w", err)
 	}
 
 	for _, e := range entries {
@@ -330,6 +345,12 @@ func (s *Store) Scan() (tasks []Task, problems []string, err error) {
 		t, err := readTask(filepath.Join(s.Dir, e.Name()))
 		if err != nil {
 			problems = append(problems, err.Error())
+
+			if unreadable == nil {
+				unreadable = map[string]string{}
+			}
+
+			unreadable[e.Name()] = err.Error()
 
 			continue
 		}
@@ -343,7 +364,7 @@ func (s *Store) Scan() (tasks []Task, problems []string, err error) {
 
 	sort.Slice(tasks, func(i, j int) bool { return num(tasks[i].ID) < num(tasks[j].ID) })
 
-	return tasks, problems, nil
+	return tasks, problems, unreadable, nil
 }
 
 // All reads every readable task, oldest first.

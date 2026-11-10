@@ -12,6 +12,7 @@ import (
 
 	"github.com/iamnikolie/zmina/internal/chat"
 	"github.com/iamnikolie/zmina/internal/crew"
+	"github.com/iamnikolie/zmina/internal/fsx"
 	"github.com/iamnikolie/zmina/internal/watch"
 )
 
@@ -64,6 +65,9 @@ type State struct {
 	SignalSent map[string]time.Time `json:"signal_sent,omitempty"`
 	// Notes wait for the dispatcher too: the ticker's own health notes, deduplicated and capped.
 	Notes []string `json:"notes,omitempty"`
+	// Unreadable is when the dispatcher was told that a task or ask file does not read, by "tasks/T-5.json" (zero:
+	// logged, not told yet), so each breakage is logged and told once.
+	Unreadable map[string]time.Time `json:"unreadable,omitempty"`
 	// Watch holds, per watch, its stored keys, held events, failures and cache.
 	Watch map[string]*watch.State `json:"watch,omitempty"`
 	// LastTick is when the ticker last beat, so a stopped ticker shows.
@@ -371,7 +375,7 @@ func stateError(path string, err error) error {
 
 // takeLock opens and locks the lock file in dir, waiting up to LockWait, and writes this pid into it.
 func takeLock(dir string) (*os.File, error) {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := fsx.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("state: %w", err)
 	}
 
@@ -430,12 +434,12 @@ func (l *Locked) Save() error {
 // Flush writes the state and keeps the lock: a beat saves what it did after each effect it cannot take back.
 func (l *Locked) Flush() error { return l.write() }
 
-// write puts the state on disk whole: a temporary file, synced, renamed over the old one (kept as state.json.prev).
+// write puts the state on disk whole (fsx.WriteFile); the one it replaces stays as state.json.prev.
 func (l *Locked) write() error {
 	if l.legacy != nil {
 		bak := l.path + ".v1.bak"
 		if _, err := os.Stat(bak); errors.Is(err, os.ErrNotExist) {
-			if err := os.WriteFile(bak, l.legacy, 0o600); err != nil {
+			if err := fsx.WriteFile(bak, l.legacy, 0o600); err != nil {
 				return fmt.Errorf("state: %w", err)
 			}
 		}
@@ -448,33 +452,18 @@ func (l *Locked) write() error {
 		return fmt.Errorf("state: %w", err)
 	}
 
-	tmp := l.path + ".tmp"
+	// The state before this save stays beside it as state.json.prev (fsx.Backup: a hard link to the file
+	// state.json leads to, or a synced copy where it cannot link, as when that file is on another file system); a
+	// save that cannot keep it fails before it replaces anything.
+	if err := fsx.Backup(l.path, l.path+".prev"); err != nil {
+		return fmt.Errorf("state: keeping the previous state as state.json.prev: %w", err)
+	}
 
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	if err != nil {
+	if err := fsx.WriteFile(l.path, raw, 0o600); err != nil {
 		return fmt.Errorf("state: %w", err)
 	}
 
-	_, err = f.Write(raw)
-	if err == nil {
-		err = f.Sync()
-	}
-
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-
-	if err != nil {
-		return fmt.Errorf("state: %w", err)
-	}
-
-	// The state before this save stays beside it as state.json.prev: a link to the old file, so the rename below
-	// leaves it whole.
-	prev := l.path + ".prev"
-	_ = os.Remove(prev)
-	_ = os.Link(l.path, prev)
-
-	return os.Rename(tmp, l.path)
+	return nil
 }
 
 // Release drops the lock without writing.

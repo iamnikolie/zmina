@@ -274,6 +274,82 @@ func TestStaleWatchResultIsDiscarded(t *testing.T) {
 	assert.False(t, slices.Contains(f.s.Names(), "ci-red"))
 }
 
+// state.json kept elsewhere and linked in: state.json.prev is still the state before the save. Linux hard-links a
+// symbolic link itself, so a .prev made from the link would show the new state (macOS follows the link either way).
+func TestSaveKeepsThePreviousStateThroughALink(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "kept", "state.json")
+	require.NoError(t, os.MkdirAll(filepath.Dir(real), 0o700))
+
+	save := func(session string) {
+		l, err := Lock(dir)
+		require.NoError(t, err)
+		l.Role("dev").LastSession = session
+		require.NoError(t, l.Save())
+	}
+
+	save("first")
+	require.NoError(t, os.Rename(filepath.Join(dir, "state.json"), real))
+	require.NoError(t, os.Symlink(real, filepath.Join(dir, "state.json")))
+
+	save("second")
+
+	fi, err := os.Lstat(filepath.Join(dir, "state.json"))
+	require.NoError(t, err)
+	assert.NotZero(t, fi.Mode()&os.ModeSymlink, "state.json is still the link")
+
+	fi, err = os.Lstat(filepath.Join(dir, "state.json.prev"))
+	require.NoError(t, err)
+	assert.Zero(t, fi.Mode()&os.ModeSymlink, ".prev is a file of its own, not the link")
+
+	prev, err := os.ReadFile(filepath.Join(dir, "state.json.prev"))
+	require.NoError(t, err)
+	assert.Contains(t, string(prev), `"first"`)
+	assert.NotContains(t, string(prev), `"second"`)
+}
+
+// state.json linked to a file on another file system (tmpfs here): no hard link reaches it, and .prev is a copy.
+func TestSaveKeepsThePreviousStateAcrossFileSystems(t *testing.T) {
+	other := "/dev/shm"
+	if fi, err := os.Stat(other); err != nil || !fi.IsDir() {
+		t.Skip("no /dev/shm")
+	}
+
+	dir := t.TempDir()
+
+	far, err := os.MkdirTemp(other, "zmina-state-")
+	if err != nil {
+		t.Skip(err)
+	}
+
+	t.Cleanup(func() { _ = os.RemoveAll(far) })
+
+	if a, b := devOf(t, dir), devOf(t, far); a == b {
+		t.Skip("the temp dir and /dev/shm are one file system")
+	}
+
+	save := func(session string) {
+		l, err := Lock(dir)
+		require.NoError(t, err)
+		l.Role("dev").LastSession = session
+		require.NoError(t, l.Save())
+	}
+
+	save("first")
+	raw, err := os.ReadFile(filepath.Join(dir, "state.json"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(far, "state.json"), raw, 0o600))
+	require.NoError(t, os.Remove(filepath.Join(dir, "state.json")))
+	require.NoError(t, os.Symlink(filepath.Join(far, "state.json"), filepath.Join(dir, "state.json")))
+
+	save("second")
+	save("third")
+
+	prev, err := os.ReadFile(filepath.Join(dir, "state.json.prev"))
+	require.NoError(t, err, "a backup across file systems")
+	assert.Contains(t, string(prev), `"second"`)
+}
+
 func TestSaveKeepsThePreviousState(t *testing.T) {
 	dir := t.TempDir()
 

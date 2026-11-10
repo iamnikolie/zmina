@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/iamnikolie/zmina/internal/crew"
+	"github.com/iamnikolie/zmina/internal/fsx"
 )
 
 // One cockpit per machine. A running zmina ui writes ui.json (0600, next to the crews): its address, its pid and a
@@ -99,16 +100,11 @@ func writeUIState(url string, l *uiLogins) error {
 	}
 
 	path := uiStatePath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := fsx.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		return err
-	}
-
-	return os.Rename(tmp, path)
+	return fsx.WriteFile(path, raw, 0o600)
 }
 
 func dropUIState() {

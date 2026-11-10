@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/iamnikolie/zmina/internal/fsx"
 	"gopkg.in/yaml.v3"
 )
 
@@ -164,13 +165,19 @@ func (e *Edit) save(check func(string) (*Crew, error)) error {
 		return fmt.Errorf("not saved, the crew would not load: %w", err)
 	}
 
+	_ = os.Remove(tmp)
+
 	if old, err := os.ReadFile(e.path); err == nil {
-		if err := os.WriteFile(e.path+".bak", old, 0o600); err != nil {
+		if err := fsx.WriteFile(e.path+".bak", old, 0o600); err != nil {
 			return fmt.Errorf("crew: %w", err)
 		}
 	}
 
-	return os.Rename(tmp, e.path)
+	if err := fsx.WriteFile(e.path, buf.Bytes(), 0o600); err != nil {
+		return fmt.Errorf("crew: %w", err)
+	}
+
+	return nil
 }
 
 func (e *Edit) roles(create bool) *yaml.Node {

@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/iamnikolie/zmina/internal/fsx"
 	"github.com/iamnikolie/zmina/internal/registry"
 )
 
@@ -48,24 +49,7 @@ func atomicJSON(path string, value any) error {
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".usage-*")
-	if err != nil {
-		return err
-	}
-	name := tmp.Name()
-	defer func() { _ = os.Remove(name) }()
-	if _, err = tmp.Write(raw); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err = tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err = tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(name, path)
+	return fsx.WriteFile(path, raw, 0o600)
 }
 
 // SaveUsage atomically journals one snapshot. Billing deltas are derived when reading; no separate counter can drift after a crash.
@@ -74,7 +58,7 @@ func (r Registry) SaveUsage(u Usage) error {
 		return fmt.Errorf("usage snapshot has no thread")
 	}
 	dir := filepath.Join(r.Dir, "usage", fmt.Sprintf("%x", sha256.Sum256([]byte(u.Thread))))
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := fsx.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
 	lock, err := os.OpenFile(filepath.Join(dir, "lock"), os.O_CREATE|os.O_RDWR, 0600)

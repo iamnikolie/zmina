@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"unicode"
+
+	"github.com/iamnikolie/zmina/internal/fsx"
 )
 
 const MaxFileBytes = 8 << 20
@@ -136,7 +138,7 @@ func (s FileStore) Put(upload Upload) (Attachment, error) {
 		return Attachment{}, errors.New("attachment storage is full; remove unused files from the crew chat-files directory")
 	}
 	parent := filepath.Dir(s.root(upload.ID))
-	if err = os.MkdirAll(parent, 0700); err != nil {
+	if err = fsx.MkdirAll(parent, 0700); err != nil {
 		return Attachment{}, err
 	}
 	temp, err := os.MkdirTemp(parent, ".upload-")
@@ -144,17 +146,22 @@ func (s FileStore) Put(upload Upload) (Attachment, error) {
 		return Attachment{}, err
 	}
 	defer func() { _ = os.RemoveAll(temp) }()
-	if err = os.WriteFile(filePath(temp, upload.Name), upload.Data, 0600); err != nil {
+	// Each file synced with the temporary directory (fsx), then the directory takes its name and its parent is synced:
+	// a message that names the attachment never outlives its content.
+	if err = fsx.WriteFile(filePath(temp, upload.Name), upload.Data, 0600); err != nil {
 		return Attachment{}, err
 	}
 	raw, err := json.Marshal(meta)
 	if err != nil {
 		return Attachment{}, err
 	}
-	if err = os.WriteFile(filepath.Join(temp, "metadata.json"), raw, 0600); err != nil {
+	if err = fsx.WriteFile(filepath.Join(temp, "metadata.json"), raw, 0600); err != nil {
 		return Attachment{}, err
 	}
 	if err = os.Rename(temp, s.root(upload.ID)); err != nil {
+		return Attachment{}, err
+	}
+	if err = fsx.SyncDir(parent); err != nil {
 		return Attachment{}, err
 	}
 	return meta, nil

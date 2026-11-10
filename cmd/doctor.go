@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -158,6 +160,16 @@ func (a *app) diagnose() []check {
 		}
 	} else {
 		add("tasks", "ok", "readable")
+	}
+
+	if bad, err := askStore(c).Unreadable(); err != nil {
+		add("asks", "fail", "%v", err)
+	} else if len(bad) > 0 {
+		for _, file := range slices.Sorted(maps.Keys(bad)) {
+			add("asks", "warn", "%s (on no list until mended)", bad[file])
+		}
+	} else {
+		add("asks", "ok", "readable")
 	}
 
 	if _, problems, err := laterStore(c).Scan(); err != nil {

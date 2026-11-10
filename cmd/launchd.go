@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/iamnikolie/zmina/internal/crew"
+	"github.com/iamnikolie/zmina/internal/fsx"
 )
 
 // launchdCommand is the macOS name of 'zmina ticker', kept for scripts that use it.
@@ -40,12 +41,12 @@ func (a *app) launchdCommand() *cobra.Command {
 func launchdInstall(w io.Writer, c *crew.Crew, bin string) error {
 	label := c.LaunchdLabel()
 
-	if err := os.MkdirAll(filepath.Dir(plistPath(label)), 0o755); err != nil {
+	if err := fsx.MkdirAll(filepath.Dir(plistPath(label)), 0o755); err != nil {
 		return err
 	}
 
 	plist := launchdPlist(label, bin, c.Path, tickLog(c))
-	if err := os.WriteFile(plistPath(label), plist, 0o644); err != nil {
+	if err := fsx.WriteFile(plistPath(label), plist, 0o644); err != nil {
 		return err
 	}
 

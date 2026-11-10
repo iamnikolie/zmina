@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/iamnikolie/zmina/internal/crew"
+	"github.com/iamnikolie/zmina/internal/fsx"
 	"github.com/iamnikolie/zmina/internal/inbox"
 	"github.com/iamnikolie/zmina/internal/registry"
 	"github.com/iamnikolie/zmina/internal/task"
@@ -74,6 +75,7 @@ func (s *Shift) Tick() []string {
 
 	// Alarms first: a role an alarm starts is up for the rest of the beat.
 	did, notes := s.ring(now, stopped)
+	did = append(did, s.reportUnreadable(now)...)
 
 	for _, name := range s.Names() {
 		r, err := s.Role(name)
@@ -484,14 +486,14 @@ func (s *Shift) saveScreen(name string, now time.Time) string {
 	}
 
 	dir := s.ScreensDir()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := fsx.MkdirAll(dir, 0o700); err != nil {
 		return ""
 	}
 
 	base := strings.ReplaceAll(name, "#", "-")
 	file := filepath.Join(dir, base+"-"+now.Format("20060102-150405")+".txt")
 
-	if err := os.WriteFile(file, []byte(text+"\n"), 0o600); err != nil {
+	if err := fsx.WriteFile(file, []byte(text+"\n"), 0o600); err != nil {
 		return ""
 	}
 
@@ -1379,7 +1381,7 @@ func (s *Shift) pruneAbsent(now time.Time) {
 // archiveRole writes a role's state to <state dir>/pruned/<role>-<time>.json.
 func (s *Shift) archiveRole(name string, rs *RoleState, now time.Time) (string, error) {
 	dir := filepath.Join(s.Crew.StateDir(), "pruned")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := fsx.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
 
@@ -1391,7 +1393,7 @@ func (s *Shift) archiveRole(name string, rs *RoleState, now time.Time) (string, 
 	safe := strings.NewReplacer("/", "_", "#", "_", string(filepath.Separator), "_").Replace(name)
 	path := filepath.Join(dir, safe+"-"+now.UTC().Format("20060102-150405")+".json")
 
-	return path, os.WriteFile(path, raw, 0o600)
+	return path, fsx.WriteFile(path, raw, 0o600)
 }
 
 // flush writes the state at once after an effect that cannot be taken back (a line typed or posted, a session

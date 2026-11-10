@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/iamnikolie/zmina/internal/crew"
+	"github.com/iamnikolie/zmina/internal/fsx"
 )
 
 // Env is what a run needs besides the watch: where the crew keeps its state, the stored fingerprints and the
@@ -54,7 +55,7 @@ func Run(ctx context.Context, w *crew.Watch, env Env) Result {
 // runExec starts the command with the seen file and its cache dir in the environment, and reads one JSON event per
 // line from its output. Exit 0 means the output is the whole current set.
 func runExec(ctx context.Context, w *crew.Watch, env Env) Result {
-	if err := os.MkdirAll(env.Dir, 0o700); err != nil {
+	if err := fsx.MkdirAll(env.Dir, 0o700); err != nil {
 		return Result{Err: err}
 	}
 
@@ -164,12 +165,7 @@ func writeJSON(path string, v any) error {
 		return err
 	}
 
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		return err
-	}
-
-	return os.Rename(tmp, path)
+	return fsx.WriteFile(path, raw, 0o600)
 }
 
 // Dir is a watch's private directory under the crew's state dir.

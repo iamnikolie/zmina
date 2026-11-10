@@ -901,7 +901,24 @@ One file per task in `~/.zmina/tasks/T-<n>.json`. States: `open` (handed, in wor
 `later: "L-15"` in its file, shown `parked L-15`). "Active" = open or waiting (and a
 state this zmina does not know, so nothing runs over it). The first name of `waiting`,
 `waiting-<owner>`, is still read and accepted. A new task is numbered above every `T-<n>.json` in the
-directory, readable or not, and never replaces a file; `task ls` and `doctor` name damaged files.
+directory, readable or not, and never replaces a file; `task ls` and `doctor` name damaged files. A task file
+that does not read is in no list and holds no role: the ticker logs `unreadable` (with the task's id and why) and
+signals the dispatcher `zmina: files that do not read, so they are in no list and hold no role: tasks/T-5.json; …`
+(one signal a beat for every file found since the last, ten named and the rest counted). Each breakage is logged and
+told once; a signal queue that is full leaves it untold until it has room; a file that reads again is forgotten.
+
+Every file zmina keeps (tasks, asks, the parked list, alarms, lessons, `state.json`, handoffs, results and
+checkpoints, inbox lines, messages, chat attachments, the crew file, saved screens, the ticker's launchd or systemd
+files) is written whole: a hidden `.<name>.<random>.tmp` beside it, synced, then renamed over it, then the directory
+synced. A reader sees the old file or the new one, never an empty or half-written one; a writer killed half way
+leaves the old file and at most a stray `.tmp`, which nothing reads. A new record takes its name with a hard link,
+so only when the name is free; a file system without hard links gets an error, not a name shown before its content.
+A directory made for a kept file is synced into its parent, up to the one that was there. A kept file that is a
+symbolic link is written through (the link stays); a link that leads nowhere is an error. `state.json.prev` is the
+state before the save: a hard link to it (to a link's target), or a synced copy when that is on another file
+system; a save that cannot keep it fails before it replaces anything. Not this path: the
+append-only logs (`events.jsonl`, `reads.jsonl`, the ticker's log), the read meter's rate cache, and lesson drafts,
+which edit files in a repository checkout.
 
 | Command | Does |
 |---|---|
@@ -932,7 +949,8 @@ else: `task set <id> waiting --on <who>`.
 One list of what only the owner can answer: the dispatcher's **asks** — a `decision` (a question with its
 recommendation and a one-line reason) or a `check` (something only the owner can do: "sign in and publish the test
 board") — and every task in state `waiting`, with its note. One file per ask in `~/.zmina/asks/A-<n>.json`, written
-alone like tasks. An ask with `--task T-n` about a waiting task is that task's question: the two show as one item
+alone like tasks. An ask file that does not read is on no list: `doctor` names it (`asks` line) and the ticker tells
+the dispatcher once, as for tasks. An ask with `--task T-n` about a waiting task is that task's question: the two show as one item
 (the ask's question and recommendation, the task's note). Order: items that block a role first (a waiting task
 blocks its role while that role is up and idle; an ask with `--blocks`), then the overdue ones (older than 24 h),
 then the rest; oldest first in each group. A reminder for the owner (`zmina remind`) lands here as a `check` when it

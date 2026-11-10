@@ -7,13 +7,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/iamnikolie/zmina/internal/fsx"
 )
 
 // Kind is what the owner is asked for.
@@ -132,7 +136,7 @@ func (s *Store) write(it Ask, fresh bool) error {
 		return fmt.Errorf("asks: bad id %q", it.ID)
 	}
 
-	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
+	if err := fsx.MkdirAll(s.Dir, 0o700); err != nil {
 		return fmt.Errorf("asks: %w", err)
 	}
 
@@ -143,21 +147,17 @@ func (s *Store) write(it Ask, fresh bool) error {
 
 	path := filepath.Join(s.Dir, it.ID+".json")
 
+	write := fsx.WriteFile
 	if fresh {
-		// Claim the name first: O_EXCL fails if anything is there.
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err != nil {
-			return fmt.Errorf("asks: %w", err)
-		}
-
-		_ = f.Close()
+		// A new one takes its name with its content, and only when the name is free.
+		write = fsx.CreateFile
 	}
 
-	if err := os.WriteFile(path+".tmp", raw, 0o600); err != nil {
+	if err := write(path, raw, 0o600); err != nil {
 		return fmt.Errorf("asks: %w", err)
 	}
 
-	return os.Rename(path+".tmp", path)
+	return nil
 }
 
 // Get reads one ask; "3", "a-3" and "A-3" are A-3.
@@ -198,6 +198,24 @@ func read(path string) (Ask, error) {
 
 // Scan reads every ask, oldest first, and names the files it could not read.
 func (s *Store) Scan() (items []Ask, problems []string, err error) {
+	items, bad, err := s.scan()
+
+	for _, name := range slices.Sorted(maps.Keys(bad)) {
+		problems = append(problems, bad[name])
+	}
+
+	return items, problems, err
+}
+
+// Unreadable names each ask file that does not read (by its file name) with why. Such an ask is on no list: the
+// ticker tells the dispatcher and doctor names it.
+func (s *Store) Unreadable() (map[string]string, error) {
+	_, bad, err := s.scan()
+
+	return bad, err
+}
+
+func (s *Store) scan() (items []Ask, unreadable map[string]string, err error) {
 	entries, err := os.ReadDir(s.Dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil, nil
@@ -214,7 +232,11 @@ func (s *Store) Scan() (items []Ask, problems []string, err error) {
 
 		it, err := read(filepath.Join(s.Dir, e.Name()))
 		if err != nil {
-			problems = append(problems, err.Error())
+			if unreadable == nil {
+				unreadable = map[string]string{}
+			}
+
+			unreadable[e.Name()] = err.Error()
 
 			continue
 		}
@@ -224,7 +246,7 @@ func (s *Store) Scan() (items []Ask, problems []string, err error) {
 
 	sort.Slice(items, func(i, j int) bool { return num(items[i].ID) < num(items[j].ID) })
 
-	return items, problems, nil
+	return items, unreadable, nil
 }
 
 // Pending is every ask still waiting on the owner, oldest first.

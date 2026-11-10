@@ -12,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/iamnikolie/zmina/internal/fsx"
 )
 
 // Node is this ~/.zmina's member of the mesh: its directory, name, key, certificate and the owner's public key.
@@ -55,7 +57,7 @@ func Init(dir, name string) (Request, error) {
 		return Request{}, fmt.Errorf("node name %q: use letters, digits, '.', '_' and '-'", name)
 	}
 
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := fsx.MkdirAll(dir, 0o700); err != nil {
 		return Request{}, err
 	}
 
@@ -326,7 +328,7 @@ func (n *Node) Outbox() ([]Envelope, error) {
 
 // Queue puts an envelope in the outbox.
 func (n *Node) Queue(e Envelope) error {
-	if err := os.MkdirAll(n.path("outbox"), 0o700); err != nil {
+	if err := fsx.MkdirAll(n.path("outbox"), 0o700); err != nil {
 		return err
 	}
 
@@ -472,10 +474,5 @@ func writeJSON(path string, v any) error {
 		return err
 	}
 
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(raw, '\n'), 0o600); err != nil {
-		return err
-	}
-
-	return os.Rename(tmp, path)
+	return fsx.WriteFile(path, append(raw, '\n'), 0o600)
 }
