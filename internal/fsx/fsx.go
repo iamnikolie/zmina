@@ -18,8 +18,13 @@ import (
 // set it to stop a process at that moment; it is nil in zmina.
 var BeforeCommit func(tmp, path string)
 
-// WriteFile puts data at path, replacing what is there.
+// WriteFile puts data at path, replacing what is there. A path that is a symbolic link is written through: the
+// file it points to is replaced, the link stays.
 func WriteFile(path string, data []byte, perm os.FileMode) error {
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		path = real
+	}
+
 	tmp, err := stage(path, data, perm)
 	if err != nil {
 		return err

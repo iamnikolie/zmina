@@ -202,3 +202,34 @@ func TestPermIsKept(t *testing.T) {
 		}
 	}
 }
+
+// A crew file kept elsewhere and linked in stays a link: the file it points to gets the new content.
+func TestWriteFileKeepsASymlink(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "dotfiles", "crew.yaml")
+	link := filepath.Join(dir, "crew.yaml")
+
+	if err := os.MkdirAll(filepath.Dir(real), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(real, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := fsx.WriteFile(link, []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if fi, err := os.Lstat(link); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the link was replaced: %v, %v", fi, err)
+	}
+
+	if got, _ := os.ReadFile(real); string(got) != "new" {
+		t.Fatalf("target: %q", got)
+	}
+}
