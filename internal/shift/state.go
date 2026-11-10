@@ -452,11 +452,18 @@ func (l *Locked) write() error {
 		return fmt.Errorf("state: %w", err)
 	}
 
-	// The state before this save stays beside it as state.json.prev: a link to the old file, so the rename that
-	// puts the new one in place leaves it whole.
+	// The state before this save stays beside it as state.json.prev: a hard link to the old file, so the rename that
+	// puts the new one in place leaves it whole. When state.json is a symbolic link, the link is to the file it
+	// leads to (fsx.WriteFile replaces that file): a hard link to the symbolic link itself, which Linux makes, would
+	// show the new state.
+	cur, err := fsx.Resolve(l.path)
+	if err != nil {
+		return fmt.Errorf("state: %w", err)
+	}
+
 	prev := l.path + ".prev"
 	_ = os.Remove(prev)
-	_ = os.Link(l.path, prev)
+	_ = os.Link(cur, prev)
 
 	if err := fsx.WriteFile(l.path, raw, 0o600); err != nil {
 		return fmt.Errorf("state: %w", err)
