@@ -2,6 +2,7 @@ package ui
 
 import (
 	"encoding/json"
+	"os"
 	"os/exec"
 	"testing"
 
@@ -18,10 +19,7 @@ type labelledRow struct {
 // (testdata/app-labels.js): in All the same question from two nodes carries each node's label, on the cockpit and on
 // the lean page; a view filtered to that node or crew drops what the switch already says.
 func TestSameQuestionFromTwoNodesReadsApart(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is not installed: the page's rows are not rendered")
-	}
+	node := requireNode(t, "node is not installed: the page's rows are not rendered")
 
 	raw, err := exec.Command(node, "testdata/app-labels.js", "static/app.js").Output()
 	require.NoError(t, err)
@@ -45,10 +43,7 @@ func TestSameQuestionFromTwoNodesReadsApart(t *testing.T) {
 // TestPhoneTabs runs static/app.js's phone tabs (D-09, D-12) under Node: Talk opens the scoped crew's dispatcher once
 // the scope changed, Back to the entry the page opened on without a hash returns to the tab it opened on, Agents draws one row per role in its groups, and a by-hand item opens as a sheet.
 func TestPhoneTabs(t *testing.T) {
-	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("node is not installed: the page's tabs are not run")
-	}
+	node := requireNode(t, "node is not installed: the page's tabs are not run")
 
 	raw, err := exec.Command(node, "testdata/app-labels.js", "static/app.js", "phone").Output()
 	require.NoError(t, err)
@@ -126,4 +121,22 @@ func TestPhoneTabs(t *testing.T) {
 	assert.Equal(t, []string{"Sign in and publishdefault · 8 d›"}, res.Hand)
 	assert.Equal(t, []string{"", "Yours by hand · raised by dispatcher · default · 8 d", "Sign in and publish",
 		"Sign in and publish the test board", "Done", "Talk to dispatcher"}, res.Sheet)
+}
+
+// requireNode is the node binary; without one the test skips, except in CI, where a skip would read as a pass.
+func requireNode(t *testing.T, why string) string {
+	t.Helper()
+
+	node, err := exec.LookPath("node")
+	if err == nil {
+		return node
+	}
+
+	if os.Getenv("CI") != "" {
+		t.Fatal(why + " (CI must run it)")
+	}
+
+	t.Skip(why)
+
+	return ""
 }

@@ -16,7 +16,8 @@ Before opening one:
 ```bash
 make fmt           # gofmt -w .
 make vet           # go vet ./...
-make test          # publiccheck, gofmt check, go test ./... (needs tmux 3.2+ on PATH)
+make test          # publiccheck, gofmt check, go test -race -count=1 ./... (needs tmux 3.2+ on PATH), as CI
+make test-fast     # go test ./..., cached and without the race detector, while working
 golangci-lint run  # config in .golangci.yml
 ```
 
