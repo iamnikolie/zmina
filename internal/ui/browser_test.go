@@ -59,10 +59,7 @@ func TestBrowserFixtures(t *testing.T) {
 
 // knownFailing are fixtures that fail on main as it is, each with what fails; a fix removes its line. They are
 // skipped so the job guards the others from the day it is added.
-var knownFailing = map[string]string{
-	"chat-ids": "the message sent with an item on the field never shows as the owner's bubble (no outbox entry " +
-		"within 20 s), headless and with focus emulation alike; every step before it passes",
-}
+var knownFailing = map[string]string{}
 
 // resultsVar is the global a fixture page sets: chat-outbox → chatOutboxResults.
 func resultsVar(name string) string {

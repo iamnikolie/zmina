@@ -37,7 +37,7 @@
   ];
 
   async function open(cls, crew, nodes = []) {
-    const fixture = {posts: [], sends: [], reads: []};
+    const fixture = {posts: [], sends: [], reads: [], pending: []};
     const frame = document.createElement("iframe");
     frame.className = cls;
     document.body.append(frame);
@@ -54,14 +54,15 @@
         if (path === "/api/chat") return json(fixture.snapshot());
         if (path === "/api/items") { const q = new URLSearchParams(query); fixture.reads.push(q.get("ids")); const out = {}; for (const id of q.get("ids").split(",")) out[id] = fixture.items[id] || {id, found: false}; return json({items: out}); }
         if (path === "/api/todo") { fixture.posts.push(JSON.parse(options.body)); return json({done: "ok"}); }
-        if (path === "/api/chat/send") { const body = JSON.parse(options.body); fixture.sends.push(body); return json({...fixture.snapshot(), accepted_id: body.id}); }
+        // As the server does, an accepted message stands in pending until the transcript shows it.
+        if (path === "/api/chat/send") { const body = JSON.parse(options.body); fixture.sends.push(body); fixture.pending.push({id: "web:" + body.id, role: "user", text: body.text, at: new Date().toISOString(), state: "queued"}); return json({...fixture.snapshot(), accepted_id: body.id}); }
         return json("not in this fixture", 404);
       };
     <\/script>`;
     fixture.items = items;
     fixture.nodes = nodes;
     fixture.snapshot = () => ({presentation_version: 1, attachments_supported: true, retry_window_seconds: 604800, role: "dev", runtime: "claude",
-      state: "up", status: "idle", session: "session-1", messages, pending: []});
+      state: "up", status: "idle", session: "session-1", messages, pending: fixture.pending});
     const doc = frame.contentDocument;
     doc.open(); doc.write(page.replace("<head>", "<head>" + stub)); doc.close();
     const $ = (sel) => frame.contentDocument.querySelector(sel), $$ = (sel) => [...frame.contentDocument.querySelectorAll(sel)];
@@ -150,13 +151,15 @@
       $("#message").dispatchEvent(new Event("input", {bubbles: true}));
       await wait("Send to be ready", () => !$("#send-message").disabled);
       $("#send-message").click();
-      // Saved to the outbox first (delivery follows when the page is visible): its bubble says what it is about.
+      // Saved to the outbox, then sent and in pending: its bubble says what it is about either way.
       const sent = await wait("the message saved: " + $("#chat-error").textContent + " " + $("#composer-status").textContent,
         () => $$(".chat-message.user").find((m) => m.querySelector(".xre")?.textContent === "↳ T-1 · the page is reworked from scratch"),
         // The outbox is IndexedDB, real time: headless virtual time runs ahead of it.
         20000);
       assert(sent.querySelector(".message-body").lastChild.textContent === "how far?", "the owner's words under it, the prefix read off");
-      if (fixture.sends.length) assert(fixture.sends[0].text === "Re T-1 (Login: the page is reworked from scratch): how far?", "the message says what it is about: " + fixture.sends[0].text);
+      await wait("the message sent", () => fixture.sends.length, 20000);
+      assert(fixture.sends[0].text === "Re T-1 (Login: the page is reworked from scratch): how far?", "the message says what it is about: " + fixture.sends[0].text);
+      assert($$(".chat-message.user").find((m) => m.querySelector(".xre")?.textContent === "↳ T-1 · the page is reworked from scratch"), "sent, its bubble stays");
       assert($("#reply-to").hidden, "the chip goes with the message");
     }
     {
