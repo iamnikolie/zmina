@@ -65,6 +65,9 @@ type State struct {
 	SignalSent map[string]time.Time `json:"signal_sent,omitempty"`
 	// Notes wait for the dispatcher too: the ticker's own health notes, deduplicated and capped.
 	Notes []string `json:"notes,omitempty"`
+	// Unreadable is when the dispatcher was told that a task or ask file does not read, by "tasks/T-5.json", so it
+	// is told once per breakage.
+	Unreadable map[string]time.Time `json:"unreadable,omitempty"`
 	// Watch holds, per watch, its stored keys, held events, failures and cache.
 	Watch map[string]*watch.State `json:"watch,omitempty"`
 	// LastTick is when the ticker last beat, so a stopped ticker shows.

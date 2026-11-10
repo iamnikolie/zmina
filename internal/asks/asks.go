@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -196,6 +198,24 @@ func read(path string) (Ask, error) {
 
 // Scan reads every ask, oldest first, and names the files it could not read.
 func (s *Store) Scan() (items []Ask, problems []string, err error) {
+	items, bad, err := s.scan()
+
+	for _, name := range slices.Sorted(maps.Keys(bad)) {
+		problems = append(problems, bad[name])
+	}
+
+	return items, problems, err
+}
+
+// Unreadable names each ask file that does not read (by its file name) with why. Such an ask is on no list: the
+// ticker tells the dispatcher and doctor names it.
+func (s *Store) Unreadable() (map[string]string, error) {
+	_, bad, err := s.scan()
+
+	return bad, err
+}
+
+func (s *Store) scan() (items []Ask, unreadable map[string]string, err error) {
 	entries, err := os.ReadDir(s.Dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil, nil
@@ -212,7 +232,11 @@ func (s *Store) Scan() (items []Ask, problems []string, err error) {
 
 		it, err := read(filepath.Join(s.Dir, e.Name()))
 		if err != nil {
-			problems = append(problems, err.Error())
+			if unreadable == nil {
+				unreadable = map[string]string{}
+			}
+
+			unreadable[e.Name()] = err.Error()
 
 			continue
 		}
@@ -222,7 +246,7 @@ func (s *Store) Scan() (items []Ask, problems []string, err error) {
 
 	sort.Slice(items, func(i, j int) bool { return num(items[i].ID) < num(items[j].ID) })
 
-	return items, problems, nil
+	return items, unreadable, nil
 }
 
 // Pending is every ask still waiting on the owner, oldest first.

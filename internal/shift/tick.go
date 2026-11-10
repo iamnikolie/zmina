@@ -75,6 +75,7 @@ func (s *Shift) Tick() []string {
 
 	// Alarms first: a role an alarm starts is up for the rest of the beat.
 	did, notes := s.ring(now, stopped)
+	did = append(did, s.reportUnreadable(now)...)
 
 	for _, name := range s.Names() {
 		r, err := s.Role(name)

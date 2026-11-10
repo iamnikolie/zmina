@@ -314,13 +314,27 @@ func readTask(path string) (Task, error) {
 // Scan reads every task, oldest first, and says what it could not read: damaged files, a file whose id does not
 // match its name, a state this zmina does not know.
 func (s *Store) Scan() (tasks []Task, problems []string, err error) {
+	tasks, problems, _, err = s.scan()
+
+	return tasks, problems, err
+}
+
+// Unreadable names each task file that does not read (by its file name) with why. Such a task is in no list: not
+// active, not holding its role; the ticker tells the dispatcher and doctor names it.
+func (s *Store) Unreadable() (map[string]string, error) {
+	_, _, bad, err := s.scan()
+
+	return bad, err
+}
+
+func (s *Store) scan() (tasks []Task, problems []string, unreadable map[string]string, err error) {
 	entries, err := os.ReadDir(s.Dir)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 
 	if err != nil {
-		return nil, nil, fmt.Errorf("task: %w", err)
+		return nil, nil, nil, fmt.Errorf("task: %w", err)
 	}
 
 	for _, e := range entries {
@@ -331,6 +345,12 @@ func (s *Store) Scan() (tasks []Task, problems []string, err error) {
 		t, err := readTask(filepath.Join(s.Dir, e.Name()))
 		if err != nil {
 			problems = append(problems, err.Error())
+
+			if unreadable == nil {
+				unreadable = map[string]string{}
+			}
+
+			unreadable[e.Name()] = err.Error()
 
 			continue
 		}
@@ -344,7 +364,7 @@ func (s *Store) Scan() (tasks []Task, problems []string, err error) {
 
 	sort.Slice(tasks, func(i, j int) bool { return num(tasks[i].ID) < num(tasks[j].ID) })
 
-	return tasks, problems, nil
+	return tasks, problems, unreadable, nil
 }
 
 // All reads every readable task, oldest first.

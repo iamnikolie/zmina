@@ -896,7 +896,15 @@ One file per task in `~/.zmina/tasks/T-<n>.json`. States: `open` (handed, in wor
 `later: "L-15"` in its file, shown `parked L-15`). "Active" = open or waiting (and a
 state this zmina does not know, so nothing runs over it). The first name of `waiting`,
 `waiting-<owner>`, is still read and accepted. A new task is numbered above every `T-<n>.json` in the
-directory, readable or not, and never replaces a file; `task ls` and `doctor` name damaged files.
+directory, readable or not, and never replaces a file; `task ls` and `doctor` name damaged files. A task file
+that does not read is in no list and holds no role: the ticker logs `unreadable` (with the task's id) and tells the
+dispatcher `zmina: tasks/T-5.json does not read (…)`, once until the file reads again.
+
+Every file zmina keeps (tasks, asks, the parked list, alarms, lessons, `state.json`, handoffs, results and
+checkpoints, inbox lines, the crew file and the rest) is written whole: a hidden `.<name>.<random>.tmp` beside it,
+synced, then renamed over it (a new record takes its name only if it is free), then the directory synced. A reader
+sees the old file or the new one, never an empty or half-written one; a writer killed half way leaves the old file
+and at most a stray `.tmp`, which nothing reads.
 
 | Command | Does |
 |---|---|
@@ -927,7 +935,8 @@ else: `task set <id> waiting --on <who>`.
 One list of what only the owner can answer: the dispatcher's **asks** — a `decision` (a question with its
 recommendation and a one-line reason) or a `check` (something only the owner can do: "sign in and publish the test
 board") — and every task in state `waiting`, with its note. One file per ask in `~/.zmina/asks/A-<n>.json`, written
-alone like tasks. An ask with `--task T-n` about a waiting task is that task's question: the two show as one item
+alone like tasks. An ask file that does not read is on no list: `doctor` names it (`asks` line) and the ticker tells
+the dispatcher once, as for tasks. An ask with `--task T-n` about a waiting task is that task's question: the two show as one item
 (the ask's question and recommendation, the task's note). Order: items that block a role first (a waiting task
 blocks its role while that role is up and idle; an ask with `--blocks`), then the overdue ones (older than 24 h),
 then the rest; oldest first in each group. A reminder for the owner (`zmina remind`) lands here as a `check` when it

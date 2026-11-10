@@ -339,7 +339,15 @@ func TestDoctorReports(t *testing.T) {
 	assert.Contains(t, out, "ok    lock")
 	assert.Contains(t, out, "ok    boot      zmina's rules at a fresh start: ")
 	assert.Contains(t, out, "ok    boot      skill list not trimmed")
+	assert.Regexp(t, `ok +asks +readable`, out)
 	assert.NoError(t, err, "warnings only")
+
+	// An ask file that does not read is on no list: doctor names it.
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "asks"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "asks", "A-1.json"), nil, 0o600))
+
+	out, _, _ = zm(t, crewFile, "doctor")
+	assert.Regexp(t, `warn +asks +ask A-1: unexpected end of JSON input \(on no list until mended\)`, out)
 
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "claude"), []byte("#!/bin/sh\necho '--model'\n"), 0o700))
 
