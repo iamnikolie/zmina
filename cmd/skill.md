@@ -7,6 +7,11 @@ routes tasks to roles, starts and stops them, and hears the ticker's health note
 itself lives in a **task ledger** outside any session, and everything that happens goes to an
 **event log**.
 
+**This reference in parts**: `zmina skill` prints this introduction, the list of topics and the dispatcher's part;
+`zmina skill <topic>` one section (`zmina skill tasks todo` several; a word of a name finds it: `task` is Tasks);
+`zmina skill all` all of it, over 200k characters, which no single tool result holds (they are cut near 30k): pipe
+it (`zmina skill all | grep -n <word>`). A section too long for one result prints its start and names its parts.
+
 **Output is compact by default**: one line per item, only what an agent needs to act — every output read stays
 in the reader's context for every turn after it. Ask for detail only when the compact view does not answer:
 `--all` (every item, closed ones too), `--wide` (every column), `--full` (whole texts), `--json` (for machines).
