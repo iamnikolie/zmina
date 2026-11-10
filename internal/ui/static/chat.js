@@ -78,7 +78,8 @@
   const store = window.zminaChatStore;
   let outbox = [], draining = false, retryTimer = null, live = false;
   // accepted are messages the server took whose outbox entry is gone, each with its row and the reads started before
-  // it was taken (after): its bubble stays until a snapshot shows it, or a read started after it comes without it.
+  // it was taken (after): its bubble stays until a snapshot shows it, or a read started after it reaches the last page
+  // (more unset) without it: then the server no longer holds it.
   let accepted = [], reads = 0;
   // The outbox entry this tab is uploading or sending now (name: the file going up), so its bubble says it goes.
   let inflight = null;
@@ -115,7 +116,7 @@
     let size = 0;
     data.messages = (data.messages || []).slice(-1000).reverse().filter(row => { size += row.text.length; return size <= 4 * 1024 * 1024; }).reverse();
     const evidence = new Map([...(data.messages || []), ...(data.pending || [])].map(row => [row.id, row]));
-    accepted = accepted.filter(a => !sameDestination(a.dest) || !(evidence.has(a.row.id) || seq > a.after));
+    accepted = accepted.filter(a => !sameDestination(a.dest) || !(evidence.has(a.row.id) || (seq > a.after && !data.more)));
     for (const entry of outbox) if (sameDestination(entry.dest) && evidence.has("web:" + entry.id)) {
       store.remove(entry.key).then(refreshOutbox).catch(e => error(e.message));
     }

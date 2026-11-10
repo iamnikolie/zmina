@@ -37,7 +37,7 @@
   ];
 
   async function open(cls, crew, nodes = []) {
-    const fixture = {posts: [], sends: [], reads: [], pending: [], slow: false, slowReads: 0};
+    const fixture = {posts: [], sends: [], reads: [], pending: [], paged: false, pages: 0, keep: true};
     const frame = document.createElement("iframe");
     frame.className = cls;
     document.body.append(frame);
@@ -52,11 +52,18 @@
         if (path === "/api/terminal/nodes") { await new Promise(r => setTimeout(r, fixture.nodes.length ? 1500 : 300)); return json(fixture.nodes); }
         if (path === "/api/terminal/targets") return json([]);
         // slow: the next read after a send takes 1.5 s, so the page shows what it has meanwhile.
-        if (path === "/api/chat") { if (fixture.slow) { fixture.slow = false; fixture.slowReads++; await new Promise(r => setTimeout(r, 1500)); } return json(fixture.snapshot()); }
+        // paged: the read after a send gets a first page without the message (more history to come, as chat.Page
+        // answers when the cursor is far behind), and the page after it, which has the message, takes 1.5 s.
+        if (path === "/api/chat") {
+          const cursor = new URLSearchParams(query).get("cursor");
+          if (fixture.paged && cursor !== "p1") { fixture.pages = 1; return json({...fixture.snapshot(), cursor: "p1", more: true, pending: fixture.pending.slice(0, -1)}); }
+          if (fixture.paged) { fixture.paged = false; fixture.pages = 2; await new Promise(r => setTimeout(r, 1500)); return json({...fixture.snapshot(), cursor: "p2"}); }
+          return json(fixture.snapshot());
+        }
         if (path === "/api/items") { const q = new URLSearchParams(query); fixture.reads.push(q.get("ids")); const out = {}; for (const id of q.get("ids").split(",")) out[id] = fixture.items[id] || {id, found: false}; return json({items: out}); }
         if (path === "/api/todo") { fixture.posts.push(JSON.parse(options.body)); return json({done: "ok"}); }
         // As the server does, an accepted message stands in pending until the transcript shows it.
-        if (path === "/api/chat/send") { const body = JSON.parse(options.body); fixture.sends.push(body); fixture.slow = true; fixture.pending.push({id: "web:" + body.id, role: "user", text: body.text, at: new Date().toISOString(), state: "queued"}); return json({...fixture.snapshot(), accepted_id: body.id}); }
+        if (path === "/api/chat/send") { const body = JSON.parse(options.body); fixture.sends.push(body); if (fixture.keep) { fixture.paged = true; fixture.pending.push({id: "web:" + body.id, role: "user", text: body.text, at: new Date().toISOString(), state: "queued"}); } return json({...fixture.snapshot(), accepted_id: body.id}); }
         return json("not in this fixture", 404);
       };
     <\/script>`;
@@ -166,12 +173,29 @@
       assert(sent.querySelector(".message-body").lastChild.textContent === "how far?", "the owner's words under it, the prefix read off");
       await wait("the message sent", () => fixture.sends.length, 20000);
       assert(fixture.sends[0].text === "Re T-1 (Login: the page is reworked from scratch): how far?", "the message says what it is about: " + fixture.sends[0].text);
-      // Taken, its outbox entry gone, the read that brings it slow: the bubble stands all the same.
-      await wait("the slow read", () => fixture.slowReads, 4000);
+      // Taken, its outbox entry gone, the next read a first page without it and the page with it slow: the bubble
+      // stands all the same.
+      await wait("the page with the message", () => fixture.pages === 2, 4000);
       await new Promise(r => setTimeout(r, 2000));
       observer.disconnect();
-      assert(bubble() && watch.shown && !watch.gone, "taken, its bubble never goes while the next read is slow (gone " + watch.gone + " times)");
+      assert(bubble() && watch.shown && !watch.gone, "taken, its bubble never goes through a first page without it and a slow second (gone " + watch.gone + " times)");
       assert($("#reply-to").hidden, "the chip goes with the message");
+
+      // A message the server took but no longer holds (dismissed elsewhere): the last page of a read after the send
+      // comes without it, and its bubble goes.
+      fixture.keep = false;
+      $("#message").value = "never mind";
+      $("#message").dispatchEvent(new Event("input", {bubbles: true}));
+      await wait("Send to be ready", () => !$("#send-message").disabled);
+      const gone = () => !$$(".chat-message.user").some((m) => m.textContent.includes("never mind"));
+      const seen = {shown: false};
+      const looks = new MutationObserver(() => { if (!gone()) seen.shown = true; });
+      looks.observe($("#messages"), {childList: true, subtree: true, characterData: true});
+      $("#send-message").click();
+      await wait("the second send", () => fixture.sends.length === 2, 20000);
+      await wait("its bubble gone after a full read", gone, 6000);
+      looks.disconnect();
+      assert(seen.shown, "a message the server no longer holds showed, then went with the full read after it");
     }
     {
       // The desktop: a click pins a popover under the id; Esc closes it and gives the focus back.
