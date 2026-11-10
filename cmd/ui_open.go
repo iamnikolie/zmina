@@ -100,7 +100,7 @@ func writeUIState(url string, l *uiLogins) error {
 	}
 
 	path := uiStatePath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := fsx.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 

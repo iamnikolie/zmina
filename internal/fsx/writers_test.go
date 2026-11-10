@@ -122,3 +122,47 @@ func mustInboxID(t *testing.T) string {
 
 	return id
 }
+
+// A first write into directories that do not exist yet syncs each new directory into its parent, up to the one that
+// was there: otherwise a power loss can drop the new directory with the synced file in it.
+func TestFirstWriteSyncsNewDirectories(t *testing.T) {
+	cases := map[string]struct {
+		write func(dir string) error
+		made  []string // new directories, relative to dir
+	}{
+		"handoff": {func(dir string) error {
+			_, err := handoff.Write(dir, handoff.Packet{Task: task.Task{ID: "T-1"}})
+			return err
+		}, []string{"handoffs", "handoffs/T-1"}},
+		"chat upload": {func(dir string) error {
+			_, err := chat.FileStore{Dir: filepath.Join(dir, "chat-files"), Role: "dev"}.Put(chat.Upload{
+				ID: "abcdefab-1234-1234-1234-123456789abc", Name: "image.png", Data: []byte{0, 255, 1, 2}})
+			return err
+		}, []string{"chat-files", "chat-files/" + chat.Hash("dev")}},
+		"task": {func(dir string) error {
+			_, err := (&task.Store{Dir: filepath.Join(dir, "tasks")}).Add(task.Task{Role: "dev", Asked: "x"}, now)
+			return err
+		}, []string{"tasks"}},
+	}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+
+			synced := map[string]bool{}
+			fsx.Synced = func(d string) { synced[d] = true }
+			t.Cleanup(func() { fsx.Synced = nil })
+
+			if err := c.write(dir); err != nil {
+				t.Fatal(err)
+			}
+
+			for _, m := range c.made {
+				parent := filepath.Dir(filepath.Join(dir, m))
+				if !synced[parent] {
+					t.Errorf("%s was made but %s, which got its entry, was not synced", m, parent)
+				}
+			}
+		})
+	}
+}

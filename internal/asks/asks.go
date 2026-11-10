@@ -136,7 +136,7 @@ func (s *Store) write(it Ask, fresh bool) error {
 		return fmt.Errorf("asks: bad id %q", it.ID)
 	}
 
-	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
+	if err := fsx.MkdirAll(s.Dir, 0o700); err != nil {
 		return fmt.Errorf("asks: %w", err)
 	}
 

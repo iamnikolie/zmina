@@ -84,7 +84,7 @@ func (Inbox) Delivered(dir, _, id string) (bool, error) {
 
 // openInbox makes the bridge's inbox and drops taken marks older than a day.
 func openInbox(dir string) error {
-	if err := os.MkdirAll(filepath.Join(dir, "taken"), 0o700); err != nil {
+	if err := fsx.MkdirAll(filepath.Join(dir, "taken"), 0o700); err != nil {
 		return err
 	}
 

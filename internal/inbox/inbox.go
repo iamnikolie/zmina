@@ -75,7 +75,7 @@ func (s *Store) Put(e Entry) error {
 		e.At = s.now()
 	}
 
-	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
+	if err := fsx.MkdirAll(s.Dir, 0o700); err != nil {
 		return fmt.Errorf("inbox: %w", err)
 	}
 

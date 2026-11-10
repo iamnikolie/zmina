@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/iamnikolie/zmina/internal/crew"
@@ -55,7 +54,7 @@ func publish(dir string, value any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := fsx.MkdirAll(dir, 0700); err != nil {
 		return "", err
 	}
 	path, err := filepath.Abs(filepath.Join(dir, fmt.Sprintf("%x.json", sha256.Sum256(raw))))

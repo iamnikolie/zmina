@@ -375,7 +375,7 @@ func stateError(path string, err error) error {
 
 // takeLock opens and locks the lock file in dir, waiting up to LockWait, and writes this pid into it.
 func takeLock(dir string) (*os.File, error) {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := fsx.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("state: %w", err)
 	}
 

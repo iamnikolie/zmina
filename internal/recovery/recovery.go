@@ -73,7 +73,7 @@ func write(path string, v any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	if err = fsx.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return "", err
 	}
 	if err = fsx.WriteFile(path, append(raw, '\n'), 0o600); err != nil {

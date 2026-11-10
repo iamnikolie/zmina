@@ -44,7 +44,7 @@ func (a *app) initCommand() *cobra.Command {
 				return fmt.Errorf("%s exists; --force overwrites it", path)
 			}
 
-			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			if err := fsx.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 				return err
 			}
 

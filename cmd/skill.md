@@ -908,8 +908,9 @@ files) is written whole: a hidden `.<name>.<random>.tmp` beside it, synced, then
 synced. A reader sees the old file or the new one, never an empty or half-written one; a writer killed half way
 leaves the old file and at most a stray `.tmp`, which nothing reads. A new record takes its name with a hard link,
 so only when the name is free; a file system without hard links gets an error, not a name shown before its content.
-A kept file that is a symbolic link is written through (the link stays); a link that leads nowhere is an error.
-`state.json.prev` is a hard link to the file before the save, a link's target included. Not this path: the
+A directory made for a kept file is synced into its parent, up to the one that was there. A kept file that is a
+symbolic link is written through (the link stays); a link that leads nowhere is an error. `state.json.prev` is a
+hard link to the file before the save, a link's target included. Not this path: the
 append-only logs (`events.jsonl`, `reads.jsonl`, the ticker's log), the read meter's rate cache, and lesson drafts,
 which edit files in a repository checkout.
 

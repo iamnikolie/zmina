@@ -17,6 +17,10 @@ import (
 // link is os.Link; tests replace it to stand for a file system without hard links.
 var link = os.Link
 
+// Synced, when set, is told each directory SyncDir has synced. Tests set it to see what was made durable; it is nil
+// in zmina.
+var Synced func(dir string)
+
 // BeforeCommit, when set, runs after the temporary file is written and synced and before it takes its name. Tests
 // set it to stop a process at that moment; it is nil in zmina.
 var BeforeCommit func(tmp, path string)
@@ -144,8 +148,45 @@ func SyncDir(dir string) error {
 	}
 
 	if errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.ENOTSUP) || errors.Is(err, syscall.EBADF) {
-		return nil
+		err = nil
+	}
+
+	if err == nil && Synced != nil {
+		Synced(filepath.Clean(dir))
 	}
 
 	return err
+}
+
+// MkdirAll makes dir and any parents it lacks, and syncs each new directory into its parent, so a file written in
+// a new directory is not lost with a directory a power loss forgot.
+func MkdirAll(dir string, perm os.FileMode) error {
+	dir = filepath.Clean(dir)
+
+	var made []string
+
+	for d := dir; ; d = filepath.Dir(d) {
+		if _, err := os.Stat(d); err == nil {
+			break
+		}
+
+		made = append(made, d)
+
+		if filepath.Dir(d) == d {
+			break
+		}
+	}
+
+	if err := os.MkdirAll(dir, perm); err != nil {
+		return err
+	}
+
+	// Top down: each parent is synced once the entry for its new child is in it.
+	for i := len(made) - 1; i >= 0; i-- {
+		if err := SyncDir(filepath.Dir(made[i])); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

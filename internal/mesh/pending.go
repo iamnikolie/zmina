@@ -77,7 +77,7 @@ func (n *Node) setPendingError(id, problem string) error {
 		}
 		return err
 	}
-	if err := os.MkdirAll(n.path("pending"), 0700); err != nil {
+	if err := fsx.MkdirAll(n.path("pending"), 0700); err != nil {
 		return err
 	}
 	raw, err := json.Marshal(problem)

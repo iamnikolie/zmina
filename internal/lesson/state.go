@@ -70,7 +70,7 @@ func LoadState(dir string) (RunState, error) {
 
 // SaveState writes the record whole.
 func SaveState(dir string, st RunState) error {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := fsx.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("lessons state: %w", err)
 	}
 

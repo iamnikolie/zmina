@@ -78,7 +78,7 @@ func (r *Registry) Last(id string) (registry.Turn, error) {
 
 // Save publishes one complete snapshot; partial writes are never visible.
 func (r *Registry) Save(rec Record) error {
-	if err := os.MkdirAll(r.Dir, 0700); err != nil {
+	if err := fsx.MkdirAll(r.Dir, 0700); err != nil {
 		return err
 	}
 	raw, err := json.Marshal(rec)

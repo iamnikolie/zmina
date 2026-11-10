@@ -58,7 +58,7 @@ func (r Registry) SaveUsage(u Usage) error {
 		return fmt.Errorf("usage snapshot has no thread")
 	}
 	dir := filepath.Join(r.Dir, "usage", fmt.Sprintf("%x", sha256.Sum256([]byte(u.Thread))))
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := fsx.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
 	lock, err := os.OpenFile(filepath.Join(dir, "lock"), os.O_CREATE|os.O_RDWR, 0600)

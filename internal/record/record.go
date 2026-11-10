@@ -182,7 +182,7 @@ func Save(dir string, d Document) (Ref, error) {
 		return Ref{}, err
 	}
 	d.At = at
-	if err := os.MkdirAll(filepath.Dir(p), 0700); err != nil {
+	if err := fsx.MkdirAll(filepath.Dir(p), 0700); err != nil {
 		return Ref{}, err
 	}
 	raw, err = json.MarshalIndent(d, "", "  ")

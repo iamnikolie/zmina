@@ -486,7 +486,7 @@ func (s *Shift) saveScreen(name string, now time.Time) string {
 	}
 
 	dir := s.ScreensDir()
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := fsx.MkdirAll(dir, 0o700); err != nil {
 		return ""
 	}
 
@@ -1381,7 +1381,7 @@ func (s *Shift) pruneAbsent(now time.Time) {
 // archiveRole writes a role's state to <state dir>/pruned/<role>-<time>.json.
 func (s *Shift) archiveRole(name string, rs *RoleState, now time.Time) (string, error) {
 	dir := filepath.Join(s.Crew.StateDir(), "pruned")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := fsx.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
 

@@ -131,7 +131,7 @@ func (s *Store) write(l Lesson, fresh bool) error {
 		return fmt.Errorf("lesson: bad id %q", l.ID)
 	}
 
-	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
+	if err := fsx.MkdirAll(s.Dir, 0o700); err != nil {
 		return fmt.Errorf("lesson: %w", err)
 	}
 

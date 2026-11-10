@@ -41,7 +41,7 @@ func (a *app) launchdCommand() *cobra.Command {
 func launchdInstall(w io.Writer, c *crew.Crew, bin string) error {
 	label := c.LaunchdLabel()
 
-	if err := os.MkdirAll(filepath.Dir(plistPath(label)), 0o755); err != nil {
+	if err := fsx.MkdirAll(filepath.Dir(plistPath(label)), 0o755); err != nil {
 		return err
 	}
 

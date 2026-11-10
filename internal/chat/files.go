@@ -138,7 +138,7 @@ func (s FileStore) Put(upload Upload) (Attachment, error) {
 		return Attachment{}, errors.New("attachment storage is full; remove unused files from the crew chat-files directory")
 	}
 	parent := filepath.Dir(s.root(upload.ID))
-	if err = os.MkdirAll(parent, 0700); err != nil {
+	if err = fsx.MkdirAll(parent, 0700); err != nil {
 		return Attachment{}, err
 	}
 	temp, err := os.MkdirTemp(parent, ".upload-")

@@ -20,7 +20,7 @@ func systemdInstall(w io.Writer, c *crew.Crew, bin string) error {
 	unit := c.SystemdUnit()
 	dir := systemdDir()
 
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := fsx.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 

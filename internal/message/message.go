@@ -259,7 +259,7 @@ func (s Store) Save(m Message) error {
 
 // writeAtomic writes v as indented JSON to dir/name through a synced temporary file.
 func writeAtomic(dir, name string, v any) error {
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := fsx.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
 	raw, err := json.MarshalIndent(v, "", "  ")
