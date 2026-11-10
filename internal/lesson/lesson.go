@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/iamnikolie/zmina/internal/fsx"
 )
 
 // Applies is how far a lesson reaches.
@@ -141,40 +143,14 @@ func (s *Store) write(l Lesson, fresh bool) error {
 	raw = append(raw, '\n')
 	path := filepath.Join(s.Dir, l.ID+".json")
 
+	write := fsx.WriteFile
 	if fresh {
-		// Claim the name first: O_EXCL fails if anything is there.
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err != nil {
-			return fmt.Errorf("lesson: %w", err)
-		}
-
-		_ = f.Close()
+		// A new lesson takes its name with its content, and only when the name is free.
+		write = fsx.CreateFile
 	}
 
-	if err := replace(path, raw); err != nil {
-		if fresh {
-			// The claim is still empty; leaving it would be a lesson nobody can read.
-			_ = os.Remove(path)
-		}
-
+	if err := write(path, raw, 0o600); err != nil {
 		return fmt.Errorf("lesson %s: %w", l.ID, err)
-	}
-
-	return nil
-}
-
-// replace puts raw at path through a temporary file, so a reader sees the old content or the new, never half.
-func replace(path string, raw []byte) error {
-	tmp := path + ".tmp"
-
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		return err
-	}
-
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-
-		return err
 	}
 
 	return nil

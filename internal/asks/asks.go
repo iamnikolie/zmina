@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/iamnikolie/zmina/internal/fsx"
 )
 
 // Kind is what the owner is asked for.
@@ -143,21 +145,17 @@ func (s *Store) write(it Ask, fresh bool) error {
 
 	path := filepath.Join(s.Dir, it.ID+".json")
 
+	write := fsx.WriteFile
 	if fresh {
-		// Claim the name first: O_EXCL fails if anything is there.
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err != nil {
-			return fmt.Errorf("asks: %w", err)
-		}
-
-		_ = f.Close()
+		// A new one takes its name with its content, and only when the name is free.
+		write = fsx.CreateFile
 	}
 
-	if err := os.WriteFile(path+".tmp", raw, 0o600); err != nil {
+	if err := write(path, raw, 0o600); err != nil {
 		return fmt.Errorf("asks: %w", err)
 	}
 
-	return os.Rename(path+".tmp", path)
+	return nil
 }
 
 // Get reads one ask; "3", "a-3" and "A-3" are A-3.

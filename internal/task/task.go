@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/iamnikolie/zmina/internal/record"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,6 +14,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/iamnikolie/zmina/internal/fsx"
+	"github.com/iamnikolie/zmina/internal/record"
 )
 
 // State is where a task is.
@@ -246,9 +248,8 @@ func (s *Store) write(t Task, fresh bool) error {
 	path := filepath.Join(s.Dir, t.ID+".json")
 
 	if fresh {
-		// Claim the name first: O_EXCL fails if anything is there.
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err != nil {
+		// A new task takes its name with its content, and only when the name is free.
+		if err := fsx.CreateFile(path, raw, 0o600); err != nil {
 			if errors.Is(err, os.ErrExist) {
 				return fmt.Errorf("task %s: %w", t.ID, ErrExists)
 			}
@@ -256,14 +257,14 @@ func (s *Store) write(t Task, fresh bool) error {
 			return fmt.Errorf("task: %w", err)
 		}
 
-		_ = f.Close()
+		return nil
 	}
 
-	if err := os.WriteFile(path+".tmp", raw, 0o600); err != nil {
+	if err := fsx.WriteFile(path, raw, 0o600); err != nil {
 		return fmt.Errorf("task: %w", err)
 	}
 
-	return os.Rename(path+".tmp", path)
+	return nil
 }
 
 // Remove deletes a task's file.

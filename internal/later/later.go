@@ -8,8 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/iamnikolie/zmina/internal/record"
-	"github.com/iamnikolie/zmina/internal/task"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -17,6 +15,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/iamnikolie/zmina/internal/fsx"
+	"github.com/iamnikolie/zmina/internal/record"
+	"github.com/iamnikolie/zmina/internal/task"
 )
 
 // State is where an item is.
@@ -115,21 +117,17 @@ func (s *Store) write(it Item, fresh bool) error {
 
 	path := filepath.Join(s.Dir, it.ID+".json")
 
+	write := fsx.WriteFile
 	if fresh {
-		// Claim the name first: O_EXCL fails if anything is there.
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err != nil {
-			return fmt.Errorf("later: %w", err)
-		}
-
-		_ = f.Close()
+		// A new one takes its name with its content, and only when the name is free.
+		write = fsx.CreateFile
 	}
 
-	if err := os.WriteFile(path+".tmp", raw, 0o600); err != nil {
+	if err := write(path, raw, 0o600); err != nil {
 		return fmt.Errorf("later: %w", err)
 	}
 
-	return os.Rename(path+".tmp", path)
+	return nil
 }
 
 // Get reads one item; "3", "l-3" and "L-3" are L-3.

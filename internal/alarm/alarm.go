@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/iamnikolie/zmina/internal/fsx"
 )
 
 // Kind is what an alarm does when it rings.
@@ -135,21 +137,17 @@ func (s *Store) write(a Alarm, fresh bool) error {
 
 	path := filepath.Join(s.Dir, a.ID+".json")
 
+	write := fsx.WriteFile
 	if fresh {
-		// Claim the name first: O_EXCL fails if anything is there.
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err != nil {
-			return fmt.Errorf("alarm: %w", err)
-		}
-
-		_ = f.Close()
+		// A new one takes its name with its content, and only when the name is free.
+		write = fsx.CreateFile
 	}
 
-	if err := os.WriteFile(path+".tmp", raw, 0o600); err != nil {
+	if err := write(path, raw, 0o600); err != nil {
 		return fmt.Errorf("alarm: %w", err)
 	}
 
-	return os.Rename(path+".tmp", path)
+	return nil
 }
 
 // Get reads one alarm; "3", "r-3" and "R-3" are R-3.
