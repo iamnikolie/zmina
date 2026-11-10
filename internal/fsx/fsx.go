@@ -14,15 +14,20 @@ import (
 	"syscall"
 )
 
+// link is os.Link; tests replace it to stand for a file system without hard links.
+var link = os.Link
+
 // BeforeCommit, when set, runs after the temporary file is written and synced and before it takes its name. Tests
 // set it to stop a process at that moment; it is nil in zmina.
 var BeforeCommit func(tmp, path string)
 
 // WriteFile puts data at path, replacing what is there. A path that is a symbolic link is written through: the
-// file it points to is replaced, the link stays.
+// file it points to is replaced, the link stays. A link that leads nowhere (dangling, a loop, a directory it may not
+// read) is an error, and nothing is written.
 func WriteFile(path string, data []byte, perm os.FileMode) error {
-	if real, err := filepath.EvalSymlinks(path); err == nil {
-		path = real
+	path, err := Resolve(path)
+	if err != nil {
+		return err
 	}
 
 	tmp, err := stage(path, data, perm)
@@ -49,33 +54,45 @@ func CreateFile(path string, data []byte, perm os.FileMode) error {
 
 	defer func() { _ = os.Remove(tmp) }()
 
-	// A hard link takes the name only if it is free, with the content already in place.
-	err = os.Link(tmp, path)
-	if err != nil && !errors.Is(err, os.ErrExist) && !errors.Is(err, os.ErrNotExist) {
-		// A file system without hard links: claim the name, then put the synced file over the claim.
-		err = claimAndRename(tmp, path, perm)
-	}
-
-	if err != nil {
+	// A hard link takes the name only if it is free, with the content already in place. There is no fallback: any
+	// other way to take only a free name shows the name before its content, which is what this exists to prevent.
+	if err := link(tmp, path); err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return fmt.Errorf("%s: %w", path, os.ErrExist)
 		}
 
-		return err
+		if errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+
+		return fmt.Errorf("%s: a new file is made with a hard link, and this file system refused one: %w", path, err)
 	}
 
 	return SyncDir(filepath.Dir(path))
 }
 
-func claimAndRename(tmp, path string, perm os.FileMode) error {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, perm)
-	if err != nil {
-		return err
+// Resolve is the file path names: path itself when it is not a symbolic link or does not exist, else the file the
+// link leads to. A link that leads nowhere is an error.
+func Resolve(path string) (string, error) {
+	fi, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return path, nil
 	}
 
-	_ = f.Close()
+	if err != nil {
+		return "", err
+	}
 
-	return os.Rename(tmp, path)
+	if fi.Mode()&os.ModeSymlink == 0 {
+		return path, nil
+	}
+
+	target, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", fmt.Errorf("%s is a link that leads nowhere, not written: %w", path, err)
+	}
+
+	return target, nil
 }
 
 // stage writes data to a new temporary file beside path and syncs it.

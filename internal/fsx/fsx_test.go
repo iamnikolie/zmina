@@ -233,3 +233,31 @@ func TestWriteFileKeepsASymlink(t *testing.T) {
 		t.Fatalf("target: %q", got)
 	}
 }
+
+// A link that leads nowhere is not replaced by a plain file: the write fails and the link stays as it was.
+func TestWriteFileRefusesABrokenLink(t *testing.T) {
+	dir := t.TempDir()
+
+	loopA, loopB := filepath.Join(dir, "a"), filepath.Join(dir, "b")
+	dangling := filepath.Join(dir, "dangling")
+
+	for _, l := range [][2]string{{filepath.Join(dir, "missing"), dangling}, {loopB, loopA}, {loopA, loopB}} {
+		if err := os.Symlink(l[0], l[1]); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, p := range []string{dangling, loopA} {
+		if err := fsx.WriteFile(p, []byte("new"), 0o600); err == nil {
+			t.Fatalf("%s: written", filepath.Base(p))
+		}
+
+		if fi, err := os.Lstat(p); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("%s: the link was replaced (%v)", filepath.Base(p), err)
+		}
+	}
+
+	if _, err := os.Lstat(filepath.Join(dir, "missing")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the missing target was made: %v", err)
+	}
+}
