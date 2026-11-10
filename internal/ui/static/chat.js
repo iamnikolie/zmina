@@ -77,6 +77,9 @@
   function fileData(blob) {return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result.split(",")[1]);reader.onerror=()=>reject(reader.error);reader.onabort=()=>reject(new Error("File reading stopped."));reader.readAsDataURL(blob);});}
   const store = window.zminaChatStore;
   let outbox = [], draining = false, retryTimer = null, live = false;
+  // accepted are messages the server took whose outbox entry is gone, each with its row and the reads started before
+  // it was taken (after): its bubble stays until a snapshot shows it, or a read started after it comes without it.
+  let accepted = [], reads = 0;
   // The outbox entry this tab is uploading or sending now (name: the file going up), so its bubble says it goes.
   let inflight = null;
   const OFFLINE_NOTE = "Saved · sends when you’re back online";
@@ -96,7 +99,7 @@
   // a terminal escape never reaches the page as boxes and brackets, whichever node sent the text.
   const ansi = /\x1b(?:\[[0-?]*[ -\/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)?|[@-Z\\-_])|\x1b/g;
   const plain = (text) => typeof text === "string" && text.includes("\x1b") ? text.replace(ansi, "") : text;
-  function applySnapshot(data) {
+  function applySnapshot(data, seq = 0) {
     for (const row of data.messages || []) {
       row.text = plain(row.text);
       if (row.event) for (const k of ["summary", "result", "detail"]) row.event[k] = plain(row.event[k]);
@@ -112,6 +115,7 @@
     let size = 0;
     data.messages = (data.messages || []).slice(-1000).reverse().filter(row => { size += row.text.length; return size <= 4 * 1024 * 1024; }).reverse();
     const evidence = new Map([...(data.messages || []), ...(data.pending || [])].map(row => [row.id, row]));
+    accepted = accepted.filter(a => !sameDestination(a.dest) || !(evidence.has(a.row.id) || seq > a.after));
     for (const entry of outbox) if (sameDestination(entry.dest) && evidence.has("web:" + entry.id)) {
       store.remove(entry.key).then(refreshOutbox).catch(e => error(e.message));
     }
@@ -163,6 +167,8 @@
           }
           inflight.name = ""; inflight.file = ""; render();
           await post("/api/chat/send", {...entry.dest, id: entry.id, text: entry.text, files:(entry.files||[]).map(file=>file.id)});
+          // Taken: its bubble stands as accepted until a snapshot read from now on brings it.
+          accepted.push({dest: entry.dest, after: reads, row: {id: "web:" + entry.id, role: "user", text: entry.text, at: entry.at, state: "accepted", attachments: entry.uploaded || []}});
           await store.remove(entry.key); inflight = null;
           // Sent: a note that said it waits for the network no longer holds.
           if ($("composer-status").textContent === OFFLINE_NOTE) note("");
@@ -401,6 +407,7 @@
     snapshot ||= {state: "unknown", messages: [], pending: []};
     const follow = firstPaint || atBottom(), oldScroll = conversation.scrollTop;
     const rows = [...(snapshot.messages || []), ...(snapshot.pending || [])], seen = new Set(rows.map(row => row.id));
+    for (const a of accepted) if (sameDestination(a.dest) && !seen.has(a.row.id) && !outbox.some(entry => "web:" + entry.id === a.row.id)) { rows.push({...a.row}); seen.add(a.row.id); }
     for (const entry of outbox) if (sameDestination(entry.dest) && !seen.has("web:" + entry.id)) rows.push({id: "web:" + entry.id, role: "user", text: entry.text, at: entry.at, state: outboxState(entry), upload: inflight?.key === entry.key ? inflight.name : "", uploadFile: inflight?.key === entry.key ? inflight.file : "", uploadProgress: inflight?.key === entry.key ? inflight.progress : 0, uploaded: (entry.uploaded || []).map(meta => meta.id), failure: entry.failure, outboxKey: entry.key, attachments:entry.files||[]});
     // A message not yet seen in the conversation stands where it was sent, not under every newer reply; one with no
     // time stays last. The sort is stable, so the conversation's own order holds.
@@ -509,9 +516,9 @@
   }
   async function read() {
     if (!destination) return;
-    const version = generation, dest = {...destination};
+    const version = generation, dest = {...destination}, seq = ++reads;
     readRequest?.abort(); const request = new AbortController(); readRequest = request;
-    try { const response = await fetch("/api/chat?" + new URLSearchParams({...dest, ...(snapshot?.cursor ? {cursor: snapshot.cursor} : {})}), {signal: request.signal, cache: "no-store"}); if (!response.ok) throw new Error(await response.text()); const data = await response.json(); if (version !== generation) return; applySnapshot(data); if ($("chat-error").textContent.startsWith("Could not refresh this role:")) error(""); }
+    try { const response = await fetch("/api/chat?" + new URLSearchParams({...dest, ...(snapshot?.cursor ? {cursor: snapshot.cursor} : {})}), {signal: request.signal, cache: "no-store"}); if (!response.ok) throw new Error(await response.text()); const data = await response.json(); if (version !== generation) return; applySnapshot(data, seq); if ($("chat-error").textContent.startsWith("Could not refresh this role:")) error(""); }
     catch (e) { if (!request.signal.aborted && version === generation) { live = false; render(); error("Could not refresh this role: " + e.message); } }
     finally { if (version === generation && readRequest === request && !request.signal.aborted) { clearTimeout(pollTimer); pollTimer = setTimeout(() => { if (document.hidden) pollTimer = setTimeout(read, 3000); else read(); }, snapshot?.more ? 0 : 3000); } }
   }
