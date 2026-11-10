@@ -16,6 +16,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/iamnikolie/zmina/internal/fsx"
 )
 
 // Entry is one stored text.
@@ -82,12 +84,7 @@ func (s *Store) Put(e Entry) error {
 		return err
 	}
 
-	tmp := s.path(e.ID) + ".tmp"
-	if err := os.WriteFile(tmp, append(raw, '\n'), 0o600); err != nil {
-		return fmt.Errorf("inbox: %w", err)
-	}
-
-	if err := os.Rename(tmp, s.path(e.ID)); err != nil {
+	if err := fsx.WriteFile(s.path(e.ID), append(raw, '\n'), 0o600); err != nil {
 		return fmt.Errorf("inbox: %w", err)
 	}
 

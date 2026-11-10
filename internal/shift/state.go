@@ -12,6 +12,7 @@ import (
 
 	"github.com/iamnikolie/zmina/internal/chat"
 	"github.com/iamnikolie/zmina/internal/crew"
+	"github.com/iamnikolie/zmina/internal/fsx"
 	"github.com/iamnikolie/zmina/internal/watch"
 )
 
@@ -430,12 +431,12 @@ func (l *Locked) Save() error {
 // Flush writes the state and keeps the lock: a beat saves what it did after each effect it cannot take back.
 func (l *Locked) Flush() error { return l.write() }
 
-// write puts the state on disk whole: a temporary file, synced, renamed over the old one (kept as state.json.prev).
+// write puts the state on disk whole (fsx.WriteFile); the one it replaces stays as state.json.prev.
 func (l *Locked) write() error {
 	if l.legacy != nil {
 		bak := l.path + ".v1.bak"
 		if _, err := os.Stat(bak); errors.Is(err, os.ErrNotExist) {
-			if err := os.WriteFile(bak, l.legacy, 0o600); err != nil {
+			if err := fsx.WriteFile(bak, l.legacy, 0o600); err != nil {
 				return fmt.Errorf("state: %w", err)
 			}
 		}
@@ -448,33 +449,17 @@ func (l *Locked) write() error {
 		return fmt.Errorf("state: %w", err)
 	}
 
-	tmp := l.path + ".tmp"
-
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
-	if err != nil {
-		return fmt.Errorf("state: %w", err)
-	}
-
-	_, err = f.Write(raw)
-	if err == nil {
-		err = f.Sync()
-	}
-
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-
-	if err != nil {
-		return fmt.Errorf("state: %w", err)
-	}
-
-	// The state before this save stays beside it as state.json.prev: a link to the old file, so the rename below
-	// leaves it whole.
+	// The state before this save stays beside it as state.json.prev: a link to the old file, so the rename that
+	// puts the new one in place leaves it whole.
 	prev := l.path + ".prev"
 	_ = os.Remove(prev)
 	_ = os.Link(l.path, prev)
 
-	return os.Rename(tmp, l.path)
+	if err := fsx.WriteFile(l.path, raw, 0o600); err != nil {
+		return fmt.Errorf("state: %w", err)
+	}
+
+	return nil
 }
 
 // Release drops the lock without writing.

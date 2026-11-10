@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/iamnikolie/zmina/internal/fsx"
 	"github.com/iamnikolie/zmina/internal/peer"
 	"github.com/iamnikolie/zmina/internal/registry"
 )
@@ -58,16 +59,9 @@ func (i Inbox) Post(_ string, s *registry.Session, text string) (string, error) 
 
 	id := hex.EncodeToString(b)
 	raw, _ := json.Marshal(line{ID: id, Text: text})
-	tmp := filepath.Join(s.Inbox, "."+id+".tmp")
-
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		return "", fmt.Errorf("%w: %v", peer.ErrUnavailable, err)
-	}
 
 	name := strconv.FormatInt(time.Now().UnixNano(), 10) + "-" + id + ".line"
-	if err := os.Rename(tmp, filepath.Join(s.Inbox, name)); err != nil {
-		_ = os.Remove(tmp)
-
+	if err := fsx.WriteFile(filepath.Join(s.Inbox, name), raw, 0o600); err != nil {
 		return "", fmt.Errorf("%w: %v", peer.ErrUnavailable, err)
 	}
 

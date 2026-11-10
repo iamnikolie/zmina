@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"syscall"
 
+	"github.com/iamnikolie/zmina/internal/fsx"
 	"github.com/iamnikolie/zmina/internal/registry"
 )
 
@@ -85,8 +86,5 @@ func (r *Registry) Save(rec Record) error {
 		return err
 	}
 	path := filepath.Join(r.Dir, fmt.Sprint(rec.PID)+".json")
-	if err := os.WriteFile(path+".tmp", raw, 0600); err != nil {
-		return err
-	}
-	return os.Rename(path+".tmp", path)
+	return fsx.WriteFile(path, raw, 0600)
 }

@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/iamnikolie/zmina/internal/fsx"
 )
 
 type Followup struct {
@@ -74,23 +76,7 @@ func write(path string, v any) (string, error) {
 	if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return "", err
 	}
-	f, err := os.CreateTemp(filepath.Dir(path), ".recovery-*")
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = os.Remove(f.Name()) }()
-	if _, err = f.Write(append(raw, '\n')); err != nil {
-		_ = f.Close()
-		return "", err
-	}
-	if err = f.Sync(); err != nil {
-		_ = f.Close()
-		return "", err
-	}
-	if err = f.Close(); err != nil {
-		return "", err
-	}
-	if err = os.Rename(f.Name(), path); err != nil {
+	if err = fsx.WriteFile(path, append(raw, '\n'), 0o600); err != nil {
 		return "", err
 	}
 	return filepath.Abs(path)

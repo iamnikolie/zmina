@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/iamnikolie/zmina/internal/crew"
+	"github.com/iamnikolie/zmina/internal/fsx"
 )
 
 // Env is what a run needs besides the watch: where the crew keeps its state, the stored fingerprints and the
@@ -164,12 +165,7 @@ func writeJSON(path string, v any) error {
 		return err
 	}
 
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		return err
-	}
-
-	return os.Rename(tmp, path)
+	return fsx.WriteFile(path, raw, 0o600)
 }
 
 // Dir is a watch's private directory under the crew's state dir.

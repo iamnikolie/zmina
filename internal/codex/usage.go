@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/iamnikolie/zmina/internal/fsx"
 	"github.com/iamnikolie/zmina/internal/registry"
 )
 
@@ -48,24 +49,7 @@ func atomicJSON(path string, value any) error {
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".usage-*")
-	if err != nil {
-		return err
-	}
-	name := tmp.Name()
-	defer func() { _ = os.Remove(name) }()
-	if _, err = tmp.Write(raw); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err = tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err = tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(name, path)
+	return fsx.WriteFile(path, raw, 0o600)
 }
 
 // SaveUsage atomically journals one snapshot. Billing deltas are derived when reading; no separate counter can drift after a crash.

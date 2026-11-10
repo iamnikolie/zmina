@@ -12,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/iamnikolie/zmina/internal/fsx"
 )
 
 // Node is this ~/.zmina's member of the mesh: its directory, name, key, certificate and the owner's public key.
@@ -472,10 +474,5 @@ func writeJSON(path string, v any) error {
 		return err
 	}
 
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(raw, '\n'), 0o600); err != nil {
-		return err
-	}
-
-	return os.Rename(tmp, path)
+	return fsx.WriteFile(path, append(raw, '\n'), 0o600)
 }

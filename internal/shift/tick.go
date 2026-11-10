@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/iamnikolie/zmina/internal/crew"
+	"github.com/iamnikolie/zmina/internal/fsx"
 	"github.com/iamnikolie/zmina/internal/inbox"
 	"github.com/iamnikolie/zmina/internal/registry"
 	"github.com/iamnikolie/zmina/internal/task"
@@ -1391,7 +1392,7 @@ func (s *Shift) archiveRole(name string, rs *RoleState, now time.Time) (string, 
 	safe := strings.NewReplacer("/", "_", "#", "_", string(filepath.Separator), "_").Replace(name)
 	path := filepath.Join(dir, safe+"-"+now.UTC().Format("20060102-150405")+".json")
 
-	return path, os.WriteFile(path, raw, 0o600)
+	return path, fsx.WriteFile(path, raw, 0o600)
 }
 
 // flush writes the state at once after an effect that cannot be taken back (a line typed or posted, a session

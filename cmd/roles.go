@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/iamnikolie/zmina/internal/crew"
+	"github.com/iamnikolie/zmina/internal/fsx"
 	"github.com/iamnikolie/zmina/internal/ledger"
 	"github.com/iamnikolie/zmina/internal/shift"
 	"github.com/iamnikolie/zmina/internal/task"
@@ -51,7 +52,7 @@ func (a *app) initCommand() *cobra.Command {
 				agents = tildeHome(filepath.Join(filepath.Dir(path), "agents"))
 			}
 
-			if err := os.WriteFile(path, []byte(crew.Starter(agents)), 0o600); err != nil {
+			if err := fsx.WriteFile(path, []byte(crew.Starter(agents)), 0o600); err != nil {
 				return err
 			}
 

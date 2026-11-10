@@ -5,8 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"github.com/iamnikolie/zmina/internal/mesh"
-	"github.com/iamnikolie/zmina/internal/record"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,6 +13,10 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/iamnikolie/zmina/internal/fsx"
+	"github.com/iamnikolie/zmina/internal/mesh"
+	"github.com/iamnikolie/zmina/internal/record"
 )
 
 const Prefix = mesh.TypedReportPrefix
@@ -264,23 +266,7 @@ func writeAtomic(dir, name string, v any) error {
 	if err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(dir, ".message-*")
-	if err != nil {
-		return err
-	}
-	defer func() { _ = os.Remove(f.Name()) }()
-	if _, err = f.Write(append(raw, '\n')); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err = f.Sync(); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err = f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(f.Name(), filepath.Join(dir, name))
+	return fsx.WriteFile(filepath.Join(dir, name), append(raw, '\n'), 0o600)
 }
 func (s Store) All() ([]Message, error) {
 	paths, err := filepath.Glob(filepath.Join(s.Dir, "*.json"))
