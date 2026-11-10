@@ -897,14 +897,21 @@ One file per task in `~/.zmina/tasks/T-<n>.json`. States: `open` (handed, in wor
 state this zmina does not know, so nothing runs over it). The first name of `waiting`,
 `waiting-<owner>`, is still read and accepted. A new task is numbered above every `T-<n>.json` in the
 directory, readable or not, and never replaces a file; `task ls` and `doctor` name damaged files. A task file
-that does not read is in no list and holds no role: the ticker logs `unreadable` (with the task's id) and tells the
-dispatcher `zmina: tasks/T-5.json does not read (…)`, once until the file reads again.
+that does not read is in no list and holds no role: the ticker logs `unreadable` (with the task's id and why) and
+signals the dispatcher `zmina: files that do not read, so they are in no list and hold no role: tasks/T-5.json; …`
+(one signal a beat for every file found since the last, ten named and the rest counted). Each breakage is logged and
+told once; a signal queue that is full leaves it untold until it has room; a file that reads again is forgotten.
 
 Every file zmina keeps (tasks, asks, the parked list, alarms, lessons, `state.json`, handoffs, results and
-checkpoints, inbox lines, the crew file and the rest) is written whole: a hidden `.<name>.<random>.tmp` beside it,
-synced, then renamed over it (a new record takes its name only if it is free), then the directory synced. A reader
-sees the old file or the new one, never an empty or half-written one; a writer killed half way leaves the old file
-and at most a stray `.tmp`, which nothing reads.
+checkpoints, inbox lines, messages, chat attachments, the crew file, saved screens, the ticker's launchd or systemd
+files) is written whole: a hidden `.<name>.<random>.tmp` beside it, synced, then renamed over it, then the directory
+synced. A reader sees the old file or the new one, never an empty or half-written one; a writer killed half way
+leaves the old file and at most a stray `.tmp`, which nothing reads. A new record takes its name with a hard link,
+so only when the name is free; a file system without hard links gets an error, not a name shown before its content.
+A kept file that is a symbolic link is written through (the link stays); a link that leads nowhere is an error.
+`state.json.prev` is a hard link to the file before the save, a link's target included. Not this path: the
+append-only logs (`events.jsonl`, `reads.jsonl`, the ticker's log), the read meter's rate cache, and lesson drafts,
+which edit files in a repository checkout.
 
 | Command | Does |
 |---|---|
