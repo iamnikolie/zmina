@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -99,4 +102,39 @@ func TestDoctorHygiene(t *testing.T) {
 
 	out, _, _ = zm(t, crewFile, "doctor")
 	assert.Contains(t, out, "warn  crew      2 copies of the crew file next to it")
+}
+
+// A claude whose child holds stdout (in the background, or after claude exits) does not hold doctor past the
+// deadline.
+func TestDoctorLoginDeadlineHoldsForChildren(t *testing.T) {
+	oldTimeout, oldDelay := loginTimeout, loginWaitDelay
+	// Long enough for macOS to look at a new executable before its first run.
+	loginTimeout, loginWaitDelay = 2*time.Second, 300*time.Millisecond
+	t.Cleanup(func() { loginTimeout, loginWaitDelay = oldTimeout, oldDelay })
+
+	for name, script := range map[string]string{
+		"waits for its child": "sleep 30 &\necho $! > %s\nwait\n",
+		"leaves its child":    "echo '{\"loggedIn\": true}'\nsleep 30 &\necho $! > %s\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			bin := filepath.Join(t.TempDir(), "claude")
+			require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\n"+fmt.Sprintf(script, bin+".child")), 0o700))
+
+			var lines []string
+			start := time.Now()
+			checkLogin(bin, "ns", time.Now(), func(name, level, format string, args ...any) {
+				lines = append(lines, level+" "+fmt.Sprintf(format, args...))
+			})
+
+			assert.Less(t, time.Since(start), 10*time.Second, "bounded by the deadline, not the child")
+			require.Len(t, lines, 1)
+
+			raw, err := os.ReadFile(bin + ".child")
+			require.NoError(t, err)
+			pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+			require.NoError(t, err)
+			assert.Eventually(t, func() bool { return syscall.Kill(pid, 0) != nil }, 2*time.Second, 20*time.Millisecond,
+				"the child is not left running")
+		})
+	}
 }

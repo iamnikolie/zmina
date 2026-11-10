@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/iamnikolie/zmina/internal/crew"
@@ -22,6 +23,10 @@ const (
 	parkedAge = 14 * 24 * time.Hour
 )
 
+// loginTimeout is how long doctor waits for `claude auth status`; loginWaitDelay is how long after that it waits
+// for the output pipes a child of claude still holds.
+var loginTimeout, loginWaitDelay = 10 * time.Second, 2 * time.Second
+
 // claudeAuth is what `claude auth status` prints.
 type claudeAuth struct {
 	LoggedIn       bool      `json:"loggedIn"`
@@ -31,13 +36,21 @@ type claudeAuth struct {
 // checkLogin asks the claude binary whether the crew's namespace is logged in: a role started in a namespace that is
 // not sits on the login screen and reads nothing.
 func checkLogin(bin, namespace string, now time.Time, add func(name, level, format string, args ...any)) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), loginTimeout)
 	defer cancel()
 
+	// The deadline holds for what claude starts too: its process group is killed, and a child that kept stdout open
+	// after claude exited is waited for loginWaitDelay at most.
 	cmd := exec.CommandContext(ctx, bin, "auth", "status")
 	cmd.Env = append(os.Environ(), "CLAUDE_CONFIG_DIR="+namespace)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = loginWaitDelay
 
 	raw, err := cmd.Output()
+	if cmd.Process != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) // what claude left running
+	}
 
 	var st claudeAuth
 	if jerr := json.Unmarshal(raw, &st); jerr != nil {
