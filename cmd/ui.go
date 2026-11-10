@@ -323,7 +323,8 @@ func (a *app) uiHandler(bound string, loopback bool, token string, allowHosts ..
 
 	snapshot := func() uiSnapshot { return a.cockpitSnapshot(peers) }
 	mux.HandleFunc("GET /api/state", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, snapshot()) })
-	mux.HandleFunc("GET /api/stream", func(w http.ResponseWriter, r *http.Request) { a.uiStream(w, r, snapshot) })
+	hub := newUIHub(snapshot)
+	mux.HandleFunc("GET /api/stream", func(w http.ResponseWriter, r *http.Request) { a.uiStream(w, r, hub.get) })
 	a.uiTerminals(mux)
 	a.uiChat(mux)
 	a.uiItems(mux)
@@ -464,7 +465,7 @@ func (a *app) uiHandler(bound string, loopback bool, token string, allowHosts ..
 		writeJSON(w, map[string]string{"done": line})
 	})
 
-	return guardLogins(mux, bound, loopback, token, a.uiLogins, a.uiSignin, allowHosts...)
+	return guardLogins(hub.dropAfterChanges(mux), bound, loopback, token, a.uiLogins, a.uiSignin, allowHosts...)
 }
 
 // alarmAction is the page's set, move and off; the caller holds the lock. set is a reminder for the owner, or for a
@@ -656,8 +657,9 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// uiStream sends the snapshot as server-sent events: at once, then whenever it changes.
-func (a *app) uiStream(w http.ResponseWriter, r *http.Request, snapshot func() uiSnapshot) {
+// uiStream sends the snapshot as server-sent events: at once, then whenever it changes. snapshot is its JSON, shared
+// by every stream open (uiHub).
+func (a *app) uiStream(w http.ResponseWriter, r *http.Request, snapshot func() []byte) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
@@ -675,7 +677,7 @@ func (a *app) uiStream(w http.ResponseWriter, r *http.Request, snapshot func() u
 	var last []byte
 
 	send := func() {
-		raw, _ := json.Marshal(snapshot())
+		raw := snapshot()
 		// The clock moves every poll; compare without it.
 		if body := withoutNow(raw); !bytes.Equal(body, last) {
 			last = body
