@@ -3,13 +3,16 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/iamnikolie/zmina/internal/codex"
 )
 
 // TestMain runs the package's tests in a sandbox: HOME is a temp dir, so a test that forgets its own never reads or
 // writes the operator's ~/.zmina; the environment a role or a tmux pane leaves (ZMINA_CREW, ZMINA_ROLE, Claude Code's
-// session variables, TMUX) is dropped, so a test run from inside a role does not act on its live crew; and tmux keeps
+// session variables, TMUX, CODEX_HOME, XDG_*) is dropped, so a test run from inside a role does not act on its live crew; and tmux keeps
 // its sockets in a short temp dir, under macOS's 104-byte socket path limit.
 func TestMain(m *testing.M) {
 	os.Exit(sandboxed(m))
@@ -58,11 +61,12 @@ func sandboxed(m *testing.M) int {
 // test at the live crew or the operator's session.
 func inheritedFromARole(name string) bool {
 	switch name {
-	case "TMUX", "TMUX_PANE", "CLAUDECODE", "CLAUDE_CONFIG_DIR", "CODEX_THREAD_ID":
+	case "TMUX", "TMUX_PANE", "CLAUDECODE", "CLAUDE_CONFIG_DIR", "CODEX_THREAD_ID", "CODEX_HOME":
 		return true
 	}
 
-	return strings.HasPrefix(name, "ZMINA_") || strings.HasPrefix(name, "CLAUDE_CODE_")
+	// XDG_* moves config, data and state dirs (systemd units among them) off HOME.
+	return strings.HasPrefix(name, "ZMINA_") || strings.HasPrefix(name, "CLAUDE_CODE_") || strings.HasPrefix(name, "XDG_")
 }
 
 func TestTheSandboxHoldsNoLiveCrew(t *testing.T) {
@@ -71,9 +75,20 @@ func TestTheSandboxHoldsNoLiveCrew(t *testing.T) {
 		t.Fatalf("HOME is %s, not the sandbox", home)
 	}
 
-	for _, name := range []string{"ZMINA_CREW", "ZMINA_ROLE", "TMUX", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_SESSION_ID"} {
+	for _, name := range []string{"ZMINA_CREW", "ZMINA_ROLE", "TMUX", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_SESSION_ID",
+		"CODEX_HOME", "XDG_CONFIG_HOME"} {
 		if v, ok := os.LookupEnv(name); ok {
 			t.Errorf("%s=%s reached the tests", name, v)
 		}
+	}
+
+	// What reads them falls back inside the sandbox.
+	if dir := systemdDir(); !strings.HasPrefix(dir, home+string(os.PathSeparator)) {
+		t.Errorf("systemd units go to %s, outside the sandbox", dir)
+	}
+
+	_, err := codex.LoadProfile("", "review")
+	if err == nil || !strings.Contains(err.Error(), filepath.Join(home, ".codex")) {
+		t.Errorf("the Codex profile is read outside the sandbox: %v", err)
 	}
 }
