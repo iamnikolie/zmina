@@ -117,6 +117,7 @@ func (a *app) laterLsCommand() *cobra.Command {
 				}
 
 				w := tabwriter.NewWriter(a.out, 0, 0, 2, ' ', 0)
+				back := laterBack(s.Crew)
 
 				for _, it := range out {
 					line := it.ID + "\t" + age(s.Now().Sub(it.Created)) + "\t"
@@ -125,6 +126,9 @@ func (a *app) laterLsCommand() *cobra.Command {
 					}
 
 					text := it.Text
+					if when, ok := back[it.ID]; ok && it.Open() {
+						text = "[back " + when.In(s.Crew.Location()).Format("01-02 15:04") + "] " + text
+					}
 					if it.Note != "" {
 						text += " · " + it.Note
 					}
@@ -138,7 +142,15 @@ func (a *app) laterLsCommand() *cobra.Command {
 					fmt.Fprintln(w, line)
 				}
 
-				return w.Flush()
+				if err := w.Flush(); err != nil {
+					return err
+				}
+
+				if line := laterSummary(out, back, s.Now()); line != "" && !all {
+					fmt.Fprintln(a.out, line)
+				}
+
+				return nil
 			})
 		},
 	}
@@ -310,4 +322,45 @@ func canResume(s *shift.Shift, it later.Item, role string) error {
 
 func laterStore(c *crew.Crew) *later.Store {
 	return &later.Store{Dir: c.Layout().Later()}
+}
+
+// laterBack is when each parked item comes back to the owner's todo (later add --until), by item id.
+func laterBack(c *crew.Crew) map[string]time.Time {
+	alarms, _, _ := alarmStore(c).Scan()
+	out := map[string]time.Time{}
+
+	for _, al := range alarms {
+		if al.Kind == alarm.Later && al.State == alarm.Set && al.Later != "" {
+			out[al.Later] = al.At
+		}
+	}
+
+	return out
+}
+
+// laterSummary is one line under the list when parked items pile up: how many have no day to come back and how many
+// are older than parkedAge, so the list gets taken, dropped or kept on purpose.
+func laterSummary(items []later.Item, back map[string]time.Time, now time.Time) string {
+	undated, old := 0, 0
+
+	for _, it := range items {
+		if !it.Open() {
+			continue
+		}
+
+		if _, ok := back[it.ID]; !ok && it.Back.IsZero() {
+			undated++
+		}
+
+		if now.Sub(it.Created) >= parkedAge {
+			old++
+		}
+	}
+
+	if old == 0 {
+		return ""
+	}
+
+	return fmt.Sprintf("%d parked over %s, %d with no day to come back: take, drop or keep them", old, days(parkedAge),
+		undated)
 }

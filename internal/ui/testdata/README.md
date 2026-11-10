@@ -1,3 +1,11 @@
+# All of them at once
+
+`go test -tags browser -run TestBrowserFixtures ./internal/ui` serves `internal/ui`, opens every page here in headless
+Chrome on a fresh profile (real time, not virtual) and fails a page whose `passed` is false or never comes; CI runs
+it (job `browser`). `CHROME` names the browser when it is not on PATH. A page known to fail on main is listed in
+`knownFailing` in `browser_test.go` with what fails, and skipped until it is fixed. The pages below can still be
+opened by hand as each section says.
+
 # Chat content smoke test
 
 From repository root:

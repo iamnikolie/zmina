@@ -21,6 +21,7 @@ import (
 	"github.com/iamnikolie/zmina/internal/ledger"
 	"github.com/iamnikolie/zmina/internal/shift"
 	"github.com/iamnikolie/zmina/internal/task"
+	"github.com/iamnikolie/zmina/internal/tmux"
 )
 
 func (a *app) roleCommands() []*cobra.Command {
@@ -412,7 +413,7 @@ func (a *app) upCommand() *cobra.Command {
 						}
 					}
 					if err := s.UpWith(n, opts); err != nil {
-						errs = append(errs, err)
+						errs = append(errs, upAgainHint(s, n, fresh, resume, err))
 
 						continue
 					}
@@ -1279,4 +1280,22 @@ func deadWhy(s *shift.Shift, name string) string {
 	}
 
 	return ""
+}
+
+// upAgainHint names restart when up asked for a fresh or resumed start of a role that is up: up starts roles that
+// are down, and the plain error points at attach, which is not what the flag asked for.
+func upAgainHint(s *shift.Shift, name string, fresh bool, resume string, err error) error {
+	if !fresh && resume == "" {
+		return err
+	}
+
+	if p, perr := s.Tmux.Probe(name); perr != nil || p.State != tmux.Up {
+		return err
+	}
+
+	if fresh {
+		return fmt.Errorf("%s is already up: zmina restart %s --fresh ends it and starts it on a new conversation", name, name)
+	}
+
+	return fmt.Errorf("%s is already up: --resume starts a role that is down (zmina down %s first)", name, name)
 }

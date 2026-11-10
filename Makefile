@@ -1,4 +1,4 @@
-.PHONY: build install uninstall test vet fmt fmt-check clean public-check
+.PHONY: build install uninstall test test-fast vet fmt fmt-check clean public-check
 
 BIN := zmina
 PREFIX ?= $(HOME)/.local
@@ -23,7 +23,12 @@ install: build
 uninstall:
 	rm -f $(PREFIX)/bin/$(BIN)
 
+# The gate before a push, as CI runs it: the race detector on, nothing taken from the test cache.
 test: public-check fmt-check
+	go test -race -count=1 ./...
+
+# A quicker loop while working: cached results, no race detector.
+test-fast:
 	go test ./...
 
 # CI fails on unformatted files; so does make test, before a push.

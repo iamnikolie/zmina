@@ -82,3 +82,18 @@ jobs:
 
       - name: go test
         run: go test -race -count=1 ./...
+
+  # The cockpit's browser fixtures (internal/ui/testdata) in headless Chrome, which the runner has; a page that
+  # fails or never reports fails the job.
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: browser fixtures
+        run: go test -tags browser -run TestBrowserFixtures -count=1 -v ./internal/ui
