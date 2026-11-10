@@ -33,7 +33,7 @@ func (a *app) doctorCommand() *cobra.Command {
 
 	c := &cobra.Command{
 		Use:   "doctor",
-		Short: "Check the setup: crew file, tmux, claude, its session registry, the ticker, state, lock, tasks",
+		Short: "Check the setup (crew file, tmux, claude and its login, the ticker, state, lock, tasks) and what piles up",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			checks := a.diagnose()
@@ -181,6 +181,7 @@ func (a *app) diagnose() []check {
 		}
 	}
 
+	checkHygiene(c, time.Now(), add)
 	a.checkSockets(c, add)
 	checkVersions(c, st, add)
 
@@ -282,6 +283,7 @@ func (a *app) checkClaude(c *crew.Crew, add func(name, level, format string, arg
 	}
 
 	add("claude", "ok", "%s%s", bin, note)
+	checkLogin(bin, c.Namespace, time.Now(), add)
 }
 
 // lookIn finds an executable the way a process with that PATH would.
