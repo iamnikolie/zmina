@@ -391,7 +391,8 @@ func (s *Shift) dropQueued(a *Ack) {
 // as it was, to be seen, failed or given back by its parts as without the ack (giveBack leaves the acked ones out). A
 // posted line closes as it does when it shows. A typed line closes as it does when it lands, and only then: one still
 // in the input line has not landed, and landed finishes it (presses Enter again, or clears the input), where an ack
-// that dropped the record would leave a draft nothing clears.
+// that dropped the record would leave a draft nothing clears. The ack is recorded on that record (Sent.Acked), so that
+// landed can tell a line its reader acked from one whose ack is merely gone.
 func (s *Shift) clearInFlight(rs *RoleState, a *Ack) {
 	mine := func(ids []string, parts []Part) bool { return slices.Contains(ids, a.ID) && s.ackedWhole(ids, parts) }
 	dispatcher := a.Role == s.Crew.Dispatcher
@@ -425,6 +426,9 @@ func (s *Shift) clearInFlight(rs *RoleState, a *Ack) {
 		if landed, _ := s.typedLanded(a.Role, sent); landed {
 			s.log(a.Role, "acked-cleared", "", "typed: "+sent.Line)
 			s.closeTyped(a.Role)
+		} else {
+			// Not landed: the record stays for landed to finish, and says its reader acked it.
+			sent.Acked = true
 		}
 	}
 }

@@ -240,6 +240,7 @@ func TestAckLeavesATypedLineThatSitsInTheInputLine(t *testing.T) {
 	acked, _ := f.s.AckLines([]string{"S-1"}, false, "", "hand")
 	require.Equal(t, []string{"S-1"}, acked)
 	require.NotNil(t, rs.Sent, "not landed: the line is still in the input line")
+	assert.True(t, rs.Sent.Acked, "its ack is recorded on it, for landed")
 
 	for range typeTries + 1 {
 		*f.now = f.now.Add(confirmAfter + time.Second)
@@ -250,4 +251,39 @@ func TestAckLeavesATypedLineThatSitsInTheInputLine(t *testing.T) {
 	assert.Empty(t, f.tm.drafts["designer"], "the input line is cleared")
 	assert.Empty(t, rs.Failed, "its reader has it: nothing to inspect")
 	assert.NotContains(t, strings.Join(f.s.State.Notes, "|"), "delivery failed")
+}
+
+// A typed line is cleared without a failed mark only when its ack was recorded on the record (clearInFlight). A line
+// whose id merely is not among the acks any more is no such line: the ack may have gone by eviction (acksMax) or by
+// another path, and nobody read the line. It fails as an unconfirmed line does, for inspection.
+func TestTypedLineWhoseAckWasEvictedStillFails(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	require.NoError(t, f.s.Up("designer"))
+	f.s.State.Role("designer").Inbound = true
+	f.status("designer", "idle", *f.now)
+	f.tm.onType = nil // the status never changes: the line never shows as landed
+	*f.now = f.now.Add(3 * time.Minute)
+
+	id, err := f.s.QueueTracked("designer", "[dev] look at T-1")
+	require.NoError(t, err)
+	require.NotEmpty(t, f.s.deliverInbox("designer", *f.now))
+
+	rs := f.s.State.Role("designer")
+	require.NotNil(t, rs.Sent)
+
+	for range acksMax {
+		f.s.newAck("designer", "a later line")
+	}
+
+	require.Nil(t, f.s.State.Acks[id], "evicted by the newer ones")
+
+	for range typeTries + 1 {
+		*f.now = f.now.Add(confirmAfter + time.Second)
+		f.s.landed("designer", *f.now)
+	}
+
+	assert.Nil(t, rs.Sent)
+	require.Len(t, rs.Failed, 1, "kept as failed: nobody acked it")
+	assert.Contains(t, rs.Failed[0].Line, "look at T-1")
+	assert.Zero(t, f.eventCount("acked-cleared"))
 }

@@ -246,6 +246,9 @@ type Sent struct {
 	IDs []string `json:"ids,omitempty"`
 	// Parts are what a line to the dispatcher was made of, given back each on its own when it never lands.
 	Parts []Part `json:"parts,omitempty"`
+	// Acked is that its reader acked it (every id it carries) while it had not landed: landed then closes it without a
+	// failed mark. Set by the ack (clearInFlight), never inferred from an id missing among the acks.
+	Acked bool `json:"acked,omitempty"`
 }
 
 // Posted is a line posted to a role's inbox socket: the message's id, and the session it went to.
