@@ -124,6 +124,38 @@ type Task struct {
 	Closed *Closure `json:"closed,omitempty"`
 	// Route is what the crew file's routes said when the task was made, when the crew has routes (zmina route).
 	Route *Route `json:"route,omitempty"`
+	// Criteria is what must be true for the task to count as finished, one statement each; the handoff packet
+	// carries them and the worker's result says for each whether it holds. Empty: the worker decides.
+	Criteria []string `json:"criteria,omitempty"`
+}
+
+// CleanCriteria checks a list of criteria as given on the command line: each is one non-empty line, its edges
+// trimmed. An empty list stays empty.
+func CleanCriteria(values []string) ([]string, error) {
+	var out []string
+
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+
+		switch {
+		case v == "":
+			return nil, errors.New("a criterion is not empty")
+		case strings.ContainsAny(v, "\r\n"):
+			return nil, fmt.Errorf("criterion %q: one line each", clipRunes(v, 40))
+		}
+
+		out = append(out, v)
+	}
+
+	return out, nil
+}
+
+func clipRunes(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "…"
+	}
+
+	return s
 }
 
 // Route is the crew file's routes' answer for a task: the rule that answered (its number, 0 or 2 to 6, and name) and

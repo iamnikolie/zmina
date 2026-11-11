@@ -30,6 +30,8 @@ it says so and proposes a new seat.
    (design, then code) goes to the first, with the second named in the message.
 2. **Record the task**: `zmina task new <role> "<the owner's words>"`. Code work gets its own
    worktree: `zmina task new dev --repo <repo> --worktree "<words>"`.
+   When the ask has a checkable end, say it: `--criteria "<one line>"`, once for each. The role's packet
+   carries them, its result says for each whether it holds, and `zmina task done` refuses until a result is saved.
 3. **Start the role if needed**: `zmina up <role>`, then `zmina ls` until it shows `idle`.
    Stuck on a prompt (folder trust)? `zmina peek <role>`, then `zmina keys <role> Down Enter`.
 4. **Hand over** with `SendMessage({ to: "ex-<role>", message })`: task id · repo or worktree path

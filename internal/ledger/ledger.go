@@ -83,6 +83,8 @@ type NewTask struct {
 	Budget float64
 	// Route is what the crew file's routes said for the task, kept in its record; nil when the crew has none.
 	Route *task.Route
+	// Criteria is what must be true for the task to count as finished (task.Task.Criteria), one line each.
+	Criteria []string
 }
 
 // New records a task. With a worktree, the task is written first — with the worktree's path, branch and base — and
@@ -96,8 +98,13 @@ func (l *Ledger) New(n NewTask) (task.Task, error) {
 		return task.Task{}, errors.New("a budget is a positive number of dollars")
 	}
 
+	criteria, err := task.CleanCriteria(n.Criteria)
+	if err != nil {
+		return task.Task{}, err
+	}
+
 	t := task.Task{Role: n.Role, Asked: n.Asked, Note: n.Note, By: n.By, Title: n.Title, Project: n.Project, URL: n.URL,
-		Budget: n.Budget, Route: n.Route}
+		Budget: n.Budget, Route: n.Route, Criteria: criteria}
 
 	if n.Repo != "" {
 		repo, err := l.repo(n.Repo)
@@ -114,7 +121,7 @@ func (l *Ledger) New(n NewTask) (task.Task, error) {
 		}
 	}
 
-	t, err := l.Store.Add(t, l.Now())
+	t, err = l.Store.Add(t, l.Now())
 	if err != nil {
 		return t, err
 	}
@@ -174,7 +181,9 @@ type Change struct {
 	Title, Project, URL string
 	// Budget replaces the task's budget, in dollars; "-" or 0 clears it.
 	Budget string
-	// Force closes a task although its worktree has uncommitted changes.
+	// Criteria replaces the task's criteria when not nil; an empty list clears them.
+	Criteria *[]string
+	// Force closes a task although its worktree has uncommitted changes, or although it has criteria and no result.
 	Force bool
 	// By is who makes the change (a role, "hand"); a task it closes keeps it (Task.Closed).
 	By string
@@ -183,8 +192,11 @@ type Change struct {
 // ErrDirty is returned when a task would close over uncommitted work.
 var ErrDirty = errors.New("uncommitted changes")
 
+// ErrNoResult is returned when a task with criteria would be closed as done with no result saved.
+var ErrNoResult = errors.New("has criteria and no saved result")
+
 // Set changes a task. Closing one (done, dropped) whose worktree has uncommitted changes is refused without Force;
-// the worktree stays either way until GC.
+// the worktree stays either way until GC. So is closing as done a task that has criteria and no saved result.
 func (l *Ledger) Set(id string, c Change) (task.Task, error) {
 	t, err := l.Store.Get(id)
 	if err != nil {
@@ -204,6 +216,11 @@ func (l *Ledger) Set(id string, c Change) (task.Task, error) {
 				return t, fmt.Errorf("%s: %w in %s:\n%s\ncommit them, or --force closes it anyway (the worktree "+
 					"stays until 'zmina task gc')", t.ID, ErrDirty, t.Worktree, dirty)
 			}
+		}
+
+		if c.State == task.Done && len(t.Criteria) > 0 && t.Result == nil && !c.Force {
+			return t, fmt.Errorf("%s: %w: save one with zmina task result %s --file <json> (--force closes it anyway)",
+				t.ID, ErrNoResult, t.ID)
 		}
 
 		t.State = c.State
@@ -269,8 +286,24 @@ func (l *Ledger) Set(id string, c Change) (task.Task, error) {
 		changes = append(changes, fmt.Sprintf("budget $%g", v))
 	}
 
+	if c.Criteria != nil {
+		criteria, err := task.CleanCriteria(*c.Criteria)
+		if err != nil {
+			return t, err
+		}
+
+		t.Criteria = criteria
+
+		if len(criteria) == 0 {
+			changes = append(changes, "criteria cleared")
+		} else {
+			changes = append(changes, fmt.Sprintf("criteria: %d", len(criteria)))
+		}
+	}
+
 	if len(changes) == 0 {
-		return t, errors.New("nothing to change: give a state, --note, --role, --title, --project, --url or --budget")
+		return t, errors.New("nothing to change: give a state, --note, --role, --title, --project, --url, --budget or " +
+			"--criteria")
 	}
 
 	t.Updated = l.Now()
