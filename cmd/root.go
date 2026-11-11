@@ -7,7 +7,6 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -472,14 +471,14 @@ func (l *lazyTmux) KeepScreens(name string) error {
 // self is this zmina's executable, for the hooks the roles it starts run; empty when it cannot be found.
 // procArgs is a process's command line, as ps shows it.
 func procArgs(pid int) (string, error) {
-	out, err := exec.Command("ps", "-o", "args=", "-p", strconv.Itoa(pid)).Output()
+	out, err := runTool(psTimeout, false, "ps", "-o", "args=", "-p", strconv.Itoa(pid))
 
 	return strings.TrimSpace(string(out)), err
 }
 
 // procParent reads a process's parent pid.
 func procParent(pid int) (int, error) {
-	out, err := exec.Command("ps", "-o", "ppid=", "-p", strconv.Itoa(pid)).Output()
+	out, err := runTool(psTimeout, false, "ps", "-o", "ppid=", "-p", strconv.Itoa(pid))
 	if err != nil {
 		return 0, err
 	}

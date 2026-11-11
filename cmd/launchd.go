@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -72,7 +71,7 @@ func launchdUninstall(w io.Writer, c *crew.Crew, _ string) error {
 }
 
 func launchdStatus(w io.Writer, c *crew.Crew, _ string) error {
-	out, err := exec.Command("launchctl", "print", domain()+"/"+c.LaunchdLabel()).CombinedOutput()
+	out, err := runTool(serviceTimeout, true, "launchctl", "print", domain()+"/"+c.LaunchdLabel())
 	if err != nil {
 		fmt.Fprintln(w, "ticker not loaded")
 
@@ -135,7 +134,7 @@ func plistPath(label string) string {
 func domain() string { return "gui/" + strconv.Itoa(os.Getuid()) }
 
 func launchctl(args ...string) error {
-	out, err := exec.Command("launchctl", args...).CombinedOutput()
+	out, err := runTool(serviceTimeout, true, "launchctl", args...)
 	if err != nil {
 		return fmt.Errorf("launchctl %s: %s: %w", args[0], bytes.TrimSpace(out), err)
 	}

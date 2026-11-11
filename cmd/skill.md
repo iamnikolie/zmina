@@ -1828,7 +1828,9 @@ arguments. `zmina doctor` counts them for the last 24 h.
 `zmina ticker install | uninstall | status` — every minute, PATH captured at install; its output
 goes to `tick.log` next to the crew file. `status` also shows the last beat and the end of
 tick.log. A PATH that changes later (claude moved by an upgrade) needs `ticker install` again. `tick.log` past 5 MB is
-cut to its last 1 MB by the retention pass.
+cut to its last 1 MB by the retention pass. Every program zmina asks a question of ends at a deadline: `launchctl`,
+`systemctl` and `loginctl` at 30 s (a service manager whose bus is gone fails the command, it does not hold it), `ps`
+at 5 s.
 
 - macOS: launchd agent `io.iamnikolie.zmina` (`.<name>` for a named crew) in `~/Library/LaunchAgents`.
 - Linux: systemd user units `zmina.service` + `zmina.timer` (`zmina-<name>` for a named crew) in

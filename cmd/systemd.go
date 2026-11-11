@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strings"
@@ -68,8 +67,8 @@ func systemdUninstall(w io.Writer, c *crew.Crew, _ string) error {
 func systemdStatus(w io.Writer, c *crew.Crew, _ string) error {
 	unit := c.SystemdUnit()
 
-	out, err := exec.Command("systemctl", "--user", "show", unit+".timer", "-p", "ActiveState",
-		"-p", "LastTriggerUSec", "-p", "NextElapseUSecRealtime").CombinedOutput()
+	out, err := runTool(serviceTimeout, true, "systemctl", "--user", "show", unit+".timer", "-p", "ActiveState",
+		"-p", "LastTriggerUSec", "-p", "NextElapseUSecRealtime")
 	if err != nil || bytes.Contains(out, []byte("ActiveState=inactive")) && !unitExists(unit) {
 		fmt.Fprintln(w, "ticker not installed")
 
@@ -78,8 +77,8 @@ func systemdStatus(w io.Writer, c *crew.Crew, _ string) error {
 
 	fmt.Fprint(w, string(out))
 
-	if svc, err := exec.Command("systemctl", "--user", "show", unit+".service", "-p", "Result",
-		"-p", "ExecMainStatus").CombinedOutput(); err == nil {
+	if svc, err := runTool(serviceTimeout, true, "systemctl", "--user", "show", unit+".service", "-p", "Result",
+		"-p", "ExecMainStatus"); err == nil {
 		fmt.Fprint(w, string(svc))
 	}
 
@@ -157,13 +156,13 @@ func lingering() bool {
 		name = u.Username
 	}
 
-	out, err := exec.Command("loginctl", "show-user", name, "-p", "Linger").CombinedOutput()
+	out, err := runTool(serviceTimeout, true, "loginctl", "show-user", name, "-p", "Linger")
 
 	return err == nil && strings.TrimSpace(string(out)) == "Linger=yes"
 }
 
 func systemctl(args ...string) error {
-	out, err := exec.Command("systemctl", append([]string{"--user"}, args...)...).CombinedOutput()
+	out, err := runTool(serviceTimeout, true, "systemctl", append([]string{"--user"}, args...)...)
 	if err != nil {
 		return fmt.Errorf("systemctl --user %s: %s: %w", args[0], bytes.TrimSpace(out), err)
 	}
