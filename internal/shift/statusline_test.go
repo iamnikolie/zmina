@@ -106,3 +106,57 @@ func TestOnlyTheRoleStartsWithTheTap(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, f.s.Command(r, ""), "--settings")
 }
+
+func writeProjectLine(t *testing.T, dir, file, command string) {
+	t.Helper()
+
+	project := filepath.Join(dir, ".claude")
+	require.NoError(t, os.MkdirAll(project, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(project, file), []byte(`{"statusLine":{"type":"command","command":"`+command+`"}}`), 0o600))
+}
+
+// A role started in a task's worktree runs there, so the project whose status line it would draw is that worktree: it is
+// looked up first, then the role's own dir, then the namespace's.
+func TestRoleStatusLineLooksInTheWorktreeTheRoleStartsIn(t *testing.T) {
+	f, _ := nativeFixture(t, crewYAML)
+	f.s.Self = "/opt/zmina"
+	f.s.Crew.Namespace = t.TempDir()
+	writeSettings(t, f.s.Crew.Namespace, `{"statusLine":{"type":"command","command":"/ns/line.sh"}}`)
+
+	own := f.s.Crew.Roles["designer"].Dir
+	wt := t.TempDir()
+	started := func() string {
+		t.Helper()
+
+		var got statusLineSetting
+		require.NoError(t, json.Unmarshal([]byte(f.s.roleSettingsIn("designer", wt)), &got))
+
+		return got.StatusLine["command"].(string)
+	}
+
+	assert.Contains(t, started(), "-- '/ns/line.sh'", "no project line anywhere: the namespace's")
+
+	writeProjectLine(t, own, "settings.json", "/own/line.sh")
+	assert.Contains(t, started(), "-- '/own/line.sh'", "the worktree has none: the role's dir")
+
+	writeProjectLine(t, wt, "settings.json", "/wt/line.sh")
+	assert.Contains(t, started(), "-- '/wt/line.sh'", "the worktree's project wins over the role's dir")
+
+	writeProjectLine(t, wt, "settings.local.json", "/wt/local.sh")
+	assert.Contains(t, started(), "-- '/wt/local.sh'", "its local settings win over its project's")
+
+	assert.Contains(t, f.s.roleSettings("designer"), "-- '/own/line.sh'", "without a start dir the role's own")
+}
+
+// The start dir reaches the settings through the start itself, not only through the helper.
+func TestUpWithDirWrapsTheStatusLineOfThatDir(t *testing.T) {
+	f, _ := nativeFixture(t, crewYAML)
+	f.s.Self = "/opt/zmina"
+	f.s.Crew.Namespace = t.TempDir()
+
+	wt := t.TempDir()
+	writeProjectLine(t, wt, "settings.json", "/wt/line.sh")
+
+	require.NoError(t, f.s.UpWith("designer", UpOptions{Dir: wt}))
+	assert.Contains(t, strings.Join(f.tm.argv["designer"], " "), "/wt/line.sh")
+}

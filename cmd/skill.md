@@ -1522,8 +1522,9 @@ policy   claude: pinned work only from 80%, nothing from 99% · codex: pinned wo
   arguments. It never breaks a status line: any error of its own is dropped and the wrapped command runs anyway.
 - **Where the tap is installed**: in the `statusLine` of the `--settings` zmina passes a Claude role that takes its lines
   on its own channel (Delivery), next to its hooks. It wraps the status line Claude Code would have drawn for that role —
-  the `statusLine` command of its dir's `.claude/settings.local.json`, then `.claude/settings.json`, then the
-  namespace's `settings.json` — so the pane looks as before; with none configured the tap draws nothing of its own. The
+  the `statusLine` command of `.claude/settings.local.json`, then `.claude/settings.json` in the directory it starts in
+  (a task's worktree when it is started with one), then in its configured dir, then the namespace's `settings.json` —
+  so the pane looks as before; with none configured the tap draws nothing of its own. The
   owner's settings files are only read, never edited, and the sessions the owner starts keep their own status line. A
   role typed to (`delivery: tmux`), a Codex role, one whose `args` pass their own `--settings` and one an earlier zmina
   started (until its next start) have no tap, so their status lines record nothing. The line is a command line a
