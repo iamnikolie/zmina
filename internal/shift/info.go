@@ -23,9 +23,6 @@ const (
 	// infoRide is how long info lines wait for a line the dispatcher is posted anyway, to go with it; then they go
 	// alone.
 	infoRide = 90 * time.Second
-	// roleLineWindow is how long after a role's own line about a task a result of that task is not announced, and
-	// how long a result's notice still queued gives way to the role's own line.
-	roleLineWindow = 15 * time.Minute
 	// resultReady is what a result's notice says after its task's id.
 	resultReady = " result ready (worker-reported)"
 	// infoRule is what the dispatcher's boot line says of info lines.
@@ -153,68 +150,4 @@ func (s *Shift) pruneInfo() {
 			delete(s.State.Info, text)
 		}
 	}
-}
-
-// NoteRole is Note for a line a role wrote itself (zmina note, a closure's note): the line is one to act on, and the
-// tasks it names are remembered (roleLine), so a result of one of them ready within roleLineWindow is not announced
-// twice.
-func (s *Shift) NoteRole(from, text string, ifUp bool) (bool, error) {
-	sig, queued, err := s.note(from, text, ifUp, false)
-	if err == nil {
-		s.roleLine(from, text, sig)
-	}
-
-	return queued, err
-}
-
-// roleLine remembers the tasks a role's own line names, with the signal it waits as, and takes out of the
-// dispatcher's signals the notices of that role's results of those tasks that were queued within roleLineWindow and
-// have not gone yet: the role's own line tells it. Only for a role of this crew, and only with info_lines on.
-func (s *Shift) roleLine(from, text, sig string) {
-	if _, err := s.Role(from); err != nil || !s.Crew.InfoLinesOn() {
-		return
-	}
-
-	now := s.Now()
-
-	for key, l := range s.State.RoleLines {
-		if now.Sub(l.At) >= roleLineWindow && !slices.Contains(s.State.Signals, l.Signal) {
-			delete(s.State.RoleLines, key)
-		}
-	}
-
-	for _, id := range taskRef.FindAllString(text, -1) {
-		if s.State.RoleLines == nil {
-			s.State.RoleLines = map[string]RoleLine{}
-		}
-
-		s.State.RoleLines[from+" "+id] = RoleLine{Signal: sig, At: now}
-
-		for _, queued := range slices.Clone(s.State.Signals) {
-			if s.isInfo(queued) && strings.HasPrefix(queued, from+": "+id+resultReady) &&
-				now.Sub(s.State.Info[queued]) < roleLineWindow {
-				s.dropSignal(queued)
-				delete(s.State.Info, queued)
-				s.log(from, "result-told", id, "its own line names "+id+", the result's notice is dropped: "+queued)
-			}
-		}
-	}
-}
-
-// roleLineWent stamps a role's own line as gone to the dispatcher now: the window runs from when it went.
-func (s *Shift) roleLineWent(sig string, now time.Time) {
-	for key, l := range s.State.RoleLines {
-		if l.Signal == sig {
-			l.At = now
-			s.State.RoleLines[key] = l
-		}
-	}
-}
-
-// roleTold reports whether a role's own line that names the task still waits in the dispatcher's signals, or was
-// queued or went to it within roleLineWindow.
-func (s *Shift) roleTold(role, id string, now time.Time) bool {
-	l, ok := s.State.RoleLines[role+" "+id]
-
-	return ok && s.Crew.InfoLinesOn() && (now.Sub(l.At) < roleLineWindow || slices.Contains(s.State.Signals, l.Signal))
 }

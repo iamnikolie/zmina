@@ -372,10 +372,8 @@ crew, a watch's note and every other health note are never info lines.
 - Info lines do not start a turn of their own at once: they wait up to 90 s for a line that goes anyway (a signal,
   another crew's line, the dispatcher's own queued line, a health note) and go with it, else alone. They never go
   into a turn the dispatcher is in.
-- A result's notice and the role's own line about the same task make one line: when the role queued a line naming the
-  task (`zmina note`, or its closure's note) that still waits or went to the dispatcher within 15 min, the notice is
-  not made; when the notice was queued within 15 min and has not gone yet, the role's line takes it out. Either way
-  the log has `result-told`, and `zmina task result` has the result.
+- A result's notice is made whatever the role wrote of the task itself: its own line naming the task is one to act
+  on and need not be about the result, so both go.
 - Typed delivery (`delivery: tmux`, or no inbox socket) shows no `seen`: an info line goes in the typed line behind
   `FYI`, after the signals, and is closed when the line lands (`closed`, `typed: <line>`); a typed line that never
   lands is kept as failed with everything in it (`zmina queue retry`).

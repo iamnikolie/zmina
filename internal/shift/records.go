@@ -49,15 +49,8 @@ func (s *Shift) NotifyRecords() {
 			// The revision is in the notice itself: it is what the queue keeps and what tells two results of one
 			// task apart when their gists are the same, and the command opens that one, not the latest.
 			text += " (zmina task result " + id + " --revision " + record.Short(revs, ref.Revision) + ")"
-			// The role's own line about the task, queued a short while ago, told the dispatcher already: the
-			// notice is dropped, and stays in the event log. Else it is an info line: it asks for nothing.
-			if s.roleTold(d.Role, id, s.Now()) {
-				s.log(d.Role, "result-told", id, "its own line named "+id+" within "+span(roleLineWindow)+", no notice: "+text)
-				s.State.RecordNotified[key] = true
-
-				continue
-			}
-
+			// An info line: it asks for nothing. It is made whatever the role wrote of the task itself: a line of
+			// its own that names the task need not be about the result.
 			if _, _, err := s.note(d.Role, text, false, true); err != nil {
 				return
 			}
@@ -139,7 +132,7 @@ func (s *Shift) NotifyClosed() {
 			text += ", no note"
 		}
 
-		if _, err := s.NoteRole(c.By, text+" (zmina task show "+t.ID+")", false); err != nil {
+		if _, err := s.Note(c.By, text+" (zmina task show "+t.ID+")", false); err != nil {
 			return
 		}
 

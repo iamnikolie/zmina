@@ -69,9 +69,6 @@ type State struct {
 	// it waits in Signals or Notes, with when it was queued. A line that is not here is one to act on: a state
 	// written before the classes has none, and every line of it waits for its ack as it did.
 	Info map[string]time.Time `json:"info,omitempty"`
-	// RoleLines is the last line of its own a role queued that names a task (zmina note, a closure's note), by
-	// "<role> <task id>": a result of that task ready soon after is not announced a second time.
-	RoleLines map[string]RoleLine `json:"role_lines,omitempty"`
 	// Unreadable is when the dispatcher was told that a task or ask file does not read, by "tasks/T-5.json" (zero:
 	// logged, not told yet), so each breakage is logged and told once.
 	Unreadable map[string]time.Time `json:"unreadable,omitempty"`
@@ -257,13 +254,6 @@ type Posted struct {
 	IDs []string `json:"ids,omitempty"`
 	// Parts are what a post to the dispatcher was made of, given back each on its own when it never shows.
 	Parts []Part `json:"parts,omitempty"`
-}
-
-// RoleLine is a role's own line about a task: the signal it waits as while it is queued, and when it was queued or,
-// once it went, when it went.
-type RoleLine struct {
-	Signal string    `json:"signal"`
-	At     time.Time `json:"at"`
 }
 
 // Part is one item of a line or post to the dispatcher, kept so that what never reached it goes back where it

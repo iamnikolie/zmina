@@ -206,44 +206,17 @@ func TestInfoLinesRideWithTheNextPost(t *testing.T) {
 	}
 }
 
-// A result's notice and the role's own line about the same task within roleLineWindow make one line, whichever
-// came first; outside it, or about another task or from another role, both go.
-func TestResultReadyGivesWayToTheRolesOwnLine(t *testing.T) {
-	const own = "designer: T-1 is on the branch, two open points"
-
-	cases := []struct {
-		name string
-		// first is what comes first: the role's line, or the result; gap is how long the other comes after it.
-		first string
-		gap   time.Duration
-		// from and about are who writes the role's line and which task it names.
-		from, about string
-		// posted: the first one was posted and seen before the other came.
-		posted bool
-		// result reports whether the result's notice is told.
-		result bool
-	}{
-		{"the role's line, then its result inside the window", "line", roleLineWindow - time.Second, "designer", "T-1", false, false},
-		{"the role's line posted, then its result inside the window", "line", roleLineWindow - time.Second, "designer", "T-1", true, false},
-		{"the role's line posted, then its result past the window", "line", roleLineWindow, "designer", "T-1", true, true},
-		{"the role's line still queued past the window, then its result", "line", 2 * roleLineWindow, "designer", "T-1", false, false},
-		{"the result, then the role's line inside the window", "result", roleLineWindow - time.Second, "designer", "T-1", false, false},
-		{"the result, then the role's line past the window", "result", roleLineWindow, "designer", "T-1", false, true},
-		{"the result posted, then the role's line", "result", time.Minute, "designer", "T-1", true, true},
-		{"a line about another task", "line", time.Minute, "designer", "T-2", false, true},
-		{"another role's line about the task", "line", time.Minute, "harvester", "T-1", false, true},
-		{"a line from outside the crew", "line", time.Minute, "mrs", "T-1", false, true},
-	}
-
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			f, p := nativeFixture(t, crewYAML)
+// A result's notice is made whatever the role wrote of the task itself, before or after: the role's own line names
+// the task but need not be about its result, and a notice dropped for it would leave the result untold.
+func TestResultReadyIsToldBesideTheRolesOwnLine(t *testing.T) {
+	for _, first := range []string{"line", "result"} {
+		t.Run(first+" first", func(t *testing.T) {
+			f, _ := nativeFixture(t, crewYAML)
 			upNative(t, f, "dispatcher")
-			// Busy with a dialog: nothing is posted unless the case says so.
 			f.status("dispatcher", "waiting", *f.now)
 
 			line := func() {
-				_, err := f.s.NoteRole(c.from, strings.Replace(strings.TrimPrefix(own, "designer: "), "T-1", c.about, 1), false)
+				_, err := f.s.Note("designer", "T-1: which of the two layouts?", false)
 				require.NoError(t, err)
 			}
 			result := func() {
@@ -252,61 +225,29 @@ func TestResultReadyGivesWayToTheRolesOwnLine(t *testing.T) {
 			}
 
 			steps := []func(){line, result}
-			if c.first == "result" {
+			if first == "result" {
 				steps = []func(){result, line}
 			}
 
 			steps[0]()
-
-			told := 0
-
-			if c.posted {
-				f.status("dispatcher", "idle", *f.now)
-				*f.now = f.now.Add(infoRide)
-				require.NotEmpty(t, f.s.deliver(*f.now))
-				p.showAll()
-				f.s.deliver(*f.now)
-				f.status("dispatcher", "waiting", *f.now)
-
-				if c.first == "result" {
-					told++
-				}
-			}
-
-			*f.now = f.now.Add(c.gap)
+			*f.now = f.now.Add(time.Minute)
 			steps[1]()
 
+			told, own := 0, 0
+
 			for _, sig := range f.s.State.Signals {
-				if strings.Contains(sig, "T-1"+resultReady) {
+				switch {
+				case strings.Contains(sig, "T-1"+resultReady):
 					told++
 
 					assert.NotRegexp(t, `^S-[0-9]+ `, sig, "an info line: no id")
+				case strings.Contains(sig, "which of the two layouts"):
+					own++
 				}
 			}
 
-			if c.result {
-				assert.Equal(t, 1, told, "the result is told")
-				assert.False(t, f.ev.has("designer", "result-told"))
-			} else {
-				assert.Zero(t, told, "the role's own line tells it")
-				assert.True(t, f.ev.has("designer", "result-told"), "the dropped notice stays in the event log")
-			}
-
-			// The role's own line is one to act on, whatever became of the result's notice.
-			acts := 0
-
-			for _, a := range f.s.State.Acks {
-				if strings.Contains(a.Text, "is on the branch") {
-					acts++
-				}
-			}
-
-			assert.Equal(t, 1, acts, "the role's line has its ack id")
-
-			// The dropped notice is not made again by the next beat.
-			n := len(f.s.State.Signals)
-			f.s.NotifyRecords()
-			assert.Len(t, f.s.State.Signals, n)
+			assert.Equal(t, 1, told, "the result is told")
+			assert.Equal(t, 1, own, "the role's line waits too")
 		})
 	}
 }
@@ -454,7 +395,7 @@ func TestInfoLinesOff(t *testing.T) {
 	f, p := nativeFixture(t, "info_lines: false\n"+crewYAML)
 	upNative(t, f, "dispatcher")
 
-	_, err := f.s.NoteRole("designer", "T-1 is on the branch", false)
+	_, err := f.s.Note("designer", "T-1 is on the branch", false)
 	require.NoError(t, err)
 	saveResult(t, f, "designer", "T-1")
 	f.s.NotifyRecords()
@@ -469,7 +410,6 @@ func TestInfoLinesOff(t *testing.T) {
 	assert.True(t, strings.HasSuffix(lines[0], ") (zmina S-1 S-2)"), lines[0])
 	assert.Equal(t, "[zmina] released designer after 34m idle · harvester: started again (keep: always)", lines[1])
 	assert.Empty(t, f.s.State.Info)
-	assert.Empty(t, f.s.State.RoleLines)
 	assert.Len(t, f.s.Pending("dispatcher"), 2)
 
 	p.showAll()

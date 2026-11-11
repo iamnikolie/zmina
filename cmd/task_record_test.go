@@ -138,10 +138,10 @@ func TestCheckpointFreshnessUsesTaskSnapshotAndExplicitRevalidation(t *testing.T
 	}
 }
 
-// A role's own line about its task (zmina note) and the task's result right after make one line for the dispatcher:
-// the result's notice is left out. Without that line the notice waits as an info line, with no id; with info_lines
-// off both wait, each with its id as before.
-func TestResultNoticeGivesWayToTheRolesNote(t *testing.T) {
+// A task's result is told beside a role's own line about the task (zmina note): the line names the task but need
+// not be about the result. The notice waits as an info line, with no id; with info_lines off it waits with its id as
+// before.
+func TestResultNoticeIsMadeBesideTheRolesNote(t *testing.T) {
 	const handoff = "  support:\n    handoff:\n      sections:\n        - name: draft\n          guidance: Proposed response\n"
 
 	for _, c := range []struct {
@@ -149,7 +149,7 @@ func TestResultNoticeGivesWayToTheRolesNote(t *testing.T) {
 		note       bool
 		results    int
 	}{
-		{"the role's note first", handoff, true, 0},
+		{"the role's note first", handoff, true, 1},
 		{"no note", handoff, false, 1},
 		{"info_lines off", handoff + "info_lines: false\n", true, 1},
 	} {

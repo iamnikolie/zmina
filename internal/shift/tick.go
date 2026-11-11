@@ -1030,7 +1030,6 @@ func (s *Shift) postDispatcher(d string, sess *registry.Session, local, remote, 
 		s.State.Signals = slices.DeleteFunc(s.State.Signals, func(v string) bool { return v == sig })
 		delete(s.State.SignalCounts, sig)
 		delete(s.State.SignalSent, sig)
-		s.roleLineWent(sig, now)
 	}
 
 	if took["\x00notes"] {
@@ -1202,7 +1201,6 @@ func (s *Shift) typeDispatcher(d string, local, remote, notes []string, now time
 		}
 		for _, sig := range local {
 			delete(s.State.SignalCounts, sig)
-			s.roleLineWent(sig, now)
 		}
 		s.State.Signals, s.State.Notes = remote, nil
 		s.State.NoticeMeta = nil
