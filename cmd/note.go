@@ -29,7 +29,7 @@ func (a *app) noteCommand() *cobra.Command {
 			}
 
 			return a.withState(func(s *shift.Shift) error {
-				queued, err := s.Note(from, strings.Join(args, " "), ifUp)
+				queued, err := s.NoteRole(from, strings.Join(args, " "), ifUp)
 				if errors.Is(err, shift.ErrNotUp) {
 					return &exitError{code: exitDown, msg: "the dispatcher is not up; nothing queued"}
 				}

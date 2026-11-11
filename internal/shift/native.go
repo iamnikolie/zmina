@@ -150,6 +150,7 @@ func (s *Shift) followPosted(name string, now time.Time) bool {
 
 			if name == s.Crew.Dispatcher {
 				s.stageIDs(p.IDs, "submitted")
+				s.closeInfo(name, p.Parts, "seen")
 			}
 		case sess != nil && sess.SessionID != p.Session:
 			back = append(back, p)
@@ -227,7 +228,8 @@ func (s *Shift) TurnOver(name, sessionID string) bool {
 // TurnEnd posts what waits for a role whose turn just ended (its Stop hook), the way a beat would post it: only to
 // its own channel, only past its boot and between turns, each line once the one before it showed, the dispatcher's
 // signals before its queue. The only line it types is the owner's own message from Chat (ownerChat), which he waits
-// on; a slash command, or a role whose lines are typed, waits for the beat.
+// on; a slash command, or a role whose lines are typed, waits for the beat. Before that it decides the role's restart
+// for its context (restartAtTurnEnd): the flag the next beat acts on, and the request for its note.
 // It returns the lines for the log.
 func (s *Shift) TurnEnd(name, sessionID string) []string {
 	now := s.Now()
@@ -247,15 +249,24 @@ func (s *Shift) TurnEnd(name, sessionID string) []string {
 	// for deliverInbox to type.
 	s.pruneTaskInbox(name)
 
+	// A turn's end is where a busy role is between turns: its restart for its context is decided here, and the note
+	// it asks for goes with what follows.
+	restart := s.restartAtTurnEnd(name, sess, now)
+
 	// The owner's own message is typed now too, not at the next beat: he waits for the answer.
 	rs := s.State.Role(name)
+	var did []string
+	if restart != "" {
+		did = append(did, restart)
+	}
+
 	if rs.Sent != nil || len(rs.Inbox) == 0 || (!postable(rs.Inbox[0]) && !s.ownerChat(name, rs.Inbox[0])) {
-		return nil
+		return did
 	}
 
 	if line := s.deliverInbox(name, now); line != "" {
-		return []string{line}
+		did = append(did, line)
 	}
 
-	return nil
+	return did
 }

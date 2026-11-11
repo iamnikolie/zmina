@@ -153,7 +153,7 @@ func (s *Shift) currentNotes() []string {
 			continue
 		}
 		pending = append(pending, text)
-		out = append(out, repeated(text, n.Count))
+		out = append(out, s.fyi(text, repeated(text, n.Count)))
 	}
 	s.State.Notes = pending
 	return out

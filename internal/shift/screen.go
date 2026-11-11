@@ -266,6 +266,11 @@ func (s *Shift) landed(name string, now time.Time) bool {
 
 	if !unsent {
 		if sess := s.session(name); sess != nil && sess.StatusUpdatedAt > sent.At.UnixMilli() {
+			// A typed line shows no seen: the info lines it carried are closed when it lands.
+			if name == s.Crew.Dispatcher {
+				s.closeInfo(name, sent.Parts, "typed")
+			}
+
 			rs.Sent = nil
 
 			return true

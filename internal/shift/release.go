@@ -176,6 +176,8 @@ func (s *Shift) putDown(name string) (did, note string) {
 	}
 
 	s.log(name, "released", tasks, note)
+	// What zmina did, told once: an info line.
+	s.markInfo(note, s.Now())
 
 	return note, note
 }

@@ -65,6 +65,13 @@ type State struct {
 	SignalSent map[string]time.Time `json:"signal_sent,omitempty"`
 	// Notes wait for the dispatcher too: the ticker's own health notes, deduplicated and capped.
 	Notes []string `json:"notes,omitempty"`
+	// Info is the class of a line made for the dispatcher that asks nothing of it (info.go), by the line's text as
+	// it waits in Signals or Notes, with when it was queued. A line that is not here is one to act on: a state
+	// written before the classes has none, and every line of it waits for its ack as it did.
+	Info map[string]time.Time `json:"info,omitempty"`
+	// RoleLines is the last line of its own a role queued that names a task (zmina note, a closure's note), by
+	// "<role> <task id>": a result of that task ready soon after is not announced a second time.
+	RoleLines map[string]RoleLine `json:"role_lines,omitempty"`
 	// Unreadable is when the dispatcher was told that a task or ask file does not read, by "tasks/T-5.json" (zero:
 	// logged, not told yet), so each breakage is logged and told once.
 	Unreadable map[string]time.Time `json:"unreadable,omitempty"`
@@ -193,6 +200,11 @@ type RoleState struct {
 	RestartGaveUp  string    `json:"restart_gave_up,omitempty"`
 	// RestartHeld is the background work (its ids) the log last said holds a restart off, so it is said once.
 	RestartHeld string `json:"restart_held,omitempty"`
+	// RestartDue is the conversation whose turn ended at or over restart_at with a task held (seen by its Stop hook):
+	// the beat restarts it once it is plainly idle, without the idle settle. RestartNoted is the conversation asked
+	// early, at restartEarly of restart_at, for its note; once a conversation.
+	RestartDue   string `json:"restart_due,omitempty"`
+	RestartNoted string `json:"restart_noted,omitempty"`
 	// Sent is the last line typed into the role, until the role shows it took it.
 	Sent *Sent `json:"sent,omitempty"`
 	// Posted are lines posted to its inbox socket not yet seen in its conversation; Inbound that it was started
@@ -245,6 +257,13 @@ type Posted struct {
 	IDs []string `json:"ids,omitempty"`
 	// Parts are what a post to the dispatcher was made of, given back each on its own when it never shows.
 	Parts []Part `json:"parts,omitempty"`
+}
+
+// RoleLine is a role's own line about a task: the signal it waits as while it is queued, and when it was queued or,
+// once it went, when it went.
+type RoleLine struct {
+	Signal string    `json:"signal"`
+	At     time.Time `json:"at"`
 }
 
 // Part is one item of a line or post to the dispatcher, kept so that what never reached it goes back where it

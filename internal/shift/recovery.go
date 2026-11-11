@@ -69,6 +69,10 @@ func (s *Shift) RecoveryPack() (string, recovery.Pack, error) {
 			k.Since.In(s.Crew.Location()).Format("Mon 2 Jan 15:04")+")", k.AckCommand(), k)
 	}
 	for i, text := range s.State.Signals {
+		if s.isInfo(text) {
+			continue // an info line asks for nothing: it is not part of what the dispatcher has to recover
+		}
+
 		add("signals", fmt.Sprint(i), text, "zmina queue ls", nil)
 	}
 	refs, err := record.All(s.Crew.StateDir(), "result")

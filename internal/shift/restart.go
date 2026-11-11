@@ -22,7 +22,10 @@ const (
 	// that conversation, and context_max trims it as before.
 	restartNoteWait = 10 * time.Minute
 	// restartSettle is how long a role sits idle before restart_at restarts it, so a reply being read is not cut.
+	// Not waited for a conversation its Stop hook flagged at a turn's end (RestartDue): that turn is known to be over.
 	restartSettle = trimIdle
+	// restartEarly is the share of restart_at (4/5) at which a role is asked for its note ahead of the restart.
+	restartEarlyNum, restartEarlyDen = 4, 5
 	// restartOwnerQuiet is how long after the owner's last line to a role it is left alone: he may be mid-talk.
 	restartOwnerQuiet = 15 * time.Minute
 	// restartDoneGrace is how long a role whose task is done sits before restart_done restarts it, so a quick
@@ -60,8 +63,9 @@ func (s *Shift) restarts(r *crew.Role) bool {
 // conversation (or waking on a cold cache). Only between turns, by the plain idle test (see plainIdle). The note is
 // each task's checkpoint: one saved since the last turn began is the note already; else the role is asked for it
 // and restarted once every one landed. A new task, a draft, the owner's line or no note within restartNoteWait calls
-// the restart off. It returns a line for the log.
-func (s *Shift) restart(name string, r *crew.Role, now time.Time, tasks []string) string {
+// the restart off. A turn's end (begin false) asks for the note and leaves the down to the beat, which finishes it
+// outside the lock. It returns a line for the log.
+func (s *Shift) restart(name string, r *crew.Role, now time.Time, tasks []string, begin bool) string {
 	rs := s.State.Role(name)
 	asked := !rs.RestartAsked.IsZero()
 
@@ -75,6 +79,10 @@ func (s *Shift) restart(name string, r *crew.Role, now time.Time, tasks []string
 
 	sess := s.session(name)
 	if sess == nil {
+		return ""
+	}
+
+	if !begin && (asked || len(tasks) == 0) {
 		return ""
 	}
 
@@ -101,11 +109,13 @@ func (s *Shift) restart(name string, r *crew.Role, now time.Time, tasks []string
 	}
 
 	idle := now.Sub(since)
+	// Flagged at a turn's end and still between turns by its transcript: the settle has nothing left to guard.
+	due := rs.RestartDue == sess.SessionID && turn.Ended
 
 	var why string
 
 	switch {
-	case r.RestartContext() > 0 && turn.Context >= r.RestartContext() && idle >= restartSettle:
+	case r.RestartContext() > 0 && turn.Context >= r.RestartContext() && (due || idle >= restartSettle):
 		why = fmt.Sprintf("context %s over restart_at %s", Tokens(turn.Context), Tokens(r.RestartContext()))
 	case r.RestartAfter() > 0 && turn.Context > restartColdFloor && idle >= r.RestartAfter()-restartNoteAhead:
 		why = fmt.Sprintf("idle %s at %s, near restart_idle %s", idleFor(idle), Tokens(turn.Context),
@@ -121,10 +131,14 @@ func (s *Shift) restart(name string, r *crew.Role, now time.Time, tasks []string
 
 	mine := s.heldTasks(name)
 	if s.notesLanded(mine, act.Prompt) {
+		if !begin {
+			return ""
+		}
+
 		return s.beginRestart(name, mine, why, "")
 	}
 
-	request, err := s.restartRequest(name, mine)
+	request, err := s.restartRequest(name, mine, restartLine)
 	if err != nil {
 		return name + ": restart: note request: " + err.Error()
 	}
@@ -134,6 +148,84 @@ func (s *Shift) restart(name string, r *crew.Role, now time.Time, tasks []string
 	s.log(name, "restart-asked", strings.Join(tasks, ","), why)
 
 	return fmt.Sprintf("%s: %s; asked for its note to restart fresh", name, why)
+}
+
+// restartAtTurnEnd is the restart gate at a turn's end (the Stop hook of a role on its own channel), where a busy
+// role is caught between turns: the beat alone sees it only once it has sat idle restartSettle. A role holding a task
+// whose turn ended at or over restart_at is flagged (RestartDue) and, when no current note is there, asked for it
+// at once; the next beat puts it down. One at restartEarly of restart_at is asked for its note once a conversation,
+// so the note is there when it crosses. Every guard of the beat's gate holds here too (restart, plainIdle).
+func (s *Shift) restartAtTurnEnd(name string, sess *registry.Session, now time.Time) string {
+	r, err := s.Role(name)
+	if err != nil {
+		return ""
+	}
+
+	if !s.restarts(r) {
+		return ""
+	}
+
+	// The line that began this turn is settled now, as a beat or the delivery after this would settle it: one the
+	// conversation showed must not read as still unseen (plainIdle) until the next beat — the note's request too,
+	// once the note's turn is over.
+	s.followPosted(name, now)
+
+	rs := s.State.Role(name)
+	if r.RestartContext() == 0 || !rs.RestartAsked.IsZero() || !rs.Downing.IsZero() || !rs.Releasing.IsZero() ||
+		rs.RestartGaveUp == sess.SessionID {
+		return ""
+	}
+
+	tasks := s.held()[name]
+	if len(tasks) == 0 {
+		return ""
+	}
+
+	turn, err := s.registryFor(name).Last(sess.SessionID)
+	if err != nil || !turn.Ended {
+		return ""
+	}
+
+	at := r.RestartContext()
+	if turn.Context >= at {
+		if rs.RestartDue != sess.SessionID {
+			rs.RestartDue = sess.SessionID
+			s.log(name, "restart-due", strings.Join(tasks, ","),
+				fmt.Sprintf("context %s over restart_at %s at a turn's end", Tokens(turn.Context), Tokens(at)))
+		}
+
+		return s.restart(name, r, now, tasks, false)
+	}
+
+	if turn.Context < at/restartEarlyDen*restartEarlyNum || rs.RestartNoted == sess.SessionID ||
+		now.Sub(rs.RestartOff) < trimPause {
+		return ""
+	}
+
+	act, ok := s.plainIdle(name, now, sess)
+	if !ok {
+		return ""
+	}
+
+	mine := s.heldTasks(name)
+	if s.notesLanded(mine, act.Prompt) {
+		// It saved its note in this very turn: nothing to ask for.
+		rs.RestartNoted = sess.SessionID
+
+		return ""
+	}
+
+	request, err := s.restartRequest(name, mine, fmt.Sprintf(earlyLine, Tokens(turn.Context), Tokens(at)))
+	if err != nil {
+		return name + ": restart: note request: " + err.Error()
+	}
+
+	why := fmt.Sprintf("context %s near restart_at %s", Tokens(turn.Context), Tokens(at))
+	rs.Inbox = append(rs.Inbox, request)
+	rs.RestartNoted = sess.SessionID
+	s.log(name, "restart-note", strings.Join(tasks, ","), why)
+
+	return fmt.Sprintf("%s: %s; asked for its note ahead of the restart", name, why)
 }
 
 // restartAsked follows a role asked for its note: restarted once every task's note landed and it is plainly idle,
@@ -152,7 +244,13 @@ func (s *Shift) restartAsked(name string, now time.Time, tasks []string, sess *r
 	}
 
 	if len(tasks) == 0 {
-		return s.restartOff(name, "it holds no task")
+		// Its last task was closed or parked after the ask. No pause follows: nothing is asked of a role holding no
+		// task, and restart_done is to apply to the close without waiting trimPause out.
+		off := rs.RestartOff
+		line := s.restartOff(name, "it holds no task")
+		rs.RestartOff = off
+
+		return line
 	}
 
 	if draft, _, ok, err := s.Tmux.Input(name); err == nil && ok && draft != "" {
@@ -164,7 +262,9 @@ func (s *Shift) restartAsked(name string, now time.Time, tasks []string, sess *r
 	}
 
 	mine := s.heldTasks(name)
-	if s.notesLanded(mine, rs.RestartAsked) {
+
+	landed := s.notesLanded(mine, rs.RestartAsked)
+	if landed {
 		act, ok := s.plainIdle(name, now, sess)
 		if ok {
 			return s.beginRestart(name, mine, rs.RestartWhy, "")
@@ -177,6 +277,12 @@ func (s *Shift) restartAsked(name string, now time.Time, tasks []string, sess *r
 
 	if now.Sub(rs.RestartAsked) < restartNoteWait {
 		return ""
+	}
+
+	// The note came and the role went on working (a line it got as the note's turn ended): called off, not given
+	// up. It wrote what was asked; its next turn's end over restart_at asks again once the pause is over.
+	if landed {
+		return s.restartOff(name, "its note is there, but it was not between turns within "+restartNoteWait.String())
 	}
 
 	rs.RestartGaveUp = sess.SessionID
@@ -401,10 +507,21 @@ func (s *Shift) notesLanded(tasks []task.Task, after time.Time) bool {
 	return true
 }
 
-// restartRequest is the line that asks the role for its note: a short locator to one file of role-shaped
-// checkpoint requests, never multiline guidance through the input line. It starts with "[zmina]", a line of
-// zmina's own, never one the owner typed.
-func (s *Shift) restartRequest(name string, tasks []task.Task) (string, error) {
+const (
+	// restartLine asks for the note the restart waits for; earlyLine asks for it ahead, at restartEarly of restart_at
+	// (the context, then restart_at). Each ends with the request file's path.
+	restartLine = "[zmina] restart: your conversation has grown; zmina restarts you fresh from your own note. " +
+		"Read %q, write each checkpoint it asks for, then stop."
+	earlyLine = "[zmina] restart ahead: your conversation is at %s; past restart_at %s zmina restarts you fresh " +
+		"from your own note, between turns. Read %%q and write each checkpoint it asks for now, then stop; no " +
+		"restart follows yet, your next line is work as usual. Save the checkpoint again at the end of any later " +
+		"turn that moved the work: a note saved in your last turn restarts you with no extra turn."
+)
+
+// restartRequest is the line (restartLine, earlyLine) that asks the role for its note: a short locator to one file
+// of role-shaped checkpoint requests, never multiline guidance through the input line. It starts with "[zmina]", a
+// line of zmina's own, never one the owner typed.
+func (s *Shift) restartRequest(name string, tasks []task.Task, line string) (string, error) {
 	packets := make([]handoff.Packet, 0, len(tasks))
 	for _, t := range tasks {
 		p, err := s.TaskPacket(name, t)
@@ -423,8 +540,7 @@ func (s *Shift) restartRequest(name string, tasks []task.Task) (string, error) {
 		return "", err
 	}
 
-	return fmt.Sprintf("[zmina] restart: your conversation has grown; zmina restarts you fresh from your own note. "+
-		"Read %q, write each checkpoint it asks for, then stop.", path), nil
+	return fmt.Sprintf(line, path), nil
 }
 
 // beginRestart puts the role down to start it again fresh (FinishRestart, once it ended): in the worktree of its
@@ -453,7 +569,7 @@ func (s *Shift) beginRestart(name string, tasks []task.Task, why, done string) s
 	}
 
 	rs.RestartAsked, rs.RestartSession, rs.RestartTasks, rs.RestartWhy = time.Time{}, "", nil, ""
-	rs.RestartHeld = ""
+	rs.RestartHeld, rs.RestartDue = "", ""
 
 	logTask := strings.Join(ids, ",")
 	if done != "" {

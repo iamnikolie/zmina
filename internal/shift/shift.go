@@ -495,7 +495,7 @@ func (s *Shift) bootText(r *crew.Role, tagged bool) string {
 			tag = s.tag(r.Name)
 		}
 
-		text = strings.TrimSpace(text + "\n\n" + InboxRule(tag) + " " + s.ackRule())
+		text = strings.TrimSpace(text + "\n\n" + InboxRule(tag) + " " + s.ackRuleFor(r))
 	}
 	if r.Name != "" && r.Name == s.Crew.Dispatcher {
 		text = s.recoveryBoot(text)
@@ -509,7 +509,7 @@ func (s *Shift) bootText(r *crew.Role, tagged bool) string {
 func (s *Shift) RulesSize(r *crew.Role) int {
 	text := s.rulesText(r, r.Boot)
 	if s.inbound(r) {
-		text = strings.TrimSpace(text + "\n\n" + InboxRule(strings.Repeat("x", 12)) + " " + s.ackRule())
+		text = strings.TrimSpace(text + "\n\n" + InboxRule(strings.Repeat("x", 12)) + " " + s.ackRuleFor(r))
 	}
 
 	return max(len(text)-len(strings.TrimSpace(r.Boot)), 0)
@@ -589,6 +589,15 @@ func (s *Shift) ackRule() string {
 		"Once you have handled it — answered, recorded a task, routed it, or found nothing to do — run " +
 		"`zmina ack S-12 S-14` (one call for several). It only tells zmina the line reached you; it changes " +
 		"nothing else. Until then the line is " + again + "given back to you after your context is compacted."
+}
+
+// ackRuleFor is ackRule for a role: the dispatcher, the only reader of info lines, is told they need no ack.
+func (s *Shift) ackRuleFor(r *crew.Role) string {
+	if r.Name != "" && r.Name == s.Crew.Dispatcher && s.Crew.InfoLinesOn() {
+		return s.ackRule() + " " + infoRule
+	}
+
+	return s.ackRule()
 }
 
 // MixedRuntimeRule gives both engines a transport they can use to reach every seat.
@@ -1226,7 +1235,7 @@ func (s *Shift) QueueTracked(name, text string) (string, error) {
 // A text longer than noteMax is never cut silently: with an inbox, its whole text is stored there and the note
 // carries its head and the entry's id (Pointer).
 func (s *Shift) Note(from, text string, ifUp bool) (bool, error) {
-	_, queued, err := s.note(from, text, ifUp)
+	_, queued, err := s.note(from, text, ifUp, false)
 
 	return queued, err
 }
@@ -1243,7 +1252,7 @@ func (s *Shift) NoteSent(from, text string, sent time.Time) (bool, error) {
 // waits in: a line that coalesced into a signal still queued shares that signal's id. Receipts follow the id
 // (BindMessage).
 func (s *Shift) NoteSentAs(from, text string, sent time.Time) (string, string, bool, error) {
-	note, queued, err := s.note(from, text, false)
+	note, queued, err := s.note(from, text, false, false)
 	if err != nil || note == "" || sent.IsZero() {
 		return signalBody(note), queuedSignalID(note), queued, err
 	}
@@ -1259,8 +1268,10 @@ func (s *Shift) NoteSentAs(from, text string, sent time.Time) (string, string, b
 	return signalBody(note), queuedSignalID(note), queued, nil
 }
 
-// note queues a note and returns it as queued (or as it already waits).
-func (s *Shift) note(from, text string, ifUp bool) (string, bool, error) {
+// note queues a note and returns it as queued (or as it already waits). info makes it an info line (info.go), which
+// only zmina's own notice of a result is; any other note is one to act on, and stays one when its text is that of an
+// info line that waits or went.
+func (s *Shift) note(from, text string, ifUp, info bool) (string, bool, error) {
 	whole := text
 	from, text = clipRunes(oneLine(from), noteMax/10), oneLine(text)
 
@@ -1288,6 +1299,12 @@ func (s *Shift) note(from, text string, ifUp bool) (string, bool, error) {
 	}
 
 	note := from + ": " + text
+	if info {
+		s.markInfo(note, s.Now())
+	} else {
+		delete(s.State.Info, note)
+	}
+
 	if s.State.SignalCounts == nil {
 		s.State.SignalCounts = map[string]int{}
 	}

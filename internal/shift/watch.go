@@ -202,7 +202,7 @@ func (s *Shift) FinishWatch(run WatchRun, res watch.Result, baseline bool) []str
 			line = s.renoteLine(name, e)
 		}
 
-		note, _, err := s.note(name, line, false)
+		note, _, err := s.note(name, line, false, false)
 
 		return note, err
 	})
