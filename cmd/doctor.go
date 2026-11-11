@@ -114,6 +114,7 @@ func (a *app) diagnose() []check {
 		a.checkRegistry(c, add)
 	}
 	checkBoot(c, add)
+	checkContext(c, add)
 	if hasCodex {
 		a.checkCodex(c, add)
 	}

@@ -126,6 +126,17 @@ roles:
     prompt: write today's summary        # one line typed at each run
 ```
 
+**Recommended context sizes**: `context_max: 250k`, `restart_at: 180k`, `restart_done: 60k`. Every turn of a Claude role
+reads its whole conversation again, so the mean context of a turn is most of what the role costs. `context_max` compacts
+an idle role sooner, `restart_at` restarts a role holding a task from its checkpoint note before its conversation
+grows large, and `restart_done` restarts a role fresh once its task closed: set low, a session per task. These are
+advice, not defaults. The defaults are unchanged (`context_max` none, `restart_at` 250k, `restart_done` 150k) and no
+running crew changes unless its file does. `zmina doctor` reports each crew-level value past them in a `context` line
+that names the key to set, and lists in one line the roles whose own value is past them; a role the owner talks to
+directly may keep a higher value, and nothing silences that line. Codex roles are not measured, since the sizes
+come from Claude crews, and the dispatcher only by `context_max`: it is never restarted for its context.
+`zmina init` writes the three values into the starter file it creates; a crew file that exists is not rewritten.
+
 ### Codex roles
 
 Roles default to `runtime: claude`. Set `runtime: codex` for selected seats in the same crew:
@@ -436,7 +447,7 @@ goes over the crew's field by field; a change applies at the role's next start. 
 | `zmina stop` | the ticker starts nothing any more (no keep: always role, no scheduled run), then every role goes down, the dispatcher too; a role with a draft or a dialog stays up and is named (`--clear` as with `down`). `ls` shows `STOPPED`. |
 | `zmina start` | lifts the stop and starts the dispatcher. A retired crew refuses it, naming the live one. |
 | `zmina retire [--moved-to <node>/<crew>] [--clear]` / `retire --off` | the owner's word that this crew is no longer the live one: `retired:` and `moved_to:` in the crew file (a state file recovered or a stop lifted does not lose them), then as `zmina stop`. `--off` takes the mark off; the shift stays stopped until `zmina start`. Only this mark says one crew went on as another: two crews with one name are never taken for one. |
-| `zmina doctor [--json]` | checks crew file, tmux (3.2 or newer), claude as roles find it (their PATH; a binary in a temp dir fails) and the flags zmina passes, Claude Code's session registry (zmina reads it to tell idle from busy; it is not a public interface — doctor says when its shape changed), ticker beat, state, lock holder, task files, crews sharing a tmux server, versions (this zmina's; a cockpit, a Codex bridge or Claude roles that another zmina started); what zmina's own rules add to a fresh role's prefix (`boot`: characters on average and the role with most, by what read_guard, lessons, delivery and Codex seats turn on) and whether `skills:` trims the skill list; whether the crew's namespace is logged in (`login`, from `claude auth status`: not logged in fails, a login expiring within 7 days warns); what piles up: owner asks open over 7 days, parked items over 14 days, hand-made copies of the crew file beside it (seat keeps one `.bak`), closed tasks that keep their worktree (`worktrees`). Exit 1 on a fail. |
+| `zmina doctor [--json]` | checks crew file, tmux (3.2 or newer), claude as roles find it (their PATH; a binary in a temp dir fails) and the flags zmina passes, Claude Code's session registry (zmina reads it to tell idle from busy; it is not a public interface — doctor says when its shape changed), ticker beat, state, lock holder, task files, crews sharing a tmux server, versions (this zmina's; a cockpit, a Codex bridge or Claude roles that another zmina started); what zmina's own rules add to a fresh role's prefix (`boot`: characters on average and the role with most, by what read_guard, lessons, delivery and Codex seats turn on) and whether `skills:` trims the skill list; whether `context_max`, `restart_at` and `restart_done` are at or below the recommended context sizes (`context`, advice only: The crew file); whether the crew's namespace is logged in (`login`, from `claude auth status`: not logged in fails, a login expiring within 7 days warns); what piles up: owner asks open over 7 days, parked items over 14 days, hand-made copies of the crew file beside it (seat keeps one `.bak`), closed tasks that keep their worktree (`worktrees`). Exit 1 on a fail. |
 | `zmina queue ls [--full] [--json]` | what waits to be typed: the dispatcher's signals and health notes, each role's inbox, lines posted to its inbox socket not yet seen in its conversation, and its failed lines (a line tmux refused three beats in a row); each line clipped to 160 characters, `--full` whole. |
 | `zmina queue retry <role>` / `queue drop <role> [--all]` | put failed lines back at the head of the inbox / drop them (`--all`: the inbox too; for the dispatcher its signals and notes). Without `--all`, any retained inbox count and the command needed to drop it are printed. The hint includes the resolved `--crew` path and shell-quotes both path and role, so it still targets this crew when pasted into another shell. |
 | `zmina state show` | the state as zmina reads it (JSON). |
