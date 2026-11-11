@@ -153,6 +153,8 @@ func (a *app) diagnose() []check {
 		add("lock", "ok", "free")
 	}
 
+	checkLockHolds(c, time.Now(), add)
+
 	if _, problems, err := taskStore(c).Scan(); err != nil {
 		add("tasks", "fail", "%v", err)
 	} else if len(problems) > 0 {

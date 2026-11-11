@@ -446,10 +446,11 @@ goes over the crew's field by field; a change applies at the role's next start. 
 | `zmina stop` | the ticker starts nothing any more (no keep: always role, no scheduled run), then every role goes down, the dispatcher too; a role with a draft or a dialog stays up and is named (`--clear` as with `down`). `ls` shows `STOPPED`. |
 | `zmina start` | lifts the stop and starts the dispatcher. A retired crew refuses it, naming the live one. |
 | `zmina retire [--moved-to <node>/<crew>] [--clear]` / `retire --off` | the owner's word that this crew is no longer the live one: `retired:` and `moved_to:` in the crew file (a state file recovered or a stop lifted does not lose them), then as `zmina stop`. `--off` takes the mark off; the shift stays stopped until `zmina start`. Only this mark says one crew went on as another: two crews with one name are never taken for one. |
-| `zmina doctor [--json]` | checks crew file, tmux (3.2 or newer), claude as roles find it (their PATH; a binary in a temp dir fails) and the flags zmina passes, Claude Code's session registry (zmina reads it to tell idle from busy; it is not a public interface — doctor says when its shape changed), ticker beat, state, lock holder, task files, crews sharing a tmux server, versions (this zmina's; a cockpit, a Codex bridge or Claude roles that another zmina started); what zmina's own rules add to a fresh role's prefix (`boot`: characters on average and the role with most, by what read_guard, lessons, delivery and Codex seats turn on) and whether `skills:` trims the skill list; whether `context_max`, `restart_at` and `restart_done` are at or below the recommended context sizes (`context`, advice only: The crew file); whether the crew's namespace is logged in (`login`, from `claude auth status`: not logged in fails, a login expiring within 7 days warns); what piles up: owner asks open over 7 days, parked items over 14 days, hand-made copies of the crew file beside it (seat keeps one `.bak`), closed tasks that keep their worktree (`worktrees`). Exit 1 on a fail. |
+| `zmina doctor [--json]` | checks crew file, tmux (3.2 or newer), claude as roles find it (their PATH; a binary in a temp dir fails) and the flags zmina passes, Claude Code's session registry (zmina reads it to tell idle from busy; it is not a public interface — doctor says when its shape changed), ticker beat, state, lock (the holder now with its age and phase, and the holds over 20 s and waits over 5 s of the last 24 h from the log), task files, crews sharing a tmux server, versions (this zmina's; a cockpit, a Codex bridge or Claude roles that another zmina started); what zmina's own rules add to a fresh role's prefix (`boot`: characters on average and the role with most, by what read_guard, lessons, delivery and Codex seats turn on) and whether `skills:` trims the skill list; whether `context_max`, `restart_at` and `restart_done` are at or below the recommended context sizes (`context`, advice only: The crew file); whether the crew's namespace is logged in (`login`, from `claude auth status`: not logged in fails, a login expiring within 7 days warns); what piles up: owner asks open over 7 days, parked items over 14 days, hand-made copies of the crew file beside it (seat keeps one `.bak`), closed tasks that keep their worktree (`worktrees`). Exit 1 on a fail. |
 | `zmina queue ls [--full] [--json]` | what waits to be typed: the dispatcher's signals and health notes, each role's inbox, lines posted to its inbox socket not yet seen in its conversation, and its failed lines (a line tmux refused three beats in a row); each line clipped to 160 characters, `--full` whole. |
 | `zmina queue retry <role>` / `queue drop <role> [--all]` | put failed lines back at the head of the inbox / drop them (`--all`: the inbox too; for the dispatcher its signals and notes). Without `--all`, any retained inbox count and the command needed to drop it are printed. The hint includes the resolved `--crew` path and shell-quotes both path and role, so it still targets this crew when pasted into another shell. |
 | `zmina state show` | the state as zmina reads it (JSON). |
+| `zmina lock` | who holds the state lock now, for a hang while it happens: `held by pid 4242 (tick), held 4m10s, in roles (dev) for 3m55s`, or `free`. It reads the holder record beside the lock and tries the lock without waiting, so it never queues behind the hang; it writes nothing. A record whose process is gone, or that the lock file does not name, is called stale and never taken for the holder. |
 | `zmina state recover` | an unreadable `state.json` (or one from a newer zmina) is never written over: every writing command refuses until this moves it aside as `state.json.broken-<time>`. |
 | `zmina version` / `--version` | `zmina version <v>` on stdout. `version`, `skill` and `help` need no crew file. |
 
@@ -1698,6 +1699,15 @@ each with who did it (`hand`, `ticker`, `schedule`, or the role) and, after a ta
 `--full` whole. File `~/.zmina/events.jsonl`,
 rotated at 10 MB into `events.jsonl.1` (log reads both).
 
+The state lock leaves two events, crew-wide (no role): `lock-wait` when a command waited 5 s or more for the lock
+(`waited=12.4s holder=tick holder_pid=4242 holder_for=11m2s holder_phase=roles/dev`, `gave_up=yes` when it ran out of
+`LockWait` and failed) and `lock-held` when a hold lasted 20 s or more (`held=4m10s verb=tick phase=roles phase_for=3m58s
+step=roles/dev step_for=1m3s tmux=capture-pane tmux_for=9.8s phases=…`: the phase it spent longest in, the one thing in
+it that took longest, the slowest single tmux call, then every phase longest first). The beat's phases are `reconcile`,
+`notices`, `alarms`, `roles` (a step per role), `notes`, `deliver`, `trim`, `reconcile-end`, `finish` and the final
+`save`; what a command does before its first mark is `run`. Verbs are the command (`tick`, `task set`), never its
+arguments. `zmina doctor` counts them for the last 24 h.
+
 ## The ticker
 
 `zmina ticker install | uninstall | status` — every minute, PATH captured at install; its output
@@ -1874,6 +1884,11 @@ there stops the beat's further typing and starting, and says so.
    `<role>: its last turn ended in an API error: …` (once per error). A usage-limit notice at the
    bottom of the screen → `<role>: stopped by a usage limit: …` (once per notice). Folder trust in
    a role's own task worktree is answered (`trusted` in the log).
+
+The lock file `lock` has a record beside it, `lock.holder`: pid, the command's verb, when it took the lock and the phase
+it is in. Whoever takes the lock writes it (one small write, no sync; a write that fails fails nothing) and clears it
+before letting go; the beat updates its phase at each big step and per role, in memory and in that file only. It is
+advisory: nothing decides by it. `zmina lock` reads it.
 
 State: `~/.zmina/state.json` (version 2; the first format is read and kept as `state.json.v1.bak`
 on the first save). Part of it is what zmina saw and could see again; most is what it was told or

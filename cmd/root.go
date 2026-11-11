@@ -39,6 +39,9 @@ type app struct {
 	out, err io.Writer
 	config   string
 	crew     string
+	// verb is the command that runs, without its arguments (tick, task set): the state lock's holder record and
+	// events name it.
+	verb string
 	// cockpitPeers reads the mesh's other nodes for zmina ui (nil: the mesh's own; tests set a fake).
 	cockpitPeers *uiPeerCache
 	// uiLogins hands out one-time login codes for zmina ui (nil: none).
@@ -84,6 +87,9 @@ Run 'zmina skill' for the agent reference: its topics and the dispatcher's part;
 
 	root.SetOut(out)
 	root.SetErr(errw)
+	root.PersistentPreRun = func(cmd *cobra.Command, args []string) {
+		a.verb = strings.TrimPrefix(cmd.CommandPath(), cmd.Root().Name()+" ")
+	}
 	root.PersistentFlags().StringVar(&a.config, "config", "", "crew config to use (subdirectory of ~/.zmina/)")
 	root.PersistentFlags().StringVar(&a.crew, "crew", "", "crew file (default $ZMINA_CREW or ~/.zmina/crew.yaml)")
 	root.MarkFlagsMutuallyExclusive("config", "crew")
@@ -93,7 +99,8 @@ Run 'zmina skill' for the agent reference: its topics and the dispatcher's part;
 		a.stopCommand(), a.startCommand(), a.retireCommand(), a.queueCommand(), a.stateCommand(), a.tickerCommand(),
 		a.launchdCommand(), a.doctorCommand(), a.usageCommand(), a.limitsCommand(), a.routeCommand(), a.skillCommand(), a.versionCommand(), a.uiCommand(),
 		a.messageCommand(), a.contextCommand(), a.reportCommand(), a.nodeCommand(), a.tellCommand(), a.codexCommand(), a.terminalCommand(),
-		a.ackCommand(), a.pendingCommand(), a.turnEndCommand(), a.limitsTapCommand(), a.readCommand(), a.grepCommand(), a.readGuardCommand())
+		a.ackCommand(), a.pendingCommand(), a.turnEndCommand(), a.limitsTapCommand(), a.readCommand(), a.grepCommand(), a.readGuardCommand(),
+		a.lockCommand())
 	groupCommands(root)
 
 	return root
@@ -268,13 +275,14 @@ func (a *app) withState(fn func(s *shift.Shift) error) error {
 		return err
 	}
 
-	l, err := shift.Lock(s.Crew.StateDir())
+	l, err := shift.LockAs(s.Crew.StateDir(), shift.LockOpts{Verb: a.verb, Log: s.LogEvent})
 	if err != nil {
 		return err
 	}
 
 	s.State = l.State
 	s.Flush = l.Flush
+	s.Mark = l.Mark
 	s.CommittedMessageStages = map[string]map[string]time.Time{}
 	for key, stages := range s.State.MessageStages {
 		copy := map[string]time.Time{}
