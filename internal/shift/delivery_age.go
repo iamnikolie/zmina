@@ -25,13 +25,13 @@ var (
 // sweepIDsShown is how many ids the event and the dispatcher's line of a sweep name; the rest are counted.
 const sweepIDsShown = 8
 
-// sweepDelivery drops the delivery records past their age limit: posted and typed lines of a role that is up past
-// inFlightMaxAge, failed lines past failedMaxAge. One event names how many, of which kinds and the ids (clipped), and one FYI line tells the
+// sweepDelivery drops the delivery records past their age limit: posted and typed lines of a role the beat found up (up)
+// past inFlightMaxAge, failed lines past failedMaxAge. One event names how many, of which kinds and the ids (clipped), and one FYI line tells the
 // dispatcher (an info line: no id, nothing says it again). It returns that line, none when nothing aged. Lines that
 // wait in a role's inbox are not records of this kind and stay, whatever the role is doing. The tracked line of a
 // failed record that was never delivered loses its ack with it (as dropSignal does): nothing queued would carry it;
 // the ack of a delivered one stays, listed by zmina pending and said again.
-func (s *Shift) sweepDelivery(now time.Time) []string {
+func (s *Shift) sweepDelivery(now time.Time, up map[string]bool) []string {
 	var (
 		roles   = map[string]bool{}
 		ids     []string
@@ -60,11 +60,12 @@ func (s *Shift) sweepDelivery(now time.Time) []string {
 		rs := s.State.Roles[name]
 		ch, dir := s.peerFor(name)
 
-		// The in-flight records of a role are judged while it is up this beat (the loop of the beat set rs.Up from its
-		// probe). One that is not up is settleEnded's: it gives its lines back or drops them by their kind, a beat later
+		// The in-flight records of a role are judged while this beat probed it up (up: the names the beat's loop saw up,
+		// never the stored flag, which is what an earlier beat left when the loop skipped the role because tmux did not
+		// answer). One that is not up is settleEnded's: it gives its lines back or drops them by their kind, a beat later
 		// than the one that saw it end, and a sweep that ran in between would report as dropped what that beat gives
 		// back.
-		if rs.Up && rs.Downing.IsZero() {
+		if up[name] && rs.Downing.IsZero() {
 			// Look before judging: a record this old may be one nothing has looked at since (the beats stopped, the
 			// machine slept). A line the conversation did show closes as it always does (followPosted), a typed one that
 			// landed as it always does (closeTyped), and neither is reported as dropped.

@@ -1,6 +1,7 @@
 package shift
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -44,11 +45,12 @@ func TestAgeSweepDropsOldRecordsAndTellsOnce(t *testing.T) {
 	f.s.State.Acks["S-2"] = &Ack{ID: "S-2", Role: "harvester", Text: "[dev] look at T-2", First: t0}
 
 	// Nothing is old enough yet.
-	assert.Nil(t, f.s.sweepDelivery(t0))
+	assert.Nil(t, f.s.sweepDelivery(t0, map[string]bool{"designer": true, "harvester": true}))
 	require.Len(t, f.s.State.Role("designer").Posted, 1)
 
 	*f.now = t0.Add(4 * time.Hour)
 	f.status("designer", "busy", *f.now)
+	f.s.State.LastTick = f.now.Add(-time.Minute) // regular beats: the records are old, the gap is not
 	f.s.Tick()
 
 	assert.Empty(t, f.s.State.Role("designer").Posted)
@@ -85,7 +87,7 @@ func TestAgeSweepDropsOldRecordsAndTellsOnce(t *testing.T) {
 
 	assert.Equal(t, 1, f.eventCount("delivery-aged"), "not every beat")
 	assert.Equal(t, 1, strings.Count(strings.Join(f.s.State.Notes, "|"), "delivery: dropped"))
-	assert.Nil(t, f.s.sweepDelivery(*f.now))
+	assert.Nil(t, f.s.sweepDelivery(*f.now, nil))
 }
 
 // The ids an event and a line of the sweep name are clipped.
@@ -100,7 +102,7 @@ func TestAgeSweepClipsTheIDs(t *testing.T) {
 			IDs: []string{fmt.Sprint("S-", i+1)}})
 	}
 
-	out := f.s.sweepDelivery(*f.now)
+	out := f.s.sweepDelivery(*f.now, nil)
 	require.Len(t, out, 1)
 	assert.Contains(t, out[0], "dropped 12 records")
 	assert.Contains(t, out[0], "S-1 S-2 S-3 S-4 S-5 S-6 S-7 S-8 and 4 more")
@@ -149,6 +151,7 @@ func TestAgeSweepClosesWhatWasShownBeforeItJudges(t *testing.T) {
 
 	*f.now = f.now.Add(5 * time.Hour)
 	f.status("dispatcher", "idle", *f.now)
+	f.s.State.LastTick = f.now.Add(-time.Minute) // regular beats: the post is old, the gap is not
 	f.s.Tick()
 
 	for _, p := range f.s.State.Role("dispatcher").Posted {
@@ -176,6 +179,7 @@ func TestAgeSweepClosesATypedLineThatLandedBeforeItJudges(t *testing.T) {
 	require.NotNil(t, f.s.State.Role("designer").Sent)
 
 	*f.now = f.now.Add(5 * time.Hour)
+	f.s.State.LastTick = f.now.Add(-time.Minute) // regular beats: the record is old, the gap is not
 	f.s.Tick()
 
 	assert.Nil(t, f.s.State.Role("designer").Sent)
@@ -201,6 +205,7 @@ func TestAgeSweepLeavesACodexLineWaitingInItsFile(t *testing.T) {
 		Status: "busy", StatusUpdatedAt: f.now.UnixMilli(), Inbox: dir}}))
 
 	*f.now = f.now.Add(5 * time.Hour)
+	f.s.State.LastTick = f.now.Add(-time.Minute) // regular beats: the record is old, the gap is not
 	f.s.Tick()
 
 	assert.Len(t, f.s.State.Role("dev").Posted, 1)
@@ -251,4 +256,37 @@ func TestAgeSweepLeavesARoleThatIsNotUpToItsSettling(t *testing.T) {
 	assert.Nil(t, rs.Sent)
 	assert.Equal(t, 1, f.eventCount("requeued"))
 	assert.Zero(t, f.eventCount("delivery-aged"), "never reported dropped by age")
+}
+
+// The sweep judges the in-flight records of the roles this beat probed up, and no others. A role the beat could not ask
+// tmux about is skipped by its loop, which leaves the stored flag as the beat before set it: that says nothing of this
+// beat, and a line posted to the role must not be reported dropped on it.
+func TestAgeSweepSkipsARoleTmuxDidNotAnswerFor(t *testing.T) {
+	shortAges(t, time.Hour, time.Hour)
+
+	f, _ := nativeFixture(t, crewYAML)
+	upNative(t, f, "designer")
+
+	_, id := postedTo(t, f, "designer", "[dev] look at T-1")
+	f.status("designer", "busy", *f.now)
+
+	rs := f.s.State.Role("designer")
+	rs.Posted[0].At = f.now.Add(-25 * time.Hour) // aged on its own clock: the beats were regular
+	f.s.State.LastTick = f.now.Add(-time.Minute)
+
+	f.tm.probeErr["designer"] = errors.New("tmux: timeout")
+	f.s.Tick()
+
+	assert.Len(t, rs.Posted, 1, "not judged on a beat that learned nothing of the role")
+	assert.NotNil(t, f.s.State.Acks[id])
+	assert.Zero(t, f.eventCount("delivery-aged"))
+
+	// The next beat probes it up, and judges as usual.
+	delete(f.tm.probeErr, "designer")
+	*f.now = f.now.Add(time.Minute)
+	f.status("designer", "busy", *f.now)
+	f.s.Tick()
+
+	assert.Empty(t, rs.Posted)
+	assert.Equal(t, 1, f.eventCount("delivery-aged"))
 }

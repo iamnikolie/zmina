@@ -80,6 +80,9 @@ func (s *Shift) Tick() []string {
 	did, notes := s.ring(now, stopped)
 	did = append(did, s.reportUnreadable(now)...)
 
+	// The roles this beat probed up, for the age sweep: a role skipped below (tmux did not answer) is not among them.
+	probedUp := map[string]bool{}
+
 	for _, name := range s.Names() {
 		s.mark("roles", name)
 		r, err := s.Role(name)
@@ -111,6 +114,8 @@ func (s *Shift) Tick() []string {
 
 		up := p.State == tmux.Up
 		if up {
+			probedUp[name] = true
+
 			s.remember(name, p)
 			s.observeRecovery(name)
 			// A role started by an older zmina would vanish without a screen.
@@ -213,7 +218,7 @@ func (s *Shift) Tick() []string {
 
 	s.mark("notes", "")
 	// Delivery records past their age limit go, told once (one more note).
-	notes = append(notes, s.sweepDelivery(now)...)
+	notes = append(notes, s.sweepDelivery(now, probedUp)...)
 	s.addNotes(notes)
 	did = append(did, notes...)
 
