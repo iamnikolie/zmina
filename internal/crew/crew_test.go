@@ -523,6 +523,29 @@ func TestDelivery(t *testing.T) {
 	require.Error(t, err)
 }
 
+// worktree_gc is off unless the crew file says daily; anything else is refused naming the two words.
+func TestWorktreeGCKey(t *testing.T) {
+	const roles = "namespace: /ns\nroles:\n  dispatcher:\n"
+
+	for body, want := range map[string]bool{
+		"":                       false,
+		"worktree_gc: daily\n":   true,
+		"worktree_gc: off\n":     false,
+		"worktree_gc: \"off\"\n": false,
+		"worktree_gc: \"\"\n":    false,
+	} {
+		c, err := Load(write(t, body+roles))
+		require.NoError(t, err, body)
+		assert.Equal(t, want, c.WorktreeGCOn(), body)
+		assert.Empty(t, c.Warnings, body)
+	}
+
+	for _, bad := range []string{"weekly", "on", "true", "Daily", "1d"} {
+		_, err := Load(write(t, "worktree_gc: "+bad+"\n"+roles))
+		require.ErrorContains(t, err, "worktree_gc is daily or off", bad)
+	}
+}
+
 // A session name with '/' is refused naming the form to use: '/' is zmina's <node>/<crew>.
 func TestSessionNameWithASlash(t *testing.T) {
 	dir := t.TempDir()
