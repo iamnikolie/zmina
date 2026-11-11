@@ -131,7 +131,7 @@ func TestTapWritesOnlyWhenAValueChanged(t *testing.T) {
 
 	info, err := os.Stat(path)
 	require.NoError(t, err)
-	assert.True(t, info.ModTime().Equal(old.Truncate(time.Second)) || info.ModTime().Equal(old), "same figures: the file is left alone")
+	assert.WithinDuration(t, old, info.ModTime(), time.Second, "same figures: the file is left alone")
 
 	after, err := os.ReadFile(path)
 	require.NoError(t, err)

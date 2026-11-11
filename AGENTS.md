@@ -6,7 +6,7 @@ file: parse, resolve paths, check; `edit.go` edits it as a YAML tree for `zmina 
 file of a crew), `internal/shift` (roles, tick, schedules, queues, state v2 — tested with fakes), `internal/ledger`
 (task + worktree rules), `internal/task` (`tasks/T-<n>.json`), `internal/worktree` (git), `internal/tmux` (the
 role's tagged pane; tested against a real tmux), `internal/registry` (Claude Code `<ns>/sessions/<pid>.json`),
-`internal/events` (`events.jsonl`), `internal/cron` (five-field schedules, no dependency), `internal/watch`, `internal/mesh` (nodes:
+`internal/events` (`events.jsonl`), `internal/limits` (plan limits: the status-line tap's file for Claude, Codex rollouts, staleness, policy; no crew, no state), `internal/cron` (five-field schedules, no dependency), `internal/watch`, `internal/mesh` (nodes:
 keys signed by the owner's key, signed envelopes, the stdio protocol peers speak over ssh; tested over pipes).
 
 - `make test`, `make install`; `golangci-lint run` is clean (config in `.golangci.yml`). Keep `go 1.24` in go.mod (no `sync.WaitGroup.Go` and other 1.25+ API); a dependency bump can raise it silently, so re-check.
