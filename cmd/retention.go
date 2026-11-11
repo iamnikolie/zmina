@@ -23,6 +23,7 @@ import (
 	"github.com/iamnikolie/zmina/internal/handoff"
 	"github.com/iamnikolie/zmina/internal/lean"
 	"github.com/iamnikolie/zmina/internal/message"
+	"github.com/iamnikolie/zmina/internal/record"
 	"github.com/iamnikolie/zmina/internal/task"
 )
 
@@ -32,8 +33,6 @@ const (
 	// tickLogMax is the size past which the pass cuts tick.log down to its last tickLogKeep bytes.
 	tickLogMax  = 5 << 20
 	tickLogKeep = 1 << 20
-	// retentionStub is the file left in the directory of a task whose results or checkpoints were moved, saying where.
-	retentionStub = "archived.txt"
 )
 
 // retentionTimeout is the most one pass may take. What it did not reach waits for the next one.
@@ -325,7 +324,7 @@ func (p *retentionPass) readState() {
 
 // archiveRoot is where this pass puts what it moves: archive/retention/<yyyy-mm>/ in the crew's directory.
 func (p *retentionPass) archiveRoot() string {
-	return filepath.Join(p.dir, "archive", "retention", p.now.UTC().Format("2006-01"))
+	return filepath.Join(p.dir, record.ArchiveRoot, p.now.UTC().Format("2006-01"))
 }
 
 func (p *retentionPass) say(format string, args ...any) {
@@ -405,9 +404,9 @@ func (p *retentionPass) taskDirs(kind string, stub bool) {
 		p.moved[kind]++
 
 		if stub {
-			note := fmt.Sprintf("Moved by zmina retention on %s to %s. Move the files back to read them again.\n",
+			note := fmt.Sprintf("Moved by zmina retention on %s to %s; zmina reads them there.\n",
 				p.now.UTC().Format("2006-01-02"), filepath.ToSlash(relTo(p.dir, dst)))
-			_ = fsx.WriteFile(filepath.Join(src, retentionStub), []byte(note), 0o600)
+			_ = fsx.WriteFile(filepath.Join(src, record.StubFile), []byte(note), 0o600)
 		}
 	}
 }

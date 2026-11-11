@@ -1006,7 +1006,8 @@ at a 60 s deadline (what it did not reach waits for the next pass) and fails not
 beat's output. It moves, never deletes, into `archive/retention/<yyyy-mm>/` beside the crew file: the `handoffs/<task>/`,
 `results/<task>/` and `checkpoints/<task>/` directories of tasks closed (done or dropped) longer ago than the span (a
 directory no task names moves when its files are that old; a note `archived.txt` in an emptied `results/` or
-`checkpoints/` directory says where its files went; move them back to read them again); the files of `releases/` and
+`checkpoints/` directory says where its files went; `task result`, `task checkpoint` and `task show` read them there,
+read-only, and a note whose files are gone from the archive is an error naming it); the files of `releases/` and
 `restarts/` older than the span that `state.json` does not name; finished report records (every revision read by its
 destination or superseded, all envelopes queued, nothing new for the span) from `messages/` to `messages/archive/`,
 where `message show <id>` still finds them. What an open, waiting, parked or recently closed task points at stays, and
