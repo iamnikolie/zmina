@@ -25,6 +25,12 @@ type Node struct {
 	Owner ed25519.PublicKey
 	// Health is how this node's crews stand, told in every hello; nil tells nothing.
 	Health func() []CrewHealth
+	// StrictRequests, set in node.json (zmina node strict on), refuses owner requests in the old form, the ones that
+	// name no node: it is for once every node runs a zmina that sends the bound form.
+	StrictRequests bool
+	// Notice, when set, is told what the node should say to its owner (an event in the crews' logs): a kind and a
+	// sentence. A caller of the node sets it; the mesh stays quiet without.
+	Notice func(kind, detail string)
 }
 
 // ErrNoNode is returned while this ~/.zmina has no node yet (`zmina node init`).
@@ -36,6 +42,8 @@ type nodeFile struct {
 	Name  string            `json:"name"`
 	Owner ed25519.PublicKey `json:"owner,omitempty"`
 	Cert  *Cert             `json:"cert,omitempty"`
+	// StrictRequests: refuse owner requests that name no node (see Node.StrictRequests).
+	StrictRequests bool `json:"strict_requests,omitempty"`
 }
 
 // Request is what a new node hands the owner to sign: its name and public key.
@@ -202,7 +210,51 @@ func Open(dir string) (*Node, error) {
 		return nil, err
 	}
 
-	return &Node{Dir: dir, Name: nf.Name, Key: key, Cert: *nf.Cert, Owner: nf.Owner}, nil
+	return &Node{Dir: dir, Name: nf.Name, Key: key, Cert: *nf.Cert, Owner: nf.Owner, StrictRequests: nf.StrictRequests}, nil
+}
+
+// SetStrictRequests turns the refusal of owner requests that name no node on or off for the node under dir.
+func SetStrictRequests(dir string, on bool) error {
+	var nf nodeFile
+	if err := readJSON(filepath.Join(dir, "node.json"), &nf); errors.Is(err, os.ErrNotExist) {
+		return ErrNoNode
+	} else if err != nil {
+		return err
+	}
+
+	nf.StrictRequests = on
+
+	return writeJSON(filepath.Join(dir, "node.json"), nf)
+}
+
+// noticeDue says whether the notice called key may be made now, and counts it as made when so: once per every. The
+// stamps are a file of the node, because each session is a process of its own.
+func (n *Node) noticeDue(key string, now time.Time, every time.Duration) bool {
+	due := false
+
+	_ = n.locked(func() error {
+		m := map[string]time.Time{}
+		if err := readJSON(n.path("noticed.json"), &m); err != nil && !errors.Is(err, os.ErrNotExist) {
+			m = map[string]time.Time{}
+		}
+
+		if last, ok := m[key]; ok && now.Sub(last) < every && !now.Before(last) {
+			return nil
+		}
+
+		for k, at := range m {
+			if now.Sub(at) > 30*24*time.Hour {
+				delete(m, k)
+			}
+		}
+
+		m[key] = now
+		due = writeJSON(n.path("noticed.json"), m) == nil
+
+		return nil
+	})
+
+	return due
 }
 
 // IsOwner reports whether this node holds the owner key.
@@ -239,6 +291,9 @@ type Peer struct {
 	// TellReceipts: the peer authenticated tell_receipts in its last session with this node — it takes receipts
 	// for the plain lines it sent, and sends them for the lines it took.
 	TellReceipts bool `json:"tell_receipts,omitempty"`
+	// TerminalV2: the peer authenticated terminal_v2 in its last session with this node — it takes owner requests
+	// bound to the node they are for, and the owner's node sends them so.
+	TerminalV2 bool `json:"terminal_v2,omitempty"`
 	// Crews is how the peer's crews stood in its last session with this node, CrewsAt when that was; none from an
 	// older zmina.
 	Crews   []CrewHealth `json:"crews,omitempty"`

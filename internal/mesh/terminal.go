@@ -80,24 +80,85 @@ type TerminalRequest struct {
 	FileID string       `json:"file_id,omitempty"`
 	// When is an alarm's time, as the owner wrote it (alarm/act).
 	When string `json:"when,omitempty"`
-	// To is the node the owner meant the request for, inside what the owner signs: a write (todo/act, alarm/act) is
-	// done only by the node it names, so a peer that got it cannot pass it on to another node's session.
+	// To is the node the owner meant the request for, inside what the owner signs. A request in the bound form
+	// (terminalMessageV2) always names it and any operation is done only by that node; in the old form only a write
+	// (todo/act, alarm/act) names it. So a peer that got a request cannot pass it on to another node's session.
 	To string `json:"to,omitempty"`
 }
 
+// terminalMessage is what an owner request in the old form signs: the operation, the challenge the serving node chose
+// and the request. It names no node, so it is accepted only while strict_requests is off.
 func terminalMessage(op string, challenge []byte, req TerminalRequest) []byte {
 	req.Sig = nil
 	raw, _ := json.Marshal(req)
 	return append(append([]byte("zmina-terminal\x00"+op+"\x00"), challenge...), raw...)
 }
 
+// terminalMessageV2 is what an owner request in the bound form signs: the operation, the key of the node it is for
+// (the key that node proved in its hello), the challenge it chose, and the request, whose To names that node. Every
+// part but the request is fixed text or hex, so no part can be read as another.
+func terminalMessageV2(op string, server ed25519.PublicKey, challenge []byte, req TerminalRequest) []byte {
+	req.Sig = nil
+	raw, _ := json.Marshal(req)
+	return []byte(fmt.Sprintf("zmina-terminal-v2\x00%s\x00%x\x00%x\x00%s", op, []byte(server), challenge, raw))
+}
+
+// terminalRequest signs an owner request for the node on the other end of c and sends it: in the bound form when that
+// node authenticated terminal_v2, else in the old one.
 func (n *Node) terminalRequest(c *conn, op string, req TerminalRequest) error {
 	key, err := readKey(filepath.Join(n.Dir, "owner.key"))
 	if err != nil || !key.Public().(ed25519.PublicKey).Equal(n.Owner) {
 		return errors.New("mesh terminals need the owner node: run zmina ui there; keep owner.key there only")
 	}
-	req.Sig = ed25519.Sign(key, terminalMessage(op, c.challenge, req))
+	if c.peer.TerminalV2 && len(c.serverKey) == ed25519.PublicKeySize {
+		if req.To == "" {
+			req.To = c.peer.Name
+		}
+		req.Sig = ed25519.Sign(key, terminalMessageV2(op, c.serverKey, c.challenge, req))
+	} else {
+		req.Sig = ed25519.Sign(key, terminalMessage(op, c.challenge, req))
+	}
 	return c.send(wire{Op: op, Terminal: &req})
+}
+
+// requestForm is how an owner request was signed, if it was.
+type requestForm int
+
+const (
+	formNone   requestForm = iota // not signed by the owner for this connection
+	formBound                     // terminalMessageV2: for this node's key and challenge
+	formLegacy                    // terminalMessage: for this challenge only
+)
+
+// requestForm checks the owner's signature on a request against this node's own key and the challenge it gave.
+func (n *Node) requestForm(c *conn, op string, req TerminalRequest) requestForm {
+	switch {
+	case ed25519.Verify(n.Owner, terminalMessageV2(op, n.Cert.Key, c.challenge, req), req.Sig):
+		return formBound
+	case ed25519.Verify(n.Owner, terminalMessage(op, c.challenge, req), req.Sig):
+		return formLegacy
+	}
+	return formNone
+}
+
+// legacyNoticeEvery is how often a node says it took an old-form request from the same caller: the cockpit asks every
+// peer every 20 s, so one line a day is enough to show that old requests still arrive.
+const legacyNoticeEvery = 24 * time.Hour
+
+// legacyRequest says, at most once a day per caller, that an owner request in the old form was taken.
+func (n *Node) legacyRequest(c *conn, op string) {
+	if n.Notice == nil {
+		return
+	}
+	now := time.Now
+	if c.now != nil {
+		now = c.now
+	}
+	if !n.noticeDue("terminal-unbound:"+c.peer.Name, now(), legacyNoticeEvery) {
+		return
+	}
+	n.Notice("terminal-unbound", fmt.Sprintf("took %s from %s signed in the old form, bound to no node (the caller says terminal_v2: %t); "+
+		"zmina node strict on, once every node runs a zmina that binds its requests, refuses it", op, c.peer.Name, c.peer.TerminalV2))
 }
 
 func terminalSize(cols, rows uint16) bool {
@@ -106,8 +167,23 @@ func terminalSize(cols, rows uint16) bool {
 
 func (n *Node) serveTerminal(ctx context.Context, c *conn, w wire, s *TerminalServices) error {
 	fail := func(err error) error { _ = c.send(wire{Op: "err", Err: err.Error()}); return err }
-	if w.Terminal == nil || !ed25519.Verify(n.Owner, terminalMessage(w.Op, c.challenge, *w.Terminal), w.Terminal.Sig) {
+	if w.Terminal == nil {
 		return fail(errors.New("terminal access requires the owner's signature"))
+	}
+	req := w.Terminal
+	form := n.requestForm(c, w.Op, *req)
+	switch {
+	case form == formNone:
+		return fail(errors.New("terminal access requires the owner's signature"))
+	case form == formLegacy && n.StrictRequests:
+		return fail(errors.New("this node takes only owner requests addressed to it (strict_requests is on): update zmina on the owner's node"))
+	case form == formLegacy:
+		n.legacyRequest(c, w.Op)
+	}
+	// A bound request names this node whatever it asks; an old one only when it writes (todo/act, alarm/act), and
+	// when it names a node at all it names this one.
+	if (form == formBound || req.To != "" || w.Op == "todo/act" || w.Op == "alarm/act") && req.To != n.Name {
+		return fail(fmt.Errorf("this request is for node %q, not %s", req.To, n.Name))
 	}
 	if s == nil {
 		return fail(errors.New("this node has no terminal service; update zmina"))
@@ -119,7 +195,6 @@ func (n *Node) serveTerminal(ctx context.Context, c *conn, w wire, s *TerminalSe
 		}
 		return c.send(wire{Op: "terminal/targets", Targets: targets})
 	}
-	req := w.Terminal
 	if w.Op == "crew/status" {
 		if s.Status == nil {
 			return fail(errors.New("crew status unavailable; update zmina on this node"))
@@ -141,9 +216,6 @@ func (n *Node) serveTerminal(ctx context.Context, c *conn, w wire, s *TerminalSe
 		return c.send(wire{Op: "item/result", Data: data})
 	}
 	if w.Op == "todo/act" || w.Op == "alarm/act" {
-		if req.To != n.Name {
-			return fail(fmt.Errorf("this request is for node %q, not %s", req.To, n.Name))
-		}
 		var line string
 		var err error
 		switch {
