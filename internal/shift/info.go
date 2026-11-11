@@ -28,7 +28,6 @@ const (
 	infoRule = "A zmina line marked `FYI` carries no id and needs no ack."
 )
 
-
 // markInfo makes a line for the dispatcher an info line, by the text it waits under; the first time counts.
 func (s *Shift) markInfo(text string, now time.Time) {
 	if !s.Crew.InfoLinesOn() {
