@@ -1462,6 +1462,12 @@ policy   claude: pinned work only from 80%, nothing from 99% · codex: pinned wo
   `stop`). A share is 1 to 100 and Claude's `pinned` may not be above its `stop`; a crew file that breaks this is
   refused. A seat bills the plan of its `runtime:`, so there is no key to name one. A crew file without the key keeps
   the defaults.
+- **The tap** is `zmina _limits-tap [-- command...]`, plumbing no one types. Claude Code runs a status line on every redraw
+  with a JSON on stdin; the tap reads the limits in it, writes `limits/claude.json` in the crew's directory when a
+  figure changed (and, to say the status line is still drawn, at most every 5 minutes when none did), then runs the
+  command it wraps with the same bytes on stdin and prints that command's output and exit code as they are. With
+  no command it prints nothing. One word after `--` is a shell command line, more words are a program and its
+  arguments. It never breaks a status line: any error of its own is dropped and the wrapped command runs anyway.
 
 ## Log
 
