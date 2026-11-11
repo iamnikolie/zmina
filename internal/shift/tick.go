@@ -218,6 +218,10 @@ func (s *Shift) Tick() []string {
 
 	s.mark("notes", "")
 	// Delivery records past their age limit go, told once (one more note).
+	if s.lastBeat.IsZero() || now.Sub(s.lastBeat) > beatGapMax {
+		probedUp = nil // the beat after a gap judges no in-flight record by age (beatGapMax)
+	}
+
 	notes = append(notes, s.sweepDelivery(now, probedUp)...)
 	s.addNotes(notes)
 	did = append(did, notes...)

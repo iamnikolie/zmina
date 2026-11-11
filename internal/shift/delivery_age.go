@@ -22,6 +22,11 @@ var (
 	failedMaxAge = 7 * 24 * time.Hour
 )
 
+// beatGapMax is how long since the beat before is a gap: the machine slept or the ticker stood still. The beat after
+// one judges no in-flight record by age (a line posted to a busy role may show seconds later, and a record's age was
+// measured by a clock nobody watched); the next ordinary beat does.
+const beatGapMax = 5 * time.Minute
+
 // sweepIDsShown is how many ids the event and the dispatcher's line of a sweep name; the rest are counted.
 const sweepIDsShown = 8
 

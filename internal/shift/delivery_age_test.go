@@ -290,3 +290,34 @@ func TestAgeSweepSkipsARoleTmuxDidNotAnswerFor(t *testing.T) {
 	assert.Empty(t, rs.Posted)
 	assert.Equal(t, 1, f.eventCount("delivery-aged"))
 }
+
+// A beat after a long gap (the machine slept) judges no in-flight record by age: a line posted to a busy role may show
+// seconds after the beat, and the line before it would be reported dropped on a clock nobody watched. The next
+// ordinary beat judges.
+func TestAgeSweepWaitsForAnOrdinaryBeatAfterALongGap(t *testing.T) {
+	shortAges(t, time.Hour, time.Hour)
+
+	f, _ := nativeFixture(t, crewYAML)
+	upNative(t, f, "designer")
+
+	require.NoError(t, f.s.Queue("designer", "[dev] untracked line"))
+	require.NotEmpty(t, f.s.deliverInbox("designer", *f.now))
+	f.s.Tick()
+
+	rs := f.s.State.Role("designer")
+	require.Len(t, rs.Posted, 1)
+
+	*f.now = f.now.Add(25 * time.Hour)
+	f.status("designer", "busy", *f.now)
+	f.s.Tick()
+
+	assert.Len(t, rs.Posted, 1, "the first beat after the gap does not judge it")
+	assert.Zero(t, f.eventCount("delivery-aged"))
+
+	*f.now = f.now.Add(time.Minute)
+	f.status("designer", "busy", *f.now)
+	f.s.Tick()
+
+	assert.Empty(t, rs.Posted, "an ordinary beat does")
+	assert.Equal(t, 1, f.eventCount("delivery-aged"))
+}
