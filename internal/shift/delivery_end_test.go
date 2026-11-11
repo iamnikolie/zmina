@@ -430,3 +430,34 @@ func TestLineThatOpensLikeTheBootSurvivesASessionEnd(t *testing.T) {
 	assert.True(t, f.s.sessionBound("designer", rs.QueuedBoot))
 	assert.False(t, f.s.sessionBound("designer", "read AGENTS.md section 3 again, it changed"))
 }
+
+// The dispatcher's deliver clears QueuedBoot as soon as the boot has left the queue, so a boot posted and not yet shown
+// is known at the session's end by the record, which says it is the boot: dropped, not given to the next session, which
+// starts with its own boot.
+func TestPostedBootIsDroppedAtSessionEnd(t *testing.T) {
+	f, _ := nativeFixture(t, crewYAML)
+	upNative(t, f, "dispatcher")
+
+	rs := f.s.State.Role("dispatcher")
+	boot := "read d and boot\n\n[zmina] the rules"
+	rs.QueuedBoot, rs.Inbox = boot, []string{boot}
+
+	require.NotEmpty(t, f.s.deliverInbox("dispatcher", *f.now))
+	require.Len(t, rs.Posted, 1)
+
+	f.s.deliver(*f.now) // clears QueuedBoot: the boot is not in the queue any more
+	require.Empty(t, rs.QueuedBoot)
+
+	f.s.State.Stopped = *f.now // nothing starts a new dispatcher
+	delete(f.tm.up, "dispatcher")
+
+	for range 3 {
+		*f.now = f.now.Add(time.Minute)
+		f.s.Tick()
+	}
+
+	assert.Empty(t, rs.Posted)
+	assert.Empty(t, rs.Inbox, "the next session has its own boot")
+	assert.Zero(t, f.eventCount("requeued"))
+	assert.Equal(t, 1, f.eventCount("dropped"))
+}

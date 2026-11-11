@@ -62,7 +62,7 @@ func (s *Shift) requeuePosted(name string, p Posted) []string {
 	parts := p.Parts
 
 	if len(parts) == 0 {
-		if s.sessionBound(name, p.Line) {
+		if p.Boot || s.sessionBound(name, p.Line) {
 			s.log(name, "dropped", "", "meant for the conversation that ended, never shown in it: "+p.Line)
 
 			return nil
@@ -103,7 +103,8 @@ var sessionBoundOpenings = []string{
 // is for the role, not for the session: a line sent to it, an alarm, a task packet, a signal.
 func (s *Shift) sessionBound(name, line string) bool {
 	// The boot is the line a clear queued, known by equality: the role's boot text is also how a line sent to it may
-	// open, and a line is not the boot for opening like it.
+	// open, and a line is not the boot for opening like it. Once it is posted, the record says so itself (Posted.Boot),
+	// since QueuedBoot is cleared as soon as the boot has left the queue.
 	if q := s.State.Role(name).QueuedBoot; slashCommand(line) || q != "" && line == q {
 		return true
 	}

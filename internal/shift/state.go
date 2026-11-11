@@ -261,6 +261,9 @@ type Posted struct {
 	IDs []string `json:"ids,omitempty"`
 	// Parts are what a post to the dispatcher was made of, given back each on its own when it never shows.
 	Parts []Part `json:"parts,omitempty"`
+	// Boot is that the line is the boot a clear queued for the role (QueuedBoot, which the dispatcher's deliver clears
+	// once the boot has left the queue): the conversation that ends before it shows it takes it with it.
+	Boot bool `json:"boot,omitempty"`
 }
 
 // Part is one item of a line or post to the dispatcher, kept so that what never reached it goes back where it

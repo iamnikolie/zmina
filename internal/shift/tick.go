@@ -1389,6 +1389,7 @@ func (s *Shift) postInbox(name string, sess *registry.Session, now time.Time) st
 
 	ids := s.takeIDs(name, head)
 	rs.Posted[len(rs.Posted)-1].IDs = ids
+	rs.Posted[len(rs.Posted)-1].Boot = rs.QueuedBoot != "" && head == rs.QueuedBoot
 
 	rs.Inbox, rs.Attempts = rs.Inbox[1:], 0
 	s.submittedTask(name, head)
