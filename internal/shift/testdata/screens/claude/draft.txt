@@ -1,0 +1,9 @@
+⏺ Done. Anything else on the parser?
+
+✻ Baked for 20s
+
+────────────────────────────────────────────────────────────────────────────────
+❯ rename the helper and update its callers
+────────────────────────────────────────────────────────────────────────────────
+  ~/work/example (main) [Opus 5.5] ctx:41%
+  ⏵⏵ bypass permissions on (shift+tab to cycle)

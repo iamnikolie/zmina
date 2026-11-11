@@ -1,0 +1,10 @@
+ Detected a custom API key in your environment
+
+ ANTHROPIC_API_KEY: sk-ant-...XXXX
+
+ Do you want to use this API key?
+
+ ❯ 1. No (recommended) ✔
+   2. Yes
+
+ Enter to confirm · Esc to cancel

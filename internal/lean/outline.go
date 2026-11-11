@@ -229,6 +229,11 @@ func goOutline(src []byte) []Symbol {
 		}
 	}
 
+	// A declaration the parser cut short at the end of the file has no end position of its own (line 0).
+	for i := range out {
+		out[i].End = max(out[i].End, out[i].Start)
+	}
+
 	return out
 }
 
@@ -333,7 +338,8 @@ func yamlOutline(src []byte, lines int) []Symbol {
 
 			stop := end
 			if i+2 < len(m.Content) {
-				stop = m.Content[i+2].Line - 1
+				// The next key may share the line (a flow mapping, {a: 1, b: 2}): this one then ends where it starts.
+				stop = max(m.Content[i+2].Line-1, k.Line)
 			}
 
 			name := prefix + k.Value
@@ -367,7 +373,8 @@ func jsonOutline(src []byte, lines int) []Symbol {
 
 	closeKey := func(depth, at int) {
 		if i, ok := last[depth]; ok {
-			out[i].End = at
+			// A key on the same line as the next one (a file of one line, or `"a": 1, "b": 2`) ends where it starts.
+			out[i].End = max(at, out[i].Start)
 			delete(last, depth)
 		}
 	}

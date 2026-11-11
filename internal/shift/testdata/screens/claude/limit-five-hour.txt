@@ -1,0 +1,10 @@
+⏺ Working on the exporter.
+
+  ⎿  5-hour limit reached ∙ resets 9pm
+     /upgrade to increase your usage limit.
+
+────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  ~/work/example (main) [Opus 5.5] ctx:41%
+  ⏵⏵ bypass permissions on (shift+tab to cycle)

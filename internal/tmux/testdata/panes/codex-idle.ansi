@@ -1,0 +1,7 @@
+› fix the failing parser test
+
+• The test expected the old name; updated it and the callers.
+
+[zmina codex: idle]
+[38;5;244m────────────────────────────────────────[39m
+❯ 

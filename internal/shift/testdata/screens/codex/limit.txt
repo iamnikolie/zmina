@@ -1,0 +1,7 @@
+› fix the failing parser test
+
+■ You've hit your usage limit. Try again in 2 days 3 hours 11 minutes.
+
+[zmina codex: idle]
+────────────────────────────────────────
+❯

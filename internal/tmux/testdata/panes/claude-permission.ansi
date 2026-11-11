@@ -1,0 +1,14 @@
+[38;5;114m⏺[39m I'll clear the stale build output first.
+
+[38;5;244m────────────────────────────────────────────────────────────────────────────────[39m
+ [1mBash command[0m
+
+   rm -rf build
+   Remove the stale build directory
+
+ Do you want to proceed?
+ [38;5;153m❯ 1. Yes[39m
+   2. Yes, and don't ask again for rm commands in /work/example
+   3. No, and tell Claude what to do differently (esc)
+
+[2m Esc to cancel · Tab to amend · ctrl+e to explain[0m

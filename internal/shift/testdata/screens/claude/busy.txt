@@ -1,0 +1,16 @@
+⏺ Tests pass. Now the wrapped records: the long ones are cut at the first
+  separator, which drops the tail.
+
+⏺ Update(internal/parse/records.go)
+  ⎿  Added 4 lines, removed 1 line
+
+⏺ Bash(go test ./internal/parse/...)
+  ⎿  Running…
+
+✢ Pondering… (3m 26s · ↓ 15.6k tokens · esc to interrupt)
+
+────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  ~/work/example (main) [Opus 5.5] ctx:41%
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt
