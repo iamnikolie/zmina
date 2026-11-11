@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -223,4 +224,90 @@ func TestCheckModelsCodexSeats(t *testing.T) {
 
 	require.Len(t, lines, 1)
 	assert.Contains(t, lines[0], "warn models 2 roles with no model: (dispatcher, cdx)")
+}
+
+// fakeClaudeVersion is a claude that passes doctor's flag check, is logged in and answers --version with the given text
+// (a script of its own when it starts with #!).
+func fakeClaudeVersion(t *testing.T, dir, version string) {
+	t.Helper()
+
+	script := fmt.Sprintf(`#!/bin/sh
+if [ "$1" = auth ]; then echo '{"loggedIn": true}'; exit 0; fi
+if [ "$1" = --version ]; then %s; exit 0; fi
+echo '--name --resume --remote-control --model'
+`, version)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0o700))
+}
+
+// doctor prints the installed Claude Code and warns, never fails, outside the range this build was tried with.
+func TestDoctorClaudeCodeVersion(t *testing.T) {
+	crewFile := testCrew(t, "")
+	dir := filepath.Dir(crewFile)
+
+	old := claudeCodeTested
+	claudeCodeTested = versionRange{min: "2.1.224", max: "2.1.322"}
+	t.Cleanup(func() { claudeCodeTested = old })
+
+	for name, tc := range map[string]struct{ says, level, want string }{
+		"in range":      {"echo '2.1.300 (Claude Code)'", "ok", "Claude Code 2.1.300 (this zmina was tried with 2.1.224 to 2.1.322)"},
+		"the newest":    {"echo '2.1.322 (Claude Code)'", "ok", "Claude Code 2.1.322"},
+		"newer":         {"echo '2.1.323 (Claude Code)'", "warn", "Claude Code 2.1.323 is newer than the newest this zmina was tried with (2.1.224 to 2.1.322)"},
+		"newer minor":   {"echo '2.2.0 (Claude Code)'", "warn", "is newer than the newest"},
+		"older":         {"echo '2.1.100 (Claude Code)'", "warn", "Claude Code 2.1.100 is older than the oldest"},
+		"no number":     {"echo 'claude, a coding agent'", "warn", "could not read the version"},
+		"fails":         {"echo nope >&2; exit 3", "warn", "could not read the version"},
+		"two-digit one": {"echo '10.0.0'", "warn", "is newer than the newest"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fakeClaudeVersion(t, dir, tc.says)
+
+			out, _, _ := zm(t, crewFile, "doctor")
+			assert.NotContains(t, out, "fail  claude", "a version out of range is a warning")
+			assert.Regexp(t, "(?m)^"+tc.level+" +claude +.*"+regexp.QuoteMeta(tc.want), out)
+		})
+	}
+}
+
+// A claude that never answers --version does not hold doctor: the check is bounded, and says so.
+func TestDoctorVersionCommandHasADeadline(t *testing.T) {
+	oldT, oldD := versionTimeout, versionWaitDelay
+	versionTimeout, versionWaitDelay = time.Second, 200*time.Millisecond
+	t.Cleanup(func() { versionTimeout, versionWaitDelay = oldT, oldD })
+
+	bin := filepath.Join(t.TempDir(), "claude")
+	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\nsleep 30 &\necho $! > "+bin+".child\nwait\n"), 0o700))
+
+	var lines []string
+
+	start := time.Now()
+	checkRelease("claude", "Claude Code", bin, "", versionRange{max: "2.1.322"}, func(name, level, format string, args ...any) {
+		lines = append(lines, level+" "+fmt.Sprintf(format, args...))
+	})
+
+	assert.Less(t, time.Since(start), 10*time.Second)
+	require.Len(t, lines, 1)
+	assert.Contains(t, lines[0], "warn Claude Code: could not read the version")
+	assert.Contains(t, lines[0], "no answer in 1s")
+
+	raw, err := os.ReadFile(bin + ".child")
+	require.NoError(t, err)
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	require.NoError(t, err)
+	assert.Eventually(t, func() bool { return syscall.Kill(pid, 0) != nil }, 2*time.Second, 20*time.Millisecond,
+		"the child is not left running")
+}
+
+// Codex is read when a role runs on it; a range with no lower end has no lower bound.
+func TestCheckReleaseCodex(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "codex")
+	require.NoError(t, os.WriteFile(bin, []byte("#!/bin/sh\necho 'codex-cli 0.150.2'\n"), 0o700))
+
+	var lines []string
+
+	checkRelease("codex", "Codex", bin, "", versionRange{max: "0.167.0"}, func(name, level, format string, args ...any) {
+		lines = append(lines, level+" "+name+" "+fmt.Sprintf(format, args...))
+	})
+
+	require.Len(t, lines, 1)
+	assert.Equal(t, "ok codex Codex 0.150.2 (this zmina was tried with up to 0.167.0)", lines[0])
 }

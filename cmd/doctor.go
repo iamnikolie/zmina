@@ -119,6 +119,7 @@ func (a *app) diagnose() []check {
 	if hasCodex {
 		a.checkCodex(c, add)
 	}
+	checkToolVersions(c, hasClaude, hasCodex, add)
 	a.checkTicker(c, add)
 
 	st, err := shift.Read(c.StateDir())
