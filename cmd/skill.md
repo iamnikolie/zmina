@@ -82,6 +82,15 @@ lessons: on                              # daily triage of the roles' lessons in
 limits:                                  # how the crew spends its plans, in % of the 7-day (Claude) and weekly (Codex) window; see Limits
   claude: {pinned: 80, stop: 99}         # from pinned only work that needs Claude goes to it, from stop nothing (defaults 80 and 99)
   codex: {pinned: 80}                    # from pinned only work that needs Codex goes to it (default 80)
+routes:                                  # the dispatcher's routing rules in order, the first that matches and yields a seat wins; see Routes
+  - other_crew: {repo_under: ~/work/acme-lg, tell: box/acme}   # a repo under it is another crew's: tell its dispatcher
+  - continuation: {fresh_over: 80}       # --after T-n: the seat that did it, a fresh copy once its context is over 80%
+  - project: {api: dev-api}              # a project's owner seat
+  - kind: {design: designer}             # a kind of work's seat
+  - review: {first: designer, again: [dev-api]}   # --kind review --of T-n: never the author
+  - pool: {seats: [dev-api, scribe], by: limits}  # the rest: a free seat of the emptier plan
+busy: copy-or-pool                       # a busy seat gives way to its copy, or a free seat of its plan (pool: no copies); default copy-or-pool
+route_override: optional                 # required: a seat picked by hand against the routes has to say why (default optional)
 day_start: "09:00"                       # when morning, tomorrow, thu or a date rings (default 09:00)
 # name: ops                              # a second crew: tmux -L zmina-ops, its own ticker
 # prefix: ops-                           # default session names (default zm-); no '/': it reads as <node>/<crew>
@@ -1476,6 +1485,65 @@ policy   claude: pinned work only from 80%, nothing from 99% · codex: pinned wo
   role typed to (`delivery: tmux`), a Codex role, one whose `args` pass their own `--settings` and one an earlier zmina
   started (until its next start) have no tap, so their status lines record nothing. The line is a command line a
   session keeps for its life, like the hooks: `_limits-tap` keeps its name and form across versions.
+
+## Routes — which seat takes a piece of work
+
+The crew file's `routes:` key is the routing table the dispatcher keeps in its head, as data: an ordered list of rules,
+and the first rule that matches and yields a seat wins. The kinds of rule are fixed, one for each rule the dispatcher
+has always followed; there is no expression language. Rule 1, the owner naming the seat, is not a row of the table:
+it is naming the role yourself. The table is advice: it picks among the seats the crew file names and never decides
+what the work is (its kind, its project when no repo says it, whether it is one task or two stay the dispatcher's
+judgment). A crew file without `routes:` behaves as it always did.
+
+```yaml
+routes:
+  - other_crew: {repo_under: ~/work/acme-lg, tell: box/acme}   # rule 0
+  - other_crew: {repo_under: ~/work/acme-erp, tell: box/erp}
+  - continuation: {fresh_over: 80}                              # rule 2
+  - project: {app: dev-api, docs: scribe}                       # rule 3
+  - kind: {design: designer, film: director}                    # rule 4
+  - review:                                                     # rule 5
+      first: reviewer                                           # the first review of a task
+      again: [codex-dev, dev-api, dev-web]                      # a re-review: not the author
+  - pool: {seats: [dev-api, dev-web, codex-dev], by: limits}    # rule 6
+busy: copy-or-pool                                              # rule 7, applied to every seat picked
+route_override: optional
+```
+
+| Rule | Matches when | Picks |
+|---|---|---|
+| `other_crew: {repo_under, tell}` (0) | `--repo` is `repo_under` or below it (`~` or a path relative to the crew file; symbolic links followed). Any number of rows. | `tell`, a `<node>/<crew>` that is not a seat: the work is another crew's. Action `tell`. |
+| `continuation: {fresh_over}` (2) | `--after T-n` | The seat that held T-n (its copy `dev#2` if that is still there, else its role). When its conversation fills more than `fresh_over` percent (1 to 100, default 80) of what it may fill — the role's `context_max`, else its `restart_at` — a fresh copy takes it, the next free number from 2 to 9 (action `copy`). A context not known is not judged. A seat that is not in the crew, or is asleep, yields nothing, and the next rule is asked. |
+| `project: {name: seat}` (3) | The project (`--project`, else the repo's directory name) is a name of the map. | Its seat. |
+| `kind: {name: seat}` (4) | `--kind` is a name of the map. | Its seat. `--kind review` is the review rule's, not this one's. |
+| `review: {first, again}` (5) | `--kind review` with `--of T-n`. | First review: `first`. Re-review (`--rereview`): the first seat of `again` that is idle, else the first that is down, else the first that is busy — never the author of T-n, and a copy of the author is the author. A `first` that is the author, or cannot take work, falls to `again`; a rule with only `first` re-reviews with it. |
+| `pool: {seats, by: limits}` (6) | Always. | See below. |
+
+**The pool** takes the rest of the work by how full the plans are (see Limits; a seat bills the plan of its `runtime:`).
+A seat whose plan is at its `pinned` share is out of the pool (only work that needs that plan goes there), and so is
+one at Claude's `stop` share. Of the others the seat of the plan with the lower share used wins (Claude's 7-day
+window against Codex's weekly one), within a plan the seat that can start soonest — idle, then down, then busy — then
+the one with fewest open tasks, then the first in the list. When a plan's reading is unknown or stale the plans are
+not compared: the pool answers by how soon a seat starts and by fewest open tasks, and says `limits unknown`. A pool
+with every seat out yields nothing.
+
+**Seats' state.** A seat is `idle` (up, between turns, holding no task), `busy` (up and working, or holding an
+active task, up or down), `down` (no session, holding nothing) or unavailable (asleep, outside zmina, its directory
+gone, tmux not answering): an unavailable seat yields nothing and the next rule is asked.
+
+**Busy** is rule 7, applied to every seat a rule picks. `busy: copy-or-pool` (the default) gives a busy seat's work to
+a copy of its role that is idle, else to a new copy (`dev#2`, the lowest free number; never the dispatcher's), else to
+a free seat of the same plan from the first `pool:` (idle, then down). `busy: pool` makes no copies: the pool only.
+With none of those the seat keeps it and the task queues behind its work, said so. A copy is advice: starting one
+stays the owner's call, as in For the dispatcher.
+
+**`route_override`** is `optional` (the default) or `required`; see below.
+
+**The crew file is checked** (`zmina doctor`, every command that loads it): an unknown rule kind, a rule that is not
+one key, a key a rule does not have, a role no seat exists for (a copy is no seat of a rule), an empty or missing
+pool, a `tell` that is not `<node>/<crew>`, a `fresh_over` outside 1 to 100, a `busy` or `route_override` value that is
+not one of the two are errors that name the rule and its line, and the crew does not load. A role a rule names cannot
+be removed with `zmina seat rm` while it does.
 
 ## Log
 
