@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -191,4 +194,179 @@ func TestTapIsPlumbingNotListedAnywhere(t *testing.T) {
 	out, _, err := zm(t, testCrew(t, ""), "--help")
 	require.NoError(t, err)
 	assert.NotContains(t, out, "_limits-tap")
+}
+
+// pidFileGone reports whether the process whose pid a script wrote to path no longer runs. A pid that is not written yet is
+// not gone.
+func pidFileGone(t *testing.T, path string) bool {
+	t.Helper()
+
+	raw, err := os.ReadFile(path)
+	if err != nil || !strings.HasSuffix(string(raw), "\n") {
+		return false
+	}
+
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	require.NoError(t, err)
+
+	return syscall.Kill(pid, 0) != nil
+}
+
+// killAtEnd ends what a test's script left running, so a failing test leaves no process behind.
+func killAtEnd(t *testing.T, paths ...string) {
+	t.Helper()
+
+	t.Cleanup(func() {
+		for _, path := range paths {
+			if raw, err := os.ReadFile(path); err == nil {
+				if pid, err := strconv.Atoi(strings.TrimSpace(string(raw))); err == nil && pid > 1 {
+					_ = syscall.Kill(pid, syscall.SIGKILL)
+				}
+			}
+		}
+	})
+}
+
+// A wrapped command that never exits does not hold the status line: the tap cuts it at the time it has, quietly, with
+// what it printed so far, and nothing it started is left running.
+func TestTapCutsAWrappedCommandThatNeverEnds(t *testing.T) {
+	pids := filepath.Join(t.TempDir(), "sleep.pid")
+	killAtEnd(t, pids)
+
+	var out, errOut bytes.Buffer
+
+	a := &app{out: &out, err: &errOut}
+	start := time.Now()
+
+	err := a.runWrappedWithin([]string{"echo partial; sleep 30 & echo $! > " + pids + "; wait"}, []byte(tapStatusline), 700*time.Millisecond)
+
+	assert.NoError(t, err, "out of time is not a failure of the status line")
+	assert.Equal(t, "partial\n", out.String(), "what was printed stays")
+	assert.Empty(t, errOut.String(), "no error text into the status line")
+	assert.Less(t, time.Since(start), 10*time.Second, "bounded by its time, not by the command")
+	assert.Eventually(t, func() bool { return pidFileGone(t, pids) }, 3*time.Second, 20*time.Millisecond,
+		"the whole group is killed, what the shell started included")
+}
+
+// What the command started and left holding the output does not hold the tap past the wait delay once the command
+// itself is done.
+func TestTapDoesNotWaitForPipesAChildOfTheCommandHolds(t *testing.T) {
+	pids := filepath.Join(t.TempDir(), "sleep.pid")
+	killAtEnd(t, pids)
+
+	var out, errOut bytes.Buffer
+
+	a := &app{out: &out, err: &errOut}
+	start := time.Now()
+
+	err := a.runWrappedWithin([]string{"echo hi; sleep 8 & echo $! > " + pids}, []byte(tapStatusline), time.Minute)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "hi\n", out.String())
+	assert.Empty(t, errOut.String())
+	assert.Less(t, time.Since(start), 5*time.Second, "bounded by the wait delay, not by the child")
+}
+
+// The wrapped command's exit code and a program that is not there are still as before.
+func TestTapKeepsTheWrappedExitCodeUnderTheTimeout(t *testing.T) {
+	var out, errOut bytes.Buffer
+
+	a := &app{out: &out, err: &errOut}
+
+	var ee *exitError
+
+	require.True(t, errors.As(a.runWrappedWithin([]string{"echo x; exit 4"}, nil, time.Minute), &ee))
+	assert.Equal(t, 4, ee.code)
+	assert.Equal(t, "x\n", out.String())
+
+	require.True(t, errors.As(a.runWrappedWithin([]string{"kill -TERM $$"}, nil, time.Minute), &ee))
+	assert.Equal(t, 128+int(syscall.SIGTERM), ee.code, "ended by a signal of its own: as a shell says it")
+
+	require.True(t, errors.As(a.runWrappedWithin([]string{"/nonexistent/statusline"}, nil, time.Minute), &ee))
+	assert.Equal(t, 127, ee.code)
+}
+
+// tapHelperEnv makes the test binary run as `zmina`: TestTapHelperProcess runs what follows `--` in its arguments.
+const tapHelperEnv = "ZMINA_TEST_TAP_HELPER"
+
+func TestTapHelperProcess(t *testing.T) {
+	if os.Getenv(tapHelperEnv) == "" {
+		t.Skip("run by the tests that start a tap")
+	}
+
+	args := os.Args
+	for i, arg := range args {
+		if arg == "--" {
+			args = args[i+1:]
+
+			break
+		}
+	}
+
+	root := NewRoot(os.Stdout, os.Stderr)
+	root.SetArgs(args)
+
+	if err := root.Execute(); err != nil {
+		var ee *exitError
+		if errors.As(err, &ee) {
+			os.Exit(ee.code)
+		}
+
+		os.Exit(1)
+	}
+
+	os.Exit(0)
+}
+
+// A tap that is told to end takes its wrapped command with it, whole group: Claude Code ends a status line that
+// takes too long, and the command must not outlive the tap.
+func TestTapEndsItsWrappedCommandWhenTold(t *testing.T) {
+	for _, sig := range []syscall.Signal{syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP} {
+		t.Run(sig.String(), func(t *testing.T) {
+			crewFile := testCrew(t, "")
+			dir := t.TempDir()
+			shell, child := filepath.Join(dir, "sh.pid"), filepath.Join(dir, "sleep.pid")
+			killAtEnd(t, shell, child)
+
+			script := "echo $$ > " + shell + "; sleep 30 & echo $! > " + child + "; wait"
+			c := exec.Command(os.Args[0], "-test.run=^TestTapHelperProcess$", "--", "--crew", crewFile, "_limits-tap", "--", script)
+			c.Env = append(os.Environ(), tapHelperEnv+"=1")
+			c.Stdin = strings.NewReader(tapStatusline)
+
+			var out bytes.Buffer
+
+			c.Stdout, c.Stderr = &out, &out
+			require.NoError(t, c.Start())
+
+			ended := make(chan error, 1)
+
+			go func() { ended <- c.Wait() }()
+
+			t.Cleanup(func() { _ = c.Process.Kill() })
+
+			require.Eventually(t, func() bool { return fileHasLine(child) }, 10*time.Second, 20*time.Millisecond,
+				"the wrapped command is running")
+			require.NoError(t, c.Process.Signal(sig))
+
+			select {
+			case err := <-ended:
+				var exit *exec.ExitError
+				require.True(t, errors.As(err, &exit), "the tap ends with the signal's code: %v\n%s", err, out.String())
+				assert.Equal(t, 128+int(sig), exit.ExitCode())
+			case <-time.After(10 * time.Second):
+				t.Fatalf("the tap did not end after %s\n%s", sig, out.String())
+			}
+
+			assert.Eventually(t, func() bool { return pidFileGone(t, shell) && pidFileGone(t, child) }, 3*time.Second, 20*time.Millisecond,
+				"the wrapped shell and what it started are gone")
+			assert.NotContains(t, out.String(), "_limits-tap", "no error text of the tap's")
+		})
+	}
+}
+
+// fileHasLine reports whether a script has written a whole line to path.
+func fileHasLine(path string) bool {
+	raw, err := os.ReadFile(path)
+
+	return err == nil && strings.HasSuffix(string(raw), "\n")
 }

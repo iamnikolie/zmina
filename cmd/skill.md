@@ -1521,7 +1521,10 @@ policy   claude: pinned work only from 80%, nothing from 99% · codex: pinned wo
   figure changed (and, to say the status line is still drawn, at most every 5 minutes when none did), then runs the
   command it wraps with the same bytes on stdin and prints that command's output and exit code as they are. With
   no command it prints nothing. One word after `--` is a shell command line, more words are a program and its
-  arguments. It never breaks a status line: any error of its own is dropped and the wrapped command runs anyway.
+  arguments. It never breaks a status line: any error of its own is dropped and the wrapped command runs anyway. The
+  command runs in a process group of its own and has 5 seconds: past that the group is killed and the tap ends with
+  exit code 0 and what the command printed so far, no error text; a tap that is sent SIGTERM, SIGINT or SIGHUP kills the
+  group too and exits with 128 plus the signal.
 - **Where the tap is installed**: in the `statusLine` of the `--settings` zmina passes a Claude role that takes its lines
   on its own channel (Delivery), next to its hooks. It wraps the status line Claude Code would have drawn for that role —
   the `statusLine` command of `.claude/settings.local.json`, then `.claude/settings.json` in the directory it starts in
