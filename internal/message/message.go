@@ -2,8 +2,10 @@
 package message
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -213,6 +215,13 @@ func (s Store) Load(id string) (Message, error) {
 		return Message{}, fmt.Errorf("invalid message ID")
 	}
 	raw, err := os.ReadFile(filepath.Join(s.Dir, id+".json"))
+	if errors.Is(err, os.ErrNotExist) {
+		// A finished message that was archived is still the message of its id: a late receipt or a repeated
+		// publication finds it there instead of starting a second record.
+		if old, aerr := os.ReadFile(filepath.Join(s.Dir, ArchiveDir, id+".json")); aerr == nil {
+			raw, err = old, nil
+		}
+	}
 	if err != nil {
 		return Message{}, err
 	}
@@ -257,31 +266,66 @@ func (s Store) Save(m Message) error {
 	return writeAtomic(s.Dir, m.ID+".json", m)
 }
 
-// writeAtomic writes v as indented JSON to dir/name through a synced temporary file.
+// writeAtomic writes v as indented JSON to dir/name through a synced temporary file, unless the file already holds
+// exactly those bytes: what did not change is not written again (and not synced again).
 func writeAtomic(dir, name string, v any) error {
-	if err := fsx.MkdirAll(dir, 0700); err != nil {
-		return err
-	}
 	raw, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
-	return fsx.WriteFile(filepath.Join(dir, name), append(raw, '\n'), 0o600)
+	raw = append(raw, '\n')
+	path := filepath.Join(dir, name)
+	if old, err := os.ReadFile(path); err == nil && bytes.Equal(old, raw) {
+		return nil
+	}
+	if err := fsx.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	return fsx.WriteFile(path, raw, 0o600)
 }
-func (s Store) All() ([]Message, error) {
-	paths, err := filepath.Glob(filepath.Join(s.Dir, "*.json"))
+
+// Problem is a message file that did not read: its path, its name in the store's directory, and why.
+type Problem struct {
+	Path string
+	File string
+	Err  error
+}
+
+func (p Problem) Error() string { return p.File + ": " + p.Err.Error() }
+func (p Problem) Unwrap() error { return p.Err }
+
+// Scan reads every message file in the store. A file that does not read (damaged, written by another version, not a
+// message at all) is a Problem and the others are still returned: one bad file hides nothing else. The error is
+// only for a directory that cannot be listed.
+func (s Store) Scan() ([]Message, []Problem, error) {
+	entries, err := os.ReadDir(s.Dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil, nil
+	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var out []Message
-	for _, p := range paths {
-		m, err := s.Load(strings.TrimSuffix(filepath.Base(p), ".json"))
+	var bad []Problem
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		m, err := s.Load(strings.TrimSuffix(name, ".json"))
 		if err != nil {
-			return out, err
+			bad = append(bad, Problem{Path: filepath.Join(s.Dir, name), File: name, Err: err})
+			continue
 		}
 		out = append(out, m)
 	}
-	return out, nil
+	return out, bad, nil
+}
+
+// All is every message that reads; a file that does not is left out (Scan names it).
+func (s Store) All() ([]Message, error) {
+	out, _, err := s.Scan()
+	return out, err
 }
 
 // Add preserves every revision; only explicit status supersession may suppress an unread status notification.
