@@ -888,6 +888,7 @@ func TestQueuedLineThatFailsMovesToFailed(t *testing.T) {
 	f.tm.typeErr = errors.New("tmux refused")
 	for range typeTries - 1 {
 		f.s.Tick()
+		*f.now = f.now.Add(time.Minute)
 	}
 
 	assert.Equal(t, []string{"bad", "good"}, f.s.State.Role("designer").Inbox, "retried, not dropped")

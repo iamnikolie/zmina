@@ -301,7 +301,7 @@ background shell) wait for the beat as before. So a role's next line, its first 
 second after its turn ends (`posted … by turn-end` in the log). The hook prints nothing and never blocks or continues
 a turn, so it adds no tokens: Claude Code records only a `stop_hook_summary` line, which is not sent to the model. A
 compaction ends no turn and runs no `Stop` hook, so the same command is also a `SessionStart` hook for the source
-`compact`: what waits goes once a compaction is over. A role started by an earlier zmina has no such hooks until its
+`compact`: what waits goes once a compaction is over, without the 15 s wait after a slash command (see The ticker). A role started by an earlier zmina has no such hooks until its
 next start. The beat tells the dispatcher once per session of a role on its own channel that runs without zmina's
 turn-end hook, or with the hooks of a zmina whose executable is gone (`dispatcher: runs the hooks of a zmina that is
 gone (…): its lines wait for the next beat after each turn …; restart it … zmina restart dispatcher --continue`, which
@@ -323,7 +323,7 @@ Typed into the input line as before: a slash command (a posted one is plain text
 (below: his own turn, never another session's message), a role whose `args`
 pass their own `--settings` (zmina's are not passed: a warning), a role with `delivery: tmux`, a role started by an
 earlier zmina (no settings: until its next start), and a session with no inbox socket or another `peerProtocol`.
-A post that never started is tried three beats, then kept as failed; one whose write broke after it started is
+A post that never started is tried three times, at least 30 s apart, then kept as failed; one whose write broke after it started is
 followed like a posted line (`post-broken` in the log: the role may have it), never posted again. A posted line an idle session never shows within 10 min is kept as failed (`posted to its
 inbox socket, never seen in its conversation (held or dropped); inspect before retry`); one that went to a
 conversation that is over (the role restarted, was put down, released or ended, or a `/clear` started another in the
@@ -473,7 +473,7 @@ goes over the crew's field by field; a change applies at the role's next start. 
 | `zmina retire [--moved-to <node>/<crew>] [--clear]` / `retire --off` | the owner's word that this crew is no longer the live one: `retired:` and `moved_to:` in the crew file (a state file recovered or a stop lifted does not lose them), then as `zmina stop`. `--off` takes the mark off; the shift stays stopped until `zmina start`. Only this mark says one crew went on as another: two crews with one name are never taken for one. |
 | `zmina doctor [--json]` | checks crew file, tmux (3.2 or newer), claude as roles find it (their PATH; a binary in a temp dir fails) and the flags zmina passes, the installed Claude Code (and Codex when a role runs on it) with a warning when its version is outside the range this zmina was tried with (`claude`, `codex`; a version it cannot read, within a 5 s deadline, is a warning too, never a fail), Claude Code's session registry (zmina reads it to tell idle from busy; it is not a public interface — doctor says when its shape changed), ticker beat, state, lock (the holder now with its age and phase, and the holds over 20 s and waits over 5 s of the last 24 h from the log), task files, crews sharing a tmux server, versions (this zmina's; a cockpit, a Codex bridge or Claude roles that another zmina started); on a mesh node `node`: its certificate (warn from 30 days before it expires or while it has no expiry, fail once expired or when its key was revoked), the revocation list it holds, and on the owner's node the peers' certificates near their end; what zmina's own rules add to a fresh role's prefix (`boot`: characters on average and the role with most, by what read_guard, lessons, delivery and Codex seats turn on) and whether `skills:` trims the skill list; whether `context_max`, `restart_at` and `restart_done` are at or below the recommended context sizes (`context`, advice only: The crew file); roles that name no model (`models`, a warning: `model:`, `--model` in `args:` or a Codex `profile:` names one; without it a role runs on its CLI's default, which can change its price unseen); whether the crew's namespace is logged in (`login`, from `claude auth status`: not logged in fails, a login expiring within 7 days warns); what piles up: owner asks open over 7 days, parked items over 14 days, copies of the crew file beside it (`crew.yaml.bak`, `.bak-old`: zmina keeps versions in `zmina crew history` now), closed tasks that keep their worktree (`worktrees`); report records that do not read, or whose work fails, each named by its file (`messages`, a warning for as long as it lasts); the retention pass (`retention`: its span, the last pass and what it moved, a warning when none ran for 3 days). Exit 1 on a fail. |
 | `zmina retention [--dry-run]` | the ticker's daily retention pass, run now (see Retention): finished work older than the crew's retention span moves to `archive/retention/<yyyy-mm>/`, old lines leave `reads.jsonl`, `tick.log` is cut to its tail. `--dry-run` lists each thing that would move and moves nothing. Runs whatever `retention:` says (`off` only stops the ticker); prints what it moved, and logs one `retention` event. |
-| `zmina queue ls [--full] [--json]` | what waits to be typed: the dispatcher's signals and health notes, each role's inbox, lines posted to its inbox socket not yet seen in its conversation, and its failed lines (a line tmux refused three beats in a row), the posted and the failed ones with their age; each line its words first (clipped to 160 characters, `--full` whole) and the ids it carries after them (`fix the login · T-12 · S-610`: a head id like `S-12` or `T-12`, and the `(zmina S-610)` ack tail). `--json` has the stored lines as they are. |
+| `zmina queue ls [--full] [--json]` | what waits to be typed: the dispatcher's signals and health notes, each role's inbox, lines posted to its inbox socket not yet seen in its conversation, and its failed lines (a line tmux refused three tries in a row), the posted and the failed ones with their age; each line its words first (clipped to 160 characters, `--full` whole) and the ids it carries after them (`fix the login · T-12 · S-610`: a head id like `S-12` or `T-12`, and the `(zmina S-610)` ack tail). `--json` has the stored lines as they are. |
 | `zmina queue retry <role>` / `queue drop <role> [--all]` | put failed lines back at the head of the inbox / drop them (`--all`: the inbox too; for the dispatcher its signals and notes). Without `--all`, any retained inbox count and the command needed to drop it are printed. The hint includes the resolved `--crew` path and shell-quotes both path and role, so it still targets this crew when pasted into another shell. |
 | `zmina state show` | the state as zmina reads it (JSON). |
 | `zmina lock` | who holds the state lock now, for a hang while it happens: `held by pid 4242 (tick), held 4m10s, in roles (dev) for 3m55s`, or `free`. It reads the holder record beside the lock and tries the lock without waiting, so it never queues behind the hang; it writes nothing. A record whose process is gone, or that the lock file does not name, is called stale and never taken for the holder. |
@@ -1900,7 +1900,9 @@ there stops the beat's further typing and starting, and says so.
    starts is not a boot); so its first line goes at the first beat after it read its boot, not minutes later. When the dispatcher is booted and idle, the waiting signals and notes go to it: posted to its
    own channel, everything in one post (see Delivery; its acked lines also into a turn it is in), else typed as one line: `[zmina] mr-watch: !35 … · designer: ended · director: busy for 95 min on
    T-3`. Then each other role that is booted and idle gets its first queued line; a line
-   tmux refuses is tried three beats, then kept as failed (`zmina queue`). A typed line is sent or not left
+   tmux refuses is tried three times, at least 30 s apart (passes seconds apart count as one try), then
+   kept as failed (`zmina queue`). A slash command typed into a role (a trim's, a queued `/rename`) leaves no line
+   to wait for: nothing more goes to that role for 15 s. A typed line is sent or not left
    typed: Claude Code can take a long line typed in one burst, its Enter with it, as a paste and keep it in the
    input line, so a line still there a moment after its Enter gets Enter again (twice), and one that stays is
    cleared (C-e C-u, never C-c) and waits for the next beat. A typed line has to land: the role's status changes
@@ -2111,8 +2113,8 @@ the crew are dropped from it. A role missing from the crew file keeps its state 
   Raw tmux targets are `=name` / `=name:` and need quotes in zsh. zmina itself aims every command at
   the first window's first pane, where claude runs: windows the owner opens while attached do not
   confuse it, close as usual when left, and are killed with the role.
-- A queued line tmux refuses is tried three beats (event `type-failed`), then moves to the failed
-  list, so it never blocks the lines after it: `zmina queue ls`, `queue retry`.
+- A queued line tmux refuses is tried three times, at least 30 s apart (event `type-failed`), then moves to the
+  failed list, so it never blocks the lines after it: `zmina queue ls`, `queue retry`.
 - Nothing here keeps the Mac awake: while it sleeps, the roles are paused, not gone, and a
   schedule that came due runs once on the first beat after waking.
 

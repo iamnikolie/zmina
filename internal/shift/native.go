@@ -271,6 +271,10 @@ func (s *Shift) TurnEnd(name, sessionID string) []string {
 		return nil
 	}
 
+	// The hook ran for this session: the turn, or the compaction a slash command started, is over, and the command
+	// typed before it is done with. What waits for it goes now, not after slashSettle.
+	s.State.Role(name).SlashAt = time.Time{}
+
 	if name == s.Crew.Dispatcher {
 		if line := s.deliver(now); line != "" {
 			return []string{"told the dispatcher: " + line}

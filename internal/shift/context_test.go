@@ -97,6 +97,7 @@ func TestTrimClearsAndBootsAgainUnlessATaskIsHeld(t *testing.T) {
 	assert.Contains(t, did, "dev: /clear, context 120k over 100k")
 	assert.Equal(t, []string{"read dev and boot\n\n" + RoleRules}, f.s.State.Role("dev").Inbox, "booted again on the next beat")
 
+	*f.now = f.now.Add(time.Minute)
 	f.s.Tick()
 	assert.Equal(t, []string{"/compact", "/clear", "read dev and boot\n\n" + RoleRules}, f.tm.typed["dev"])
 }
@@ -109,6 +110,7 @@ func TestTrimNeverFeedsItself(t *testing.T) {
 	f.rg.context["sid-dev"] = 120_000
 	f.status("dev", "idle", f.now.Add(-time.Hour))
 	f.s.Tick()
+	*f.now = f.now.Add(time.Minute)
 	f.s.Tick()
 	require.Equal(t, []string{"/clear", "read dev and boot\n\n" + RoleRules}, f.tm.typed["dev"])
 

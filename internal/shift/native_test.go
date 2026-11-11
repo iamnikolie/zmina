@@ -369,6 +369,7 @@ func TestNativePostErrors(t *testing.T) {
 	p.err = fmt.Errorf("%w: dial: no such file", peer.ErrUnavailable)
 	for range typeTries - 1 {
 		assert.Empty(t, f.s.deliverInbox("designer", *f.now), "a post that never started is tried again")
+		*f.now = f.now.Add(time.Minute)
 	}
 
 	assert.NotEmpty(t, f.s.deliverInbox("designer", *f.now))
@@ -492,6 +493,7 @@ func TestNativeClearKeepsTheTagOutOfLinesAndLogs(t *testing.T) {
 	}
 	assert.NotContains(t, views(), tag)
 
+	*f.now = f.now.Add(time.Minute)
 	f.s.Tick()
 	require.Len(t, p.raw, 1, "posted, behind the tag on the wire only")
 	assert.True(t, strings.HasPrefix(p.raw[0], tagMark(tag)+" "))
