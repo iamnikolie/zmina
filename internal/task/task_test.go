@@ -115,3 +115,48 @@ func TestHeadlineAndWhere(t *testing.T) {
 	assert.Equal(t, "kreida-cloud", tk.Where())
 	assert.Empty(t, Task{}.Where())
 }
+
+func TestRouteIsOptionalInTheRecord(t *testing.T) {
+	s := &Store{Dir: t.TempDir()}
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+
+	plain, err := s.Add(Task{Role: "dev", Asked: "a plain task"}, now)
+	require.NoError(t, err)
+
+	routed, err := s.Add(Task{Role: "dev", Asked: "a routed task", Route: &Route{Rule: 0, Name: "other crew", Why: "repo under acme-lg"}}, now)
+	require.NoError(t, err)
+
+	byHand, err := s.Add(Task{Role: "dev3", Asked: "a hand pick", Route: &Route{Rule: 6, Name: "pool by limits", Why: "w", Said: "dev2", Override: "alex named it"}}, now)
+	require.NoError(t, err)
+
+	raw, err := os.ReadFile(filepath.Join(s.Dir, plain.ID+".json"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "route", "no routes, no key")
+
+	raw, err = os.ReadFile(filepath.Join(s.Dir, routed.ID+".json"))
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"rule": 0`, "rule 0 is a rule")
+	assert.NotContains(t, string(raw), "said")
+	assert.NotContains(t, string(raw), "override")
+
+	got, err := s.Get(byHand.ID)
+	require.NoError(t, err)
+	assert.Equal(t, &Route{Rule: 6, Name: "pool by limits", Why: "w", Said: "dev2", Override: "alex named it"}, got.Route)
+
+	got, err = s.Get(plain.ID)
+	require.NoError(t, err)
+	assert.Nil(t, got.Route)
+
+	// A task file written before the field existed reads, and keeps no route when it is written again.
+	require.NoError(t, os.WriteFile(filepath.Join(s.Dir, "T-9.json"),
+		[]byte(`{"id":"T-9","role":"dev","asked":"old","state":"open","created":"2026-10-01T10:00:00Z","updated":"2026-10-01T10:00:00Z"}`), 0o600))
+
+	old, err := s.Get("T-9")
+	require.NoError(t, err)
+	assert.Nil(t, old.Route)
+	require.NoError(t, s.Put(old))
+
+	raw, err = os.ReadFile(filepath.Join(s.Dir, "T-9.json"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "route")
+}
