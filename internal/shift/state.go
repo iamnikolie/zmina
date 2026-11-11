@@ -200,6 +200,11 @@ type RoleState struct {
 	RestartGaveUp  string    `json:"restart_gave_up,omitempty"`
 	// RestartHeld is the background work (its ids) the log last said holds a restart off, so it is said once.
 	RestartHeld string `json:"restart_held,omitempty"`
+	// RestartDue is the conversation whose turn ended at or over restart_at with a task held (seen by its Stop hook):
+	// the beat restarts it once it is plainly idle, without the idle settle. RestartNoted is the conversation asked
+	// early, at restartEarly of restart_at, for its note; once a conversation.
+	RestartDue   string `json:"restart_due,omitempty"`
+	RestartNoted string `json:"restart_noted,omitempty"`
 	// Sent is the last line typed into the role, until the role shows it took it.
 	Sent *Sent `json:"sent,omitempty"`
 	// Posted are lines posted to its inbox socket not yet seen in its conversation; Inbound that it was started

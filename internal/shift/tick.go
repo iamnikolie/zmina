@@ -168,7 +168,7 @@ func (s *Shift) Tick() []string {
 			notes = append(notes, note)
 		}
 
-		if line := s.restart(name, r, now, held[name]); line != "" {
+		if line := s.restart(name, r, now, held[name], true); line != "" {
 			did = append(did, line)
 			up = up && rs.Downing.IsZero()
 		}

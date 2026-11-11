@@ -1561,10 +1561,21 @@ there stops the beat's further typing and starting, and says so.
    plain idle, so a role with a background process running is never put down or cleared under it.
 7. **Restart** (before trims): a role holding an active task (never the dispatcher: its recovery pack and
    `context_max` do that job; a role holding none is trimmed as below, or restarted after its task) is restarted fresh from its own note instead
-   of carrying a large conversation, when its last turn's context is at or over `restart_at` (default 250k) and it
-   has sat idle 5 min, or when it has sat idle `restart_idle` (default 1h) less 10 min with over 100k: the note is
+   of carrying a large conversation, when its last turn's context is at or over `restart_at` (default 250k), or
+   when it has sat idle `restart_idle` (default 1h) less 10 min with over 100k: the note is
    asked for while the conversation's cache is still warm, so the restart spares the cold wake that would write the
    whole conversation again. Both keys are the role's own, else the crew's, else the default; `off` turns either off.
+   When, for `restart_at`: a Claude role on its own channel is looked at as each of its turns ends (its Stop hook,
+   the one that posts its queued lines), so a role that is busy all day is caught between two turns. A turn that
+   ends at or over `restart_at` flags the conversation (`restart-due` in the log, once) and, with no current note,
+   the role is asked for it then; the next beat (within a minute) puts it down, with no idle wait. A turn that ends
+   at or over 80% of `restart_at` (200k) gets, once a conversation, `[zmina] restart ahead: …`: the same file of
+   checkpoint requests, to write now and to save again at the end of later turns that moved the work, so that at
+   `restart_at` the note is there and the restart costs no extra turn (`restart-note` in the log; nothing waits on
+   it, nothing is called off or given up for it). A role with no such hook (a Codex role, `delivery: tmux`, one
+   started without zmina's hooks) and a flag that is not there (a turn's end the hook missed) are seen by the beat
+   alone, once the role has sat idle 5 min. A task closed or parked while the role holds another is no different
+   from any turn's end: over `restart_at` it is restarted then, for the tasks it still holds.
    Only between turns, plainly idle: booted, idle (no dialog), nothing queued or posted and unseen, its input line on
    screen and empty, no terminal attached, no background work it started still running (a `run_in_background`
    shell, a Monitor, a background agent: launched anywhere in its transcript and neither reported ended nor stopped with `TaskStop`; the log
@@ -1579,9 +1590,10 @@ there stops the beat's further typing and starting, and says so.
    why, then hand it each task's packet with the note in it: `[zmina] restarted fresh: context 262k over restart_at
    250k. Your note: T-5 7b2b6944f4c7, in each task's packet that follows.` (what Talk shows as the conversation
    resets), then `[zmina T-5] Read handoff packet …` to accept as after `up --task`. A new task, a draft, the
-   owner's line or another conversation calls the ask off (`restart-off`; asked again after 30 min); no note within
+   owner's line or another conversation calls the ask off (`restart-off`; asked again after 30 min; a role that
+   closed or parked its last task instead is not paused: after a task, below, applies to that close); no note within
    10 min gives it up for that conversation (`restart-off`, and the dispatcher hears `<role>: wrote no note
-   within 10m0s …`), and `context_max` trims it as before. The log has `restart-asked`, `restarted` (with why and
+   within 10m0s …`), and `context_max` trims it as before. The log has `restart-due`, `restart-note`, `restart-asked`, `restarted` (with why and
    the notes' revisions), `restart-off` and `restart-failed` (the dispatcher hears the `up --task … --fresh` that
    starts it by hand); `zmina usage` counts the restarts. A role asked for its note is not trimmed or released
    meanwhile. A peer's `SendMessage` that reaches the old session in the seconds between its `/exit` and its end

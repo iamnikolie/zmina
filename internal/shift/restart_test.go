@@ -569,3 +569,259 @@ func TestStaleDownIsCleared(t *testing.T) {
 	assert.Contains(t, strings.Join(f.s.State.Notes, "|"), "designer: went down halfway")
 	assert.True(t, f.ev.has("designer", "down-stale"))
 }
+
+// turnEnding is restarting on the role's own channel (its Stop hook runs), designer between turns: its last turn
+// ended a few seconds ago, far inside restartSettle.
+func turnEnding(t *testing.T, extra string, context int) (fix, *fakePeer) {
+	t.Helper()
+
+	f := restarting(t, extra, context, 5*time.Second)
+	p := newFakePeer()
+	f.s.Peer = p
+	rs := f.s.State.Role("designer")
+	rs.Inbound, rs.Tag = true, "abcdefghijkl"
+	f.rg.endedAt["sid-designer"] = f.now.Add(-5 * time.Second)
+
+	return f, p
+}
+
+// A busy role never sits idle restartSettle: the beat alone leaves it, its turn's end flags it and the next beat
+// restarts it from the note it saved in that turn.
+func TestRestartAtTheFirstTurnEndWithItsNote(t *testing.T) {
+	f, p := turnEnding(t, "", 262_000)
+	f.note(t, "T-1", f.now.Add(-30*time.Second))
+
+	f.s.Tick()
+	require.Empty(t, f.s.Restarts, "idle 5s: the beat alone waits for the settle")
+
+	assert.Empty(t, f.s.TurnEnd("designer", "sid-designer"), "the note is there: nothing to ask for")
+	assert.Equal(t, "sid-designer", f.s.State.Role("designer").RestartDue)
+	assert.Equal(t, 1, f.ev.count("designer", "restart-due"))
+	assert.Empty(t, f.s.Restarts, "the down is the beat's")
+	assert.Empty(t, p.posted["sid-designer"])
+
+	*f.now = f.now.Add(20 * time.Second)
+	did := f.s.Tick()
+	require.Len(t, f.s.Restarts, 1, "%v", did)
+	assert.Equal(t, []string{"T-1"}, f.s.Restarts[0].Tasks)
+	assert.False(t, f.ev.has("designer", "restart-asked"))
+	assert.Empty(t, f.s.State.Role("designer").RestartDue, "the flag goes with the restart")
+}
+
+// Without a note the turn's end asks for it at once; the role is restarted at the first beat after it is saved.
+func TestRestartAsksAtTheTurnEnd(t *testing.T) {
+	f, p := turnEnding(t, "", 262_000)
+
+	did := f.s.TurnEnd("designer", "sid-designer")
+	require.Len(t, did, 2, "%v", did)
+	assert.Equal(t, "designer: context 262k over restart_at 250k; asked for its note to restart fresh", did[0])
+	require.Len(t, p.posted["sid-designer"], 1)
+	assert.True(t, strings.HasPrefix(p.posted["sid-designer"][0], "[zmina] restart: "))
+	assert.Empty(t, f.s.TurnEnd("designer", "sid-designer"), "asked once")
+
+	p.showAll()
+	*f.now = f.now.Add(40 * time.Second)
+	f.note(t, "T-1", *f.now)
+	f.status("designer", "idle", *f.now)
+	f.rg.endedAt["sid-designer"] = *f.now
+	f.s.TurnEnd("designer", "sid-designer")
+	assert.Empty(t, f.s.Restarts)
+
+	*f.now = f.now.Add(10 * time.Second)
+	did = f.s.Tick()
+	require.Len(t, f.s.Restarts, 1, "%v", did)
+	assert.Equal(t, 1, f.ev.count("designer", "restart-asked"))
+}
+
+// At 80% of restart_at the role is asked for its note once a conversation, and nothing restarts it yet.
+func TestRestartAsksForTheNoteAhead(t *testing.T) {
+	f, p := turnEnding(t, "", 205_000)
+
+	did := f.s.TurnEnd("designer", "sid-designer")
+	require.Len(t, did, 2, "%v", did)
+	assert.Equal(t, "designer: context 205k near restart_at 250k; asked for its note ahead of the restart", did[0])
+	require.Len(t, p.posted["sid-designer"], 1)
+	line := p.posted["sid-designer"][0]
+	assert.True(t, strings.HasPrefix(line, "[zmina] restart ahead: your conversation is at 205k; past restart_at 250k "), line)
+	paths, err := filepath.Glob(filepath.Join(f.s.Crew.StateDir(), "restarts", "*.json"))
+	require.NoError(t, err)
+	require.Len(t, paths, 1)
+	assert.Contains(t, line, paths[0])
+
+	rs := f.s.State.Role("designer")
+	assert.Equal(t, "sid-designer", rs.RestartNoted)
+	assert.True(t, rs.RestartAsked.IsZero(), "no wait runs: nothing to give up or call off")
+	assert.Empty(t, rs.RestartDue)
+
+	p.showAll()
+	*f.now = f.now.Add(time.Minute)
+	f.idle("designer", 220_000, 5*time.Second)
+	f.rg.endedAt["sid-designer"] = f.now.Add(-5 * time.Second)
+	assert.Empty(t, f.s.TurnEnd("designer", "sid-designer"), "once a conversation")
+	f.s.Tick()
+	assert.Empty(t, f.s.Restarts)
+	assert.Equal(t, 1, f.ev.count("designer", "restart-note"))
+
+	// Under 80% nothing is asked.
+	f, p = turnEnding(t, "", 199_000)
+	assert.Empty(t, f.s.TurnEnd("designer", "sid-designer"))
+	assert.Empty(t, p.posted["sid-designer"])
+}
+
+// A note asked for at a turn's end and not written within restartNoteWait gives the restart up, as from a beat.
+func TestRestartAskedAtTheTurnEndGivesUpWithoutANote(t *testing.T) {
+	f, p := turnEnding(t, "", 262_000)
+	f.s.TurnEnd("designer", "sid-designer")
+	require.True(t, f.ev.has("designer", "restart-asked"))
+	p.showAll()
+
+	*f.now = f.now.Add(restartNoteWait)
+	f.idle("designer", 270_000, 5*time.Second)
+	f.rg.endedAt["sid-designer"] = f.now.Add(-5 * time.Second)
+	f.s.Tick()
+	assert.Equal(t, "sid-designer", f.s.State.Role("designer").RestartGaveUp)
+	assert.Contains(t, strings.Join(f.s.State.Notes, "|"), "designer: wrote no note within 10m0s")
+
+	*f.now = f.now.Add(time.Hour)
+	f.idle("designer", 280_000, 5*time.Second)
+	f.rg.endedAt["sid-designer"] = f.now.Add(-5 * time.Second)
+	assert.Empty(t, f.s.TurnEnd("designer", "sid-designer"), "not in this conversation again")
+	f.s.Tick()
+	assert.Equal(t, 1, f.ev.count("designer", "restart-asked"))
+	assert.Empty(t, f.s.Restarts)
+}
+
+// What holds a restart at a beat holds it at a turn's end and at the beat after it: the flag shortens the settle only.
+func TestRestartAtTheTurnEndKeepsItsGuards(t *testing.T) {
+	cases := map[string]func(f fix){
+		"owner in the terminal": func(f fix) {
+			f.rg.activity["sid-designer"] = registry.Activity{Prompt: f.now.Add(-10 * time.Minute), Owner: f.now.Add(-10 * time.Minute)}
+		},
+		"owner in Talk": func(f fix) {
+			f.s.State.Role("designer").ChatReceipts = []chat.Receipt{{ID: "c1", At: f.now.Add(-14 * time.Minute)}}
+		},
+		"draft":            func(f fix) { f.tm.drafts["designer"] = "one more thing" },
+		"attached":         func(f fix) { f.tm.attached["designer"] = true },
+		"background shell": func(f fix) { f.rg.activity["sid-designer"] = registry.Activity{Background: []string{"b1"}} },
+		"mid-turn":         func(f fix) { delete(f.rg.endedAt, "sid-designer") },
+		"busy":             func(f fix) { f.status("designer", "busy", *f.now) },
+	}
+
+	for _, context := range []int{262_000, 205_000} {
+		for name, set := range cases {
+			t.Run(name+" "+Tokens(context), func(t *testing.T) {
+				f, p := turnEnding(t, "", context)
+				f.note(t, "T-1", f.now.Add(-30*time.Second))
+				f.rg.activity["sid-designer"] = registry.Activity{Prompt: f.now.Add(-20 * time.Minute)} // the note is older than the turn
+				set(f)
+
+				f.s.TurnEnd("designer", "sid-designer")
+				*f.now = f.now.Add(20 * time.Second)
+				f.s.Tick()
+				assert.Empty(t, p.posted["sid-designer"], "nothing asked")
+				assert.False(t, f.ev.has("designer", "restart-asked"))
+				assert.False(t, f.ev.has("designer", "restart-note"))
+				assert.Empty(t, f.s.Restarts)
+				assert.Empty(t, f.s.State.Role("designer").RestartNoted, "asked ahead at a later turn's end")
+			})
+		}
+	}
+}
+
+// A flag is its conversation's: the beat ignores one left by another, and one whose turn is no longer over.
+func TestRestartDueIsItsConversations(t *testing.T) {
+	f, _ := turnEnding(t, "", 262_000)
+	f.note(t, "T-1", f.now.Add(-30*time.Second))
+	f.s.State.Role("designer").RestartDue = "sid-before"
+
+	f.s.Tick()
+	assert.Empty(t, f.s.Restarts)
+}
+
+// A task closed while the role holds another is a turn's end like any: over restart_at it restarts then, for the
+// task it still holds.
+func TestRestartAtATaskBoundary(t *testing.T) {
+	f, _ := turnEnding(t, "", 262_000)
+	f.tk.list = append(f.tk.list, task.Task{ID: "T-2", Role: "designer", State: task.Open, Title: "draw the icon"})
+	f.note(t, "T-2", f.now.Add(-30*time.Second))
+	closed := f.now.Add(-10 * time.Second).UTC()
+	f.tk.list[0].State, f.tk.list[0].Updated = task.Done, closed
+	f.tk.list[0].Closed = &task.Closure{By: "designer", At: closed, State: task.Done}
+
+	f.s.TurnEnd("designer", "sid-designer")
+	*f.now = f.now.Add(20 * time.Second)
+	did := f.s.Tick()
+	require.Len(t, f.s.Restarts, 1, "%v", did)
+	assert.Equal(t, []string{"T-2"}, f.s.Restarts[0].Tasks)
+	assert.Empty(t, f.s.Restarts[0].Done)
+	assert.False(t, f.ev.has("designer", "restart-asked"))
+}
+
+// A role asked for its note that closes its last task instead: the ask ends without the pause, so restart_done
+// applies to that close after its own grace.
+func TestRestartAskEndedByTheTaskDone(t *testing.T) {
+	f, p := turnEnding(t, "", 262_000)
+	f.s.TurnEnd("designer", "sid-designer")
+	require.True(t, f.ev.has("designer", "restart-asked"))
+	p.showAll()
+
+	*f.now = f.now.Add(time.Minute)
+	closed := f.now.UTC()
+	f.tk.list = []task.Task{{ID: "T-1", Role: "designer", State: task.Done, Title: "draw the logo", Updated: closed,
+		Closed: &task.Closure{By: "designer", At: closed, State: task.Done}}}
+	f.idle("designer", 262_000, 0)
+	f.s.Tick()
+	rs := f.s.State.Role("designer")
+	assert.True(t, rs.RestartAsked.IsZero())
+	assert.True(t, rs.RestartOff.IsZero(), "no pause")
+	assert.Empty(t, f.s.Restarts, "inside the grace")
+
+	*f.now = f.now.Add(restartDoneGrace + time.Minute)
+	did := f.s.Tick()
+	require.Len(t, f.s.Restarts, 1, "%v", did)
+	assert.Equal(t, "T-1", f.s.Restarts[0].Done)
+}
+
+// restart_at off, and the dispatcher: a turn's end leaves both alone.
+func TestRestartAtTheTurnEndOffAndTheDispatcher(t *testing.T) {
+	f, p := turnEnding(t, "restart_at: off\n", 400_000)
+	assert.Empty(t, f.s.TurnEnd("designer", "sid-designer"))
+	rs := f.s.State.Role("designer")
+	assert.Empty(t, rs.RestartDue)
+	assert.Empty(t, rs.RestartNoted)
+	assert.Empty(t, p.posted["sid-designer"])
+
+	f, p = turnEnding(t, "", 262_000)
+	d := f.s.State.Role("dispatcher")
+	d.Inbound, d.Tag = true, "mnopqrstuvwx"
+	f.idle("dispatcher", 400_000, 5*time.Second)
+	f.rg.endedAt["sid-dispatcher"] = f.now.Add(-5 * time.Second)
+	f.tk.list = append(f.tk.list, task.Task{ID: "T-2", Role: "dispatcher", State: task.Open})
+
+	f.s.TurnEnd("dispatcher", "sid-dispatcher")
+	*f.now = f.now.Add(20 * time.Second)
+	f.s.Tick()
+	assert.Empty(t, d.RestartDue)
+	assert.False(t, f.ev.has("dispatcher", "restart-due"))
+	assert.False(t, f.ev.has("dispatcher", "restart-asked"))
+	assert.NotContains(t, strings.Join(p.posted["sid-dispatcher"], "|"), "restart")
+}
+
+// A state.json written before the flag has none: it loads, and the role is restarted by the beat's gate as before.
+func TestRestartStateWithoutTheFlagLoads(t *testing.T) {
+	var rs RoleState
+	require.NoError(t, json.Unmarshal([]byte(`{"up":true,"restart_asked":"2026-01-02T03:04:05Z","restart_session":"s1",`+
+		`"restart_gave_up":"s0"}`), &rs))
+	assert.Empty(t, rs.RestartDue)
+	assert.Empty(t, rs.RestartNoted)
+	assert.Equal(t, "s1", rs.RestartSession)
+
+	raw, err := json.Marshal(RoleState{})
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "restart_due")
+	assert.NotContains(t, string(raw), "restart_noted")
+
+	f := restarting(t, "", 262_000, 6*time.Minute)
+	f.s.Tick()
+	assert.True(t, f.ev.has("designer", "restart-asked"), "no flag: the settle, as before")
+}
