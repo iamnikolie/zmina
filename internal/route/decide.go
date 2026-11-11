@@ -130,7 +130,7 @@ func Decide(t Table, in Input, env Env) Decision {
 		o := e.eval(r)
 
 		if !o.yields() {
-			d.Trace = addStep(d.Trace, r, Step{Rule: r.Kind.Number(), Name: r.Kind.Label(), Why: o.why}, r.Kind == OtherCrew)
+			d.Trace = addStep(d.Trace, Step{Rule: r.Kind.Number(), Name: r.Kind.Label(), Why: o.why}, r.Kind == OtherCrew)
 
 			if o.seen {
 				seen = append(seen, o.why)
@@ -159,7 +159,7 @@ func Decide(t Table, in Input, env Env) Decision {
 
 // addStep adds a rule that did not answer to the trace; with merge, a row that follows one of the same rule that did
 // not answer either joins it (two other_crew rows read as one: repo not under a, b).
-func addStep(trace []Step, r Rule, s Step, merge bool) []Step {
+func addStep(trace []Step, s Step, merge bool) []Step {
 	if n := len(trace); merge && n > 0 && trace[n-1].Rule == s.Rule && !trace[n-1].Matched {
 		prev := &trace[n-1]
 
