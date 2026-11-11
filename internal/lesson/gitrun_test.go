@@ -84,18 +84,26 @@ func TestGitContextEndsWithItsContext(t *testing.T) {
 }
 
 // What git started (ssh, a hook) is killed with it when nothing drives the run from a terminal: it does not outlive
-// the deadline holding the pipes, and the call returns at the deadline, not when that process ends.
-func TestGitKillsWhatItStartedAtItsDeadline(t *testing.T) {
-	shortTimeouts(t, 500*time.Millisecond, 500*time.Millisecond)
+// the end of the call holding the pipes, and the call returns then, not when that process ends. The call is ended
+// from outside once the child is known to be running, so a slow machine cannot end it before it started.
+func TestGitKillsWhatItStartedAtItsEnd(t *testing.T) {
+	shortTimeouts(t, time.Minute, time.Minute)
 
 	pidFile := filepath.Join(t.TempDir(), "child.pid")
-	fakeGit(t, "sleep 30 &\necho $! > '"+pidFile+"'\nwait")
+	fakeGit(t, "sleep 30 &\necho $! > '"+pidFile+".tmp'\nmv '"+pidFile+".tmp' '"+pidFile+"'\nwait")
 
-	begin := time.Now()
-	_, err := Git(t.TempDir(), "fetch")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
-	require.ErrorContains(t, err, "no answer in 500ms")
-	assert.Less(t, time.Since(begin), 5*time.Second, "the child's pipes did not hold the call")
+	done := make(chan error, 1)
+
+	go func() {
+		_, err := GitContext(ctx, t.TempDir(), "fetch")
+		done <- err
+	}()
+
+	require.Eventually(t, func() bool { _, err := os.Stat(pidFile); return err == nil }, 30*time.Second,
+		10*time.Millisecond, "the fake git never started its child")
 
 	raw, err := os.ReadFile(pidFile)
 	require.NoError(t, err)
@@ -105,7 +113,16 @@ func TestGitKillsWhatItStartedAtItsDeadline(t *testing.T) {
 
 	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) }) // the pid this test started, whatever happened
 
-	require.Eventually(t, func() bool { return errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) }, 5*time.Second,
+	cancel()
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the child's pipes held the call")
+	}
+
+	require.Eventually(t, func() bool { return errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) }, 10*time.Second,
 		20*time.Millisecond, "the process git started is still running")
 }
 
