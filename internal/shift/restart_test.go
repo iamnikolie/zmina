@@ -110,8 +110,13 @@ func TestRestartAsksForTheNoteThenStartsFresh(t *testing.T) {
 
 	*f.now = f.now.Add(time.Minute)
 	f.status("designer", "idle", *f.now)
+	f.s.Tick()
+	assert.Empty(t, f.s.Restarts, "the note's turn just ended: a beat settles first")
+
+	*f.now = f.now.Add(restartDueSettle)
 	did = f.s.Tick()
 	require.Len(t, f.s.Restarts, 1)
+	require.NotEmpty(t, did)
 	assert.Contains(t, did[len(did)-1], "designer: context 262k over restart_at 250k; restarting fresh with its note (T-1 ")
 	assert.Contains(t, f.tm.typed["designer"], "/exit")
 
@@ -513,6 +518,7 @@ func TestRestartFinishedAfterItsBeatDied(t *testing.T) {
 	*f.now = f.now.Add(time.Minute)
 	f.note(t, "T-1", *f.now)
 	f.status("designer", "idle", *f.now)
+	*f.now = f.now.Add(restartDueSettle)
 	f.s.Tick()
 	require.Len(t, f.s.Restarts, 1)
 
@@ -600,7 +606,7 @@ func TestRestartAtTheFirstTurnEndWithItsNote(t *testing.T) {
 	assert.Empty(t, f.s.Restarts, "the down is the beat's")
 	assert.Empty(t, p.posted["sid-designer"])
 
-	*f.now = f.now.Add(20 * time.Second)
+	*f.now = f.now.Add(restartDueSettle)
 	did := f.s.Tick()
 	require.Len(t, f.s.Restarts, 1, "%v", did)
 	assert.Equal(t, []string{"T-1"}, f.s.Restarts[0].Tasks)
@@ -608,7 +614,8 @@ func TestRestartAtTheFirstTurnEndWithItsNote(t *testing.T) {
 	assert.Empty(t, f.s.State.Role("designer").RestartDue, "the flag goes with the restart")
 }
 
-// Without a note the turn's end asks for it at once; the role is restarted at the first beat after it is saved.
+// Without a note the turn's end asks for it at once; the role is restarted at the first beat after it is saved and
+// settled (restartDueSettle).
 func TestRestartAsksAtTheTurnEnd(t *testing.T) {
 	f, p := turnEnding(t, "", 262_000)
 
@@ -628,6 +635,10 @@ func TestRestartAsksAtTheTurnEnd(t *testing.T) {
 	assert.Empty(t, f.s.Restarts)
 
 	*f.now = f.now.Add(10 * time.Second)
+	f.s.Tick()
+	assert.Empty(t, f.s.Restarts, "the note's turn ended 10s ago: it settles first")
+
+	*f.now = f.now.Add(restartDueSettle)
 	did = f.s.Tick()
 	require.Len(t, f.s.Restarts, 1, "%v", did)
 	assert.Equal(t, 1, f.ev.count("designer", "restart-asked"))
@@ -668,6 +679,83 @@ func TestRestartAsksForTheNoteAhead(t *testing.T) {
 	assert.Empty(t, p.posted["sid-designer"])
 }
 
+// The early ask is made once a climb: a compaction or a trim that drops the conversation well under restart_at lets
+// its next climb to 80% be asked again, and a size that only dips does not.
+func TestRestartAsksAheadAgainAfterACompaction(t *testing.T) {
+	f, p := turnEnding(t, "", 205_000)
+	ends := func(context int) []string { // a turn ends at a size, a minute after the last
+		p.showAll()
+		*f.now = f.now.Add(time.Minute)
+		f.idle("designer", context, 5*time.Second)
+		f.rg.endedAt["sid-designer"] = f.now.Add(-5 * time.Second)
+
+		return f.s.TurnEnd("designer", "sid-designer")
+	}
+
+	require.Len(t, f.s.TurnEnd("designer", "sid-designer"), 2)
+	require.Equal(t, 1, f.ev.count("designer", "restart-note"))
+
+	assert.Empty(t, ends(215_000), "once a climb")
+	assert.Empty(t, ends(150_000), "a dip to 60% is no compaction")
+	assert.Empty(t, ends(210_000), "the dip asks no second time")
+	assert.Equal(t, 1, f.ev.count("designer", "restart-note"))
+
+	assert.Empty(t, ends(30_000), "compacted: nothing to ask at 12%")
+	assert.Empty(t, f.s.State.Role("designer").RestartNoted, "and the ask is forgotten")
+	assert.Empty(t, ends(190_000), "the climb is under 80% yet")
+	assert.Equal(t, 1, f.ev.count("designer", "restart-note"))
+
+	did := ends(205_000)
+	require.Len(t, did, 2, "%v", did)
+	assert.Equal(t, "designer: context 205k near restart_at 250k; asked for its note ahead of the restart", did[0])
+	assert.Equal(t, 2, f.ev.count("designer", "restart-note"))
+	assert.Equal(t, "sid-designer", f.s.State.Role("designer").RestartNoted)
+
+	assert.Empty(t, ends(230_000), "once this climb too")
+	assert.Equal(t, 2, f.ev.count("designer", "restart-note"))
+}
+
+// A size not known (0, right after a compaction before a turn shows it) and a turn not over forget nothing.
+func TestRestartAheadIsKeptWhereTheSizeIsNotKnown(t *testing.T) {
+	f, p := turnEnding(t, "", 205_000)
+	require.Len(t, f.s.TurnEnd("designer", "sid-designer"), 2)
+	p.showAll()
+
+	f.rg.context["sid-designer"] = 0
+	assert.Empty(t, f.s.TurnEnd("designer", "sid-designer"))
+	assert.Equal(t, "sid-designer", f.s.State.Role("designer").RestartNoted)
+
+	f.rg.context["sid-designer"] = 30_000
+	delete(f.rg.endedAt, "sid-designer")
+	assert.Empty(t, f.s.TurnEnd("designer", "sid-designer"))
+	assert.Equal(t, "sid-designer", f.s.State.Role("designer").RestartNoted, "mid-turn: not a turn's end")
+}
+
+// The flag of a conversation over restart_at that nothing could restart goes with a compaction, so its next climb is
+// flagged (and logged) anew.
+func TestRestartDueIsForgottenAfterACompaction(t *testing.T) {
+	f, _ := turnEnding(t, "", 262_000)
+	f.rg.activity["sid-designer"] = registry.Activity{Background: []string{"b1"}} // holds the restart off
+
+	f.s.TurnEnd("designer", "sid-designer")
+	require.Equal(t, "sid-designer", f.s.State.Role("designer").RestartDue)
+	require.Equal(t, 1, f.ev.count("designer", "restart-due"))
+
+	*f.now = f.now.Add(time.Minute)
+	f.idle("designer", 30_000, 5*time.Second)
+	f.rg.activity["sid-designer"] = registry.Activity{Background: []string{"b1"}}
+	f.rg.endedAt["sid-designer"] = f.now.Add(-5 * time.Second)
+	f.s.TurnEnd("designer", "sid-designer")
+	assert.Empty(t, f.s.State.Role("designer").RestartDue)
+
+	*f.now = f.now.Add(time.Minute)
+	f.idle("designer", 262_000, 5*time.Second)
+	f.rg.activity["sid-designer"] = registry.Activity{Background: []string{"b1"}}
+	f.rg.endedAt["sid-designer"] = f.now.Add(-5 * time.Second)
+	f.s.TurnEnd("designer", "sid-designer")
+	assert.Equal(t, 2, f.ev.count("designer", "restart-due"))
+}
+
 // A note asked for at a turn's end and not written within restartNoteWait gives the restart up, as from a beat.
 func TestRestartAskedAtTheTurnEndGivesUpWithoutANote(t *testing.T) {
 	f, p := turnEnding(t, "", 262_000)
@@ -698,7 +786,7 @@ func TestRestartAtTheTurnEndKeepsItsGuards(t *testing.T) {
 			f.rg.activity["sid-designer"] = registry.Activity{Prompt: f.now.Add(-10 * time.Minute), Owner: f.now.Add(-10 * time.Minute)}
 		},
 		"owner in Talk": func(f fix) {
-			f.s.State.Role("designer").ChatReceipts = []chat.Receipt{{ID: "c1", At: f.now.Add(-14 * time.Minute)}}
+			f.s.State.Role("designer").ChatReceipts = []chat.Receipt{{ID: "c1", At: f.now.Add(-10 * time.Minute)}}
 		},
 		"draft":            func(f fix) { f.tm.drafts["designer"] = "one more thing" },
 		"attached":         func(f fix) { f.tm.attached["designer"] = true },
@@ -716,7 +804,7 @@ func TestRestartAtTheTurnEndKeepsItsGuards(t *testing.T) {
 				set(f)
 
 				f.s.TurnEnd("designer", "sid-designer")
-				*f.now = f.now.Add(20 * time.Second)
+				*f.now = f.now.Add(restartDueSettle)
 				f.s.Tick()
 				assert.Empty(t, p.posted["sid-designer"], "nothing asked")
 				assert.False(t, f.ev.has("designer", "restart-asked"))
@@ -734,8 +822,45 @@ func TestRestartDueIsItsConversations(t *testing.T) {
 	f.note(t, "T-1", f.now.Add(-30*time.Second))
 	f.s.State.Role("designer").RestartDue = "sid-before"
 
+	*f.now = f.now.Add(restartDueSettle)
 	f.s.Tick()
 	assert.Empty(t, f.s.Restarts)
+}
+
+// A flagged conversation is put down only once its last turn has ended restartDueSettle ago and no turn began since:
+// a role that ended its turn waiting for a peer's reply is not taken at the very next beat, and the wait starts over
+// with each turn the reply begins.
+func TestRestartDueSettlesAFullBeat(t *testing.T) {
+	f, _ := turnEnding(t, "", 262_000)
+	f.note(t, "T-1", f.now.Add(-30*time.Second))
+	f.s.TurnEnd("designer", "sid-designer") // flagged; the turn ended 5s ago
+	require.Equal(t, "sid-designer", f.s.State.Role("designer").RestartDue)
+
+	// The first beat after the turn's end, and every one inside the settle: nothing.
+	*f.now = f.now.Add(20 * time.Second)
+	f.s.Tick()
+	assert.Empty(t, f.s.Restarts, "25s after the turn's end")
+
+	*f.now = f.now.Add(restartDueSettle - 26*time.Second) // 89s since the turn ended
+	f.s.Tick()
+	assert.Empty(t, f.s.Restarts, "one second short of the settle")
+	assert.False(t, f.ev.has("designer", "restart-asked"), "the note is there: nothing is asked")
+
+	// The peer's reply begins a turn at 89s and it ends at 100s: the settle counts from that end.
+	f.status("designer", "busy", *f.now)
+	delete(f.rg.endedAt, "sid-designer")
+	*f.now = f.now.Add(11 * time.Second)
+	f.status("designer", "idle", *f.now)
+	f.rg.endedAt["sid-designer"] = *f.now
+	f.s.TurnEnd("designer", "sid-designer")
+	*f.now = f.now.Add(restartDueSettle - time.Second)
+	f.s.Tick()
+	assert.Empty(t, f.s.Restarts, "89s after the new turn's end, 178s after the first")
+
+	*f.now = f.now.Add(time.Second)
+	did := f.s.Tick()
+	require.Len(t, f.s.Restarts, 1, "%v", did)
+	assert.Equal(t, []string{"T-1"}, f.s.Restarts[0].Tasks)
 }
 
 // A task closed while the role holds another is a turn's end like any: over restart_at it restarts then, for the
@@ -749,7 +874,7 @@ func TestRestartAtATaskBoundary(t *testing.T) {
 	f.tk.list[0].Closed = &task.Closure{By: "designer", At: closed, State: task.Done}
 
 	f.s.TurnEnd("designer", "sid-designer")
-	*f.now = f.now.Add(20 * time.Second)
+	*f.now = f.now.Add(restartDueSettle)
 	did := f.s.Tick()
 	require.Len(t, f.s.Restarts, 1, "%v", did)
 	assert.Equal(t, []string{"T-2"}, f.s.Restarts[0].Tasks)
