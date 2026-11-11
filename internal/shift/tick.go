@@ -131,8 +131,11 @@ func (s *Shift) Tick() []string {
 		}
 
 		// A role with no session leaves nothing posted or typed behind: settled once, here, whether it ended, was put
-		// down or released, or its state was kept from before.
-		if !up {
+		// down or released, or its state was kept from before. Only when it is really gone: a probe that fails to see
+		// a live session (tmux answered "no server") must not settle what is posted to it. So the beat before saw it
+		// not up either (rs.Up is still what that beat left; a down by command leaves it false), and no session of its
+		// name lives in the registry, the evidence start asks for.
+		if !up && !rs.Up && s.registryFor(name).LiveByName(r.Session) == nil {
 			s.settleEnded(name, now)
 		}
 

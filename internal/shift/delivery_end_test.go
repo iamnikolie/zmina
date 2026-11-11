@@ -2,6 +2,8 @@ package shift
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/iamnikolie/zmina/internal/codex"
 	"github.com/iamnikolie/zmina/internal/registry"
 	"github.com/iamnikolie/zmina/internal/task"
 )
@@ -166,8 +169,10 @@ func TestSessionBoundLinesAreThoseZminaWrites(t *testing.T) {
 		recoveryLine("/tmp/pack.md"),
 		"/compact",
 		"/rename dev",
-		"read d and boot",
+		"the boot a clear queued",
 	}
+
+	f.s.State.Role("dispatcher").QueuedBoot = "the boot a clear queued"
 
 	for _, line := range bound {
 		assert.True(t, f.s.sessionBound("dispatcher", line), line)
@@ -182,6 +187,7 @@ func TestSessionBoundLinesAreThoseZminaWrites(t *testing.T) {
 		"[zmina] dev: released after 31m idle",
 		"restart the deploy",
 		"[owner] released the build, idle since noon",
+		"read d and boot", // the words of the boot, no boot queued: a line like any other
 	} {
 		assert.False(t, f.s.sessionBound("dispatcher", line), line)
 	}
@@ -206,6 +212,9 @@ func TestTypedLineOfAnEndedSessionIsDropped(t *testing.T) {
 
 	f.tm.die("designer")
 	f.s.Tick()
+	assert.NotNil(t, rs.Sent, "one beat that does not see the role is not its end")
+
+	f.s.Tick()
 
 	assert.Nil(t, rs.Sent)
 	assert.Empty(t, rs.Inbox, "not typed again")
@@ -213,4 +222,211 @@ func TestTypedLineOfAnEndedSessionIsDropped(t *testing.T) {
 	assert.True(t, f.ev.has("designer", "dropped"))
 	require.NotNil(t, f.s.State.Acks[id], "the ack stays: listed in the next brief, said again")
 	assert.False(t, f.s.State.Acks[id].First.IsZero())
+}
+
+// A Codex bridge's inbox holds a posted line as a file until the bridge takes it, and outlives the bridge: a bridge that
+// died before it took the file leaves the line waiting there for the next one. The record stays posted then, and the
+// line is not queued again: queued, it would be a second file, run twice.
+func TestCodexLineWaitingInItsFileIsNotQueuedAgain(t *testing.T) {
+	f, dir := codexFixture(t)
+	bridge(t, f, dir, "thread-1")
+
+	id, err := f.s.QueueTracked("dev", "[dispatcher] look at T-1")
+	require.NoError(t, err)
+	require.NotEmpty(t, f.s.deliverInbox("dev", *f.now))
+
+	rs := f.s.State.Role("dev")
+	require.Len(t, rs.Posted, 1)
+	require.Len(t, waitingFiles(t, dir), 1)
+
+	// The bridge dies before it takes the file; two beats see the role gone.
+	delete(f.tm.up, "dev")
+
+	for range 3 {
+		*f.now = f.now.Add(time.Minute)
+		f.s.Tick()
+	}
+
+	assert.Len(t, rs.Posted, 1, "still posted: its file waits for the next bridge")
+	assert.Empty(t, rs.Inbox, "not queued a second time")
+	assert.Zero(t, f.eventCount("requeued"))
+	assert.NotNil(t, f.s.State.Acks[id])
+
+	// Started again, the new bridge takes the file; the record closes as seen.
+	require.NoError(t, f.s.Up("dev"))
+	bridge(t, f, dir, "thread-2")
+	assert.Empty(t, rs.Inbox)
+
+	files := waitingFiles(t, dir)
+	require.Len(t, files, 1, "one file, not two")
+	take(t, dir, files[0])
+
+	*f.now = f.now.Add(3 * time.Minute)
+	f.s.deliverInbox("dev", *f.now)
+
+	assert.Empty(t, rs.Posted)
+	assert.Empty(t, rs.Inbox)
+	assert.Empty(t, waitingFiles(t, dir), "the line ran once")
+	assert.True(t, f.ev.has("dev", "seen"))
+}
+
+// A Codex line whose file is gone and was never taken cannot be run by any bridge: it is given back, once.
+func TestCodexLineWhoseFileIsGoneIsQueuedOnce(t *testing.T) {
+	f, dir := codexFixture(t)
+	bridge(t, f, dir, "thread-1")
+
+	_, err := f.s.QueueTracked("dev", "[dispatcher] look at T-1")
+	require.NoError(t, err)
+	require.NotEmpty(t, f.s.deliverInbox("dev", *f.now))
+
+	for _, file := range waitingFiles(t, dir) {
+		require.NoError(t, os.Remove(file))
+	}
+
+	delete(f.tm.up, "dev")
+
+	for range 3 {
+		*f.now = f.now.Add(time.Minute)
+		f.s.Tick()
+	}
+
+	rs := f.s.State.Role("dev")
+	assert.Empty(t, rs.Posted)
+	assert.Len(t, rs.Inbox, 1)
+	assert.Equal(t, 1, f.eventCount("requeued"))
+}
+
+// codexFixture is a crew with a Codex role dev, its bridge's inbox a real directory and its bridge taking real files.
+func codexFixture(t *testing.T) (fix, string) {
+	t.Helper()
+
+	f, _ := nativeFixture(t, crewYAML+"  dev:\n    runtime: codex\n")
+	f.s.CodexInbox = codex.Inbox{}
+
+	r, err := f.s.Role("dev")
+	require.NoError(t, err)
+
+	dir := codex.InboxDir(filepath.Join(f.s.Crew.StateDir(), "codex"), r.Session)
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "taken"), 0o700))
+	require.NoError(t, f.s.Up("dev"))
+
+	return f, dir
+}
+
+// bridge is the record the bridge of dev's current process publishes, idle, behind this inbox.
+func bridge(t *testing.T, f fix, dir, thread string) {
+	t.Helper()
+
+	*f.now = f.now.Add(3 * time.Minute)
+
+	reg := &codex.Registry{Dir: filepath.Join(f.s.Crew.StateDir(), "codex")}
+	require.NoError(t, reg.Save(codex.Record{Session: registry.Session{PID: f.tm.up["dev"], SessionID: thread,
+		Status: "idle", StatusUpdatedAt: f.now.UnixMilli(), Inbox: dir}}))
+}
+
+// waitingFiles are the lines in the inbox no bridge has taken.
+func waitingFiles(t *testing.T, dir string) []string {
+	t.Helper()
+
+	files, err := filepath.Glob(filepath.Join(dir, "*.line"))
+	require.NoError(t, err)
+
+	return files
+}
+
+// take does what the bridge does with a line it starts a turn with: the taken mark, then the file goes.
+func take(t *testing.T, dir, file string) {
+	t.Helper()
+
+	id := strings.TrimSuffix(strings.SplitN(filepath.Base(file), "-", 2)[1], ".line")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "taken", id), nil, 0o600))
+	require.NoError(t, os.Remove(file))
+}
+
+// One beat that does not see a role (tmux asked and answered "no server") is not the end of its session: what is posted
+// to it stays posted, what was typed stays typed, and when the next beat sees it again nothing was touched. Only a
+// second beat in a row, with no session of that name alive in the registry, settles them.
+func TestOneAbsentBeatSettlesNothing(t *testing.T) {
+	f, p := nativeFixture(t, crewYAML)
+	upNative(t, f, "designer")
+
+	_, _ = postedTo(t, f, "designer", "[dev] look at T-1")
+
+	rs := f.s.State.Role("designer")
+	rs.Sent = &Sent{Line: "typed text with no id", At: *f.now}
+	pid := f.tm.up["designer"]
+
+	delete(f.tm.up, "designer")
+	*f.now = f.now.Add(time.Minute)
+	f.s.Tick()
+
+	f.tm.up["designer"] = pid
+	*f.now = f.now.Add(time.Minute)
+	f.s.Tick()
+
+	assert.Len(t, rs.Posted, 1, "still posted to the live session")
+	assert.Empty(t, rs.Inbox, "not queued into the session it was posted to")
+	require.NotNil(t, rs.Sent, "the typed line is still tracked")
+	assert.Zero(t, f.eventCount("requeued"))
+	assert.Zero(t, f.eventCount("dropped"))
+	assert.Len(t, p.posted["sid-designer"], 1)
+
+	// The session is seen again for good: the posted line shows, as it always did.
+	rs.Sent = nil
+	p.showAll()
+	*f.now = f.now.Add(time.Minute)
+	f.s.Tick()
+	f.s.deliverInbox("designer", *f.now)
+	assert.Empty(t, rs.Posted)
+}
+
+// A session of that name alive in the registry (the probe is what failed) is not gone, however many beats miss it.
+func TestAbsentRoleWithALiveSessionIsNotSettled(t *testing.T) {
+	f, _ := nativeFixture(t, crewYAML)
+	upNative(t, f, "designer")
+
+	_, _ = postedTo(t, f, "designer", "[dev] look at T-1")
+
+	r, err := f.s.Role("designer")
+	require.NoError(t, err)
+
+	delete(f.tm.up, "designer")
+	f.rg.outside[r.Session] = &registry.Session{Name: r.Session, SessionID: "sid-designer"}
+
+	for range 4 {
+		*f.now = f.now.Add(time.Minute)
+		f.s.Tick()
+	}
+
+	rs := f.s.State.Role("designer")
+	assert.Len(t, rs.Posted, 1)
+	assert.Empty(t, rs.Inbox)
+
+	delete(f.rg.outside, r.Session)
+	*f.now = f.now.Add(time.Minute)
+	f.s.Tick()
+
+	assert.Empty(t, rs.Posted, "the registry has no session of that name now: it is gone")
+	assert.Len(t, rs.Inbox, 1)
+}
+
+// A line sent to a role whose boot starts the same way is an ordinary line: only the boot a clear queued is the boot.
+func TestLineThatOpensLikeTheBootSurvivesASessionEnd(t *testing.T) {
+	f, _ := nativeFixture(t, "namespace: /ns\nclaude: claude\nroles:\n  dispatcher:\n    boot: read d and boot\n"+
+		"  designer:\n    boot: read AGENTS.md\n")
+	upNative(t, f, "designer")
+
+	line, _ := postedTo(t, f, "designer", "read AGENTS.md section 3 again, it changed")
+
+	require.NoError(t, f.s.Down("designer", DownOptions{}))
+	f.s.Tick()
+
+	rs := f.s.State.Role("designer")
+	assert.Equal(t, []string{line}, rs.Inbox, "given back for its next session")
+	assert.Zero(t, f.eventCount("dropped"))
+
+	// The boot a clear queued is that session's, and it alone: known by equality.
+	rs.QueuedBoot = "read AGENTS.md\n\n[zmina] the rules"
+	assert.True(t, f.s.sessionBound("designer", rs.QueuedBoot))
+	assert.False(t, f.s.sessionBound("designer", "read AGENTS.md section 3 again, it changed"))
 }

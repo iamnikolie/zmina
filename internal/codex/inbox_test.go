@@ -149,3 +149,24 @@ func TestRunSubprocessTakesItsInbox(t *testing.T) {
 		t.Fatal("bridge did not exit")
 	}
 }
+
+// A line waits in the inbox as a file until the bridge takes it; Waiting says so by the line's id, and nothing else.
+func TestInboxWaitingUntilTaken(t *testing.T) {
+	dir := InboxDir(t.TempDir(), "zm-dev")
+	require.NoError(t, openInbox(dir))
+
+	id, err := Inbox{}.Post("", &registry.Session{Inbox: dir}, "first")
+	require.NoError(t, err)
+
+	assert.True(t, Inbox{}.Waiting(dir, id))
+	assert.False(t, Inbox{}.Waiting(dir, "0000000000000000"), "another line")
+	assert.False(t, Inbox{}.Waiting(dir, ""))
+	assert.False(t, Inbox{}.Waiting("", id))
+	assert.False(t, Inbox{}.Waiting(dir, "*"), "an id is no pattern")
+	assert.False(t, Inbox{}.Waiting(dir, "../"+id))
+
+	l, path, err := nextLine(dir)
+	require.NoError(t, err)
+	require.NoError(t, take(dir, path, l.ID))
+	assert.False(t, Inbox{}.Waiting(dir, id), "taken")
+}

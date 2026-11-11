@@ -12,6 +12,23 @@ import (
 // and when a new session starts (start). Lines that wait in a role's inbox are not in flight: a role that is down
 // simply has them waiting.
 
+// Waiter is a Peer whose posted lines wait as files until the agent's bridge takes them, and stay after the bridge
+// is gone (the Codex inbox, keyed by the role's session name): such a line is run by the next bridge, whatever the
+// role's records say.
+type Waiter interface {
+	Waiting(dir, msgID string) bool
+}
+
+// stillQueued reports a post that waits in a bridge's inbox untaken. It is not given back to the role's queue (the
+// next bridge runs the file, a second one would run it twice) and not aged out; its record stays until the file is
+// taken (Delivered) or gone. The line cannot be lost this way: while the file exists a bridge will take it, and when it
+// does not, the line is given back as any other.
+func stillQueued(ch Peer, dir string, p Posted) bool {
+	w, ok := ch.(Waiter)
+
+	return ok && w.Waiting(dir, p.MsgID)
+}
+
 // settleEnded settles what a role's conversation left in flight when its session is gone, by kind:
 //
 //   - A posted line the conversation never showed went nowhere that will read it. Unless it is session-bound it goes
@@ -25,8 +42,8 @@ import (
 //     inspection for that reason). start has always cleared it. A tracked line stays in Acks: it is said again
 //     (renotify) and listed in the next session's brief (PendingBrief).
 //
-// It does nothing for a role with neither. The beat calls it for a role that is not up; start for the session it
-// replaces.
+// A post that waits in a Codex bridge's inbox as a file is neither (stillQueued). It does nothing for a role with
+// nothing in flight. The beat calls it for a role that is really gone (see Tick); start for the session it replaces.
 func (s *Shift) settleEnded(name string, now time.Time) {
 	rs := s.State.Role(name)
 
@@ -85,7 +102,9 @@ var sessionBoundOpenings = []string{
 // work before a release, to write a note before a restart, the pointer to a recovery pack. Everything else
 // is for the role, not for the session: a line sent to it, an alarm, a task packet, a signal.
 func (s *Shift) sessionBound(name, line string) bool {
-	if slashCommand(line) || s.isBoot(name, line) {
+	// The boot is the line a clear queued, known by equality: the role's boot text is also how a line sent to it may
+	// open, and a line is not the boot for opening like it.
+	if q := s.State.Role(name).QueuedBoot; slashCommand(line) || q != "" && line == q {
 		return true
 	}
 

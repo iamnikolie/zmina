@@ -82,6 +82,18 @@ func (Inbox) Delivered(dir, _, id string) (bool, error) {
 	return err == nil, err
 }
 
+// Waiting reports whether the line with this id still waits in the inbox as a file no bridge has taken: the directory
+// is keyed by the role's session name and outlives the bridge, so the next bridge of that session runs it.
+func (Inbox) Waiting(dir, id string) bool {
+	if dir == "" || id == "" || filepath.Base(id) != id || strings.ContainsAny(id, "*?[\\") {
+		return false
+	}
+
+	files, _ := filepath.Glob(filepath.Join(dir, "*-"+id+".line"))
+
+	return len(files) > 0
+}
+
 // openInbox makes the bridge's inbox and drops taken marks older than a day.
 func openInbox(dir string) error {
 	if err := fsx.MkdirAll(filepath.Join(dir, "taken"), 0o700); err != nil {

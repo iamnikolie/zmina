@@ -159,6 +159,9 @@ func (s *Shift) followPostedAs(name string, now time.Time, gone bool) bool {
 				s.stageIDs(p.IDs, "submitted")
 				s.closeInfo(name, p.Parts, "seen")
 			}
+		case (gone || sess != nil && sess.SessionID != p.Session) && stillQueued(ch, ns, p):
+			// Its file waits in a bridge's inbox: the next bridge takes it, and this record closes then.
+			keep = append(keep, p)
 		case gone || sess != nil && sess.SessionID != p.Session:
 			back = append(back, p)
 		case sess != nil && now.Sub(p.At) >= postedWait && s.quiet(name, sess):
