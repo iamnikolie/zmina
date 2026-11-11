@@ -141,8 +141,11 @@ func alarmRole(s *shift.Shift, name string) error {
 	return err
 }
 
+// remindWords is how many characters of an alarm's words remind ls shows, unless --full.
+const remindWords = 72
+
 func (a *app) remindLsCommand() *cobra.Command {
-	var all, asJSON bool
+	var all, asJSON, full bool
 
 	c := &cobra.Command{
 		Use:   "ls",
@@ -179,20 +182,28 @@ func (a *app) remindLsCommand() *cobra.Command {
 					return nil
 				}
 
+				// The alarm's words first, clipped, then its id: what rings reads before the number it can be moved or
+				// taken off by.
 				w := tabwriter.NewWriter(a.out, 0, 0, 2, ' ', 0)
 
 				for _, al := range list {
-					line := al.ID + "\t" + at(s, al.At) + "\t" + al.For() + "\t" + string(al.Kind) + "\t"
-					if all {
-						line += alarmState(al) + "\t"
+					words := al.Text
+					if al.Kind == alarm.Sleep && al.Note != "" {
+						words = al.Note
 					}
 
-					line += al.Text
-					if al.Kind == alarm.Sleep && al.Note != "" {
-						line = strings.TrimSuffix(line, al.Text) + strings.Join(strings.Fields(al.Note), " ")
+					if words = oneLine(words); !full {
+						words = clip(words, remindWords)
 					}
+
+					id := al.ID
 					if al.Later != "" {
-						line = strings.TrimSuffix(line, al.Text) + al.Later + " · " + al.Text
+						id += " · " + al.Later
+					}
+
+					line := words + "\t" + id + "\t" + at(s, al.At) + "\t" + al.For() + "\t" + string(al.Kind)
+					if all {
+						line += "\t" + alarmState(al)
 					}
 
 					fmt.Fprintln(w, line)
@@ -204,6 +215,7 @@ func (a *app) remindLsCommand() *cobra.Command {
 	}
 
 	c.Flags().BoolVar(&all, "all", false, "also the alarms that rang or were taken off")
+	c.Flags().BoolVar(&full, "full", false, "each alarm's words whole (default: at most 72 characters, then its id)")
 	c.Flags().BoolVar(&asJSON, "json", false, "JSON output")
 
 	return c
