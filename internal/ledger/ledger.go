@@ -81,6 +81,8 @@ type NewTask struct {
 	Base     string
 	// Budget is what the task may cost (see task.Task.Budget).
 	Budget float64
+	// Route is what the crew file's routes said for the task, kept in its record; nil when the crew has none.
+	Route *task.Route
 }
 
 // New records a task. With a worktree, the task is written first — with the worktree's path, branch and base — and
@@ -95,7 +97,7 @@ func (l *Ledger) New(n NewTask) (task.Task, error) {
 	}
 
 	t := task.Task{Role: n.Role, Asked: n.Asked, Note: n.Note, By: n.By, Title: n.Title, Project: n.Project, URL: n.URL,
-		Budget: n.Budget}
+		Budget: n.Budget, Route: n.Route}
 
 	if n.Repo != "" {
 		repo, err := l.repo(n.Repo)

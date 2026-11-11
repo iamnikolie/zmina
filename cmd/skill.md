@@ -79,6 +79,18 @@ quiet_hours: 23:00-08:00                 # in timezone:; blocking and ask pushes
 notify_again: 24h                        # an item that still blocks is pushed again this often (default 24h, 1h at least; off)
 timezone: Europe/Warsaw                  # the clock reminder times are read on (default: this machine's)
 lessons: on                              # daily triage of the roles' lessons into one draft MR on the crew's agentic-os (default off; see Lessons)
+limits:                                  # how the crew spends its plans, in % of the 7-day (Claude) and weekly (Codex) window; see Limits
+  claude: {pinned: 80, stop: 99}         # from pinned only work that needs Claude goes to it, from stop nothing (defaults 80 and 99)
+  codex: {pinned: 80}                    # from pinned only work that needs Codex goes to it (default 80)
+routes:                                  # the dispatcher's routing rules in order, the first that matches and yields a seat wins; see Routes
+  - other_crew: {repo_under: ~/work/acme-lg, tell: box/acme}   # a repo under it is another crew's: tell its dispatcher
+  - continuation: {fresh_over: 80}       # --after T-n: the seat that did it, a fresh copy once its context is over 80%
+  - project: {api: dev-api}              # a project's owner seat
+  - kind: {design: designer}             # a kind of work's seat
+  - review: {first: designer, again: [dev-api]}   # --kind review --of T-n: never the author
+  - pool: {seats: [dev-api, scribe], by: limits}  # the rest: a free seat of the emptier plan
+busy: copy-or-pool                       # a busy seat gives way to its copy, or a free seat of its plan (pool: no copies); default copy-or-pool
+route_override: optional                 # required: a seat picked by hand against the routes has to say why (default optional)
 day_start: "09:00"                       # when morning, tomorrow, thu or a date rings (default 09:00)
 # name: ops                              # a second crew: tmux -L zmina-ops, its own ticker
 # prefix: ops-                           # default session names (default zm-); no '/': it reads as <node>/<crew>
@@ -284,7 +296,7 @@ gets, and asks the process (`ps`) of a role an earlier zmina started.
 
 A start also records the zmina version that made it. After an install the roles keep the hook command lines the
 earlier zmina wrote and run them with the new executable: the hidden commands and flags those lines name
-(`pending --brief`, `_turn-end`, `_read-guard`, the `_codex` bridge's flags) stay valid across versions, a renamed one
+(`pending --brief`, `_turn-end`, `_read-guard`, `_limits-tap`, the `_codex` bridge's flags) stay valid across versions, a renamed one
 keeps its old name. A Codex role's bridge and a running `zmina ui` keep the earlier zmina's code until they are started
 again. `zmina doctor` says which (`versions`): a cockpit or a Codex bridge of another version warns, Claude roles
 started by another version are listed without a warning; `zmina restart <role> --continue` starts one with this
@@ -901,7 +913,7 @@ Watches are edited by hand in the crew file. Log events: `watch-run`, `watch-not
 
 One file per task in `~/.zmina/tasks/T-<n>.json`. States: `open` (handed, in work), `waiting`
 (the role waits for the owner; it stays up), `done`, `dropped`, `parked` (moved to the later list,
-`later: "L-15"` in its file, shown `parked L-15`). "Active" = open or waiting (and a
+`later: "L-15"` in its file, shown `parked L-15`; a task made while the crew file has routes also keeps `route:`, below). "Active" = open or waiting (and a
 state this zmina does not know, so nothing runs over it). The first name of `waiting`,
 `waiting-<owner>`, is still read and accepted. A new task is numbered above every `T-<n>.json` in the
 directory, readable or not, and never replaces a file; `task ls` and `doctor` name damaged files. A task file
@@ -925,7 +937,9 @@ which edit files in a repository checkout.
 
 | Command | Does |
 |---|---|
-| `zmina task new <role> <asked...>` | record a task; prints `T-14 · dev`. If the role is already running, also queues its current handoff packet for explicit acceptance; does not restart the role or change its working directory. A role that is down is not started: stderr names the `zmina --crew <file> up <role> --task T-14` that starts it on the task, and if the task still sits there unaccepted after 5 min the ticker tells the dispatcher once (`<role>: down, has not taken T-14; zmina --crew … up …`, one notice per task, dropped before delivery once the role is up or the task taken; not while the role sleeps or the shift is stopped). `--repo <name or path>` (a name is a directory under the crew's dir), `--note`, `--title "<short plain sentence>"`, `--project <name>`, `--url <live thing>`, `--budget <dollars>` (what it may cost, see Usage), `--json`. |
+| `zmina task new <role> <asked...>` | record a task; prints `T-14 · dev`. If the role is already running, also queues its current handoff packet for explicit acceptance; does not restart the role or change its working directory. A role that is down is not started: stderr names the `zmina --crew <file> up <role> --task T-14` that starts it on the task, and if the task still sits there unaccepted after 5 min the ticker tells the dispatcher once (`<role>: down, has not taken T-14; zmina --crew … up …`, one notice per task, dropped before delivery once the role is up or the task taken; not while the role sleeps or the shift is stopped). `--repo <name or path>` (a name is a directory under the crew's dir), `--note`, `--title "<short plain sentence>"`, `--project <name>`, `--url <live thing>`, `--budget <dollars>` (what it may cost, see Usage), `--json`. With `routes:` in the crew file the routes can pick the role (`--route`) and every task made records where it went against them (see Routes). |
+| `zmina task new --route [--kind k] [--repo r] [--project p] [--after T-n] [--of T-n [--rereview]] <asked...>` | the role is left out and the crew file's routes pick it (`zmina route` takes the same flags, see Routes): prints `T-15 · dev2 (rule 6: claude 7d 41% < codex week 50%)`. Nothing is made when no rule matched or the answer is another crew's (`tell`): the error says so, and the task is made by hand with `zmina task new <role> …`. A role down is not started, as above (a copy `dev#2`: `up dev --as 2 --task T-15`). |
+| `zmina task new <role> [--because "<why>"] <asked...>` | a role picked by hand, with the routes' answer kept beside it (see Routes). `--because` says why it is not the routes' pick; optional unless the crew file has `route_override: required`. Without `routes:` it does nothing. |
 | `zmina task new <role> --repo r --worktree <asked...>` | also gives it its own git worktree `~/.zmina/worktrees/<repo>-T-14` on a new branch `zmina/t-14` (`zmina/<crew>-t-14` for a named crew) from the repo's current branch (`--base` another). The role works there, never in the repo's checkout. The task is written before the worktree is made: if git fails, it stays as `dropped` with the error in its note. |
 | `zmina task ls [<node>/<crew>] [--all] [--role r] [--json]` | active tasks (`--all`: closed too); with an address, that crew's (see `zmina ls <node>/<crew>`). |
 | `zmina task show [<node>/<crew>] <id> [--full]` | one task: what was asked and its latest note (each clipped to 300 characters), its handoff, result and checkpoint in one line each (revision, time, the summary's start), its cost line (see Usage) and its last 8 events, one line each. `--full`: the asked text, note, result and checkpoint whole and the last 20 events. Ids: `T-14`, `t-14` or `14`. |
@@ -1429,10 +1443,191 @@ paid for: `Of the cost: cache reads 60%, cache writes 17%, output 18%, input 5%.
   older than this adds no hours or compactions.
 - Not counted: transcripts Claude Code no longer keeps, and headless runs outside every task's worktree.
 
+## Limits — how full the plans are
+
+`zmina limits [--json]` — how full the Claude and Codex plans are, how old each reading is, and the crew's policy for
+spending them. The dispatcher reads it before it routes work by plan; no status line or Codex rollout needs grepping.
+
+```
+claude   5h 12%  7d 41%   5h resets 21:40 · 7d resets Tue 13:15   seen 2m ago
+codex    week 50%         resets Thu 09:00                        seen 3h ago (codex-dev)
+policy   claude: pinned work only from 80%, nothing from 99% · codex: pinned work only from 80%
+```
+
+- **Claude** is the 5-hour and the 7-day window as the status line of a Claude role last drew them. The status-line
+  tap writes them to `limits/claude.json` in the crew's directory.
+- **Codex** is the weekly window (10080 minutes), read from the newest rollout under `sessions/` of each Codex home the
+  crew knows: `~/.codex` and every Codex seat's `codex_home`. The newest is found by modification time across all days'
+  folders, and in it the last `rate_limits` line counts. Of the homes, the reading recorded last wins; `(codex-dev)`
+  names the seats that run with that home (`~/.codex` when none does).
+- **Nothing is guessed.** A window is stale when its reset has passed since the reading, or when the reading is older
+  than 6 hours. A stale window prints `unknown (last 41% at Tue 14:02)` and carries `"stale": true` in `--json`, and its
+  reset is not shown. A plan with no reading at all prints `unknown (…)` and is `null` in `--json`. Unknown stays
+  unknown: route by the other plan, or ask the owner.
+- **`--json`**: `claude` (`five_hour` and `seven_day`, each with `used` in percent, `resets` and, when stale, `stale`;
+  `at`, when it was seen; `source`, `statusline`), `codex` (`week` the same way, `plan`, `at`, `source`, `rollout
+  <seat>`) and `policy`. Times are on the crew's `timezone:`.
+- **Policy** is the crew file's `limits:` key, in percent of the 7-day window for Claude and of the weekly window for
+  Codex. From `pinned` only work that needs that plan goes to it; from Claude's `stop` nothing does. The defaults are
+  the rules the dispatcher has always followed: Claude `pinned: 80`, `stop: 99`, Codex `pinned: 80` (Codex has no
+  `stop`). A share is 1 to 100 and Claude's `pinned` may not be above its `stop`; a crew file that breaks this is
+  refused. A seat bills the plan of its `runtime:`, so there is no key to name one. A crew file without the key keeps
+  the defaults.
+- **The tap** is `zmina _limits-tap [-- command...]`, plumbing no one types. Claude Code runs a status line on every redraw
+  with a JSON on stdin; the tap reads the limits in it, writes `limits/claude.json` in the crew's directory when a
+  figure changed (and, to say the status line is still drawn, at most every 5 minutes when none did), then runs the
+  command it wraps with the same bytes on stdin and prints that command's output and exit code as they are. With
+  no command it prints nothing. One word after `--` is a shell command line, more words are a program and its
+  arguments. It never breaks a status line: any error of its own is dropped and the wrapped command runs anyway.
+- **Where the tap is installed**: in the `statusLine` of the `--settings` zmina passes a Claude role that takes its lines
+  on its own channel (Delivery), next to its hooks. It wraps the status line Claude Code would have drawn for that role —
+  the `statusLine` command of its dir's `.claude/settings.local.json`, then `.claude/settings.json`, then the
+  namespace's `settings.json` — so the pane looks as before; with none configured the tap draws nothing of its own. The
+  owner's settings files are only read, never edited, and the sessions the owner starts keep their own status line. A
+  role typed to (`delivery: tmux`), a Codex role, one whose `args` pass their own `--settings` and one an earlier zmina
+  started (until its next start) have no tap, so their status lines record nothing. The line is a command line a
+  session keeps for its life, like the hooks: `_limits-tap` keeps its name and form across versions.
+
+## Routes — which seat takes a piece of work
+
+The crew file's `routes:` key is the routing table the dispatcher keeps in its head, as data: an ordered list of rules,
+and the first rule that matches and yields a seat wins. The kinds of rule are fixed, one for each rule the dispatcher
+has always followed; there is no expression language. Rule 1, the owner naming the seat, is not a row of the table:
+it is naming the role yourself. The table is advice: it picks among the seats the crew file names and never decides
+what the work is (its kind, its project when no repo says it, whether it is one task or two stay the dispatcher's
+judgment). A crew file without `routes:` behaves as it always did.
+
+```yaml
+routes:
+  - other_crew: {repo_under: ~/work/acme-lg, tell: box/acme}   # rule 0
+  - other_crew: {repo_under: ~/work/acme-erp, tell: box/erp}
+  - continuation: {fresh_over: 80}                              # rule 2
+  - project: {app: dev-api, docs: scribe}                       # rule 3
+  - kind: {design: designer, film: director}                    # rule 4
+  - review:                                                     # rule 5
+      first: reviewer                                           # the first review of a task
+      again: [codex-dev, dev-api, dev-web]                      # a re-review: not the author
+  - pool: {seats: [dev-api, dev-web, codex-dev], by: limits}    # rule 6
+busy: copy-or-pool                                              # rule 7, applied to every seat picked
+route_override: optional
+```
+
+| Rule | Matches when | Picks |
+|---|---|---|
+| `other_crew: {repo_under, tell}` (0) | `--repo` is `repo_under` or below it (`~` or a path relative to the crew file; symbolic links followed). Any number of rows. | `tell`, a `<node>/<crew>` that is not a seat: the work is another crew's. Action `tell`. |
+| `continuation: {fresh_over}` (2) | `--after T-n` | The seat that held T-n (its copy `dev#2` if that is still there, else its role). When its conversation fills more than `fresh_over` percent (1 to 100, default 80) of what it may fill — the role's `context_max`, else its `restart_at` — a fresh copy takes it, the next free number from 2 to 9 (action `copy`). A context not known is not judged. A seat that is not in the crew, or is asleep, yields nothing, and the next rule is asked. |
+| `project: {name: seat}` (3) | The project (`--project`, else the repo's directory name) is a name of the map. | Its seat. |
+| `kind: {name: seat}` (4) | `--kind` is a name of the map. | Its seat. `--kind review` is the review rule's, not this one's. |
+| `review: {first, again}` (5) | `--kind review` with `--of T-n`. | First review: `first`. Re-review (`--rereview`): the first seat of `again` that is idle, else the first that is down, else the first that is busy — never the author of T-n, and a copy of the author is the author. A `first` that is the author, or cannot take work, falls to `again`; a rule with only `first` re-reviews with it. |
+| `pool: {seats, by: limits}` (6) | Always. | See below. |
+
+**The pool** takes the rest of the work by how full the plans are (see Limits; a seat bills the plan of its `runtime:`).
+A seat whose plan is at its `pinned` share is out of the pool (only work that needs that plan goes there), and so is
+one at Claude's `stop` share. Of the others the seat of the plan with the lower share used wins (Claude's 7-day
+window against Codex's weekly one), within a plan the seat that can start soonest — idle, then down, then busy — then
+the one with fewest open tasks, then the first in the list. When a plan's reading is unknown or stale the plans are
+not compared: the pool answers by how soon a seat starts and by fewest open tasks, and says `limits unknown`. A pool
+with every seat out yields nothing.
+
+**Seats' state.** A seat is `idle` (up, between turns, holding no task), `busy` (up and working, or holding an
+active task, up or down), `down` (no session, holding nothing) or unavailable (asleep, outside zmina, its directory
+gone, tmux not answering): an unavailable seat yields nothing and the next rule is asked.
+
+**Busy** is rule 7, applied to every seat a rule picks. `busy: copy-or-pool` (the default) gives a busy seat's work to
+a copy of its role that is idle, else to a new copy (`dev#2`, the lowest free number; never the dispatcher's), else to
+a free seat of the same plan from the first `pool:` (idle, then down). `busy: pool` makes no copies: the pool only.
+With none of those the seat keeps it and the task queues behind its work, said so. A copy is advice: starting one
+stays the owner's call, as in For the dispatcher.
+
+**`route_override`** is `optional` (the default) or `required`: whether a role picked by hand against the routes has to say
+why, with `--because` (below).
+
+**`zmina route [<asked...>]`** says which seat takes a piece of work. It reads the crew file, the seats and the plans'
+limits and changes nothing: no state lock, no task, no event. What the work is comes from flags, never from parsing
+the owner's words:
+
+| Flag | The work |
+|---|---|
+| `--repo <name or path>` | The repository it is in (a name is a directory under the crew's dir). Rule 0 compares it; rule 3 takes its directory name as the project. |
+| `--project <name>` | The project it is for (rule 3). |
+| `--kind <kind>` | Design, film, code, review ... a name the `kind:` rule knows (rule 4); `review` is rule 5's. |
+| `--after T-n` | It goes on from that task (rule 2). |
+| `--of T-n` | With `--kind review`: the task under review; `--kind review` needs it, and no other kind takes it. |
+| `--rereview` | With `--kind review`: a review after the first. |
+| `--explain` | Every rule asked, in order, a row each (number, name, `yes` or `no`, why), then the answer. |
+| `--json` | The answer as JSON (below); with `--explain` also the rules asked as `explain`. |
+
+`<asked...>` is only text for the command lines printed under the answer. The answer is one line, the seat, the rule
+and why, then the commands that carry it out:
+
+```
+dev2 · rule 6 pool by limits: claude 7d 41% < codex week 50%; dev is busy on T-12
+  zmina task new dev2 --repo ~/work/site --worktree --title '…' 'fix the login form'
+  dev2 is down: then  zmina up dev2 --task T-<n>
+```
+
+```
+tell box/acme · rule 0 other crew: repo under acme-lg
+  zmina tell box/acme 'add a settle button'
+```
+
+```
+codex-dev · rule 5 review: re-review, T-14 by dev (claude); codex-dev idle, not the author
+```
+
+```
+no rule matched: kind movie has no seat in routes (design, film): pick by hand
+```
+
+- **`action`** is what to do with it: `task` (record the task for the seat, which is up), `up+task` (the seat is down:
+  record the task, then start it on it, the second line), `copy` (a copy such as `dev#2` takes it: record the task for
+  the copy, then `zmina up dev --as 2 --task T-<n>`), `tell` (the work is another crew's: `zmina tell`, never a task
+  here) and `none`. `--json` is `{"to", "action", "rule", "name", "why", "alternatives": [{"to", "why"}], "limits":
+  {"claude", "codex"}, "stale"}`: `rule` is the rule's number (0, 2 to 6; `null` for `none`, since rule 0 is a rule),
+  `alternatives` the other seats the rule looked at with why each was not picked, `limits` the 7-day and weekly shares
+  in whole percent (`null` for a reading that is unknown or stale) and `stale` true when either is.
+- **Exit status**: 0 with an answer, 2 when no rule matched (the line says why, `pick by hand`) or the crew file has no
+  `routes:` (`no routes in the crew file`), 1 for a bad flag or an unknown task.
+- **Same inputs, same answer.** Ties are broken by the order of the lists in the crew file, never by chance.
+- **The printed commands** carry `--crew` or `--config` when this run was given one. A `--repo` gets `--worktree`
+  unless the work goes on from a task or reviews one; the title is yours to write.
+
+**Tasks and the routes.** `zmina task new --route …` leaves the role out and lets the routes pick it; the line it prints
+says the rule (`T-15 · dev2 (rule 6: claude 7d 41% < codex week 50%)`), so the dispatcher does not have to name it in
+its reply. `zmina task new <role> …` picks by hand, and while the crew file has routes the routes are asked all the
+same, with the same flags (`--repo`, `--project`, `--kind`, `--after`, `--of`, `--rereview`):
+
+```
+$ zmina task new dev3 --because "alex named it" --kind code --repo ~/work/site "fix the login form"
+T-15 · dev3 (route said dev2, rule 6; override: alex named it)
+```
+
+- **The line** after the role says `(rule 6: …)` when the routes picked it, `(rule 6, as the routes say)` when the hand
+  agreed, `(route said dev2, rule 6)` when it did not (`; override: <why>` with `--because`), and nothing when no rule
+  matched. The first line stays `T-<n> · <role>`.
+- **`--because "<why>"`** is optional by default, so a shadow period shows where the table and the hand differ before
+  anyone is made to explain. With `route_override: required` a pick that differs from what the routes name is refused,
+  and no task is made, until it says why; a pick the routes agree with, a pick when no rule matched and `--route` need no
+  reason. `--because` with `--route` is an error: the routes picked. Without `routes:` it is ignored.
+- **One `route` event** is logged for every `task new` made while the crew file has routes, with `--route` or without:
+  `{"event": "route", "task": "T-15", "role": "dev3", "picked": "dev3", "rule": 6, "route_said": "dev2", "because": "alex
+  named it"}` (`rule` and `route_said` are left out when no rule matched; `route_said` may be a `<node>/<crew>`). It is
+  the shadow log: `zmina log --json` over a week shows which rule loses. A crew file without `routes:` logs none.
+- **The task keeps** `route: {"rule": 6, "name": "pool by limits", "why": "…"}` in its file, and `said` (the seat the
+  routes named) and `override` (the `--because`) when it went to another seat. `zmina task show` prints it as `route:`.
+  Absent when the crew had no routes or no rule matched; a task file without it reads as before.
+
+**The crew file is checked** (`zmina doctor`, every command that loads it): an unknown rule kind, a rule that is not
+one key, a key a rule does not have, a role no seat exists for (a copy is no seat of a rule), an empty or missing
+pool, a `tell` that is not `<node>/<crew>`, a `fresh_over` outside 1 to 100, a `busy` or `route_override` value that is
+not one of the two are errors that name the rule and its line, and the crew does not load. A role a rule names cannot
+be removed with `zmina seat rm` while it does.
+
 ## Log
 
 `zmina log [--since 12h|3d] [--role r] [--task T-14] [-n|--last 50] [--full] [--json]` — ups, downs, ends, broken
-roles, stuck/idle/expired notes, lines told or typed, keys, sends, tasks, seats, scheduled runs, restarts,
+roles, stuck/idle/expired notes, lines told or typed, keys, sends, tasks, seats, `route` (which seat a new task went to
+and what the routes said, see Routes), scheduled runs, restarts,
 each with who did it (`hand`, `ticker`, `schedule`, or the role) and, after a task's or parked item's id, its title
 (`accepted T-14 (fix the login)`); one line of at most 160 characters per event,
 `--full` whole. File `~/.zmina/events.jsonl`,
@@ -1657,6 +1852,14 @@ the crew are dropped from it. A role missing from the crew file keeps its state 
 - A zmina line with ids (`S-12 …`) and a line ending `(zmina S-14)` wait for your ack: once each is handled — a task recorded, routed, answered, or nothing to do — `zmina ack S-12 S-14`, one
   call for the batch. `still pending since …` is one you did not ack: handle it now or ack it. `zmina pending` lists
   them; the recovery pack has them as `unacked`.
+- Which seat takes a piece of work, when the crew file has `routes:`: `zmina task new --route [--kind k] [--repo r]
+  [--project p] [--after T-n] [--of T-n [--rereview]] --title "…" "<asked>"` records the task for the seat the routes pick
+  and prints the rule; `zmina route …` (`--explain`, `--json`) only asks. Say the kind and the project yourself: they are
+  your judgment, the table is not. When the owner named a seat or the table is wrong for this case, pick by hand and say
+  why: `zmina task new <role> --because "<why>" …`. Exit 2 of `zmina route`, or `task new --route` refusing: no rule
+  matched or the work is another crew's (`zmina tell`); pick by hand. Tell the owner the line `task new` printed.
+- How full the plans are, before a piece of work is routed by plan: `zmina limits` (`--json`). A plan printed
+  `unknown (…)` has no reading you may trust: do not guess it; the policy line says where work narrows (Limits).
 - `budget: …` — a role or a task went past its budget (API-equivalent dollars). Nothing is stopped: tell the
   owner in one line with `zmina usage --by task --role <role>` behind it, and act on what they decide.
 - Do not end a role that is `busy` unless the owner asks. Do not touch `outside` sessions — they

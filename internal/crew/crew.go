@@ -20,6 +20,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/iamnikolie/zmina/internal/cron"
+	"github.com/iamnikolie/zmina/internal/route"
 )
 
 // Keep says what the ticker does with a role that is down.
@@ -329,12 +330,21 @@ type Crew struct {
 	// Lessons is the daily triage of the roles' lessons into one draft MR on the crew's agentic-os; off unless
 	// the crew file says lessons: on (or gives a block).
 	Lessons Lessons `yaml:"lessons"`
+	// Limits states how the crew spends its Claude and Codex plans (see Limits); empty: the defaults.
+	Limits *Limits `yaml:"limits"`
+	// Routes are the dispatcher's routing rules in order, as the file wrote them (see checkRoutes); Busy says what a
+	// busy seat gives way to (copy-or-pool, pool) and RouteOverride whether a hand pick against the routes must say
+	// why (optional, required). Empty: no routes, as before.
+	Routes        []yaml.Node `yaml:"routes"`
+	Busy          string      `yaml:"busy"`
+	RouteOverride string      `yaml:"route_override"`
 
 	bootGrace time.Duration
 	renotify  time.Duration
 	morning   time.Duration // past midnight; -1 off
 	notify    notifyRules
 	loc       *time.Location
+	routes    route.Table
 	// Roles are keyed by role name.
 	Roles map[string]*Role `yaml:"roles"`
 	// Watches are periodic detectors the ticker runs, keyed by name; each queues notes for the dispatcher.
@@ -817,6 +827,14 @@ func (c *Crew) check() error {
 	}
 
 	if err := c.Handoff.check(); err != nil {
+		return err
+	}
+
+	if err := c.checkLimits(); err != nil {
+		return err
+	}
+
+	if err := c.checkRoutes(); err != nil {
 		return err
 	}
 

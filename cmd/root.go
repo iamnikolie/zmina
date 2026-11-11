@@ -91,9 +91,9 @@ Run 'zmina skill' for the agent reference: its topics and the dispatcher's part;
 	root.AddCommand(a.roleCommands()...)
 	root.AddCommand(a.connectCommand(), a.showCommand(), a.lessonCommand(), a.taskCommand(), a.todoCommand(), a.laterCommand(), a.remindCommand(), a.sleepCommand(), a.seatCommand(), a.logCommand(), a.noteCommand(), a.inboxCommand(), a.watchCommand(),
 		a.stopCommand(), a.startCommand(), a.retireCommand(), a.queueCommand(), a.stateCommand(), a.tickerCommand(),
-		a.launchdCommand(), a.doctorCommand(), a.usageCommand(), a.skillCommand(), a.versionCommand(), a.uiCommand(),
+		a.launchdCommand(), a.doctorCommand(), a.usageCommand(), a.limitsCommand(), a.routeCommand(), a.skillCommand(), a.versionCommand(), a.uiCommand(),
 		a.messageCommand(), a.contextCommand(), a.reportCommand(), a.nodeCommand(), a.tellCommand(), a.codexCommand(), a.terminalCommand(),
-		a.ackCommand(), a.pendingCommand(), a.turnEndCommand(), a.readCommand(), a.grepCommand(), a.readGuardCommand())
+		a.ackCommand(), a.pendingCommand(), a.turnEndCommand(), a.limitsTapCommand(), a.readCommand(), a.grepCommand(), a.readGuardCommand())
 	groupCommands(root)
 
 	return root
@@ -105,8 +105,8 @@ var commandGroups = []struct {
 	names     []string
 }{
 	{"owner", "For the owner: what waits, who works, what it costs:", []string{"ui", "todo", "later", "remind", "ls", "show",
-		"peek", "attach", "log", "usage"}},
-	{"dispatcher", "For the dispatcher: tasks, seats, lines:", []string{"task", "up", "down", "restart", "sleep", "stop",
+		"peek", "attach", "log", "usage", "limits"}},
+	{"dispatcher", "For the dispatcher: tasks, seats, lines:", []string{"task", "route", "up", "down", "restart", "sleep", "stop",
 		"start", "retire", "seat", "send", "tell", "note", "queue"}},
 	{"plumbing", "Plumbing (roles, hooks and the ticker run these):", []string{"ack", "pending", "inbox", "report",
 		"message", "context", "keys", "read", "grep", "state", "watch", "lesson", "terminal", "tick"}},

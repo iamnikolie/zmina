@@ -2,8 +2,8 @@ package cmd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -31,28 +31,51 @@ func (a *app) taskCommand() *cobra.Command {
 
 func (a *app) taskNewCommand() *cobra.Command {
 	var (
-		n      ledger.NewTask
-		asJSON bool
+		n       ledger.NewTask
+		ask     routeAsk
+		asJSON  bool
+		routed  bool
+		because string
 	)
 
 	c := &cobra.Command{
-		Use:   "new <role> <asked...>",
-		Short: "Record a task handed to a role (--repo, --worktree: its own git worktree and branch)",
-		Args:  cobra.MinimumNArgs(2),
+		Use:   "new [<role>] <asked...>",
+		Short: "Record a task handed to a role (--repo, --worktree: its own git worktree and branch; --route: the routes pick the role)",
+		Args: func(cmd *cobra.Command, args []string) error {
+			switch {
+			case routed && len(args) < 1:
+				return errors.New("--route picks the role: zmina task new --route [flags] <asked...>")
+			case !routed && len(args) < 2:
+				return fmt.Errorf("requires at least 2 arg(s), only received %d", len(args))
+			}
+
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.withState(func(s *shift.Shift) error {
-				if _, err := s.Role(args[0]); err != nil {
-					return err
-				}
+				ask.repo, ask.project = n.Repo, n.Project
 
-				pane, err := s.Tmux.Probe(args[0])
+				pick, err := a.pickRole(s, ask, routed, because, args)
 				if err != nil {
 					return err
 				}
 
-				n.Role, n.Asked, n.By = args[0], strings.Join(args[1:], " "), s.By
+				if _, err := s.Role(pick.role); err != nil {
+					return err
+				}
+
+				pane, err := s.Tmux.Probe(pick.role)
+				if err != nil {
+					return err
+				}
+
+				n.Role, n.Asked, n.By, n.Route = pick.role, pick.asked, s.By, pick.record()
 
 				t, err := a.ledger(s).New(n)
+				if t.ID != "" {
+					pick.log(s, t)
+				}
+
 				if err != nil {
 					return err
 				}
@@ -73,6 +96,10 @@ func (a *app) taskNewCommand() *cobra.Command {
 
 				fmt.Fprintf(a.out, "%s · %s", t.ID, t.Role)
 
+				if said := pick.said(); said != "" {
+					fmt.Fprintf(a.out, " (%s)", said)
+				}
+
 				if t.Worktree != "" {
 					fmt.Fprintf(a.out, " · worktree %s (branch %s from %s)", t.Worktree, t.Branch, t.Base)
 				} else if t.Repo != "" {
@@ -83,8 +110,7 @@ func (a *app) taskNewCommand() *cobra.Command {
 
 				// Recorded for a role that is not up: nothing starts it, so say how.
 				if pane.State != tmux.Up {
-					fmt.Fprintf(a.err, "zmina: %s is down: zmina --crew %s up %s --task %s starts it on the task\n", t.Role,
-						quoteCommandArg(s.Crew.Path), quoteCommandArg(t.Role), t.ID)
+					fmt.Fprintf(a.err, "zmina: %s is down: %s starts it on the task\n", t.Role, a.upTaskLine(s, t))
 				}
 
 				return nil
@@ -102,9 +128,23 @@ func (a *app) taskNewCommand() *cobra.Command {
 	c.Flags().StringVar(&n.URL, "url", "", "the live thing to look at")
 	c.Flags().Float64Var(&n.Budget, "budget", 0, "what the task may cost, API-equivalent dollars: past it the "+
 		"ticker tells the dispatcher")
+	c.Flags().BoolVar(&routed, "route", false, "the crew file's routes pick the role (leave <role> out): see zmina route")
+	c.Flags().StringVar(&because, "because", "", "why this role, when it is not the one the routes name (a role picked by hand)")
+	ask.flags(c)
 	c.Flags().BoolVar(&asJSON, "json", false, "JSON output")
 
 	return c
+}
+
+// upTaskLine is the command that starts a role on a task recorded for it: a copy (dev#2) is started as its role.
+func (a *app) upTaskLine(s *shift.Shift, t task.Task) string {
+	crewArg := "zmina --crew " + quoteCommandArg(s.Crew.Path)
+
+	if base, num, ok := shift.SplitInstance(t.Role); ok {
+		return fmt.Sprintf("%s up %s --as %d --task %s", crewArg, quoteCommandArg(base), num, t.ID)
+	}
+
+	return fmt.Sprintf("%s up %s --task %s", crewArg, quoteCommandArg(t.Role), t.ID)
 }
 
 func (a *app) taskLsCommand() *cobra.Command {
@@ -233,6 +273,10 @@ func (a *app) taskShowCommand() *cobra.Command {
 
 				if t.Repo != "" {
 					fmt.Fprintln(a.out, "repo:", t.Repo)
+				}
+
+				if t.Route != nil {
+					fmt.Fprintln(a.out, "route:", routeLine(t.Route))
 				}
 
 				if t.Worktree != "" {

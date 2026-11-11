@@ -1541,11 +1541,19 @@ func (s *Shift) held() map[string][]string {
 func (s *Shift) Log(role, event, taskID, detail string) { s.log(role, event, taskID, detail) }
 
 func (s *Shift) log(role, event, taskID, detail string) {
+	s.LogEvent(events.Event{Role: role, Event: event, Task: taskID, Detail: detail})
+}
+
+// LogEvent records an event with fields of its own (a route event's); the time and whoever runs this shift are filled
+// in. A failure to write is warned of once and never stops the command.
+func (s *Shift) LogEvent(e events.Event) {
 	if s.Events == nil {
 		return
 	}
 
-	err := s.Events.Add(events.Event{TS: s.Now(), Role: role, Event: event, Task: taskID, By: s.By, Detail: detail})
+	e.TS, e.By = s.Now(), s.By
+
+	err := s.Events.Add(e)
 	if err != nil && !s.warned && s.Warn != nil {
 		s.warned = true
 		s.Warn(fmt.Errorf("event log: %w", err))

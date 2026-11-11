@@ -232,3 +232,18 @@ func TestWithRealGit(t *testing.T) {
 	t2, _ := l.Store.Get("T-2")
 	assert.Equal(t, task.Dropped, t2.State)
 }
+
+func TestNewKeepsWhatTheRoutesSaid(t *testing.T) {
+	l, _ := fixture(t, "")
+
+	plain, err := l.New(NewTask{Role: "dev", Asked: "x"})
+	require.NoError(t, err)
+	assert.Nil(t, plain.Route)
+
+	routed, err := l.New(NewTask{Role: "dev2", Asked: "y", Route: &task.Route{Rule: 6, Name: "pool by limits", Why: "w", Said: "dev", Override: "o"}})
+	require.NoError(t, err)
+
+	got, err := l.Store.Get(routed.ID)
+	require.NoError(t, err)
+	assert.Equal(t, &task.Route{Rule: 6, Name: "pool by limits", Why: "w", Said: "dev", Override: "o"}, got.Route)
+}

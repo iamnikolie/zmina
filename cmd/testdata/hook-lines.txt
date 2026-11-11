@@ -8,3 +8,5 @@ v0.8.0  --crew /crew/crew.yaml pending --role dev --brief
 v0.8.0  --crew /crew/crew.yaml _turn-end --role dev
 v0.10.0 --crew /crew/crew.yaml _read-guard --role dev
 v0.10.0 _codex --bin codex --session zm-rev --role rev --state-dir /crew/state/codex --transport shared --profile p --resume thread-1 --boot hi --model m --effort high --service-tier priority --sandbox read-only --approval on-request -- --flag
+v0.12.0 --crew /crew/crew.yaml _limits-tap
+v0.12.0 --crew /crew/crew.yaml _limits-tap -- /opt/line/status.sh

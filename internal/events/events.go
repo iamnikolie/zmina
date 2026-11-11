@@ -16,13 +16,21 @@ type Event struct {
 	TS time.Time `json:"ts"`
 	// Role is the role (or instance, dev#2) the event is about; empty for crew-wide events.
 	Role string `json:"role,omitempty"`
-	// Event is what happened: up, down, ended, stuck, idle, crash-loop, told, sent, queued, keys, task, seat, ...
+	// Event is what happened: up, down, ended, stuck, idle, crash-loop, told, sent, queued, keys, task, seat, route, ...
 	Event string `json:"event"`
 	// Task is the task id the event concerns, when there is one.
 	Task string `json:"task,omitempty"`
 	// By is who did it: hand (the owner's terminal), ticker, schedule, or the role that ran the command.
 	By     string `json:"by,omitempty"`
 	Detail string `json:"detail,omitempty"`
+	// Picked, Rule, RouteSaid and Because are the fields of a route event, one for every task made while the crew file
+	// has routes: the seat the task went to (also Role), the rule of the routes' answer (its number, 0 or 2 to 6; unset
+	// when no rule matched), the seat the routes named ("" when none, or another crew's <node>/<crew>), and why it was
+	// picked by hand (task new --because).
+	Picked    string `json:"picked,omitempty"`
+	Rule      *int   `json:"rule,omitempty"`
+	RouteSaid string `json:"route_said,omitempty"`
+	Because   string `json:"because,omitempty"`
 }
 
 // MaxSize is the size at which the log is rotated: events.jsonl becomes events.jsonl.1 (replacing the older one).
