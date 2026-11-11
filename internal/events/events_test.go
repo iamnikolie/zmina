@@ -1,9 +1,14 @@
 package events
 
 import (
+	"bufio"
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -97,4 +102,175 @@ func TestRouteEventFieldsAreOptional(t *testing.T) {
 	evs, err = l.Read(Filter{Task: "T-3"})
 	require.NoError(t, err)
 	assert.Nil(t, evs[0].Rule)
+}
+
+// logLines is every line of every file of the log (current and rotated), and the files' names.
+func logLines(t *testing.T, l *Log) ([]Event, []string) {
+	t.Helper()
+
+	paths, err := filepath.Glob(l.Path + "*")
+	require.NoError(t, err)
+
+	var (
+		out   []Event
+		names []string
+	)
+
+	for _, p := range paths {
+		if strings.HasSuffix(p, ".lock") {
+			continue
+		}
+
+		names = append(names, filepath.Base(p))
+
+		f, err := os.Open(p)
+		require.NoError(t, err)
+
+		sc := bufio.NewScanner(f)
+		for sc.Scan() {
+			var e Event
+
+			require.NoError(t, json.Unmarshal(sc.Bytes(), &e), "a whole line, never half of one: %s", sc.Text())
+
+			out = append(out, e)
+		}
+
+		require.NoError(t, sc.Err())
+		require.NoError(t, f.Close())
+	}
+
+	return out, names
+}
+
+// Writers that cross the size limit together lose no line and replace no rotated file: every event written is in
+// some file of the log afterwards, once.
+func TestConcurrentWritersCrossingTheLimitLoseNothing(t *testing.T) {
+	oldMax, oldGen := MaxSize, Generations
+	MaxSize, Generations = 2048, 1000
+
+	t.Cleanup(func() { MaxSize, Generations = oldMax, oldGen })
+
+	l := &Log{Path: filepath.Join(t.TempDir(), "events.jsonl")}
+
+	const writers, each = 8, 150
+
+	var wg sync.WaitGroup
+
+	for w := range writers {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			for n := range each {
+				assert.NoError(t, l.Add(Event{Role: "dev", Event: "told", Detail: fmt.Sprintf("w%d-%d %s", w, n, strings.Repeat("x", 60))}))
+			}
+		}()
+	}
+
+	wg.Wait()
+
+	got, names := logLines(t, l)
+	require.Greater(t, len(names), 10, "the limit was crossed many times")
+
+	seen := map[string]int{}
+	for _, e := range got {
+		seen[strings.Fields(e.Detail)[0]]++
+	}
+
+	assert.Len(t, got, writers*each, "no event lost, none doubled")
+
+	for w := range writers {
+		for n := range each {
+			assert.Equal(t, 1, seen[fmt.Sprintf("w%d-%d", w, n)], "w%d-%d", w, n)
+		}
+	}
+
+	evs, err := l.Read(Filter{})
+	require.NoError(t, err)
+	assert.Len(t, evs, writers*each, "Read finds every rotated file")
+}
+
+// A small fixed number of rotated files is kept, newest numbered 1; the oldest is dropped and the newest events are
+// all still there, oldest first.
+func TestRotationKeepsAFixedNumberOfGenerations(t *testing.T) {
+	oldMax, oldGen := MaxSize, Generations
+	MaxSize, Generations = 400, 3
+
+	t.Cleanup(func() { MaxSize, Generations = oldMax, oldGen })
+
+	l := &Log{Path: filepath.Join(t.TempDir(), "events.jsonl")}
+	t0 := time.Date(2026, 10, 26, 10, 0, 0, 0, time.UTC)
+
+	for i := range 60 {
+		require.NoError(t, l.Add(Event{TS: t0.Add(time.Duration(i) * time.Minute), Role: "dev", Event: "up", Detail: "x"}))
+	}
+
+	_, names := logLines(t, l)
+	assert.ElementsMatch(t, []string{"events.jsonl", "events.jsonl.1", "events.jsonl.2", "events.jsonl.3"}, names,
+		"the current file and three generations, no more")
+
+	evs, err := l.Read(Filter{})
+	require.NoError(t, err)
+	require.NotEmpty(t, evs)
+	assert.Less(t, len(evs), 60, "the oldest were dropped")
+	assert.True(t, evs[len(evs)-1].TS.Equal(t0.Add(59*time.Minute)), "the newest is kept")
+
+	for i := 1; i < len(evs); i++ {
+		assert.True(t, evs[i].TS.After(evs[i-1].TS), "oldest first across every file")
+	}
+
+	// Fewer generations than files on disk (the number was lowered): the next rotation drops the extra ones.
+	Generations = 1
+
+	for i := 60; i < 80; i++ {
+		require.NoError(t, l.Add(Event{TS: t0.Add(time.Duration(i) * time.Minute), Role: "dev", Event: "up", Detail: "x"}))
+	}
+
+	_, names = logLines(t, l)
+	assert.ElementsMatch(t, []string{"events.jsonl", "events.jsonl.1"}, names)
+}
+
+// A process that finds the lock taken by another rotator does not wait for it for long and does not lose its event:
+// it appends to the full file, and the next event rotates it.
+func TestEventIsAppendedWhileAnotherProcessHoldsTheRotationLock(t *testing.T) {
+	oldMax := MaxSize
+	MaxSize = 200
+
+	t.Cleanup(func() { MaxSize = oldMax })
+
+	l := &Log{Path: filepath.Join(t.TempDir(), "events.jsonl")}
+	require.NoError(t, os.WriteFile(l.Path, []byte(strings.Repeat("{\"event\":\"old\"}\n", 20)), 0o600))
+
+	lock, err := os.OpenFile(l.Path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	require.NoError(t, err)
+	require.NoError(t, syscall.Flock(int(lock.Fd()), syscall.LOCK_EX))
+
+	require.NoError(t, l.Add(Event{Event: "while-locked"}))
+
+	_, err = os.Stat(l.Path + ".1")
+	require.ErrorIs(t, err, os.ErrNotExist, "nothing rotated while another holds the lock")
+
+	raw, err := os.ReadFile(l.Path)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), "while-locked")
+
+	require.NoError(t, syscall.Flock(int(lock.Fd()), syscall.LOCK_UN))
+	require.NoError(t, lock.Close())
+
+	require.NoError(t, l.Add(Event{Event: "after"}))
+
+	_, err = os.Stat(l.Path + ".1")
+	require.NoError(t, err, "the next event rotates")
+
+	evs, err := l.Read(Filter{})
+	require.NoError(t, err)
+
+	var names []string
+	for _, e := range evs {
+		names = append(names, e.Event)
+	}
+
+	assert.Contains(t, names, "while-locked")
+	assert.Equal(t, "after", names[len(names)-1])
 }

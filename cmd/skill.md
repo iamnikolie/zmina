@@ -1697,7 +1697,9 @@ and what the routes said, see Routes), scheduled runs, restarts,
 each with who did it (`hand`, `ticker`, `schedule`, or the role) and, after a task's or parked item's id, its title
 (`accepted T-14 (fix the login)`); one line of at most 160 characters per event,
 `--full` whole. File `~/.zmina/events.jsonl`,
-rotated at 10 MB into `events.jsonl.1` (log reads both).
+rotated at 10 MB: `events.jsonl.1` is the newest older file, up to `.5` the oldest, and a sixth is dropped (log reads them
+all). The rotation takes a lock (`events.jsonl.lock`), so two processes that log at once lose no line and replace no
+file.
 
 The state lock leaves two events, crew-wide (no role): `lock-wait` when a command waited 5 s or more for the lock
 (`waited=12.4s holder=tick holder_pid=4242 holder_for=11m2s holder_phase=roles/dev`, `gave_up=yes` when it ran out of
