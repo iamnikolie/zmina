@@ -25,8 +25,8 @@ var (
 // sweepIDsShown is how many ids the event and the dispatcher's line of a sweep name; the rest are counted.
 const sweepIDsShown = 8
 
-// sweepDelivery drops the delivery records past their age limit: posted and typed lines past inFlightMaxAge, failed
-// lines past failedMaxAge. One event names how many, of which kinds and the ids (clipped), and one FYI line tells the
+// sweepDelivery drops the delivery records past their age limit: posted and typed lines of a role that is up past
+// inFlightMaxAge, failed lines past failedMaxAge. One event names how many, of which kinds and the ids (clipped), and one FYI line tells the
 // dispatcher (an info line: no id, nothing says it again). It returns that line, none when nothing aged. Lines that
 // wait in a role's inbox are not records of this kind and stay, whatever the role is doing. The tracked line of a
 // failed record that was never delivered loses its ack with it (as dropSignal does): nothing queued would carry it;
@@ -60,26 +60,32 @@ func (s *Shift) sweepDelivery(now time.Time) []string {
 		rs := s.State.Roles[name]
 		ch, dir := s.peerFor(name)
 
-		// Look before judging: a record this old may be one nothing has looked at since (the beats stopped, the machine
-		// slept). A line the conversation did show closes as it always does (followPosted), a typed one that landed as
-		// it always does (closeTyped), and neither is reported as dropped.
-		if slices.ContainsFunc(rs.Posted, func(p Posted) bool { return aged(now, p.At, inFlightMaxAge) }) {
-			s.followPosted(name, now)
-		}
-
-		if sent := rs.Sent; sent != nil && aged(now, sent.At, inFlightMaxAge) {
-			if landed, _ := s.typedLanded(name, sent); landed {
-				s.closeTyped(name)
+		// The in-flight records of a role are judged while it is up this beat (the loop of the beat set rs.Up from its
+		// probe). One that is not up is settleEnded's: it gives its lines back or drops them by their kind, a beat later
+		// than the one that saw it end, and a sweep that ran in between would report as dropped what that beat gives
+		// back.
+		if rs.Up && rs.Downing.IsZero() {
+			// Look before judging: a record this old may be one nothing has looked at since (the beats stopped, the
+			// machine slept). A line the conversation did show closes as it always does (followPosted), a typed one that
+			// landed as it always does (closeTyped), and neither is reported as dropped.
+			if slices.ContainsFunc(rs.Posted, func(p Posted) bool { return aged(now, p.At, inFlightMaxAge) }) {
+				s.followPosted(name, now)
 			}
-		}
 
-		rs.Posted = slices.DeleteFunc(rs.Posted, func(p Posted) bool {
-			// A line waiting in a bridge's inbox waits for the next bridge, as an inbox line waits for its role.
-			return !stillQueued(ch, dir, p) && note(name, "posted", p.At, p.IDs, inFlightMaxAge)
-		})
+			if sent := rs.Sent; sent != nil && aged(now, sent.At, inFlightMaxAge) {
+				if landed, _ := s.typedLanded(name, sent); landed {
+					s.closeTyped(name)
+				}
+			}
 
-		if rs.Sent != nil && note(name, "sent", rs.Sent.At, rs.Sent.IDs, inFlightMaxAge) {
-			rs.Sent = nil
+			rs.Posted = slices.DeleteFunc(rs.Posted, func(p Posted) bool {
+				// A line waiting in a bridge's inbox waits for the next bridge, as an inbox line waits for its role.
+				return !stillQueued(ch, dir, p) && note(name, "posted", p.At, p.IDs, inFlightMaxAge)
+			})
+
+			if rs.Sent != nil && note(name, "sent", rs.Sent.At, rs.Sent.IDs, inFlightMaxAge) {
+				rs.Sent = nil
+			}
 		}
 
 		rs.Failed = slices.DeleteFunc(rs.Failed, func(f Failed) bool {

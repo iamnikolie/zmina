@@ -2,12 +2,16 @@ package shift
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/iamnikolie/zmina/internal/codex"
+	"github.com/iamnikolie/zmina/internal/registry"
 )
 
 // shortAges shortens the age limits of the sweep for one test.
@@ -179,8 +183,8 @@ func TestAgeSweepClosesATypedLineThatLandedBeforeItJudges(t *testing.T) {
 	assert.Zero(t, f.eventCount("delivery-aged"))
 }
 
-// A line posted to a Codex role's bridge inbox that nothing has taken yet is waiting for the next bridge, like an inbox
-// line of a role that is down: not aged out however long the role stays down.
+// A line posted to a Codex role's bridge inbox that nothing has taken yet is waiting for the bridge, like an inbox line
+// of a role that is down: not aged out however long the bridge stays busy, nor after it died.
 func TestAgeSweepLeavesACodexLineWaitingInItsFile(t *testing.T) {
 	shortAges(t, time.Hour, time.Hour)
 
@@ -191,6 +195,19 @@ func TestAgeSweepLeavesACodexLineWaitingInItsFile(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, f.s.deliverInbox("dev", *f.now))
 
+	// The bridge is busy with a long turn and takes nothing for a day.
+	reg := &codex.Registry{Dir: filepath.Join(f.s.Crew.StateDir(), "codex")}
+	require.NoError(t, reg.Save(codex.Record{Session: registry.Session{PID: f.tm.up["dev"], SessionID: "thread-1",
+		Status: "busy", StatusUpdatedAt: f.now.UnixMilli(), Inbox: dir}}))
+
+	*f.now = f.now.Add(5 * time.Hour)
+	f.s.Tick()
+
+	assert.Len(t, f.s.State.Role("dev").Posted, 1)
+	assert.Len(t, waitingFiles(t, dir), 1)
+	assert.Zero(t, f.eventCount("delivery-aged"))
+
+	// Then it dies: the record is settleEnded's, which keeps it while the file waits.
 	delete(f.tm.up, "dev")
 
 	for range 3 {
@@ -199,6 +216,39 @@ func TestAgeSweepLeavesACodexLineWaitingInItsFile(t *testing.T) {
 	}
 
 	assert.Len(t, f.s.State.Role("dev").Posted, 1)
-	assert.Len(t, waitingFiles(t, dir), 1)
 	assert.Zero(t, f.eventCount("delivery-aged"))
+}
+
+// The sweep judges the in-flight records of a role that is up this beat, and no other: one that is not up is the
+// business of settleEnded, which gives a line back or drops it by its kind. A ticker that was stopped for a day finds a
+// role that died meanwhile: that beat sees it end (and settles nothing, as one beat is not proof), and the sweep behind
+// it must not report as dropped what the next beat gives back.
+func TestAgeSweepLeavesARoleThatIsNotUpToItsSettling(t *testing.T) {
+	shortAges(t, time.Hour, time.Hour)
+
+	f, _ := nativeFixture(t, crewYAML)
+	upNative(t, f, "designer")
+
+	line, _ := postedTo(t, f, "designer", "[dev] look at T-1")
+
+	rs := f.s.State.Role("designer")
+	rs.Sent = &Sent{Line: "typed text with no id", At: *f.now}
+
+	delete(f.tm.up, "designer")
+	*f.now = f.now.Add(25 * time.Hour)
+	f.s.Tick()
+
+	assert.Len(t, rs.Posted, 1, "not judged: the role is not up")
+	assert.NotNil(t, rs.Sent)
+	assert.Zero(t, f.eventCount("delivery-aged"))
+	assert.NotContains(t, strings.Join(f.s.State.Notes, "|"), "delivery: dropped")
+
+	*f.now = f.now.Add(time.Minute)
+	f.s.Tick()
+
+	assert.Empty(t, rs.Posted)
+	assert.Equal(t, []string{line}, rs.Inbox, "given back for the next session")
+	assert.Nil(t, rs.Sent)
+	assert.Equal(t, 1, f.eventCount("requeued"))
+	assert.Zero(t, f.eventCount("delivery-aged"), "never reported dropped by age")
 }
