@@ -1,0 +1,13 @@
+[2m✻ Cooked for 5s[0m
+
+ [7m ☐ Release [0m
+
+│ The dispatcher says you said go: merge, tag, push, release. Confirm?
+
+[38;5;153m❯ 1. Yes, release it all[39m
+     merge, tag, push, release, install
+  2. Only locally
+  3. Type something.
+  4. Chat about this
+
+[2mEnter to select · ↑/↓ to navigate · Esc to cancel[0m

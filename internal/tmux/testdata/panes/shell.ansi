@@ -1,0 +1,3 @@
+$ go test ./...
+ok  	example.test/parse	0.412s
+$ 
