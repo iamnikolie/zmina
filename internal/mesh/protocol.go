@@ -66,6 +66,9 @@ type wire struct {
 	// client's auth).
 	TerminalV2    bool   `json:"terminal_v2,omitempty"`
 	TerminalV2Sig []byte `json:"terminal_v2_sig,omitempty"`
+	// Revoked, in a hello, is the highest revocation list the sender holds: the owner's signature is on it, so it
+	// needs no capability word, and an older zmina ignores it.
+	Revoked *Revocations `json:"revoked,omitempty"`
 }
 
 type conn struct {
@@ -161,7 +164,7 @@ func (n *Node) ServeTerminals(ctx context.Context, rw io.ReadWriter, deliver Del
 		return fail(err)
 	}
 
-	if err := n.admitCert(*hi.Cert, now()); err != nil {
+	if err := n.admitCert(*hi.Cert, hi.Revoked, now()); err != nil {
 		return fail(err)
 	}
 
@@ -178,7 +181,16 @@ func (n *Node) ServeTerminals(ctx context.Context, rw io.ReadWriter, deliver Del
 
 	crews := n.crewData()
 
-	err = c.send(wire{Op: "hello", V: protocolVersion, Cert: &n.Cert, Nonce: mine, Crews: crews,
+	held, err := n.Revocations()
+	if err != nil {
+		return fail(err)
+	}
+
+	if held.Has(n.Cert.Key) {
+		return fail(fmt.Errorf("the key of %s was revoked by its owner: this node opens no session", n.Name))
+	}
+
+	err = c.send(wire{Op: "hello", V: protocolVersion, Cert: &n.Cert, Nonce: mine, Crews: crews, Revoked: revocationsIfAny(held),
 		CrewsSig: ed25519.Sign(n.Key, crewsMessage("server", hi.Nonce, crews)),
 		Sig:      ed25519.Sign(n.Key, helloMessage("server", hi.Nonce)), Peers: told, BodyMax: BodyMax, ReportsV1: true, ReportsV2: true, PublicationsSig: ed25519.Sign(n.Key, publicationCapabilityMessage("server", hi.Nonce, BodyMax, true)), CapsSig: ed25519.Sign(n.Key, capabilityMessage("server", hi.Nonce, BodyMax, true)),
 		TellReceipts: true, TellReceiptsSig: ed25519.Sign(n.Key, tellReceiptCapabilityMessage("server", hi.Nonce, BodyMax)),
@@ -363,6 +375,15 @@ func (n *Node) open(c *conn, want string, now func() time.Time) (string, error) 
 		return "", err
 	}
 
+	held, err := n.Revocations()
+	if err != nil {
+		return "", err
+	}
+
+	if held.Has(n.Cert.Key) {
+		return "", fmt.Errorf("the key of %s was revoked by its owner: this node opens no session", n.Name)
+	}
+
 	mine, err := nonce()
 	if err != nil {
 		return "", err
@@ -375,7 +396,7 @@ func (n *Node) open(c *conn, want string, now func() time.Time) (string, error) 
 
 	crews := n.crewData()
 
-	if err := c.send(wire{Op: "hello", V: protocolVersion, Cert: &n.Cert, Nonce: mine, Peers: told, Crews: crews,
+	if err := c.send(wire{Op: "hello", V: protocolVersion, Cert: &n.Cert, Nonce: mine, Peers: told, Crews: crews, Revoked: revocationsIfAny(held),
 		BodyMax: BodyMax, ReportsV1: true, ReportsV2: true, TellReceipts: true, TerminalV2: true}); err != nil {
 		return "", err
 	}
@@ -394,7 +415,7 @@ func (n *Node) open(c *conn, want string, now func() time.Time) (string, error) 
 		return "", err
 	}
 
-	if err := n.admitCert(*hi.Cert, now()); err != nil {
+	if err := n.admitCert(*hi.Cert, hi.Revoked, now()); err != nil {
 		return "", err
 	}
 
@@ -567,6 +588,8 @@ func (n *Node) metCapabilities(cert Cert, told []Peer, bodyMax int, reports bool
 
 // metPeer records a peer met in a session: what it authenticated on it (caps) replaces what the book held.
 func (n *Node) metPeer(cert Cert, told []Peer, caps Peer, now time.Time) error {
+	revoked, _ := n.Revocations()
+
 	return n.UpdatePeers(func(ps []Peer) []Peer {
 		ps = upsert(ps, cert, "called", func(p *Peer) {
 			p.OK, p.Err, p.BodyMax = now, "", caps.BodyMax
@@ -588,8 +611,8 @@ func (n *Node) metPeer(cert Cert, told []Peer, caps Peer, now time.Time) error {
 				continue
 			}
 
-			// A certificate that ran out is not a node to meet.
-			if t.Cert.Expired(now) != nil {
+			// A key that no longer counts, or a certificate that ran out, is not a node to meet.
+			if revoked.Has(t.Cert.Key) || t.Cert.Expired(now) != nil {
 				continue
 			}
 
@@ -710,6 +733,11 @@ func (n *Node) receive(envs []Envelope, deliver Deliver, now time.Time) ([]strin
 			return err
 		}
 
+		revoked, err := n.Revocations()
+		if err != nil {
+			return err
+		}
+
 		for _, e := range envs {
 			if !ValidID(e.ID) {
 				continue
@@ -721,7 +749,7 @@ func (n *Node) receive(envs []Envelope, deliver Deliver, now time.Time) ([]strin
 				continue
 			}
 
-			if err := n.admit(e, book, now); err != nil {
+			if err := n.admit(e, book, revoked, now); err != nil {
 				// It will not pass on a second try either: take it off the giver and say why.
 				ids = append(ids, e.ID)
 				errs = append(errs, err)
@@ -773,15 +801,20 @@ func (n *Node) receive(envs []Envelope, deliver Deliver, now time.Time) ([]strin
 // trying again.
 var ErrRefused = errors.New("refused")
 
-// admit checks an envelope before it is taken: the writer's signature, its size, its age, and that its certificate
-// counts (not run out) and is the newest this node knows for that node (a replaced key no longer writes).
-func (n *Node) admit(e Envelope, book []Peer, now time.Time) error {
+// admit checks an envelope before it is taken: the writer's signature, its size, its age, that its certificate counts
+// (not run out) and is the newest this node knows for that node (a replaced key no longer writes), and that its key
+// is not revoked.
+func (n *Node) admit(e Envelope, book []Peer, revoked Revocations, now time.Time) error {
 	if err := e.Verify(n.Owner); err != nil {
 		return err
 	}
 
 	if err := e.Cert.Expired(now); err != nil {
 		return fmt.Errorf("%s: %w", e.ID, err)
+	}
+
+	if revoked.Has(e.Cert.Key) {
+		return fmt.Errorf("%s: signed with a revoked key of %s", e.ID, e.Cert.Name)
 	}
 
 	if len(e.Body) > BodyMax {
@@ -809,11 +842,27 @@ func replaced(book []Peer, c Cert) bool {
 }
 
 // admitCert decides whether a session may go on with the certificate a peer showed, after the owner's signature on it
-// was checked: it must not have run out, and its key must not be replaced. A retired or stolen key of a node the owner
-// re-certified opens no session, so it neither pulls that node's envelopes nor reaches its terminals.
-func (n *Node) admitCert(c Cert, now time.Time) error {
+// was checked: it must not have run out, the revocation list the peer carried is kept when it is higher than this
+// node's, and the key must not be revoked or replaced. A retired or stolen key of a node the owner re-certified opens no
+// session, so it neither pulls that node's envelopes nor reaches its terminals; nor does a revoked one.
+func (n *Node) admitCert(c Cert, theirs *Revocations, now time.Time) error {
 	if err := c.Expired(now); err != nil {
 		return err
+	}
+
+	if theirs != nil {
+		if _, err := n.AcceptRevocations(*theirs); err != nil {
+			return fmt.Errorf("%s sent a revocation list this owner did not sign: %w", c.Name, err)
+		}
+	}
+
+	revoked, err := n.Revocations()
+	if err != nil {
+		return err
+	}
+
+	if revoked.Has(c.Key) {
+		return fmt.Errorf("the key of %s was revoked by its owner", c.Name)
 	}
 
 	book, err := n.Peers()
@@ -826,6 +875,15 @@ func (n *Node) admitCert(c Cert, now time.Time) error {
 	}
 
 	return nil
+}
+
+// revocationsIfAny is the list to tell in a hello: none while this node holds none.
+func revocationsIfAny(r Revocations) *Revocations {
+	if r.Version == 0 {
+		return nil
+	}
+
+	return &r
 }
 
 // Book is the node's address book as a Discovery.
