@@ -160,3 +160,50 @@ func TestRouteIsOptionalInTheRecord(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(raw), "route")
 }
+
+// A task file written before criteria existed reads as it did; one with criteria keeps them in order, and a task
+// without any leaves the key out of its file.
+func TestCriteriaRoundTripAndOldFiles(t *testing.T) {
+	s := &Store{Dir: t.TempDir()}
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+
+	old := `{"id":"T-1","role":"dev","asked":"fix the login","state":"open","created":"2026-10-26T12:00:00Z","updated":"2026-10-26T12:00:00Z"}`
+	require.NoError(t, os.WriteFile(filepath.Join(s.Dir, "T-1.json"), []byte(old), 0o600))
+
+	got, err := s.Get("T-1")
+	require.NoError(t, err)
+	assert.Empty(t, got.Criteria)
+	assert.Equal(t, "fix the login", got.Asked)
+
+	require.NoError(t, s.Put(got))
+	raw, err := os.ReadFile(filepath.Join(s.Dir, "T-1.json"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "criteria", "a task without criteria writes no key")
+
+	added, err := s.Add(Task{Role: "dev", Asked: "x", Criteria: []string{"tests pass", "the login form shows an error, not a blank page"}}, now)
+	require.NoError(t, err)
+
+	raw, err = os.ReadFile(filepath.Join(s.Dir, added.ID+".json"))
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"criteria": [`)
+
+	got, err = s.Get(added.ID)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"tests pass", "the login form shows an error, not a blank page"}, got.Criteria)
+}
+
+func TestCleanCriteria(t *testing.T) {
+	got, err := CleanCriteria([]string{"  one  ", "two"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"one", "two"}, got)
+
+	got, err = CleanCriteria(nil)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+
+	_, err = CleanCriteria([]string{"one", " "})
+	assert.ErrorContains(t, err, "not empty")
+
+	_, err = CleanCriteria([]string{"first line\nsecond line"})
+	assert.ErrorContains(t, err, "one line")
+}

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/iamnikolie/zmina/internal/record"
 	"github.com/iamnikolie/zmina/internal/task"
 	"github.com/iamnikolie/zmina/internal/worktree"
 )
@@ -246,4 +247,99 @@ func TestNewKeepsWhatTheRoutesSaid(t *testing.T) {
 	got, err := l.Store.Get(routed.ID)
 	require.NoError(t, err)
 	assert.Equal(t, &task.Route{Rule: 6, Name: "pool by limits", Why: "w", Said: "dev", Override: "o"}, got.Route)
+}
+
+func TestNewKeepsCriteriaAndRefusesABadOne(t *testing.T) {
+	l, _ := fixture(t, "")
+
+	tk, err := l.New(NewTask{Role: "dev", Asked: "x", Criteria: []string{" tests pass ", "docs name the flag"}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"tests pass", "docs name the flag"}, tk.Criteria)
+
+	got, err := l.Store.Get(tk.ID)
+	require.NoError(t, err)
+	assert.Equal(t, tk.Criteria, got.Criteria)
+
+	_, err = l.New(NewTask{Role: "dev", Asked: "x", Criteria: []string{"one\ntwo"}})
+	require.ErrorContains(t, err, "one line")
+	_, err = l.New(NewTask{Role: "dev", Asked: "x", Criteria: []string{""}})
+	require.ErrorContains(t, err, "not empty")
+
+	all, err := l.Store.All()
+	require.NoError(t, err)
+	assert.Len(t, all, 1, "a refused task leaves no record")
+}
+
+func TestSetReplacesAndClearsCriteria(t *testing.T) {
+	l, _ := fixture(t, "")
+
+	tk, err := l.New(NewTask{Role: "dev", Asked: "x", Criteria: []string{"a"}})
+	require.NoError(t, err)
+
+	next := []string{"b", "c"}
+	got, err := l.Set(tk.ID, Change{Criteria: &next})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"b", "c"}, got.Criteria, "the list is replaced, not added to")
+
+	none := []string{}
+	got, err = l.Set(tk.ID, Change{Criteria: &none})
+	require.NoError(t, err)
+	assert.Empty(t, got.Criteria)
+
+	stored, err := l.Store.Get(tk.ID)
+	require.NoError(t, err)
+	assert.Empty(t, stored.Criteria)
+
+	_, err = l.Set(tk.ID, Change{})
+	assert.ErrorContains(t, err, "nothing to change", "no criteria given is no change")
+
+	bad := []string{"a", ""}
+	_, err = l.Set(tk.ID, Change{Criteria: &bad})
+	assert.ErrorContains(t, err, "not empty")
+}
+
+func TestDoneNeedsAResultWhenTheTaskHasCriteria(t *testing.T) {
+	l, _ := fixture(t, "")
+
+	tk, err := l.New(NewTask{Role: "dev", Asked: "x", Criteria: []string{"tests pass"}})
+	require.NoError(t, err)
+
+	_, err = l.Set(tk.ID, Change{State: task.Done})
+	require.ErrorIs(t, err, ErrNoResult)
+	assert.Equal(t, "T-1: has criteria and no saved result: save one with zmina task result T-1 --file <json> "+
+		"(--force closes it anyway)", err.Error())
+
+	_, err = l.Set(tk.ID, Change{State: task.Dropped})
+	require.NoError(t, err, "dropping gives the work up: no result to show")
+
+	_, err = l.Set(tk.ID, Change{State: task.Open})
+	require.NoError(t, err)
+
+	got, err := l.Set(tk.ID, Change{State: task.Done, Force: true})
+	require.NoError(t, err)
+	assert.Equal(t, task.Done, got.State, "--force closes it anyway")
+
+	_, err = l.Set(tk.ID, Change{State: task.Open})
+	require.NoError(t, err)
+
+	stored, err := l.Store.Get(tk.ID)
+	require.NoError(t, err)
+
+	stored.Result = &record.Ref{Revision: "abc123", Task: stored.ID}
+	require.NoError(t, l.Store.Put(stored))
+
+	got, err = l.Set(tk.ID, Change{State: task.Done})
+	require.NoError(t, err)
+	assert.Equal(t, task.Done, got.State, "a saved result lets it close")
+}
+
+func TestDoneWithoutCriteriaNeedsNoResult(t *testing.T) {
+	l, _ := fixture(t, "")
+
+	tk, err := l.New(NewTask{Role: "dev", Asked: "x"})
+	require.NoError(t, err)
+
+	got, err := l.Set(tk.ID, Change{State: task.Done})
+	require.NoError(t, err)
+	assert.Equal(t, task.Done, got.State)
 }
