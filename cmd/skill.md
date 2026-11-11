@@ -1772,7 +1772,11 @@ there stops the beat's further typing and starting, and says so.
    When, for `restart_at`: a Claude role on its own channel is looked at as each of its turns ends (its Stop hook,
    the one that posts its queued lines), so a role that is busy all day is caught between two turns. A turn that
    ends at or over `restart_at` flags the conversation (`restart-due` in the log, once) and, with no current note,
-   the role is asked for it then; the next beat (within a minute) puts it down, with no idle wait. A turn that ends
+   the role is asked for it then; the first beat once the role has sat 90 s since its last turn's end, with no new
+   turn begun, puts it down: no idle wait of 5 min, but a role that ended its turn waiting for a peer's direct reply
+   (a developer and a reviewer over `SendMessage`) is not taken at the very next beat, so a reply sent in that
+   window still lands, and each turn the reply begins starts the 90 s again. The same 90 s follows the turn in
+   which the role wrote the note it was asked for. A turn that ends
    at or over 80% of `restart_at` (200k) gets, once a conversation, `[zmina] restart ahead: …`: the same file of
    checkpoint requests, to write now and to save again at the end of later turns that moved the work, so that at
    `restart_at` the note is there and the restart costs no extra turn (`restart-note` in the log; nothing waits on

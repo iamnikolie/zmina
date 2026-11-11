@@ -22,8 +22,14 @@ const (
 	// that conversation, and context_max trims it as before.
 	restartNoteWait = 10 * time.Minute
 	// restartSettle is how long a role sits idle before restart_at restarts it, so a reply being read is not cut.
-	// Not waited for a conversation its Stop hook flagged at a turn's end (RestartDue): that turn is known to be over.
+	// A conversation its Stop hook flagged at a turn's end (RestartDue) waits restartDueSettle instead: that turn is
+	// known to be over.
 	restartSettle = trimIdle
+	// restartDueSettle is how long a restart for restart_at waits after the role's last turn ended with no new turn
+	// begun: one full beat and a half. A role that ended its turn waiting for a peer's direct reply (a developer and
+	// a reviewer over SendMessage) has that reply in flight; put down at the very next beat, the reply would go to a
+	// dead socket. Far under restartSettle, which a flagged conversation no longer waits.
+	restartDueSettle = 90 * time.Second
 	// restartEarly is the share of restart_at (4/5) at which a role is asked for its note ahead of the restart.
 	restartEarlyNum, restartEarlyDen = 4, 5
 	// restartOwnerQuiet is how long after the owner's last line to a role it is left alone: he may be mid-talk.
@@ -103,12 +109,7 @@ func (s *Shift) restart(name string, r *crew.Role, now time.Time, tasks []string
 		return ""
 	}
 
-	since := sess.StatusSince()
-	if turn.At.After(since) {
-		since = turn.At
-	}
-
-	idle := now.Sub(since)
+	idle := now.Sub(quietSince(sess, turn))
 	// Flagged at a turn's end and still between turns by its transcript: the settle has nothing left to guard.
 	due := rs.RestartDue == sess.SessionID && turn.Ended
 
@@ -131,7 +132,8 @@ func (s *Shift) restart(name string, r *crew.Role, now time.Time, tasks []string
 
 	mine := s.heldTasks(name)
 	if s.notesLanded(mine, act.Prompt) {
-		if !begin {
+		// Not put down at the very beat after a turn's end: a reply in flight to the role would be lost.
+		if !begin || idle < restartDueSettle {
 			return ""
 		}
 
@@ -153,8 +155,9 @@ func (s *Shift) restart(name string, r *crew.Role, now time.Time, tasks []string
 // restartAtTurnEnd is the restart gate at a turn's end (the Stop hook of a role on its own channel), where a busy
 // role is caught between turns: the beat alone sees it only once it has sat idle restartSettle. A role holding a task
 // whose turn ended at or over restart_at is flagged (RestartDue) and, when no current note is there, asked for it
-// at once; the next beat puts it down. One at restartEarly of restart_at is asked for its note once a conversation,
-// so the note is there when it crosses. Every guard of the beat's gate holds here too (restart, plainIdle).
+// at once; the first beat after it has settled restartDueSettle puts it down. One at restartEarly of restart_at is
+// asked for its note once a conversation, so the note is there when it crosses. Every guard of the beat's gate holds
+// here too (restart, plainIdle).
 func (s *Shift) restartAtTurnEnd(name string, sess *registry.Session, now time.Time) string {
 	r, err := s.Role(name)
 	if err != nil {
@@ -228,6 +231,23 @@ func (s *Shift) restartAtTurnEnd(name string, sess *registry.Session, now time.T
 	return fmt.Sprintf("%s: %s; asked for its note ahead of the restart", name, why)
 }
 
+// quietSince is when the role last went quiet: the later of its status's change and its last turn's end.
+func quietSince(sess *registry.Session, turn registry.Turn) time.Time {
+	since := sess.StatusSince()
+	if turn.At.After(since) {
+		since = turn.At
+	}
+
+	return since
+}
+
+// quietFor is how long the role has sat between turns (quietSince); a turn that cannot be read counts by status alone.
+func (s *Shift) quietFor(name string, sess *registry.Session, now time.Time) time.Duration {
+	turn, _ := s.registryFor(name).Last(sess.SessionID)
+
+	return now.Sub(quietSince(sess, turn))
+}
+
 // restartAsked follows a role asked for its note: restarted once every task's note landed and it is plainly idle,
 // called off when anything else came first.
 func (s *Shift) restartAsked(name string, now time.Time, tasks []string, sess *registry.Session) string {
@@ -267,6 +287,12 @@ func (s *Shift) restartAsked(name string, now time.Time, tasks []string, sess *r
 	if landed {
 		act, ok := s.plainIdle(name, now, sess)
 		if ok {
+			// The note's turn just ended: the role settles restartDueSettle before it goes down, as a flagged one does.
+			// It is quiet or busy again within a beat; the wait below bounds it either way.
+			if s.quietFor(name, sess, now) < restartDueSettle {
+				return ""
+			}
+
 			return s.beginRestart(name, mine, rs.RestartWhy, "")
 		}
 
