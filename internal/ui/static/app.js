@@ -28,7 +28,7 @@ const W = {
   notSent: "Not sent: ", rec: "Recommended: ", more: (n) => n + " more", less: "show less", hands: "By hand:",
   waits: (r) => "waits on " + r, from: (r) => "from " + r, doneText: "done", waitOn: (n, who) => n + " waiting on " + who,
   setAside: (n) => n + " set aside by you",
-  doneToday: "done today: ", history: "history", historyH: "What happened", andHistory: "and history",
+  doneToday: "done today: ", history: "history", signOut: "sign out", historyH: "What happened", andHistory: "and history",
   allN: (n) => "All " + n, olderWeek: "Older than a week", thisWeek: "This week", comesBack: "Comes back", doneTab: "Done today", historyTab: "History",
   shift: "shift", kb: "tasks", kbGo: "in progress", kbYou: "waiting on you", kbOthers: "waiting on others", kbLater: "parked", kbNone: "empty", stack: "stack", spread: "spread", moreN: (n) => "+" + n + " more", stackIdle: "stack idle", idleN: (n) => "+" + n + " idle",
   fullView: "open on the whole screen", close: "close", fvNow: "Now", fvAsked: "Asked", fvResult: "Result", fvNoResult: "No result recorded.", fvReported: "Worker report", fvLog: "Timeline", fvMove: "Your move",
@@ -1746,7 +1746,14 @@ function renderFoot() {
   line.append(el("b", "", String(done)));
   const h = button("r", W.history, () => (side && side.kind === "done" ? closeTalk() : openHistory()));
   h.setAttribute("aria-expanded", side && side.kind === "done" ? "true" : "false");
-  patch($("foot"), [line, h]);
+  patch($("foot"), [line, h, button("", W.signOut, signOut)]);
+}
+
+// signOut ends this browser's session on the server (its cookie goes with it) and loads the page again, which is then
+// the sign-in page. If the call fails the page loads again anyway: still signed in, nothing lost.
+async function signOut() {
+  try { await postTo("api/signout", {}); } catch (_) { /* the reload shows where things stand */ }
+  location.reload();
 }
 
 function taskChange(detail) {

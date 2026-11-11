@@ -467,6 +467,20 @@ func (a *app) uiHandler(bound string, loopback bool, token string, allowHosts ..
 	})
 
 	auth := newUIAuth(token, a.uiLogins, a.uiSignin, a.uiSessions)
+	// Sign-out: this browser's session ends, and its cookie with it. A call signed in by the token alone has no session.
+	mux.HandleFunc("POST /api/signout", func(w http.ResponseWriter, r *http.Request) {
+		if c, err := r.Cookie(uiCookie); err == nil && c.Value != "" {
+			if err := auth.sessions.end(c.Value); err != nil {
+				http.Error(w, "the session could not be ended", http.StatusInternalServerError)
+
+				return
+			}
+		}
+
+		dropStaleCookie(w, r, allowHosts)
+		writeJSON(w, map[string]bool{"ok": true})
+	})
+
 	return guardLogins(hub.dropAfterChanges(mux), bound, loopback, auth, allowHosts...)
 }
 

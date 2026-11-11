@@ -1240,7 +1240,8 @@ while one is open closes it within seconds.
 - `zmina ui sessions` lists them: the short id (8 characters), when each signed in, when it was last seen, when it ends.
   `zmina ui sessions --revoke <id>` ends one by the id listed (a unique start of at least 4 characters),
   `zmina ui sessions --all` ends every one. They edit the file; the cockpit need not run, and one that runs sees it on
-  its next request. Changing the token does not end sessions: revoke them.
+  its next request. Changing the token does not end sessions: revoke them. The cockpit's page has «sign out» in its
+  bottom line (the lean layout).
 - A wrong token, login code or sign-in code counts against the address it came from (the connection's peer; behind an
   `--allow-host` proxy on loopback, the last address the proxy put in `X-Forwarded-For`; an IPv6 address counts as its
   /64) and against all addresses together. Five wrong tries from one address are free, then each further try waits

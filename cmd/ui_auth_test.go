@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -274,6 +275,57 @@ func TestEndedSessionIsRefusedAndItsStreamsAreClosed(t *testing.T) {
 	}
 
 	assert.Equal(t, http.StatusUnauthorized, authCall(h, http.MethodGet, "/api/state", func(r *http.Request) { r.AddCookie(cookie) }).Code)
+}
+
+// TestSignOutEndsTheSessionAndDropsTheCookie goes through the real handler: POST /api/signout.
+func TestSignOutEndsTheSessionAndDropsTheCookie(t *testing.T) {
+	uiHome(t)
+
+	a := &app{out: io.Discard, err: io.Discard, uiSessions: testSessions(t)}
+	srv := httptest.NewUnstartedServer(nil)
+	srv.Config.Handler = a.uiHandler(srv.Listener.Addr().String(), true, authToken)
+	srv.Start()
+	t.Cleanup(srv.Close)
+
+	login, err := noRedirect().Get(srv.URL + "/?token=" + authToken)
+	require.NoError(t, err)
+	_ = login.Body.Close()
+	require.Len(t, login.Cookies(), 1)
+
+	cookie := login.Cookies()[0]
+
+	do := func(method, path string, withHeader bool) *http.Response {
+		req, err := http.NewRequest(method, srv.URL+path, nil)
+		require.NoError(t, err)
+
+		if withHeader {
+			req.Header.Set("X-Zmina", "1")
+		}
+
+		req.AddCookie(cookie)
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		_ = resp.Body.Close()
+
+		return resp
+	}
+
+	require.Equal(t, http.StatusOK, do(http.MethodGet, "/api/ping", false).StatusCode)
+	assert.Equal(t, http.StatusForbidden, do(http.MethodPost, "/api/signout", false).StatusCode, "a write needs the page's header")
+	require.Equal(t, http.StatusOK, do(http.MethodGet, "/api/ping", false).StatusCode)
+
+	out := do(http.MethodPost, "/api/signout", true)
+	require.Equal(t, http.StatusOK, out.StatusCode)
+
+	var dropped bool
+
+	for _, c := range out.Cookies() {
+		dropped = dropped || (c.Name == uiCookie && c.Value == "" && c.MaxAge < 0)
+	}
+
+	assert.True(t, dropped, "the cookie is taken off the browser")
+	assert.Equal(t, http.StatusUnauthorized, do(http.MethodGet, "/api/ping", false).StatusCode, "the session is gone")
 }
 
 // TestSessionsSurviveARestartOfTheCockpit: the file is the store, so a new handler over it knows the cookie.
