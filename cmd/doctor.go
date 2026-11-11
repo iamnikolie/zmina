@@ -115,9 +115,11 @@ func (a *app) diagnose() []check {
 	}
 	checkBoot(c, add)
 	checkContext(c, add)
+	checkModels(c, add)
 	if hasCodex {
 		a.checkCodex(c, add)
 	}
+	checkToolVersions(c, hasClaude, hasCodex, add)
 	a.checkTicker(c, add)
 
 	st, err := shift.Read(c.StateDir())
@@ -190,10 +192,7 @@ func (a *app) diagnose() []check {
 			add("alarms", "warn", "%s", p)
 		}
 
-		if c.Notify.Empty() {
-			add("alarms", "warn", "no notify command: a reminder for you and an ask that holds a role up only land on "+
-				"the todo; nothing reaches your phone (notify: in the crew file)")
-		}
+		checkNotify(c, add)
 	}
 
 	checkHygiene(c, st, time.Now(), add)

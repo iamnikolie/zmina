@@ -101,6 +101,7 @@ Run 'zmina skill' for the agent reference: its topics and the dispatcher's part;
 		a.messageCommand(), a.contextCommand(), a.reportCommand(), a.nodeCommand(), a.tellCommand(), a.codexCommand(), a.terminalCommand(),
 		a.ackCommand(), a.pendingCommand(), a.turnEndCommand(), a.limitsTapCommand(), a.readCommand(), a.grepCommand(), a.readGuardCommand(),
 		a.lockCommand())
+	root.AddCommand(a.crewCommand())
 	groupCommands(root)
 
 	return root
@@ -203,6 +204,11 @@ func (a *app) loadCrew() (*crew.Crew, error) {
 
 	for _, w := range c.Warnings {
 		fmt.Fprintln(a.err, "zmina: warning:", w)
+	}
+
+	// An edit made outside zmina is kept in the crew file's history on the first command that sees it.
+	if raw, err := os.ReadFile(c.Path); err == nil {
+		_ = noticeCrewFile(c.Path, raw)
 	}
 
 	return c, nil

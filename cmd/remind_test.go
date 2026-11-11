@@ -74,7 +74,7 @@ func TestRemindTheOwner(t *testing.T) {
 
 	out, _, err = zm(t, crewFile, "remind", "ls")
 	require.NoError(t, err)
-	assert.Regexp(t, `R-1\s+.*\(in [12]m\)\s+you\s+remind\s+the site is on hold`, out)
+	assert.Regexp(t, `^the site is on hold\s+R-1\s+.*\(in [12]m\)\s+you\s+remind\n$`, out, "the words first, then the id")
 
 	_, _, err = zm(t, crewFile, "tick")
 	require.NoError(t, err)
@@ -105,7 +105,7 @@ func TestRemindTheOwner(t *testing.T) {
 
 	out, _, err = zm(t, crewFile, "remind", "ls", "--all")
 	require.NoError(t, err)
-	assert.Regexp(t, `R-1\s+.*ago\)\s+you\s+remind\s+rang → A-1\s+the site is on hold`, out)
+	assert.Regexp(t, `the site is on hold\s+R-1\s+.*ago\)\s+you\s+remind\s+rang → A-1`, out)
 
 	out, _, err = zm(t, crewFile, "remind", "ls")
 	require.NoError(t, err)
@@ -212,4 +212,44 @@ func TestLaterUntilComesBack(t *testing.T) {
 	out, _, err = zm(t, crewFile, "later", "ls")
 	require.NoError(t, err)
 	assert.Contains(t, out, "L-1")
+}
+
+// remind ls leads with the alarm's words, clipped, and puts the id after them; --full keeps them whole; --json is the
+// stored alarms as before.
+func TestRemindLsWordsBeforeIds(t *testing.T) {
+	crewFile := testCrew(t, "")
+	long := "check the rollout " + strings.Repeat("and then look again ", 8) + "at the very end"
+
+	_, _, err := zm(t, crewFile, "remind", "tomorrow", long)
+	require.NoError(t, err)
+
+	out, _, err := zm(t, crewFile, "remind", "ls")
+	require.NoError(t, err)
+	assert.Regexp(t, `^check the rollout and then look again[^\n]{20,}…\s+R-1\s+\w{3} \d+ \w{3} \d\d:\d\d \(in \d+h\)\s+you\s+remind\n$`, out)
+
+	out, _, err = zm(t, crewFile, "remind", "ls", "--full")
+	require.NoError(t, err)
+	assert.Contains(t, out, "at the very end  ", "the whole text, the id after it")
+	assert.Regexp(t, `at the very end\s+R-1\s`, out)
+
+	text, _, err := zm(t, crewFile, "remind", "ls", "--json")
+	require.NoError(t, err)
+
+	var list []alarm.Alarm
+	require.NoError(t, json.Unmarshal([]byte(text), &list))
+	require.Len(t, list, 1)
+	assert.Equal(t, "R-1", list[0].ID)
+	assert.Equal(t, long, list[0].Text, "JSON keeps the stored text whole")
+}
+
+// A parked item's return shows its words, then its alarm and the item.
+func TestRemindLsLaterAlarmNamesTheItemAfterItsWords(t *testing.T) {
+	crewFile := testCrew(t, "")
+
+	_, _, err := zm(t, crewFile, "later", "add", "renew the certificate", "--until", "+3h")
+	require.NoError(t, err)
+
+	out, _, err := zm(t, crewFile, "remind", "ls")
+	require.NoError(t, err)
+	assert.Regexp(t, `^renew the certificate\s+R-1 · L-1\s+.*\s+you\s+later\n$`, out)
 }

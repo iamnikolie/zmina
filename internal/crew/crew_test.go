@@ -221,7 +221,7 @@ func TestSeatEditKeepsComments(t *testing.T) {
 	assert.Contains(t, body, "args: [--chrome, --verbose]")
 
 	_, err = os.Stat(path + ".bak")
-	assert.NoError(t, err)
+	assert.Error(t, err, "the previous version goes to the history, not to a single .bak")
 
 	c, err := Load(path)
 	require.NoError(t, err)

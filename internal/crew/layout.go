@@ -13,6 +13,9 @@ func (c *Crew) Layout() Layout { return Layout{Dir: filepath.Dir(c.Path)} }
 // State is zmina's state file.
 func (l Layout) State() string { return filepath.Join(l.Dir, "state.json") }
 
+// History is where the crew file's earlier versions are kept (crew.d/history; see History).
+func (l Layout) History() string { return filepath.Join(l.Dir, "crew.d", "history") }
+
 // Lock is the file every writing command and the ticker lock.
 func (l Layout) Lock() string { return filepath.Join(l.Dir, "lock") }
 

@@ -95,36 +95,34 @@ func (a *app) queueCommand() *cobra.Command {
 					return nil
 				}
 
-				line := func(kind, text string) {
-					if !full {
-						text = clip(oneLine(text), 160)
-					}
-
-					fmt.Fprintln(a.out, "  "+kind+text)
+				// The words of a line come first and its ids after them; rest is what zmina adds to a posted or failed
+				// line, never clipped away.
+				line := func(kind, text, rest string) {
+					fmt.Fprintln(a.out, "  "+kind+queueLine(text, full)+rest)
 				}
 
 				for _, q := range qs {
 					fmt.Fprintln(a.out, q.Role+":")
 
 					for _, l := range q.Signals {
-						line("signal   ", l)
+						line("signal   ", l, "")
 					}
 
 					for _, l := range q.Notes {
-						line("note     ", l)
+						line("note     ", l, "")
 					}
 
 					for _, l := range q.Inbox {
-						line("inbox    ", l)
+						line("inbox    ", l, "")
 					}
 
 					for _, p := range q.Posted {
-						line("posted   ", fmt.Sprintf("%s (to its inbox socket %s, not yet seen)", p.Line,
+						line("posted   ", p.Line, fmt.Sprintf(" (to its inbox socket %s, not yet seen)",
 							p.At.Local().Format("01-02 15:04")))
 					}
 
 					for _, f := range q.Failed {
-						line("failed   ", fmt.Sprintf("%s (%s, %s)", f.Line, f.Error, f.At.Local().Format("01-02 15:04")))
+						line("failed   ", f.Line, fmt.Sprintf(" (%s, %s)", f.Error, f.At.Local().Format("01-02 15:04")))
 					}
 				}
 
@@ -133,7 +131,7 @@ func (a *app) queueCommand() *cobra.Command {
 		},
 	}
 	ls.Flags().BoolVar(&asJSON, "json", false, "JSON output")
-	ls.Flags().BoolVar(&full, "full", false, "every line whole (default: one line of at most 160 characters each)")
+	ls.Flags().BoolVar(&full, "full", false, "every line whole (default: its words in one line of at most 160 characters, then its ids)")
 
 	retry := &cobra.Command{
 		Use:   "retry <role>",

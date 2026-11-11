@@ -78,9 +78,19 @@ func (a *app) setRetired(date, movedTo string) error {
 		e.SetCrewKey("retired", date)
 		e.SetCrewKey("moved_to", movedTo)
 
+		how := "zmina retire"
+		if date == "" {
+			how += " --off"
+		}
+
+		e.Note(by(), how)
+
 		if err := e.SaveCrewKeys(); err != nil {
 			return err
 		}
+
+		logCrewVersions(eventLog(s.Crew), e.Saved.Versions)
+		a.warnCrewHistory(e.Saved)
 
 		if date != "" {
 			s.Stop()
