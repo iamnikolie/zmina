@@ -1589,8 +1589,8 @@ no rule matched: kind movie has no seat in routes (design, film): pick by hand
 - **Exit status**: 0 with an answer, 2 when no rule matched (the line says why, `pick by hand`) or the crew file has no
   `routes:` (`no routes in the crew file`), 1 for a bad flag or an unknown task.
 - **Same inputs, same answer.** Ties are broken by the order of the lists in the crew file, never by chance.
-- **The printed commands** carry `--crew` or `--config` when this run was given one. A project's repo gets
-  `--worktree` unless the work goes on from a task or reviews one; the title is yours to write.
+- **The printed commands** carry `--crew` or `--config` when this run was given one. A `--repo` gets `--worktree`
+  unless the work goes on from a task or reviews one; the title is yours to write.
 
 **Tasks and the routes.** `zmina task new --route …` leaves the role out and lets the routes pick it; the line it prints
 says the rule (`T-15 · dev2 (rule 6: claude 7d 41% < codex week 50%)`), so the dispatcher does not have to name it in
