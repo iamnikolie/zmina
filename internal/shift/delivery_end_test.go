@@ -1,6 +1,7 @@
 package shift
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -567,4 +568,31 @@ func TestRequeueLogsWhatActuallyWentBack(t *testing.T) {
 	assert.Empty(t, rs.Inbox, "the reader has it")
 	assert.True(t, f.ev.has("designer", "acked-queued"))
 	assert.Zero(t, f.eventCount("requeued"), "nothing went back")
+}
+
+// The two flags a record carries (Sent.Acked, Posted.Boot) are optional in state.json: a state written without them
+// reads as before, one written with them is read by a zmina that does not know them (unknown fields are ignored), and
+// they are not written when false.
+func TestRecordFlagsAreOptionalInState(t *testing.T) {
+	old := `{"version":2,"roles":{"dev":{"sent":{"line":"a","at":"2026-01-02T10:00:00Z"},` +
+		`"posted":[{"line":"b","msg_id":"m-1","session":"s-1","at":"2026-01-02T10:00:00Z"}]}}}`
+
+	st, _, err := decode([]byte(old))
+	require.NoError(t, err)
+	assert.False(t, st.Roles["dev"].Sent.Acked)
+	assert.False(t, st.Roles["dev"].Posted[0].Boot)
+
+	raw, err := json.Marshal(st)
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), `"acked"`)
+	assert.NotContains(t, string(raw), `"boot"`)
+
+	st.Roles["dev"].Sent.Acked, st.Roles["dev"].Posted[0].Boot = true, true
+	raw, err = json.Marshal(st)
+	require.NoError(t, err)
+
+	back, _, err := decode(raw)
+	require.NoError(t, err)
+	assert.True(t, back.Roles["dev"].Sent.Acked)
+	assert.True(t, back.Roles["dev"].Posted[0].Boot)
 }
