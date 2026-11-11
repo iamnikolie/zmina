@@ -32,6 +32,10 @@ const (
 	restartDueSettle = 90 * time.Second
 	// restartEarly is the share of restart_at (4/5) at which a role is asked for its note ahead of the restart.
 	restartEarlyNum, restartEarlyDen = 4, 5
+	// restartReset is the share of restart_at (1/2) a conversation has to fall below, after a compaction or a trim,
+	// for the early ask to be made again on its next climb: well under restartEarly, so a size that hovers around the
+	// mark asks once.
+	restartResetNum, restartResetDen = 1, 2
 	// restartOwnerQuiet is how long after the owner's last line to a role it is left alone: he may be mid-talk.
 	restartOwnerQuiet = 15 * time.Minute
 	// restartDoneGrace is how long a role whose task is done sits before restart_done restarts it, so a quick
@@ -174,6 +178,8 @@ func (s *Shift) restartAtTurnEnd(name string, sess *registry.Session, now time.T
 	s.followPosted(name, now)
 
 	rs := s.State.Role(name)
+	s.restartRearm(name, rs, sess, r.RestartContext())
+
 	if r.RestartContext() == 0 || !rs.RestartAsked.IsZero() || !rs.Downing.IsZero() || !rs.Releasing.IsZero() ||
 		rs.RestartGaveUp == sess.SessionID {
 		return ""
@@ -246,6 +252,23 @@ func (s *Shift) quietFor(name string, sess *registry.Session, now time.Time) tim
 	turn, _ := s.registryFor(name).Last(sess.SessionID)
 
 	return now.Sub(quietSince(sess, turn))
+}
+
+// restartRearm forgets what a conversation was asked or flagged for (RestartNoted, RestartDue) once a turn ends with
+// its context well under restart_at (restartReset): a compaction or a trim dropped it, and its next climb is a new
+// one, asked for its note again at restartEarly, once. A size not known (0: right after a compaction, before a turn
+// shows it) forgets nothing, and one that only dips toward restartReset asks no second time.
+func (s *Shift) restartRearm(name string, rs *RoleState, sess *registry.Session, at int) {
+	if at == 0 || (rs.RestartNoted == "" && rs.RestartDue == "") {
+		return
+	}
+
+	turn, err := s.registryFor(name).Last(sess.SessionID)
+	if err != nil || !turn.Ended || turn.Context <= 0 || turn.Context >= at/restartResetDen*restartResetNum {
+		return
+	}
+
+	rs.RestartNoted, rs.RestartDue = "", ""
 }
 
 // restartAsked follows a role asked for its note: restarted once every task's note landed and it is plainly idle,

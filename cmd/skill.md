@@ -1777,10 +1777,12 @@ there stops the beat's further typing and starting, and says so.
    (a developer and a reviewer over `SendMessage`) is not taken at the very next beat, so a reply sent in that
    window still lands, and each turn the reply begins starts the 90 s again. The same 90 s follows the turn in
    which the role wrote the note it was asked for. A turn that ends
-   at or over 80% of `restart_at` (200k) gets, once a conversation, `[zmina] restart ahead: …`: the same file of
+   at or over 80% of `restart_at` (200k) gets, once a climb, `[zmina] restart ahead: …`: the same file of
    checkpoint requests, to write now and to save again at the end of later turns that moved the work, so that at
    `restart_at` the note is there and the restart costs no extra turn (`restart-note` in the log; nothing waits on
-   it, nothing is called off or given up for it). A role with no such hook (a Codex role, `delivery: tmux`, one
+   it, nothing is called off or given up for it). A climb ends when a turn ends under 50% of `restart_at` (125k):
+   after a compaction or a trim in the same conversation the next climb to 80% is asked again, once; a size that
+   only dips (60%) asks no second time. A role with no such hook (a Codex role, `delivery: tmux`, one
    started without zmina's hooks) and a flag that is not there (a turn's end the hook missed) are seen by the beat
    alone, once the role has sat idle 5 min. A task closed or parked while the role holds another is no different
    from any turn's end: over `restart_at` it is restarted then, for the tasks it still holds.
