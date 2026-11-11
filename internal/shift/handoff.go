@@ -17,7 +17,25 @@ func (s *Shift) TaskPacket(name string, t task.Task) (handoff.Packet, error) {
 	}
 	shape := s.Crew.HandoffFor(r)
 	t.Delivery = nil // Receipt metadata must not recursively change the packet identity.
-	return handoff.Packet{Version: 1, Role: name, Task: t, Shape: shape, Instructions: fmt.Sprintf("Read repository instructions. Run zmina --crew %s task show %s and confirm this task is still assigned to %s; use the latest note before working.\n", shellWord(s.Crew.Path), t.ID, name) + shape.Request("checkpoint or result") + fmt.Sprintf(ReportRule, shellWord(s.Crew.Path), t.ID)}, nil
+	return handoff.Packet{Version: 1, Role: name, Task: t, Shape: shape, Instructions: fmt.Sprintf("Read repository instructions. Run zmina --crew %s task show %s and confirm this task is still assigned to %s; use the latest note before working.\n", shellWord(s.Crew.Path), t.ID, name) + shape.Request("checkpoint or result") + criteriaRule(t) + fmt.Sprintf(ReportRule, shellWord(s.Crew.Path), t.ID)}, nil
+}
+
+// criteriaRule is the part of a packet's instructions that says what done means, when the task has criteria; a task
+// without them gets nothing, so its packet is the one it always had.
+func criteriaRule(t task.Task) string {
+	if len(t.Criteria) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+
+	b.WriteString("Done means every criterion below holds; in your result say for each whether it holds and how you checked.\n")
+
+	for i, c := range t.Criteria {
+		fmt.Fprintf(&b, "%d. %s\n", i+1, c)
+	}
+
+	return b.String()
 }
 
 // ReportRule is how a worker reports a finished task: the result goes to the ledger, which tells the dispatcher
