@@ -86,6 +86,10 @@ func (a *app) taskNewCommand() *cobra.Command {
 					if _, err := s.HandTask(t.Role, t); err != nil {
 						return fmt.Errorf("%s recorded, but handoff failed: %w", t.ID, err)
 					}
+
+					// The packet goes now when the role can take it, else with the beat.
+					s.DeliverTo(t.Role)
+
 					t, err = s.Tasks.Get(t.ID)
 					if err != nil {
 						return err
@@ -538,6 +542,8 @@ func (a *app) setTask(id string, st task.State, o taskChange) error {
 			if _, err := s.HandTask(t.Role, t); err != nil {
 				return err
 			}
+
+			s.DeliverTo(t.Role)
 		}
 		fmt.Fprintf(a.out, "%s · %s · %s\n", t.ID, t.Role, t.Status())
 

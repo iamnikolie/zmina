@@ -20,6 +20,8 @@ func (a *app) taskHandoffCommand() *cobra.Command {
 				if err != nil {
 					return err
 				}
+
+				s.DeliverTo(t.Role)
 				fmt.Fprintln(a.out, path)
 				return nil
 			}

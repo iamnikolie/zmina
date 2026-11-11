@@ -1467,6 +1467,30 @@ func within(now, at time.Time, d time.Duration) bool {
 // Call under the crew state lock. Busy roles, dialogs, drafts and unlanded messages retain their queue.
 func (s *Shift) FlushInbox(name string) string { return s.deliverInbox(name, s.Now()) }
 
+// DeliverTo gives a role what waits for it now, when it can take it, instead of at the next beat: the dispatcher its
+// signals, notes and own queue (deliver, then deliverInbox, as the beat does), any other role its first queued line
+// (deliverInbox). The beat's own rules decide whether it can: the role is up under zmina and booted, idle or able to
+// take a post, no dialog and no draft in the way, the line before it shown or landed, the last failed try and the
+// last slash command far enough back. It starts no role, trims nothing, tells nobody again, sweeps no record and
+// writes neither LastTick nor Up: what it cannot give stays queued for the beat, which stays the safety net. Call it
+// under the crew state lock, after the command has queued what it queued. It returns a line for the log, "" when
+// nothing went.
+func (s *Shift) DeliverTo(name string) string {
+	if _, err := s.Role(name); err != nil {
+		return ""
+	}
+
+	now := s.Now()
+
+	if name == s.Crew.Dispatcher {
+		if line := s.deliver(now); line != "" {
+			return "told the dispatcher: " + line
+		}
+	}
+
+	return s.deliverInbox(name, now)
+}
+
 // pruneAfterBeats is how many beats in a row a role must be missing from the crew file before its state is dropped:
 // long enough for an edit, a merge or a rename and back to finish.
 const pruneAfterBeats = 10

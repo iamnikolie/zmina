@@ -599,6 +599,9 @@ func answerTodo(s *shift.Shift, from, action, id, words string) (string, error) 
 		return id + " · " + action + " · recorded", nil
 	}
 
+	// The answer goes to the dispatcher now when it can take it, else with the beat.
+	s.Deliver()
+
 	return id + " · " + action + " · queued for the dispatcher", nil
 }
 

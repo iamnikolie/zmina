@@ -16,6 +16,10 @@ func (a *app) reportCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if q {
+				// A new report goes to the dispatcher now when it can take one, else with the beat.
+				s.Deliver()
+			}
 			fmt.Fprintf(a.out, "report %s · queued: %t\n", key, q)
 			return nil
 		})

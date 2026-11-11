@@ -82,12 +82,20 @@ func (s *Shift) HandTask(name string, t task.Task) (string, error) {
 	for _, rs := range s.State.Roles {
 		rs.Inbox = slices.DeleteFunc(rs.Inbox, func(old string) bool { return strings.HasPrefix(old, prefix) && old != line })
 	}
-	if !slices.Contains(s.State.Role(name).Inbox, line) {
+	// A line already on its way to the role (posted and not yet seen, typed and not yet landed) is not queued again,
+	// unless the role started since: a command that delivers at once (DeliverTo) takes it out of the queue long
+	// before the beat would have, and the packet must not reach the same session twice.
+	if rs := s.State.Role(name); !slices.Contains(rs.Inbox, line) && (renew || !onItsWay(rs, line)) {
 		if err := s.Queue(name, line); err != nil {
 			return "", err
 		}
 	}
 	return path, nil
+}
+
+// onItsWay reports whether a line was posted or typed to the role and has not yet been seen or landed.
+func onItsWay(rs *RoleState, line string) bool {
+	return rs.Sent != nil && rs.Sent.Line == line || slices.ContainsFunc(rs.Posted, func(p Posted) bool { return p.Line == line })
 }
 
 func shellWord(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'" }

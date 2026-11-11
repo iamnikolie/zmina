@@ -851,7 +851,7 @@ func (a *app) sendCommand() *cobra.Command {
 
 	c := &cobra.Command{
 		Use:   "send <role> <text>",
-		Short: "Type one line into a role's prompt and press Enter (--when-idle: the ticker types it once the role is idle)",
+		Short: "Type one line into a role's prompt and press Enter (--when-idle: queued; it goes at once when the role can take it, else with the ticker)",
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			text := strings.Join(args[1:], " ")
@@ -866,13 +866,24 @@ func (a *app) sendCommand() *cobra.Command {
 						return err
 					}
 
-					if id != "" {
+					// It goes now when the role can take it, else with the beat. Its own line is the last one queued: it
+					// went when it is no longer waiting (a line before it takes the pass first).
+					rs := s.State.Role(args[0])
+					queued := rs.Inbox[len(rs.Inbox)-1]
+					s.DeliverTo(args[0])
+					went := !slices.Contains(rs.Inbox, queued) &&
+						!slices.ContainsFunc(rs.Failed, func(f shift.Failed) bool { return f.Line == queued })
+
+					switch {
+					case id != "" && went:
+						fmt.Fprintf(a.out, "delivered to %s as %s: said again until it acks\n", args[0], id)
+					case id != "":
 						fmt.Fprintf(a.out, "queued for %s as %s: delivered once it is up and between turns; said again until it acks\n", args[0], id)
-
-						return nil
+					case went:
+						fmt.Fprintf(a.out, "delivered to %s\n", args[0])
+					default:
+						fmt.Fprintf(a.out, "queued for %s: typed the first time it is up and idle\n", args[0])
 					}
-
-					fmt.Fprintf(a.out, "queued for %s: typed the first time it is up and idle\n", args[0])
 
 					return nil
 				}
@@ -882,7 +893,7 @@ func (a *app) sendCommand() *cobra.Command {
 		},
 	}
 
-	c.Flags().BoolVar(&whenIdle, "when-idle", false, "queue the line; the ticker types it once the role is up and idle")
+	c.Flags().BoolVar(&whenIdle, "when-idle", false, "queue the line: it goes at once when the role is up and can take it, else the ticker types it once the role is idle")
 
 	return c
 }

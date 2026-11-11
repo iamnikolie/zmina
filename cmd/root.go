@@ -53,6 +53,9 @@ type app struct {
 	spawn func(args []string) error
 	// parent reads a process's parent pid (nil: procParent; tests set a fake).
 	parent func(pid int) (int, error)
+	// shiftSeams replaces what a new shift talks to (its tmux, session registry, inbox socket) once it is built
+	// (nil: the real ones; tests set fakes).
+	shiftSeams func(s *shift.Shift)
 }
 
 // NewRoot builds the whole command tree writing to out and errw.
@@ -227,7 +230,7 @@ func (a *app) newShift() (*shift.Shift, error) {
 	if n, err := openNode(); err == nil {
 		node = n.Name
 	}
-	return &shift.Shift{
+	s := &shift.Shift{
 		Node:              node,
 		ReconcileMessages: a.reconcileMessages,
 		Crew:              c,
@@ -252,7 +255,13 @@ func (a *app) newShift() (*shift.Shift, error) {
 		Warn:              func(err error) { fmt.Fprintln(a.err, "zmina: warning:", err) },
 		OtherCrews:        func() []string { return otherCrews(a.crewKey(), mesh.Address{}) },
 		HasTranscript:     hasTranscript,
-	}, nil
+	}
+
+	if a.shiftSeams != nil {
+		a.shiftSeams(s)
+	}
+
+	return s, nil
 }
 
 // readState runs fn on the shift with the saved state, read without the lock (so a look never waits for a down)
