@@ -79,7 +79,7 @@ quiet_hours: 23:00-08:00                 # in timezone:; blocking and ask pushes
 notify_again: 24h                        # an item that still blocks is pushed again this often (default 24h, 1h at least; off)
 timezone: Europe/Warsaw                  # the clock reminder times are read on (default: this machine's)
 lessons: on                              # daily triage of the roles' lessons into one draft MR on the crew's agentic-os (default off; see Lessons)
-limits:                                  # how the crew spends its plans, in % of the 7-day (Claude) and weekly (Codex) window
+limits:                                  # how the crew spends its plans, in % of the 7-day (Claude) and weekly (Codex) window; see Limits
   claude: {pinned: 80, stop: 99}         # from pinned only work that needs Claude goes to it, from stop nothing (defaults 80 and 99)
   codex: {pinned: 80}                    # from pinned only work that needs Codex goes to it (default 80)
 day_start: "09:00"                       # when morning, tomorrow, thu or a date rings (default 09:00)
@@ -1432,6 +1432,37 @@ paid for: `Of the cost: cache reads 60%, cache writes 17%, output 18%, input 5%.
   older than this adds no hours or compactions.
 - Not counted: transcripts Claude Code no longer keeps, and headless runs outside every task's worktree.
 
+## Limits — how full the plans are
+
+`zmina limits [--json]` — how full the Claude and Codex plans are, how old each reading is, and the crew's policy for
+spending them. The dispatcher reads it before it routes work by plan; no status line or Codex rollout needs grepping.
+
+```
+claude   5h 12%  7d 41%   5h resets 21:40 · 7d resets Tue 13:15   seen 2m ago
+codex    week 50%         resets Thu 09:00                        seen 3h ago (codex-dev)
+policy   claude: pinned work only from 80%, nothing from 99% · codex: pinned work only from 80%
+```
+
+- **Claude** is the 5-hour and the 7-day window as the status line of a Claude role last drew them. The status-line
+  tap writes them to `limits/claude.json` in the crew's directory.
+- **Codex** is the weekly window (10080 minutes), read from the newest rollout under `sessions/` of each Codex home the
+  crew knows: `~/.codex` and every Codex seat's `codex_home`. The newest is found by modification time across all days'
+  folders, and in it the last `rate_limits` line counts. Of the homes, the reading recorded last wins; `(codex-dev)`
+  names the seats that run with that home (`~/.codex` when none does).
+- **Nothing is guessed.** A window is stale when its reset has passed since the reading, or when the reading is older
+  than 6 hours. A stale window prints `unknown (last 41% at Tue 14:02)` and carries `"stale": true` in `--json`, and its
+  reset is not shown. A plan with no reading at all prints `unknown (…)` and is `null` in `--json`. Unknown stays
+  unknown: route by the other plan, or ask the owner.
+- **`--json`**: `claude` (`five_hour` and `seven_day`, each with `used` in percent, `resets` and, when stale, `stale`;
+  `at`, when it was seen; `source`, `statusline`), `codex` (`week` the same way, `plan`, `at`, `source`, `rollout
+  <seat>`) and `policy`. Times are on the crew's `timezone:`.
+- **Policy** is the crew file's `limits:` key, in percent of the 7-day window for Claude and of the weekly window for
+  Codex. From `pinned` only work that needs that plan goes to it; from Claude's `stop` nothing does. The defaults are
+  the rules the dispatcher has always followed: Claude `pinned: 80`, `stop: 99`, Codex `pinned: 80` (Codex has no
+  `stop`). A share is 1 to 100 and Claude's `pinned` may not be above its `stop`; a crew file that breaks this is
+  refused. A seat bills the plan of its `runtime:`, so there is no key to name one. A crew file without the key keeps
+  the defaults.
+
 ## Log
 
 `zmina log [--since 12h|3d] [--role r] [--task T-14] [-n|--last 50] [--full] [--json]` — ups, downs, ends, broken
@@ -1660,6 +1691,8 @@ the crew are dropped from it. A role missing from the crew file keeps its state 
 - A zmina line with ids (`S-12 …`) and a line ending `(zmina S-14)` wait for your ack: once each is handled — a task recorded, routed, answered, or nothing to do — `zmina ack S-12 S-14`, one
   call for the batch. `still pending since …` is one you did not ack: handle it now or ack it. `zmina pending` lists
   them; the recovery pack has them as `unacked`.
+- How full the plans are, before a piece of work is routed by plan: `zmina limits` (`--json`). A plan printed
+  `unknown (…)` has no reading you may trust: do not guess it; the policy line says where work narrows (Limits).
 - `budget: …` — a role or a task went past its budget (API-equivalent dollars). Nothing is stopped: tell the
   owner in one line with `zmina usage --by task --role <role>` behind it, and act on what they decide.
 - Do not end a role that is `busy` unless the owner asks. Do not touch `outside` sessions — they
