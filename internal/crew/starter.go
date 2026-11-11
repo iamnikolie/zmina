@@ -50,6 +50,7 @@ stuck_minutes: %d                     # busy longer than this -> the dispatcher 
 context_max: %dk                     # a role idle with more than this in its conversation is compacted
 restart_at: %dk                      # a role holding a task this full restarts fresh from its checkpoint note
 restart_done: %dk                     # a role whose task closed, this full, restarts fresh: a session per task
+# worktree_gc: daily                   # once a day, remove the worktrees of closed tasks whose branch is merged
 
 roles:
   dispatcher:

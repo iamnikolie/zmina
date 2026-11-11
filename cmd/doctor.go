@@ -194,7 +194,7 @@ func (a *app) diagnose() []check {
 		}
 	}
 
-	checkHygiene(c, time.Now(), add)
+	checkHygiene(c, st, time.Now(), add)
 	a.checkSockets(c, add)
 	checkVersions(c, st, add)
 

@@ -5,6 +5,7 @@
 package ledger
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -338,6 +339,13 @@ type Collected struct {
 // branch merged into its base. force also removes a dropped task's unmerged branch and changes. Tasks with nothing
 // left are not reported.
 func (l *Ledger) GC(dryRun, force bool) ([]Collected, error) {
+	return l.GCContext(context.Background(), dryRun, force)
+}
+
+// GCContext is GC under a deadline, for a caller that cannot wait for git (the ticker's daily sweep). Once ctx is
+// done no task is begun and no removal started, a git call that only reads is ended, and what was collected so far
+// comes back with ctx's error. A removal already under way is let finish (see worktree.Tree.Ctx).
+func (l *Ledger) GCContext(ctx context.Context, dryRun, force bool) ([]Collected, error) {
 	all, err := l.Store.All()
 	if err != nil {
 		return nil, err
@@ -346,11 +354,15 @@ func (l *Ledger) GC(dryRun, force bool) ([]Collected, error) {
 	var out []Collected
 
 	for _, t := range all {
+		if err := ctx.Err(); err != nil {
+			return out, err
+		}
+
 		if t.State.Active() || t.Branch == "" {
 			continue
 		}
 
-		if c, ok := l.collect(t, dryRun, force && t.State == task.Dropped); ok {
+		if c, ok := l.collect(ctx, t, dryRun, force && t.State == task.Dropped); ok {
 			out = append(out, c)
 		}
 	}
@@ -358,15 +370,25 @@ func (l *Ledger) GC(dryRun, force bool) ([]Collected, error) {
 	return out, nil
 }
 
-func (l *Ledger) collect(t task.Task, dryRun, force bool) (Collected, bool) {
-	tr := tree(t)
+// collect reports what became of one closed task's worktree. A task the deadline cut short is not reported (false):
+// what git said before it was cut says nothing of the task.
+func (l *Ledger) collect(ctx context.Context, t task.Task, dryRun, force bool) (Collected, bool) {
+	tr := treeCtx(ctx, t)
 	c := Collected{ID: t.ID, Detail: t.Worktree + " and branch " + t.Branch}
 
-	merged, err := l.Trees.Merged(tr)
-	if err != nil {
+	kept := func(err error) (Collected, bool) {
+		if ctx.Err() != nil {
+			return c, false
+		}
+
 		c.Kept = err.Error()
 
 		return c, true
+	}
+
+	merged, err := l.Trees.Merged(tr)
+	if err != nil {
+		return kept(err)
 	}
 
 	_, statErr := os.Stat(t.Worktree)
@@ -375,6 +397,10 @@ func (l *Ledger) collect(t task.Task, dryRun, force bool) (Collected, bool) {
 	if gone && merged {
 		// The worktree is gone and the branch merged or gone: at most a merged branch is left.
 		if !dryRun {
+			if ctx.Err() != nil {
+				return c, false
+			}
+
 			if err := l.Trees.Remove(tr, false); err != nil {
 				c.Kept = err.Error()
 
@@ -387,9 +413,7 @@ func (l *Ledger) collect(t task.Task, dryRun, force bool) (Collected, bool) {
 
 	dirty, err := l.Trees.Dirty(tr)
 	if err != nil {
-		c.Kept = err.Error()
-
-		return c, true
+		return kept(err)
 	}
 
 	switch {
@@ -399,6 +423,8 @@ func (l *Ledger) collect(t task.Task, dryRun, force bool) (Collected, bool) {
 		c.Kept = fmt.Sprintf("branch %s is not merged into %s", t.Branch, t.Base)
 	case dryRun:
 		c.Removed = true
+	case ctx.Err() != nil:
+		return c, false
 	default:
 		if err := l.Trees.Remove(tr, force); err != nil {
 			c.Kept = err.Error()
@@ -413,6 +439,14 @@ func (l *Ledger) collect(t task.Task, dryRun, force bool) (Collected, bool) {
 
 func tree(t task.Task) worktree.Tree {
 	return worktree.Tree{Repo: t.Repo, Path: t.Worktree, Branch: t.Branch, Base: t.Base}
+}
+
+// treeCtx is tree whose reading git calls end with ctx.
+func treeCtx(ctx context.Context, t task.Task) worktree.Tree {
+	tr := tree(t)
+	tr.Ctx = ctx
+
+	return tr
 }
 
 func (l *Ledger) log(role, event, id, detail string) {

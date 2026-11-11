@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/iamnikolie/zmina/internal/crew"
+	"github.com/iamnikolie/zmina/internal/shift"
 )
 
 const (
@@ -78,8 +79,9 @@ func checkLogin(bin, namespace string, now time.Time, add func(name, level, form
 }
 
 // checkHygiene names what piles up while the plumbing is fine: old questions for the owner, old parked items, copies
-// of the crew file, worktrees of closed tasks. Each is one line with the command that shows it.
-func checkHygiene(c *crew.Crew, now time.Time, add func(name, level, format string, args ...any)) {
+// of the crew file, worktrees of closed tasks. Each is one line with the command that shows it. st is the saved state
+// (nil when it could not be read).
+func checkHygiene(c *crew.Crew, st *shift.State, now time.Time, add func(name, level, format string, args ...any)) {
 	var old []string
 
 	for _, it := range askStore(c).Pending() {
@@ -110,9 +112,37 @@ func checkHygiene(c *crew.Crew, now time.Time, add func(name, level, format stri
 			"the others are hand-made", len(copies), clipList(copies))
 	}
 
-	if n := closedWorktrees(c); n > 0 {
-		add("worktrees", "warn", "%d closed tasks keep their worktree: zmina task gc --dry-run", n)
+	checkWorktrees(c, st, add)
+}
+
+// checkWorktrees is the closed tasks' worktrees: with worktree_gc on the ticker sweeps them daily, and what is left
+// is what the sweep keeps (unmerged work, changes), so it is not a warning; with it off they pile up until someone
+// runs `zmina task gc`.
+func checkWorktrees(c *crew.Crew, st *shift.State, add func(name, level, format string, args ...any)) {
+	n := closedWorktrees(c)
+
+	if !c.WorktreeGCOn() {
+		if n > 0 {
+			add("worktrees", "warn", "%d closed tasks keep their worktree: zmina task gc --dry-run; "+
+				"worktree_gc: daily in the crew file has the ticker remove the merged ones once a day", n)
+		}
+
+		return
 	}
+
+	last := "no sweep yet"
+	if st != nil && !st.WorktreeGCAt.IsZero() {
+		last = "last sweep " + st.WorktreeGCAt.In(c.Location()).Format("2006-01-02 15:04")
+	}
+
+	if n > 0 {
+		add("worktrees", "ok", "worktree_gc: daily · %s · %d closed tasks still keep theirs (unmerged or with changes: "+
+			"zmina task gc --dry-run)", last, n)
+
+		return
+	}
+
+	add("worktrees", "ok", "worktree_gc: daily · %s", last)
 }
 
 // crewCopies are the files beside the crew file whose name starts with its own and says bak.

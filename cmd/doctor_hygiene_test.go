@@ -13,6 +13,7 @@ import (
 	"github.com/iamnikolie/zmina/internal/asks"
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/later"
+	"github.com/iamnikolie/zmina/internal/shift"
 	"github.com/iamnikolie/zmina/internal/task"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -96,12 +97,52 @@ func TestDoctorHygiene(t *testing.T) {
 	assert.Contains(t, out, "warn  asks      1 open for the owner over 7 days (A-1)")
 	assert.Contains(t, out, "warn  later     1 parked over 14 days (L-1)")
 	assert.Contains(t, out, "warn  worktrees 1 closed tasks keep their worktree", "an open task's worktree is not counted")
+	assert.Contains(t, out, "worktree_gc: daily in the crew file", "the warning names the key that sweeps them")
 	assert.NotContains(t, out, "copies of the crew file", "seat's own .bak is fine")
 
 	require.NoError(t, os.WriteFile(crewFile+".bak-by-hand", []byte("x"), 0o600))
 
 	out, _, _ = zm(t, crewFile, "doctor")
 	assert.Contains(t, out, "warn  crew      2 copies of the crew file next to it")
+}
+
+// With worktree_gc: daily the worktrees line is ok: it says when the sweep last began, and how many closed tasks still
+// keep a worktree (what the sweep's checks keep).
+func TestDoctorWorktreeGC(t *testing.T) {
+	crewFile := testCrew(t, "")
+	dir := filepath.Dir(crewFile)
+	fakeAuth(t, dir, `{"loggedIn": true}`)
+
+	body := string(mustRead(t, crewFile))
+	require.NoError(t, os.WriteFile(crewFile, []byte(strings.Replace(body, "roles:\n", "worktree_gc: daily\nroles:\n", 1)), 0o600))
+
+	c, err := crew.Load(crewFile)
+	require.NoError(t, err)
+
+	out, _, err := zm(t, crewFile, "doctor")
+	require.NoError(t, err)
+	assert.Contains(t, out, "ok    worktrees worktree_gc: daily · no sweep yet\n")
+
+	wt := filepath.Join(dir, "wt")
+	require.NoError(t, os.MkdirAll(wt, 0o700))
+
+	done, err := taskStore(c).Add(task.Task{Role: "dispatcher", Asked: "x", Worktree: wt}, time.Now())
+	require.NoError(t, err)
+	done.State = task.Done
+	require.NoError(t, taskStore(c).Put(done))
+
+	at := time.Date(2026, 11, 10, 4, 5, 0, 0, c.Location())
+
+	l, err := shift.Lock(c.StateDir())
+	require.NoError(t, err)
+
+	l.WorktreeGCAt = at
+	require.NoError(t, l.Save())
+
+	out, _, err = zm(t, crewFile, "doctor")
+	require.NoError(t, err)
+	assert.Contains(t, out, "ok    worktrees worktree_gc: daily · last sweep 2026-11-10 04:05 · 1 closed tasks still keep theirs")
+	assert.NotContains(t, out, "warn  worktrees", "what the sweep keeps is not a warning")
 }
 
 // A claude whose child holds stdout (in the background, or after claude exits) does not hold doctor past the

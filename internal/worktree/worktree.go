@@ -16,6 +16,22 @@ import (
 // Timeout bounds every git call: a hung git must not hold zmina's lock.
 var Timeout = time.Minute
 
+// waitDelay is how long after the end of a call made under a Tree's Ctx zmina still waits for its output pipes: a
+// process git started (a hook, a credential helper) that outlives it and holds them would keep Wait for as long as it
+// lives, and the deadline would not be one. Calls with no Ctx wait as they always did.
+const waitDelay = 2 * time.Second
+
+// gitCmd is git in ctx; bounded gives up its pipes waitDelay after ctx ends.
+func gitCmd(ctx context.Context, bounded bool, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "git", args...)
+
+	if bounded {
+		cmd.WaitDelay = waitDelay
+	}
+
+	return cmd
+}
+
 // Tree is one task's worktree.
 type Tree struct {
 	// Repo is the main checkout's top level.
@@ -24,6 +40,19 @@ type Tree struct {
 	// Branch is the task's branch; Base is the branch (or commit) it started from.
 	Branch string
 	Base   string
+	// Ctx, when set, ends the git calls of Dirty and Merged when it is done (a sweep with a deadline). Remove does
+	// not take it: a removal cut in the middle leaves a half-deleted worktree that no check can read, a slow one
+	// only leaves the tick waiting, and each of its calls has Timeout.
+	Ctx context.Context
+}
+
+// ctx is the context of the tree's reading calls.
+func (t *Tree) ctx() context.Context {
+	if t.Ctx != nil {
+		return t.Ctx
+	}
+
+	return context.Background()
 }
 
 // TopLevel is the top of the git checkout dir is in.
@@ -79,7 +108,7 @@ func Add(repo, path, branch, base string) (*Tree, error) {
 		return nil, fmt.Errorf("%s already exists", path)
 	}
 
-	if exists, err := branchExists(top, branch); err != nil {
+	if exists, err := branchExists(context.Background(), top, branch); err != nil {
 		return nil, err
 	} else if exists {
 		return nil, fmt.Errorf("branch %s already exists in %s", branch, top)
@@ -103,7 +132,7 @@ func (t *Tree) Dirty() (string, error) {
 		return "", nil
 	}
 
-	out, err := git(t.Path, "status", "--short")
+	out, err := gitCtx(t.ctx(), t.Path, "status", "--short")
 
 	return strings.TrimSpace(out), err
 }
@@ -111,18 +140,18 @@ func (t *Tree) Dirty() (string, error) {
 // Merged reports whether every commit of the branch is in its base. A branch that no longer exists has nothing to
 // lose and counts as merged.
 func (t *Tree) Merged() (bool, error) {
-	exists, err := branchExists(t.Repo, t.Branch)
+	exists, err := branchExists(t.ctx(), t.Repo, t.Branch)
 	if err != nil || !exists {
 		return !exists, err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+	ctx, cancel := context.WithTimeout(t.ctx(), Timeout)
 	defer cancel()
 
-	err = exec.CommandContext(ctx, "git", "-C", t.Repo, "merge-base", "--is-ancestor", t.Branch, t.Base).Run()
+	err = gitCmd(ctx, t.Ctx != nil, "-C", t.Repo, "merge-base", "--is-ancestor", t.Branch, t.Base).Run()
 
 	var exit *exec.ExitError
-	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+	if errors.As(err, &exit) && exit.ExitCode() == 1 && ctx.Err() == nil {
 		return false, nil
 	}
 
@@ -148,7 +177,7 @@ func (t *Tree) Remove(force bool) error {
 		return err
 	}
 
-	exists, err := branchExists(t.Repo, t.Branch)
+	exists, err := branchExists(context.Background(), t.Repo, t.Branch)
 	if err != nil || !exists {
 		return err
 	}
@@ -164,15 +193,14 @@ func (t *Tree) Remove(force bool) error {
 }
 
 // branchExists tells "no such branch" (git exit 1) from a git that failed.
-func branchExists(repo, branch string) (bool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+func branchExists(parent context.Context, repo, branch string) (bool, error) {
+	ctx, cancel := context.WithTimeout(parent, Timeout)
 	defer cancel()
 
-	out, err := exec.CommandContext(ctx, "git", "-C", repo, "show-ref", "--verify", "--quiet",
-		"refs/heads/"+branch).CombinedOutput()
+	out, err := gitCmd(ctx, parent.Done() != nil, "-C", repo, "show-ref", "--verify", "--quiet", "refs/heads/"+branch).CombinedOutput()
 
 	var exit *exec.ExitError
-	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+	if errors.As(err, &exit) && exit.ExitCode() == 1 && ctx.Err() == nil {
 		return false, nil
 	}
 
@@ -184,10 +212,19 @@ func branchExists(repo, branch string) (bool, error) {
 }
 
 func git(dir string, args ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+	return gitCtx(context.Background(), dir, args...)
+}
+
+// gitCtx is git that also ends when parent does.
+func gitCtx(parent context.Context, dir string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(parent, Timeout)
 	defer cancel()
 
-	out, err := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...).CombinedOutput()
+	out, err := gitCmd(ctx, parent.Done() != nil, append([]string{"-C", dir}, args...)...).CombinedOutput()
+	if parent.Err() != nil {
+		return "", fmt.Errorf("git %s: stopped: %w", args[0], parent.Err())
+	}
+
 	if ctx.Err() != nil {
 		return "", fmt.Errorf("git %s: no answer in %s", args[0], Timeout)
 	}

@@ -1129,6 +1129,7 @@ func (a *app) tickCommand() *cobra.Command {
 			a.morningTick(time.Now())
 			a.pushTick(time.Now())
 			a.lessonsBeat(time.Now())
+			a.worktreeBeat(time.Now())
 
 			return err
 		},

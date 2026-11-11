@@ -1,6 +1,7 @@
 package ledger
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -23,6 +24,9 @@ type fakeTrees struct {
 	merged   map[string]bool
 	branches map[string]bool
 	removed  []string
+	// onRemove runs after each removal; mergedErr, when set, is what Merged answers.
+	onRemove  func()
+	mergedErr error
 }
 
 func (f *fakeTrees) TopLevel(dir string) (string, error) { return dir, nil }
@@ -47,12 +51,20 @@ func (f *fakeTrees) Add(_, path, branch, _ string) error {
 
 func (f *fakeTrees) Dirty(t worktree.Tree) (string, error) { return f.dirty[t.Path], nil }
 func (f *fakeTrees) Merged(t worktree.Tree) (bool, error) {
+	if f.mergedErr != nil {
+		return false, f.mergedErr
+	}
+
 	return f.merged[t.Branch] || !f.branches[t.Branch], nil
 }
 
 func (f *fakeTrees) Remove(t worktree.Tree, _ bool) error {
 	f.removed = append(f.removed, t.Branch)
 	delete(f.branches, t.Branch)
+
+	if f.onRemove != nil {
+		defer f.onRemove()
+	}
 
 	return os.RemoveAll(t.Path)
 }
@@ -169,6 +181,98 @@ func TestGCRemovesOnlyMergedCleanWork(t *testing.T) {
 	_, _ = l.GC(false, true)
 	assert.Contains(t, trees.removed, open.Branch, "force takes a dropped task's unmerged branch")
 	assert.NotContains(t, trees.removed, dirty.Branch, "force never takes a done task's work")
+}
+
+// A sweep under a deadline begins no task and starts no removal once the deadline is past, and hands back what it
+// did with the context's error.
+func TestGCContextStopsAtItsDeadline(t *testing.T) {
+	l, trees := fixture(t, "")
+
+	var made []task.Task
+
+	for _, asked := range []string{"one", "two", "three"} {
+		tk, err := l.New(NewTask{Role: "dev", Asked: asked, Repo: "api", Worktree: true})
+		require.NoError(t, err)
+
+		trees.merged[tk.Branch] = true
+		_, err = l.Set(tk.ID, Change{State: task.Done, Force: true})
+		require.NoError(t, err)
+
+		made = append(made, tk)
+	}
+
+	// The deadline falls with the first removal.
+	ctx, cancel := context.WithCancel(context.Background())
+	trees.onRemove = cancel
+
+	got, err := l.GCContext(ctx, false, false)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Len(t, got, 1, "the first task was collected, the others were not begun")
+	assert.True(t, got[0].Removed)
+	assert.Len(t, trees.removed, 1)
+
+	for _, tk := range made[1:] {
+		assert.DirExists(t, tk.Worktree, "a task past the deadline keeps its worktree for the next sweep")
+	}
+
+	// A deadline already past: nothing is begun.
+	got, err = l.GCContext(ctx, false, false)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Empty(t, got)
+	assert.Len(t, trees.removed, 1)
+
+	// Without one the rest goes.
+	trees.onRemove = nil
+
+	got, err = l.GCContext(context.Background(), false, false)
+	require.NoError(t, err)
+	assert.Len(t, got, 2)
+
+	for _, tk := range made {
+		assert.NoDirExists(t, tk.Worktree)
+	}
+}
+
+// What a cut git call said is not what the task is: a read the deadline ended is no reason to report it kept.
+func TestGCContextReportsNothingOfACutTask(t *testing.T) {
+	l, trees := fixture(t, "")
+
+	tk, err := l.New(NewTask{Role: "dev", Asked: "x", Repo: "api", Worktree: true})
+	require.NoError(t, err)
+	_, err = l.Set(tk.ID, Change{State: task.Done, Force: true})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	trees.mergedErr = errors.New("git merge-base: stopped: context canceled")
+
+	// The deadline falls while Merged runs.
+	l.Trees = cancelOnMerged{trees, cancel}
+
+	got, err := l.GCContext(ctx, false, false)
+	require.NoError(t, err, "the cut task was the last one: nothing was left undone")
+	assert.Empty(t, got, "not reported as kept")
+	assert.Empty(t, trees.removed)
+
+	// The same error with the deadline not passed is a real answer.
+	trees.mergedErr = errors.New("git merge-base: bad object")
+	l.Trees = trees
+
+	got, err = l.GCContext(context.Background(), false, false)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Contains(t, got[0].Kept, "bad object")
+}
+
+// cancelOnMerged ends its context while Merged runs.
+type cancelOnMerged struct {
+	*fakeTrees
+	cancel context.CancelFunc
+}
+
+func (c cancelOnMerged) Merged(t worktree.Tree) (bool, error) {
+	defer c.cancel()
+
+	return c.fakeTrees.Merged(t)
 }
 
 // The whole path once against real git.

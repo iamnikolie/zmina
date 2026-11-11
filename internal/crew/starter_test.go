@@ -33,3 +33,17 @@ func TestStarterCarriesRecommendedValues(t *testing.T) {
 	assert.Equal(t, RecommendedRestartAt, dev.RestartContext())
 	assert.Equal(t, RecommendedRestartDone, dev.RestartDoneAt())
 }
+
+// The starter names worktree_gc commented out; uncommented, it turns the sweep on and the file still loads.
+func TestStarterMentionsWorktreeGC(t *testing.T) {
+	body := strings.Replace(Starter(t.TempDir()), "dir: "+defaultDir, "dir: "+t.TempDir(), 1)
+	require.Contains(t, body, "\n# worktree_gc: daily ")
+
+	c, err := LoadStrict(write(t, body))
+	require.NoError(t, err)
+	assert.False(t, c.WorktreeGCOn(), "off unless the owner takes the comment away")
+
+	c, err = LoadStrict(write(t, strings.Replace(body, "\n# worktree_gc: daily", "\nworktree_gc: daily", 1)))
+	require.NoError(t, err)
+	assert.True(t, c.WorktreeGCOn())
+}

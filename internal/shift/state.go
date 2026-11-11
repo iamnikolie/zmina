@@ -90,6 +90,9 @@ type State struct {
 	PushFrom time.Time            `json:"push_from,omitzero"`
 	// PushFailed is when the last push could not be sent; the next waits a while after it.
 	PushFailed time.Time `json:"push_failed,omitzero"`
+	// WorktreeGCAt is when the ticker last began its sweep of closed tasks' worktrees (worktree_gc: daily). It is
+	// written under the lock before the sweep, which runs outside it, so a beat that overlaps does not sweep too.
+	WorktreeGCAt time.Time `json:"worktree_gc_at,omitzero"`
 
 	// Legacy is set when the file read was in the first format (converted in memory, written as this one on
 	// the next save).
@@ -656,4 +659,13 @@ func (s *State) noteTitle(session, title string) {
 		}
 	}
 	s.Titles[session] = title
+}
+
+// WorktreeGCEvery is how often the ticker sweeps the worktrees of closed tasks.
+const WorktreeGCEvery = 24 * time.Hour
+
+// WorktreeGCDue reports whether the daily sweep is due: none yet, a day since the last one began, or a last one dated
+// ahead of now (the clock was set back).
+func (s *State) WorktreeGCDue(now time.Time) bool {
+	return s.WorktreeGCAt.IsZero() || now.Sub(s.WorktreeGCAt) >= WorktreeGCEvery || s.WorktreeGCAt.After(now)
 }

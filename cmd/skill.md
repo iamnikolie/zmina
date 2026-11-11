@@ -80,6 +80,7 @@ quiet_hours: 23:00-08:00                 # in timezone:; blocking and ask pushes
 notify_again: 24h                        # an item that still blocks is pushed again this often (default 24h, 1h at least; off)
 timezone: Europe/Warsaw                  # the clock reminder times are read on (default: this machine's)
 lessons: on                              # daily triage of the roles' lessons into one draft MR on the crew's agentic-os (default off; see Lessons)
+worktree_gc: daily                       # the ticker runs `task gc` once a day: closed tasks' merged, clean worktrees go (default off)
 limits:                                  # how the crew spends its plans, in % of the 7-day (Claude) and weekly (Codex) window; see Limits
   claude: {pinned: 80, stop: 99}         # from pinned only work that needs Claude goes to it, from stop nothing (defaults 80 and 99)
   codex: {pinned: 80}                    # from pinned only work that needs Codex goes to it (default 80)
@@ -988,6 +989,12 @@ which edit files in a repository checkout.
 | `zmina task done <id>` / `task drop <id>` | close it, and print its cost line when turns are found for it; closed by a role, the dispatcher gets a signal with the note (see results). Refuses while its worktree has uncommitted changes (`--force` closes anyway; the worktree stays). `done` also refuses a task that has criteria and no saved result (`task result`, or `done --result <file>`); `--force` closes it anyway. |
 | `zmina task park <id> [--note "<what remains>"]` | move an active task to the later list: a new `L-n` with what remains (default: the task's title), note `from T-48 (designer)`, and the role and its conversation (the running one, else its last) for `later take --resume`. The task closes as `parked L-n`; its worktree stays as it is. `task set <id> parked` is refused: parking goes through here. Prints `T-48 · designer · parked L-15`, then its cost line. |
 | `zmina task gc [--dry-run]` | remove worktrees and branches of closed tasks once clean and merged into their base. `--force` also removes dropped tasks' unmerged branches. |
+
+**Daily sweep.** `worktree_gc: daily` in the crew file has the ticker run `zmina task gc` (never `--force`) at most
+once every 24 h: closed tasks whose branch is merged and whose worktree is clean lose theirs, nothing else. It runs
+after the beat's locked steps and holds no state lock, so a slow git blocks no other zmina command; it stops at a 60 s
+deadline and what it did not reach waits for the next day's sweep. Each removal is a `worktree removed` event in
+`zmina log`; `zmina doctor` shows the last sweep. Default off (`off` or absent).
 
 **What the work is.** `--title` is the work in one short plain sentence in the owner's language ("Landing page —
 rework"), `--project` the project or product it is for (default: the repo's directory name), `--url` the live thing

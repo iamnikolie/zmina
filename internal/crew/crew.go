@@ -334,6 +334,9 @@ type Crew struct {
 	// Lessons is the daily triage of the roles' lessons into one draft MR on the crew's agentic-os; off unless
 	// the crew file says lessons: on (or gives a block).
 	Lessons Lessons `yaml:"lessons"`
+	// WorktreeGC is daily or off (the default): daily has the ticker run `zmina task gc` (never --force) once a
+	// day, so the worktrees of closed tasks whose branch is merged do not pile up.
+	WorktreeGC string `yaml:"worktree_gc"`
 	// Limits states how the crew spends its Claude and Codex plans (see Limits); empty: the defaults.
 	Limits *Limits `yaml:"limits"`
 	// Routes are the dispatcher's routing rules in order, as the file wrote them (see checkRoutes); Busy says what a
@@ -849,6 +852,10 @@ func (c *Crew) check() error {
 	if err := checkDelivery(c.Delivery); err != nil {
 		return err
 	}
+
+	if err := checkWorktreeGC(c.WorktreeGC); err != nil {
+		return err
+	}
 	sessions := map[string]string{}
 
 	for _, name := range c.Names() {
@@ -1212,6 +1219,23 @@ func or(v, fallback string) string {
 	}
 
 	return v
+}
+
+// The values of worktree_gc.
+const (
+	WorktreeGCDaily = "daily"
+	WorktreeGCOff   = "off"
+)
+
+// WorktreeGCOn reports whether the ticker sweeps the worktrees of closed tasks once a day (worktree_gc: daily).
+func (c *Crew) WorktreeGCOn() bool { return c.WorktreeGC == WorktreeGCDaily }
+
+func checkWorktreeGC(v string) error {
+	if v != "" && v != WorktreeGCDaily && v != WorktreeGCOff {
+		return fmt.Errorf("worktree_gc is %s or %s, not %q", WorktreeGCDaily, WorktreeGCOff, v)
+	}
+
+	return nil
 }
 
 func checkDelivery(v string) error {

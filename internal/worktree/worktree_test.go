@@ -1,6 +1,7 @@
 package worktree
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -66,4 +67,39 @@ func TestWorktreeLifecycle(t *testing.T) {
 func TestNotARepo(t *testing.T) {
 	_, err := TopLevel(t.TempDir())
 	assert.Error(t, err)
+}
+
+// A tree's reading calls end with its context: a cancelled one runs no git and says it was stopped, not that a
+// branch is unmerged or a worktree clean; Remove does not take it.
+func TestTreeCtxEndsTheReadingCalls(t *testing.T) {
+	repo := t.TempDir()
+	run(t, repo, "init", "-q", "-b", "main")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.txt"), []byte("a"), 0o600))
+	run(t, repo, "add", ".")
+	run(t, repo, "commit", "-q", "-m", "a")
+
+	path := filepath.Join(t.TempDir(), "wt", "repo-T-1")
+
+	tree, err := Add(repo, path, "zmina/t-1", "")
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	tree.Ctx = ctx
+
+	merged, err := tree.Merged()
+	require.NoError(t, err)
+	assert.True(t, merged)
+
+	cancel()
+
+	_, err = tree.Merged()
+	require.ErrorIs(t, err, context.Canceled)
+
+	_, err = tree.Dirty()
+	require.ErrorIs(t, err, context.Canceled)
+	assert.ErrorContains(t, err, "stopped")
+
+	require.NoError(t, tree.Remove(false), "a removal is never cut by the sweep's deadline")
+	_, err = os.Stat(path)
+	assert.True(t, os.IsNotExist(err))
 }
