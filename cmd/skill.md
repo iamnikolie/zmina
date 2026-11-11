@@ -1302,7 +1302,10 @@ on every version, option or not. Then it reads the MR back with `glab`, or `gl` 
 (`$GL_CONFIG` first), and logs `lessons-draft`: `draft <url>`, `NOT A DRAFT <url>`, or the pushed ref when nothing on
 the node could read it. A remote without push options gets the branch, and the todo says to open the MR by hand. The run's budget is the smaller of `budget` and what is left of `week_budget`; a
 spent week skips the run (`triage-skipped`). Each run's cost is logged (`lessons-cost`) and `zmina usage` shows
-`Lessons triage $x: <crew> $y (n times)` per crew, peers too with `--all`.
+`Lessons triage $x: <crew> $y (n times)` per crew, peers too with `--all`. Every git call of a run ends: two minutes
+for a local one, five for one that talks to the remote (`fetch`, `push`, `ls-remote`), killed with what it started
+when no terminal drives the run (the daily run is detached); a remote that never answers fails the run, it does not
+hold it.
 
 The owner gets one todo per MR: its url, each lesson and its file, what was dropped and why, the questions, and how
 many new lessons wait for it (new ones wait while it is open; `zmina ls` shows `lessons: 4 waiting · MR open <url>`).

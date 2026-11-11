@@ -163,22 +163,6 @@ type Result struct {
 	Draft, DraftVia string
 }
 
-// Git runs git in a directory and returns its output.
-func Git(dir string, args ...string) (string, error) {
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-
-	var stderr bytes.Buffer
-
-	cmd.Stderr = &stderr
-
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
-	}
-
-	return strings.TrimSpace(string(out)), nil
-}
-
 // FindRepo is the git toplevel of the crew's agents dir: the crew's own agentic-os.
 func FindRepo(agents string) (string, error) {
 	if agents == "" {
@@ -211,11 +195,11 @@ func Triage(ctx context.Context, cfg Config, lessons []Lesson, seat Seat) (Resul
 
 	res := Result{Branch: BranchPrefix + cfg.Now.Format("2006-01-02")}
 
-	if _, err := Git(cfg.Repo, "fetch", "-q", cfg.Remote, cfg.Branch); err != nil {
+	if _, err := GitContext(ctx, cfg.Repo, "fetch", "-q", cfg.Remote, cfg.Branch); err != nil {
 		return res, err
 	}
 
-	base, err := Git(cfg.Repo, "rev-parse", cfg.Remote+"/"+cfg.Branch)
+	base, err := GitContext(ctx, cfg.Repo, "rev-parse", cfg.Remote+"/"+cfg.Branch)
 	if err != nil {
 		return res, err
 	}
@@ -229,10 +213,11 @@ func Triage(ctx context.Context, cfg Config, lessons []Lesson, seat Seat) (Resul
 	wt := filepath.Join(cfg.Work, strings.ReplaceAll(res.Branch, "/", "-"))
 	_, _ = Git(cfg.Repo, "worktree", "remove", "--force", wt)
 
-	if _, err := Git(cfg.Repo, "worktree", "add", "-q", "-b", res.Branch, wt, base); err != nil {
+	if _, err := GitContext(ctx, cfg.Repo, "worktree", "add", "-q", "-b", res.Branch, wt, base); err != nil {
 		return res, err
 	}
 
+	// The clean-up is not ended by ctx: a run that was cut short still takes its worktree away.
 	defer func() { _, _ = Git(cfg.Repo, "worktree", "remove", "--force", wt) }()
 
 	allowed := allowlist(cfg)
@@ -592,10 +577,10 @@ func Push(cfg Config, res *Result, title, description string) error {
 		args = append(args, "-o", o)
 	}
 
-	out, err := gitCombined(cfg.Repo, append(args, cfg.Remote, ref)...)
+	out, err := gitCombined(context.Background(), cfg.Repo, append(args, cfg.Remote, ref)...)
 	if err != nil && strings.Contains(out, "push options") {
 		res.PushNote = "the remote takes no push options: the branch is pushed, open the merge request by hand"
-		out, err = gitCombined(cfg.Repo, "push", cfg.Remote, ref)
+		out, err = gitCombined(context.Background(), cfg.Repo, "push", cfg.Remote, ref)
 	}
 
 	if err != nil {
@@ -626,12 +611,6 @@ func lessonCommits(repo string, applied []Applied) bool {
 	}
 
 	return true
-}
-
-func gitCombined(dir string, args ...string) (string, error) {
-	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
-
-	return string(out), err
 }
 
 // Finished reports whether a pushed lessons branch is done with: merged into <remote>/<branch>, or gone from the
