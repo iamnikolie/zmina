@@ -61,6 +61,7 @@ func RunTick(locked WithLock, run func([]WatchRun) []watch.Result, rang func([]R
 
 	return locked(func(s *Shift) error {
 		s.By = "ticker"
+		s.mark("finish", "")
 
 		for _, name := range released {
 			// Started again meanwhile (zmina up): that session is not this down's to end.

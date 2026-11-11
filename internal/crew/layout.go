@@ -16,6 +16,10 @@ func (l Layout) State() string { return filepath.Join(l.Dir, "state.json") }
 // Lock is the file every writing command and the ticker lock.
 func (l Layout) Lock() string { return filepath.Join(l.Dir, "lock") }
 
+// LockHolder is the advisory record, beside the lock, of who holds it now (pid, command, phase); empty of a record
+// when the lock is free.
+func (l Layout) LockHolder() string { return filepath.Join(l.Dir, "lock.holder") }
+
 // Tasks is the task ledger's directory (T-<n>.json).
 func (l Layout) Tasks() string { return filepath.Join(l.Dir, "tasks") }
 
