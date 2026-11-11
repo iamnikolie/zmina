@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Cockpit version notice fixture</title>
+<style>iframe { width: 1280px; height: 760px; border: 1px solid #888; }</style>
+<pre id="result">Checking the new-version notice…</pre>
+<script>
+// The real cockpit page in a frame with a stream the fixture drives: the first snapshot's version is the page's own;
+// a snapshot of the same version says nothing; one of another version, on a page that is in view, puts a notice
+// with a Reload button among the toasts, once, and it stays; a page that is out of view loads again by itself (not
+// run here: a reload of a frame written by hand is not the page).
+(async () => {
+  const results = [];
+  const assert = (condition, name) => { if (!condition) throw new Error(name); results.push(name); };
+  const wait = async (what, test, ms = 4000) => {
+    const end = Date.now() + ms;
+    while (Date.now() < end) { const value = test(); if (value) return value; await new Promise(r => setTimeout(r, 25)); }
+    throw new Error("timed out: " + what);
+  };
+  const page = await (await fetch("../static/index.html", {cache: "no-store"})).text();
+  const snapshot = (version) => JSON.stringify({version, now: new Date().toISOString(), self: "node-a", nodes: [{name: "node-a", self: true}],
+    tints: {}, crews: [], todo: [], later: [], alarms: [], log: [], tasks: [], work: []});
+
+  try {
+    const fixture = {streams: []};
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    frame.contentWindow.fixture = fixture;
+    const stub = `<base href="../static/"><script>
+      window.addEventListener("error", (e) => { fixture.err = e.message; });
+      window.EventSource = class { constructor(url) { this.url = url; this.on = {}; fixture.streams.push(this); } addEventListener(name, fn) { this.on[name] = fn; } };
+      window.fetch = async () => new Response("{}", {status: 404});
+    <\/script>`;
+    const doc = frame.contentDocument;
+    doc.open(); doc.write(page.replace("<head>", "<head>" + stub)); doc.close();
+    const $ = (sel) => frame.contentDocument.querySelector(sel), $$ = (sel) => [...frame.contentDocument.querySelectorAll(sel)];
+    const send = (version) => fixture.streams[0].on.state({data: snapshot(version)});
+
+    await wait("the stream", () => fixture.streams.length && fixture.streams[0].on.state);
+    assert(fixture.streams[0].url === "api/stream", "the page reads its stream");
+    send("v1");
+    assert(!$("#newver"), "the first snapshot is the page's own version: no notice");
+    send("v1");
+    send("v1");
+    assert(!$("#newver"), "the same version again: no notice");
+
+    send("v2");
+    const notice = await wait("the notice", () => $("#newver"));
+    assert(notice.parentElement.id === "toasts" && notice.classList.contains("toast"), "it is a toast, in the toasts' place");
+    assert(/New version/.test(notice.textContent), "it says so: " + notice.textContent);
+    const reload = notice.querySelector("button");
+    assert(reload && reload.textContent === "Reload", "with a Reload button");
+    assert(!fixture.err, "the page ran without an error: " + fixture.err);
+
+    send("v3");
+    send("v2");
+    assert($$("#newver").length === 1, "once, however many snapshots follow");
+    await new Promise(r => setTimeout(r, 5600));
+    assert($("#newver"), "it stays: a toast goes after five seconds, this does not");
+    window.cockpitVersionResults = {passed: true, results};
+  } catch (e) {
+    window.cockpitVersionResults = {passed: false, results, error: e.message + [...document.querySelectorAll("iframe")].map((f) => f.contentWindow.fixture?.err ? " · page: " + f.contentWindow.fixture.err : "").join("")};
+  }
+  document.getElementById("result").textContent = JSON.stringify(window.cockpitVersionResults, null, 2);
+})();
+</script>
+</html>

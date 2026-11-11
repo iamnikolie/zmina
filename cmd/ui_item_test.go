@@ -10,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/iamnikolie/zmina/internal/shift"
 )
 
 func getItems(t *testing.T, base, node, crew, ids string) (map[string]itemCard, int) {
@@ -141,4 +143,66 @@ func TestItemsOfAPeer(t *testing.T) {
 	require.Equal(t, http.StatusOK, code)
 	assert.Equal(t, "need", items["A-1"].State)
 
+}
+
+// A line (S-), a reminder (R-) and a lesson (LS-) open as cards too: the same lines zmina show prints, from the same
+// code; a miss is not found, as it is for a task.
+func TestItemsResolvePlainFamilies(t *testing.T) {
+	uiHome(t)
+	crew := crewPathOf(t, "default")
+
+	_, _, err := zm(t, crew, "remind", "tomorrow 09:00", "renew the certificate")
+	require.NoError(t, err)
+
+	t.Setenv("ZMINA_ROLE", "dev")
+	_, _, err = zm(t, crew, "lesson", "add", "Run make lint before a commit", "--why", "CI failed twice", "--applies", "every")
+	require.NoError(t, err)
+	t.Setenv("ZMINA_ROLE", "")
+
+	require.NoError(t, (&app{out: io.Discard, err: io.Discard, crew: crew}).withState(func(s *shift.Shift) error {
+		s.State.AckSeq = 7
+		s.State.Acks = map[string]*shift.Ack{}
+		s.State.Acks["S-7"] = &shift.Ack{ID: "S-7", Role: "dev", Text: "merge the login page"}
+
+		return nil
+	}))
+
+	srv, _ := uiServer(t, true, "")
+	items, code := getItems(t, srv.URL, "", "default", "S-7,r-1,LS-1,S-9,R-9,LS-9")
+	require.Equal(t, http.StatusOK, code)
+
+	line := items["S-7"]
+	require.True(t, line.Found)
+	assert.Equal(t, "line", line.Kind)
+	require.NotNil(t, line.Plain)
+	assert.Equal(t, "S-7 · merge the login page", line.Plain.Head)
+	assert.Equal(t, "zmina pending --role dev", line.Plain.Act)
+
+	alarm := items["R-1"]
+	require.True(t, alarm.Found)
+	assert.Equal(t, "alarm", alarm.Kind)
+	assert.Equal(t, "R-1 · renew the certificate", alarm.Plain.Head)
+
+	lesson := items["LS-1"]
+	require.True(t, lesson.Found)
+	assert.Equal(t, "lesson", lesson.Kind)
+	assert.Equal(t, "LS-1 · Run make lint before a commit", lesson.Plain.Head)
+	assert.Contains(t, lesson.Plain.Lines, "why: CI failed twice")
+
+	for _, id := range []string{"S-9", "R-9", "LS-9"} {
+		assert.False(t, items[id].Found, id)
+		assert.Nil(t, items[id].Plain, id)
+	}
+
+	// The card is what zmina show says.
+	for _, id := range []string{"S-7", "R-1", "LS-1"} {
+		out, _, err := zm(t, crew, "show", id)
+		require.NoError(t, err)
+		assert.Equal(t, out, items[id].Plain.String(), id)
+	}
+
+	_, code = getItems(t, srv.URL, "", "default", "S-1,X-1")
+	assert.Equal(t, http.StatusBadRequest, code)
+	_, code = getItems(t, srv.URL, "", "default", "LS-")
+	assert.Equal(t, http.StatusBadRequest, code)
 }

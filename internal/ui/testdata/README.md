@@ -42,6 +42,14 @@ same-title check left after the other goes opens its own item, a group's control
 group it is drawn for after groups trade places, an unchanged row stays the same element, a
 kept row's panel buttons carry the current handlers, and focus follows a swapped button.
 
+# Cockpit new-version notice test
+
+With the same static server, open `http://127.0.0.1:7530/testdata/cockpit-version.html`;
+`window.cockpitVersionResults.passed` must be true. It runs the real `static/index.html` in a frame whose
+stream the page drives: the first snapshot's version is the page's own and the same version again says
+nothing; a snapshot of another version puts «New version of zmina» with a Reload button among the toasts,
+once, and it stays.
+
 # Chat question test
 
 With the same static server, open `http://127.0.0.1:7530/testdata/chat-question.html`;
@@ -62,7 +70,8 @@ the outbox write is real time, which virtual time runs ahead of). It runs the re
 at 390 and 1280 px with a `fetch` that answers `/api/items` (D-15): ids become links (not in code,
 not inside a longer word), the first mention of a piece of work in a run carries its short title and
 a dot; a tap opens the sheet (title, state, Left, Latest, Path; a step swaps the card); an ask's
-answer goes once as a todo answer and turns into Sent; an unknown id says so; «Talk to» puts the
+answer goes once as a todo answer and turns into Sent; a line (S-), a reminder (R-) and a lesson (LS-)
+link and open a card of what `zmina show` says, asked for apart from the rest; an unknown id says so; «Talk to» puts the
 item on the field and the message goes with it; on the desktop a click pins a 360 px popover and Esc
 closes it, the focus back on the id.
 

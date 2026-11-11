@@ -92,7 +92,7 @@ func TestBrowserTerminalRejectsForeignAndMissingOrigins(t *testing.T) {
 }
 
 func TestTerminalUpgradeStillNeedsUIToken(t *testing.T) {
-	handler := guard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Error("unauthenticated request reached terminal") }), "127.0.0.1:7517", false, "secret")
+	handler := testGuard(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { t.Error("unauthenticated request reached terminal") }), "127.0.0.1:7517", false, "secret")
 	req := httptest.NewRequest("GET", "http://host/api/terminal/connect", nil)
 	req.Header.Set("Origin", "http://host")
 	req.Header.Set("Upgrade", "websocket")
@@ -114,9 +114,9 @@ func TestProxyHostNeedsExplicitAllowAndToken(t *testing.T) {
 		{"no token", "", "panel.example", []string{"panel.example"}, http.StatusForbidden},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			handler := guard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }), "127.0.0.1:7518", true, tc.token, tc.allow...)
+			handler := testGuard(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }), "127.0.0.1:7518", true, tc.token, tc.allow...)
 			req := httptest.NewRequest("GET", "http://"+tc.host+"/", nil)
-			req.AddCookie(&http.Cookie{Name: uiCookie, Value: "secret"})
+			req.Header.Set("Authorization", "Bearer secret")
 			out := httptest.NewRecorder()
 			handler.ServeHTTP(out, req)
 			require.Equal(t, tc.want, out.Code)

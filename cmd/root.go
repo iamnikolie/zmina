@@ -48,6 +48,8 @@ type app struct {
 	uiLogins *uiLogins
 	// uiSignin sends one-time sign-in codes through the owner's notifier for zmina ui (nil: none).
 	uiSignin *uiSignin
+	// uiSessions keeps the browsers signed in to zmina ui (nil: the file under ~/.zmina; tests set their own).
+	uiSessions *uiSessions
 	// spawn starts a detached zmina with these arguments (nil: spawnDetached; tests set a fake).
 	spawn func(args []string) error
 	// parent reads a process's parent pid (nil: procParent; tests set a fake).

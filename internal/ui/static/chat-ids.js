@@ -1,10 +1,11 @@
 /* D-15: a task (T-n), parked item (L-n) or ask (A-n) named in a message is a link; it opens as a card — a bottom sheet
    on the phone, a popover on the desktop — that says in plain words what it is, and offers the one answer the owner
-   can give and a conversation about it. Ids resolve on the crew the conversation is with (GET /api/items). */
+   can give and a conversation about it. A line (S-n), reminder (R-n) or lesson (LS-n) is a link too, and its card
+   says what zmina show says of it. Ids resolve on the crew the conversation is with (GET /api/items). */
 (() => {
   "use strict";
   // An id, with an optional node/crew prefix that stays part of it; never inside a word, a path or a longer id.
-  const ID = /(?<![\w/.-])(?:([A-Za-z0-9][\w.-]*)\/([A-Za-z0-9][\w.-]*)\/)?([TLA]-\d{1,7})(?![\w-])/g;
+  const ID = /(?<![\w/.-])(?:([A-Za-z0-9][\w.-]*)\/([A-Za-z0-9][\w.-]*)\/)?((?:[TLASR]|LS)-\d{1,7})(?![\w-])/g;
   const TTL = 30000, MAX = 200;
   const cache = new Map(); // key → {card, at} | {error, at}
   const waiting = new Set();
@@ -27,8 +28,11 @@
     const cut = t.slice(0, 34), sp = cut.lastIndexOf(" ");
     return (sp > 12 ? cut.slice(0, sp) : cut).replace(/[\s,.;:—-]+$/, "") + "…";
   }
-  const rootTitle = (card) => card.kind === "ask" ? (card.ask.title || card.ask.text) : card.chain[0].title;
-  const chainKey = (card) => card.kind === "ask" ? card.id : card.chain[0].id;
+  // A line, reminder or lesson has no chain: its card is the lines zmina show prints, «<id> · <what it is>» first.
+  const plainTitle = (card) => { const h = card.plain.head || "", p = card.id + " · "; return h.startsWith(p) ? h.slice(p.length) : h; };
+  const rootTitle = (card) => card.plain ? plainTitle(card) : card.kind === "ask" ? (card.ask.title || card.ask.text) : card.chain[0].title;
+  const chainKey = (card) => card.kind === "ask" || card.plain ? card.id : card.chain[0].id;
+  const plainId = (id) => /^(?:S|R|LS)-/.test(id);
 
   // linkify turns the ids in an element's text into links: not inside code, pre, links or a link already made.
   function linkify(root, dest) {
@@ -75,7 +79,9 @@
     timer = 0;
     if (fetching) { timer = setTimeout(load, 300); return; }
     const groups = new Map();
-    for (const w of waiting) { const [node, crew, id] = JSON.parse(w); const k = node + "|" + crew; if (!groups.has(k)) groups.set(k, {node, crew, ids: []}); if (groups.get(k).ids.length < MAX) groups.get(k).ids.push(id); }
+    // Lines, reminders and lessons are asked for apart from tasks, parked items and asks: a node that does not know
+    // them yet refuses the whole request, and that must not take the cards of the others with it.
+    for (const w of waiting) { const [node, crew, id] = JSON.parse(w); const k = node + "|" + crew + "|" + plainId(id); if (!groups.has(k)) groups.set(k, {node, crew, ids: []}); if (groups.get(k).ids.length < MAX) groups.get(k).ids.push(id); }
     waiting.clear();
     fetching = true;
     try {
@@ -128,7 +134,7 @@
   let open = null; // {b: the id's link, dest, id, pinned, box, shade}
   let showTimer = 0, hideTimer = 0, returning = false;
   const stateWord = {need: "Waiting on you", busy: "Working", queued: "Queued", parked: "Parked", done: "Done", dropped: "Dropped"};
-  const kindWord = {task: "task", later: "parked", ask: "ask"};
+  const kindWord = {task: "task", later: "parked", ask: "ask", line: "line", alarm: "reminder", lesson: "lesson"};
 
   // split reads a note as what was done and what is left («… · left: …»).
   function split(text) {
@@ -170,6 +176,19 @@
     if (!card.found) {
       const t = el("h2", "xtitle", "Not found on this crew"); t.id = "xcard-title";
       out.push(meta, t);
+      box.replaceChildren(...out);
+      return;
+    }
+    if (card.plain) {
+      meta.append(" · " + kindWord[card.kind]);
+      const t = el("h2", "xtitle", plainTitle(card)); t.id = "xcard-title";
+      out.push(meta, t);
+      (card.plain.lines || []).filter(Boolean).forEach((line, i) => {
+        // The first line says where it stands; «why: …», «error: …» are rows of their own.
+        const m = i ? /^([a-z]+): ([\s\S]*)$/.exec(line) : null;
+        if (m) out.push(row(m[1].charAt(0).toUpperCase() + m[1].slice(1), m[2]));
+        else out.push(el("p", i ? "xtext" : "xstate", line));
+      });
       box.replaceChildren(...out);
       return;
     }

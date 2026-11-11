@@ -81,9 +81,9 @@
     }
   }
 
-  // open loads the page this one stood for. An old ?token= in its address would win over the new cookie and bring
-  // this page back, so it goes; with the same address a reload, since a navigation to it with a #tab in it would
-  // only scroll.
+  // open loads the page this one stood for. A ?token= in its address (a wrong one is how this page came up) would be
+  // tried again and counted as a wrong try, so it goes; with the same address a reload, since a navigation to it
+  // with a #tab in it would only scroll.
   function open() {
     const u = new URL(location.href);
     if (!u.searchParams.has("token")) { location.reload(); return; }
@@ -108,6 +108,13 @@
     try {
       const r = await post("/api/signin/verify", { code });
       if (r.ok) { keep(null); say("status", "Signed in. Opening…"); open(); return; }
+      if (r.status === 429) {
+        const data = await r.json().catch(() => ({}));
+        say("status", "Too many wrong tries. Wait " + (data.wait || 60) + " seconds and try again.", true);
+        field.value = "";
+        $("go").disabled = false;
+        return;
+      }
       invalid(true);
       say("status", $("again").hidden ? "Wrong or expired code. Check it, or run zmina connect again." :
         "Wrong or expired code. Check it, or send a new one.", true);

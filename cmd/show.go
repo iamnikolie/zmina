@@ -83,23 +83,35 @@ func normalID(s string) (string, error) {
 	return strings.ToUpper(m[1]) + "-" + strings.TrimLeft(m[2], "0"), nil
 }
 
-// card lines: the head line, then the details, then the command.
-func cardText(head string, lines []string, act string) string {
+// textCard is a card of the plain families as lines: the head line (id and what it is), the details, the one command
+// to act. zmina show prints it; the cockpit's /api/items serves it as it is.
+type textCard struct {
+	Head  string   `json:"head"`
+	Lines []string `json:"lines,omitempty"`
+	Act   string   `json:"act,omitempty"`
+}
+
+func (c textCard) String() string {
 	var b strings.Builder
 
-	fmt.Fprintln(&b, head)
+	fmt.Fprintln(&b, c.Head)
 
-	for _, l := range lines {
+	for _, l := range c.Lines {
 		if l != "" {
 			fmt.Fprintln(&b, "  "+l)
 		}
 	}
 
-	if act != "" {
-		fmt.Fprintln(&b, "  act: "+act)
+	if c.Act != "" {
+		fmt.Fprintln(&b, "  act: "+c.Act)
 	}
 
 	return b.String()
+}
+
+// cardText is a textCard's lines.
+func cardText(head string, lines []string, act string) string {
+	return textCard{Head: head, Lines: lines, Act: act}.String()
 }
 
 // itemText is a task, parked item or ask as the cockpit's card says it, in lines.
@@ -216,6 +228,13 @@ func itemState(c itemCard) string {
 
 // lineText is a line that waits, or waited, for its reader's ack.
 func (a *app) lineText(s *shift.Shift, id string) string {
+	c, _ := lineCard(s, id)
+
+	return c.String()
+}
+
+// lineCard is lineText's lines; false when the line waits for no ack and is not in the log.
+func lineCard(s *shift.Shift, id string) (textCard, bool) {
 	if ack, ok := s.State.Acks[id]; ok {
 		state := "queued for " + ack.Role + ", not delivered yet"
 		if !ack.First.IsZero() {
@@ -225,8 +244,8 @@ func (a *app) lineText(s *shift.Shift, id string) string {
 			}
 		}
 
-		return cardText(id+" · "+clip(oneLine(ack.Text), 120), []string{"a line · " + state},
-			"zmina pending --role "+ack.Role)
+		return textCard{Head: id + " · " + clip(oneLine(ack.Text), 120), Lines: []string{"a line · " + state},
+			Act: "zmina pending --role " + ack.Role}, true
 	}
 
 	evs, err := eventLog(s.Crew).Read(events.Filter{})
@@ -239,21 +258,28 @@ func (a *app) lineText(s *shift.Shift, id string) string {
 					state = "dropped unacked (too many waiting)"
 				}
 
-				return cardText(id+" · "+clip(oneLine(text), 120),
-					[]string{"a line for " + dash(e.Role) + " · " + state + " · " + e.TS.Local().Format(time.DateTime)},
-					"zmina log --role "+e.Role)
+				return textCard{Head: id + " · " + clip(oneLine(text), 120),
+					Lines: []string{"a line for " + dash(e.Role) + " · " + state + " · " + e.TS.Local().Format(time.DateTime)},
+					Act:   "zmina log --role " + e.Role}, true
 			}
 		}
 	}
 
-	return cardText(id+" · waits for no ack and is not in the log", nil, "")
+	return textCard{Head: id + " · waits for no ack and is not in the log"}, false
 }
 
 // alarmText is a reminder or alarm.
 func alarmText(s *shift.Shift, id string) string {
+	c, _ := alarmCard(s, id)
+
+	return c.String()
+}
+
+// alarmCard is alarmText's lines; false when the alarm does not read.
+func alarmCard(s *shift.Shift, id string) (textCard, bool) {
 	al, err := alarmStore(s.Crew).Get(id)
 	if err != nil {
-		return cardText(id+" · "+err.Error(), nil, "")
+		return textCard{Head: id + " · " + err.Error()}, false
 	}
 
 	when := al.At.In(s.Crew.Location()).Format("Mon 2 Jan 15:04")
@@ -276,17 +302,24 @@ func alarmText(s *shift.Shift, id string) string {
 		act = "zmina remind off " + al.ID
 	}
 
-	return cardText(al.ID+" · "+clip(oneLine(al.Text), 160), []string{
+	return textCard{Head: al.ID + " · " + clip(oneLine(al.Text), 160), Lines: []string{
 		what + " · for " + al.For() + " · " + state,
 		ifSet("error: ", al.Err),
-	}, act)
+	}, Act: act}, true
 }
 
 // lessonText is a lesson.
 func lessonText(s *shift.Shift, id string) string {
+	c, _ := lessonCard(s, id)
+
+	return c.String()
+}
+
+// lessonCard is lessonText's lines; false when the lesson does not read.
+func lessonCard(s *shift.Shift, id string) (textCard, bool) {
 	l, err := lessonStore(s.Crew).Get(id)
 	if err != nil {
-		return cardText(id+" · "+err.Error(), nil, "")
+		return textCard{Head: id + " · " + err.Error()}, false
 	}
 
 	from := "from " + dash(l.Role)
@@ -294,10 +327,41 @@ func lessonText(s *shift.Shift, id string) string {
 		from += " · " + l.Task
 	}
 
-	return cardText(l.ID+" · "+clip(oneLine(l.Rule), 160), []string{
+	return textCard{Head: l.ID + " · " + clip(oneLine(l.Rule), 160), Lines: []string{
 		"lesson · " + string(l.State) + " · " + age(s.Now().Sub(l.At)) + " · " + from,
 		ifSet("why: ", clip(oneLine(l.Why), 300)),
-	}, "zmina lesson show "+l.ID)
+	}, Act: "zmina lesson show " + l.ID}, true
+}
+
+// plainCard is the card of an id of the families that have no chain: a line (S-), a reminder or alarm (R-), a lesson
+// (LS-), the same lines zmina show prints. The cockpit's /api/items serves it.
+func plainCard(s *shift.Shift, id string) itemCard {
+	c := itemCard{ID: id}
+
+	var (
+		card textCard
+		ok   bool
+	)
+
+	switch {
+	case strings.HasPrefix(id, "LS-"):
+		c.Kind = "lesson"
+		card, ok = lessonCard(s, id)
+	case strings.HasPrefix(id, "S-"):
+		c.Kind = "line"
+		card, ok = lineCard(s, id)
+	default:
+		c.Kind = "alarm"
+		card, ok = alarmCard(s, id)
+	}
+
+	if !ok {
+		return itemCard{ID: id}
+	}
+
+	c.Found, c.Plain = true, &card
+
+	return c
 }
 
 func ifSet(prefix, s string) string {

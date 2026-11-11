@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -107,4 +109,32 @@ func TestUIOnLoopbackWithNoTokenStillNeedsOne(t *testing.T) {
 	require.NoError(t, err)
 	_ = resp.Body.Close()
 	assert.Equal(t, http.StatusUnauthorized, call(late, http.MethodGet, "api/state", nil))
+}
+
+func TestUIRefusesAShortToken(t *testing.T) {
+	uiHome(t)
+
+	for _, tc := range []struct {
+		name string
+		args []string
+		env  string
+	}{
+		{"flag", []string{"ui", "--addr", "127.0.0.1:0", "--no-open", "--token", "short-secret"}, ""},
+		{"environment", []string{"ui", "--addr", "127.0.0.1:0", "--no-open"}, "short-secret"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("ZMINA_UI_TOKEN", tc.env)
+
+			var out bytes.Buffer
+
+			root := NewRoot(&out, &out)
+			root.SetArgs(tc.args)
+
+			err := root.Execute()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), fmt.Sprintf("at least %d", uiTokenMin))
+			assert.Contains(t, err.Error(), "12 characters")
+			assert.NotContains(t, err.Error(), "short-secret", "the token is not echoed")
+		})
+	}
 }

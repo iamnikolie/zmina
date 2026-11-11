@@ -40,9 +40,9 @@ func TestLoginCodesWorkOnceAndExpire(t *testing.T) {
 func tokenCockpit(t *testing.T) (*httptest.Server, *app) {
 	t.Helper()
 
-	a := &app{out: io.Discard, err: io.Discard, uiLogins: newUILogins()}
+	a := &app{out: io.Discard, err: io.Discard, uiLogins: newUILogins(), uiSessions: testSessions(t)}
 	srv := httptest.NewUnstartedServer(nil)
-	srv.Config.Handler = a.uiHandler(srv.Listener.Addr().String(), true, "example-token")
+	srv.Config.Handler = a.uiHandler(srv.Listener.Addr().String(), true, "example-token-1234")
 	srv.Start()
 	t.Cleanup(srv.Close)
 
@@ -115,7 +115,7 @@ func TestHandoffSignsInWithoutTheToken(t *testing.T) {
 		"/%0D/example.invalid/x":  "",
 		"/%09%2F/example.invalid": "/%09/example.invalid",
 	} {
-		away, err := noRedirect().Get(srv.URL + path + "?login=nope&tab=2")
+		away, err := noRedirect().Get(srv.URL + path + "?login=" + a.uiLogins.code() + "&tab=2")
 		require.NoError(t, err)
 		_ = away.Body.Close()
 
@@ -156,7 +156,7 @@ func TestSecondUIFindsTheRunningCockpit(t *testing.T) {
 	url, ok := runningCockpit()
 	require.True(t, ok)
 	assert.True(t, strings.HasPrefix(url, srv.URL+"/?login="), url)
-	assert.NotContains(t, url, "example-token")
+	assert.NotContains(t, url, "example-token-1234")
 
 	dropUIState()
 	_, err = os.Stat(uiStatePath())
@@ -181,7 +181,7 @@ func TestExplicitAddrReopenSignsTheBrowserIn(t *testing.T) {
 		t.Helper()
 
 		require.True(t, strings.HasPrefix(url, srv.URL+"/?login="), url)
-		assert.NotContains(t, url, "example-token")
+		assert.NotContains(t, url, "example-token-1234")
 
 		login, err := noRedirect().Get(url)
 		require.NoError(t, err)
@@ -197,7 +197,7 @@ func TestExplicitAddrReopenSignsTheBrowserIn(t *testing.T) {
 	}
 
 	// Not recorded in ui.json (another cockpit wrote it, or none): the token signs in.
-	url, ok := runningCockpitAt(addr, "example-token")
+	url, ok := runningCockpitAt(addr, "example-token-1234")
 	require.True(t, ok)
 	signsIn(url)
 
@@ -229,21 +229,21 @@ func TestExplicitAddrReopenSignsTheBrowserIn(t *testing.T) {
 
 	var out strings.Builder
 	root := NewRoot(&out, io.Discard)
-	root.SetArgs([]string{"ui", "--addr", addr, "--token", "example-token"})
+	root.SetArgs([]string{"ui", "--addr", addr, "--token", "example-token-1234"})
 	require.NoError(t, root.Execute())
 	assert.Equal(t, "zmina ui already runs on "+srv.URL+"/\n", out.String())
 	require.Len(t, opened, 1)
 	signsIn(opened[0])
 }
 
-// TestOlderUIPingCarriesNoToken: the ping of an older cockpit (no login codes) shows the token as the page's cookie,
-// never in its address.
-func TestOlderUIPingCarriesNoToken(t *testing.T) {
+// TestUIPingCarriesTheTokenAsBearerOnly: the ping that asks whether a cockpit answers at an address shows the token as
+// a Bearer header, never in its address and never as a cookie.
+func TestUIPingCarriesTheTokenAsBearerOnly(t *testing.T) {
 	var seen *http.Request
 
 	old := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen = r
-		if c, err := r.Cookie(uiCookie); err != nil || c.Value != "example-token" {
+		if given, ok := bearer(r); !ok || given != "example-token-1234" {
 			w.WriteHeader(http.StatusUnauthorized)
 
 			return
@@ -254,10 +254,11 @@ func TestOlderUIPingCarriesNoToken(t *testing.T) {
 	t.Cleanup(old.Close)
 
 	addr := strings.TrimPrefix(old.URL, "http://")
-	assert.Equal(t, old.URL+"/", runningUI(addr, "example-token"))
+	assert.Equal(t, old.URL+"/", runningUI(addr, "example-token-1234"))
 	require.NotNil(t, seen)
 	assert.Equal(t, "/api/ping", seen.URL.Path)
 	assert.Empty(t, seen.URL.RawQuery, "no token in the address")
+	assert.Empty(t, seen.Cookies(), "no token in a cookie")
 	assert.Empty(t, runningUI(addr, "wrong"))
 }
 
@@ -301,10 +302,10 @@ func TestNoCredentialFollowsARedirect(t *testing.T) {
 			_, ok := runningCockpit()
 			assert.False(t, ok, what+": recorded cockpit")
 
-			_, ok = runningCockpitAt(addr, "example-token")
+			_, ok = runningCockpitAt(addr, "example-token-1234")
 			assert.False(t, ok, what+": --addr with the token")
 
-			assert.Empty(t, runningUI(addr, "example-token"), what+": older-UI ping")
+			assert.Empty(t, runningUI(addr, "example-token-1234"), what+": older-UI ping")
 
 			// The command: the address is taken, nothing there signs in, so it fails and opens nothing.
 			require.NoError(t, os.Remove(uiStatePath()))
@@ -314,7 +315,7 @@ func TestNoCredentialFollowsARedirect(t *testing.T) {
 			openBrowser = func(url string) { opened = append(opened, url) }
 
 			root := NewRoot(io.Discard, io.Discard)
-			root.SetArgs([]string{"ui", "--addr", addr, "--token", "example-token"})
+			root.SetArgs([]string{"ui", "--addr", addr, "--token", "example-token-1234"})
 			assert.Error(t, root.Execute(), what+": the command")
 			assert.Empty(t, opened, what+": nothing opened")
 

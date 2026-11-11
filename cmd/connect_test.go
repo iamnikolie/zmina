@@ -40,7 +40,7 @@ func connectCockpit(t *testing.T, token string) (*httptest.Server, *app, *locked
 	t.Helper()
 
 	logs := &lockedLog{}
-	a := &app{out: io.Discard, err: io.Discard, uiLogins: newUILogins()}
+	a := &app{out: io.Discard, err: io.Discard, uiLogins: newUILogins(), uiSessions: testSessions(t)}
 	if token != "" {
 		a.uiSignin = newUISignin("", logs.add)
 	}
@@ -93,7 +93,7 @@ func verify(t *testing.T, url, code string) *http.Response {
 func TestConnectPrintsACodeThatSignsInOnce(t *testing.T) {
 	uiHome(t)
 
-	srv, _, logs := connectCockpit(t, "example-token")
+	srv, _, logs := connectCockpit(t, "example-token-1234")
 
 	out, _, err := runConnect(t)
 	require.NoError(t, err)
@@ -117,7 +117,8 @@ func TestConnectPrintsACodeThatSignsInOnce(t *testing.T) {
 	good := verify(t, srv.URL, code)
 	require.Equal(t, http.StatusOK, good.StatusCode)
 	require.Len(t, good.Cookies(), 1)
-	assert.Equal(t, "example-token", good.Cookies()[0].Value)
+	assert.Len(t, good.Cookies()[0].Value, 64, "a session id")
+	assert.NotEqual(t, "example-token-1234", good.Cookies()[0].Value, "never the token")
 
 	assert.Equal(t, http.StatusUnauthorized, verify(t, srv.URL, code).StatusCode, "single use")
 
@@ -135,7 +136,7 @@ func TestConnectWithNoCockpitSaysHowToStartOne(t *testing.T) {
 	assert.Contains(t, err.Error(), "ZMINA_UI_TOKEN=")
 
 	// Recorded, but gone.
-	srv, _, _ := connectCockpit(t, "example-token")
+	srv, _, _ := connectCockpit(t, "example-token-1234")
 	srv.Close()
 
 	_, _, err = runConnect(t)
@@ -158,7 +159,7 @@ func TestConnectToACockpitWithNoToken(t *testing.T) {
 func TestConnectNeedsTheSecretAndThisMachine(t *testing.T) {
 	logins := newUILogins()
 	s := newUISignin("", func(string) {})
-	h := guardLogins(http.NotFoundHandler(), tailA+":7517", false, "example-token", logins, s,
+	h := guardLogins(http.NotFoundHandler(), tailA+":7517", false, uiTestAuth(t, "example-token-1234", logins, s),
 		"zmina.example.ts.net")
 
 	var extra func(r *http.Request)
@@ -268,7 +269,7 @@ func TestSigninSlotsAreApart(t *testing.T) {
 
 func TestSigninWithNoNotifier(t *testing.T) {
 	s := newUISignin("", func(string) {})
-	h := guardLogins(http.NotFoundHandler(), "127.0.0.1:7518", true, "example-token", newUILogins(), s)
+	h := guardLogins(http.NotFoundHandler(), "127.0.0.1:7518", true, uiTestAuth(t, "example-token-1234", newUILogins(), s))
 
 	do := func(method, path string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, "http://127.0.0.1:7518"+path, nil)
@@ -290,7 +291,7 @@ func TestSigninWithNoNotifier(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, do(http.MethodPost, "/api/signin/code").Code, "nothing to send a code with")
 
 	withSend := newSigninFix()
-	h = guardLogins(http.NotFoundHandler(), "127.0.0.1:7518", true, "example-token", nil, withSend.s)
+	h = guardLogins(http.NotFoundHandler(), "127.0.0.1:7518", true, uiTestAuth(t, "example-token-1234", nil, withSend.s))
 	info = do(http.MethodGet, "/api/signin")
 	assert.JSONEq(t, `{"send":true}`, info.Body.String())
 }

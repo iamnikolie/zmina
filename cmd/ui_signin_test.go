@@ -149,7 +149,7 @@ func TestSigninThroughTheGuard(t *testing.T) {
 	f := newSigninFix()
 	reached := ""
 	app := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { reached = r.URL.Path; w.WriteHeader(http.StatusOK) })
-	h := guardLogins(app, "127.0.0.1:7518", true, "example-token", nil, f.s)
+	h := guardLogins(app, "127.0.0.1:7518", true, uiTestAuth(t, "example-token-1234", nil, f.s))
 
 	do := func(method, path, body string, zmina bool, cookie string) *httptest.ResponseRecorder {
 		reached = ""
@@ -191,19 +191,22 @@ func TestSigninThroughTheGuard(t *testing.T) {
 	cookies := good.Result().Cookies()
 	require.Len(t, cookies, 1)
 	assert.Equal(t, uiCookie, cookies[0].Name)
-	assert.Equal(t, "example-token", cookies[0].Value, "the same device cookie as the ?token= link")
+	assert.NotEqual(t, "example-token-1234", cookies[0].Value, "the cookie holds a session, never the token")
+	assert.Len(t, cookies[0].Value, 64, "a 256-bit session id")
 	assert.True(t, cookies[0].HttpOnly)
 	assert.Equal(t, http.SameSiteStrictMode, cookies[0].SameSite)
 
 	do(http.MethodGet, "/api/state", "", false, cookies[0].Value)
 	assert.Equal(t, "/api/state", reached, "signed in")
 
-	do(http.MethodGet, "/?token=example-token", "", false, "")
-	assert.Equal(t, "/", reached, "the ?token= link still signs in")
+	link := do(http.MethodGet, "/?token=example-token-1234", "", false, "")
+	assert.Equal(t, http.StatusSeeOther, link.Code, "the ?token= link still signs in, and leaves the address")
+	assert.Equal(t, "/", link.Header().Get("Location"))
+	assert.Empty(t, reached)
 }
 
 func TestSigninPageWithoutACodeCommandIsTheOldHint(t *testing.T) {
-	h := guardLogins(http.NotFoundHandler(), "127.0.0.1:7518", true, "example-token", nil, nil)
+	h := guardLogins(http.NotFoundHandler(), "127.0.0.1:7518", true, uiTestAuth(t, "example-token-1234", nil, nil))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7518/", nil))
 	assert.Equal(t, http.StatusUnauthorized, w.Code)

@@ -5,8 +5,8 @@
 <style>iframe { height: 760px; border: 1px solid #888; } .phone { width: 390px; } .desk { width: 1280px; }</style>
 <pre id="result">Checking ids as cards…</pre>
 <script>
-// The real chat page in a frame whose fetch answers for a role whose replies name tasks, a parked item and an ask
-// (D-15): ids become links, the first mention of a piece of work carries its short title, a tap opens its card, the
+// The real chat page in a frame whose fetch answers for a role whose replies name tasks, a parked item, an ask, a
+// queued line, a reminder and a lesson (D-15): ids become links, the first mention of a piece of work carries its short title, a tap opens its card, the
 // card's answer goes as a todo answer, and «Talk to» puts the item on the field.
 (async () => {
   const results = [];
@@ -28,12 +28,15 @@
     "A-1": {id: "A-1", found: true, kind: "ask", ask: {id: "A-1", kind: "decision", title: "Merge the login page", text: "Tests are green.", rec: "merge it", role: "dispatcher", open: true, created: now},
       state: "need", who: "a decision", since: now, decision: {id: "A-1", action: "yes", word: "merge it"}, talk: "dispatcher"},
     "T-9": {id: "T-9", found: false},
+    "S-3": {id: "S-3", found: true, kind: "line", plain: {head: "S-3 · merge the login page", lines: ["a line · delivered to dev 4m ago, waits for its ack"], act: "zmina pending --role dev"}},
+    "R-2": {id: "R-2", found: true, kind: "alarm", plain: {head: "R-2 · renew the certificate", lines: ["remind · for you · rings Thu 12 Nov 09:00 (in 16h)", "error: the notifier is down"], act: "zmina remind off R-2"}},
+    "LS-1": {id: "LS-1", found: true, kind: "lesson", plain: {head: "LS-1 · Run make lint before a commit", lines: ["lesson · new · 2h · from dev", "why: CI failed twice"], act: "zmina lesson show LS-1"}},
     "T-5": {id: "T-5", found: true, kind: "task", chain: [step("T-5", "task", "Docs", "open")], at: 0, state: "with", who: "dev", idle: true, since: now, talk: "dev"},
   };
   const messages = [
     {id: "m1", role: "assistant", text: "T-1 goes on as T-2 (from L-1). `T-3` is code. A-1 waits on you; T-9 is gone. T-10x is not an id.", at: now},
     {id: "m2", role: "user", text: "Re T-1 (Login page — rework): how far?", at: now},
-    {id: "m3", role: "assistant", text: "T-2 is half done. T-5 waits. See src/acme/T-7. Ask box/ops/A-2.", at: now},
+    {id: "m3", role: "assistant", text: "T-2 is half done. T-5 waits. See src/acme/T-7. Ask box/ops/A-2. Queued S-3, reminder R-2, rule LS-1; `S-4` is code, ISO-S-5 and S-6x are no ids.", at: now},
   ];
 
   async function open(cls, crew, nodes = []) {
@@ -82,7 +85,7 @@
     {
       const {fixture, $, $$} = await open("phone", "ids-phone");
       const ids = $$(".chat-message.assistant .xid").map((b) => b.textContent);
-      assert(ids.join(" ") === "T-1 T-2 L-1 A-1 T-9 T-2 T-5", "every id is a link, not in code, not inside a longer word: " + ids.join(" "));
+      assert(ids.join(" ") === "T-1 T-2 L-1 A-1 T-9 T-2 T-5 S-3 R-2 LS-1", "every id is a link, not in code, not inside a longer word: " + ids.join(" "));
       assert(!$$(".xid").some((b) => b.closest("code")), "code stays code");
       await new Promise(r => setTimeout(r, 500));
       assert(!$$(".xid").some((b) => /A-2/.test(b.textContent)) && /Ask box\/ops\/A-2\./.test($$(".chat-message.assistant")[1].textContent), "an unknown node's id stays text, never this crew's");
@@ -98,7 +101,11 @@
       const mine = $(".chat-message.user");
       assert(mine.querySelector(".xre").textContent === "↳ T-1 · Login page — rework", "the owner's message says what it is about");
       assert(!mine.querySelector(".xt"), "the owner's words get no titles");
-      assert(fixture.reads.length <= 2, "the ids are asked for at once");
+      // Tasks, parked items and asks in one request, lines, reminders and lessons in another: a node that does not know
+      // them yet must not refuse the first with the second.
+      assert(fixture.reads.length <= 3, "the ids are asked for at once, not one by one: " + fixture.reads.join(" | "));
+      assert(fixture.reads.some((r) => r.split(",").every((id) => /^(?:S|R|LS)-/.test(id))) && fixture.reads.every((r) => r.split(",").every((id) => /^(?:S|R|LS)-/.test(id)) || r.split(",").every((id) => /^[TLA]-/.test(id))),
+        "the plain families are asked for apart from the rest: " + fixture.reads.join(" | "));
 
       // A tap opens the sheet.
       $$(".chat-message.assistant .xid")[0].click();
@@ -137,6 +144,22 @@
       await wait("not found", () => $(".xsheet .xtitle"));
       assert($(".xsheet .xtitle").textContent === "Not found on this crew" && !$(".xsheet .xacts"), "an unknown id says so, no actions");
       $(".xshade").click();
+
+      // A line, a reminder and a lesson: a card of what zmina show says, no answer, no Talk.
+      for (const [id, kind, title, lines] of [["S-3", "line", "merge the login page", ["a line · delivered to dev 4m ago, waits for its ack"]],
+        ["R-2", "reminder", "renew the certificate", ["remind · for you · rings Thu 12 Nov 09:00 (in 16h)", "Error", "the notifier is down"]],
+        ["LS-1", "lesson", "Run make lint before a commit", ["lesson · new · 2h · from dev", "Why", "CI failed twice"]]]) {
+        [...$$(".chat-message.assistant .xid")].find((b) => b.textContent === id).click();
+        await wait(id + "'s card", () => $(".xsheet .xtitle")?.textContent === title);
+        assert($(".xsheet .xmeta").textContent === id + " · " + kind, id + " meta: " + $(".xsheet .xmeta").textContent);
+        const said = [...$(".xsheet").querySelectorAll(".xstate, .xlab, .xtext")].map((n) => n.textContent);
+        assert(said.join(" | ") === lines.join(" | "), id + " says what zmina show says: " + said.join(" | "));
+        assert(!$(".xsheet .xdo") && !$(".xsheet .xtalk") && !$(".xsheet .xacts"), id + ": nothing to answer, nobody to talk to");
+        $(".xshade").click();
+      }
+      const m3 = $$(".chat-message.assistant")[1];
+      assert(!m3.querySelector("code .xid") && /`?S-4`?/.test(m3.textContent) && !/ISO-S-5|S-6x/.test([...m3.querySelectorAll(".xid")].map((b) => b.textContent).join(" ")), "code, a longer word and S-6x stay text");
+      assert([...m3.querySelectorAll(".xid")].some((b) => b.textContent === "S-3") && [...m3.querySelectorAll(".xt")].some((t) => t.textContent === " · merge the login page"), "a line's first mention carries its short title too");
 
       // Taken, its role idle: with that role, not working; no dot in the text.
       const t5 = [...$$(".chat-message.assistant .xid")].find((b) => b.textContent === "T-5");
