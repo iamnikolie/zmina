@@ -1305,7 +1305,9 @@ spent week skips the run (`triage-skipped`). Each run's cost is logged (`lessons
 `Lessons triage $x: <crew> $y (n times)` per crew, peers too with `--all`. Every git call of a run ends: two minutes
 for a local one, five for one that talks to the remote (`fetch`, `push`, `ls-remote`), killed with what it started
 when no terminal drives the run (the daily run is detached); a remote that never answers fails the run, it does not
-hold it.
+hold it. A lesson, or the owner's todo, that a run could not save does not stop it recording its MR: the failure is a
+`lesson-state-failed` event, a note for the dispatcher and the run's last error (`ls`, doctor), and `zmina lesson
+triage` by hand exits with it.
 
 The owner gets one todo per MR: its url, each lesson and its file, what was dropped and why, the questions, and how
 many new lessons wait for it (new ones wait while it is open; `zmina ls` shows `lessons: 4 waiting · MR open <url>`).
