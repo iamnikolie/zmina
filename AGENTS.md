@@ -2,7 +2,7 @@
 
 Go + cobra. `cmd/`: one file per command group; `NewRoot(out, err)` builds the whole tree per run, every command
 with its own flags (no package-level flag variables); `skill.md` is embedded and is the spec. `internal/crew` (crew
-file: parse, resolve paths, check; `edit.go` edits it as a YAML tree for `zmina seat`; `layout.go` names every
+file: parse, resolve paths, check; `edit.go` edits it as a YAML tree for `zmina seat`; `history.go` keeps its versions in `crew.d/history`; `layout.go` names every
 file of a crew), `internal/shift` (roles, tick, schedules, queues, state v2 — tested with fakes), `internal/ledger`
 (task + worktree rules), `internal/task` (`tasks/T-<n>.json`), `internal/worktree` (git), `internal/tmux` (the
 role's tagged pane; tested against a real tmux), `internal/registry` (Claude Code `<ns>/sessions/<pid>.json`),

@@ -91,14 +91,18 @@ func TestDoctorHygiene(t *testing.T) {
 	_, err = taskStore(c).Add(task.Task{Role: "dispatcher", Asked: "y", Worktree: wt}, old)
 	require.NoError(t, err)
 
-	require.NoError(t, os.WriteFile(crewFile+".bak", []byte("x"), 0o600))
-
 	out, _, _ = zm(t, crewFile, "doctor")
+	assert.NotContains(t, out, "copies of the crew file", "zmina keeps no copy beside the file now, only crew.d/history")
 	assert.Contains(t, out, "warn  asks      1 open for the owner over 7 days (A-1)")
 	assert.Contains(t, out, "warn  later     1 parked over 14 days (L-1)")
 	assert.Contains(t, out, "warn  worktrees 1 closed tasks keep their worktree", "an open task's worktree is not counted")
 	assert.Contains(t, out, "worktree_gc: daily in the crew file", "the warning names the key that sweeps them")
-	assert.NotContains(t, out, "copies of the crew file", "seat's own .bak is fine")
+
+	require.NoError(t, os.WriteFile(crewFile+".bak", []byte("x"), 0o600))
+
+	out, _, _ = zm(t, crewFile, "doctor")
+	assert.Contains(t, out, "warn  crew      1 copy of the crew file next to it (crew.yaml.bak)")
+	assert.Contains(t, out, "zmina crew history", "the warning names the command that keeps versions now")
 
 	require.NoError(t, os.WriteFile(crewFile+".bak-by-hand", []byte("x"), 0o600))
 

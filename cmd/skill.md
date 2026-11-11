@@ -446,7 +446,7 @@ goes over the crew's field by field; a change applies at the role's next start. 
 | `zmina stop` | the ticker starts nothing any more (no keep: always role, no scheduled run), then every role goes down, the dispatcher too; a role with a draft or a dialog stays up and is named (`--clear` as with `down`). `ls` shows `STOPPED`. |
 | `zmina start` | lifts the stop and starts the dispatcher. A retired crew refuses it, naming the live one. |
 | `zmina retire [--moved-to <node>/<crew>] [--clear]` / `retire --off` | the owner's word that this crew is no longer the live one: `retired:` and `moved_to:` in the crew file (a state file recovered or a stop lifted does not lose them), then as `zmina stop`. `--off` takes the mark off; the shift stays stopped until `zmina start`. Only this mark says one crew went on as another: two crews with one name are never taken for one. |
-| `zmina doctor [--json]` | checks crew file, tmux (3.2 or newer), claude as roles find it (their PATH; a binary in a temp dir fails) and the flags zmina passes, Claude Code's session registry (zmina reads it to tell idle from busy; it is not a public interface — doctor says when its shape changed), ticker beat, state, lock (the holder now with its age and phase, and the holds over 20 s and waits over 5 s of the last 24 h from the log), task files, crews sharing a tmux server, versions (this zmina's; a cockpit, a Codex bridge or Claude roles that another zmina started); what zmina's own rules add to a fresh role's prefix (`boot`: characters on average and the role with most, by what read_guard, lessons, delivery and Codex seats turn on) and whether `skills:` trims the skill list; whether `context_max`, `restart_at` and `restart_done` are at or below the recommended context sizes (`context`, advice only: The crew file); whether the crew's namespace is logged in (`login`, from `claude auth status`: not logged in fails, a login expiring within 7 days warns); what piles up: owner asks open over 7 days, parked items over 14 days, hand-made copies of the crew file beside it (seat keeps one `.bak`), closed tasks that keep their worktree (`worktrees`). Exit 1 on a fail. |
+| `zmina doctor [--json]` | checks crew file, tmux (3.2 or newer), claude as roles find it (their PATH; a binary in a temp dir fails) and the flags zmina passes, Claude Code's session registry (zmina reads it to tell idle from busy; it is not a public interface — doctor says when its shape changed), ticker beat, state, lock (the holder now with its age and phase, and the holds over 20 s and waits over 5 s of the last 24 h from the log), task files, crews sharing a tmux server, versions (this zmina's; a cockpit, a Codex bridge or Claude roles that another zmina started); what zmina's own rules add to a fresh role's prefix (`boot`: characters on average and the role with most, by what read_guard, lessons, delivery and Codex seats turn on) and whether `skills:` trims the skill list; whether `context_max`, `restart_at` and `restart_done` are at or below the recommended context sizes (`context`, advice only: The crew file); whether the crew's namespace is logged in (`login`, from `claude auth status`: not logged in fails, a login expiring within 7 days warns); what piles up: owner asks open over 7 days, parked items over 14 days, copies of the crew file beside it (`crew.yaml.bak`, `.bak-old`: zmina keeps versions in `zmina crew history` now), closed tasks that keep their worktree (`worktrees`). Exit 1 on a fail. |
 | `zmina queue ls [--full] [--json]` | what waits to be typed: the dispatcher's signals and health notes, each role's inbox, lines posted to its inbox socket not yet seen in its conversation, and its failed lines (a line tmux refused three beats in a row); each line clipped to 160 characters, `--full` whole. |
 | `zmina queue retry <role>` / `queue drop <role> [--all]` | put failed lines back at the head of the inbox / drop them (`--all`: the inbox too; for the dispatcher its signals and notes). Without `--all`, any retained inbox count and the command needed to drop it are printed. The hint includes the resolved `--crew` path and shell-quotes both path and role, so it still targets this crew when pasted into another shell. |
 | `zmina state show` | the state as zmina reads it (JSON). |
@@ -1421,7 +1421,23 @@ is marked `"bulk": true` (a script sweeping files, not an agent reading them); a
 | `zmina seat rm <role>` | remove a role that is down and holds no active task (`--force` despite tasks). |
 
 Every edit keeps the file's comments, is checked by loading it before it is written (a crew that
-would not load is never saved), and leaves the previous file as `crew.yaml.bak`.
+would not load is never saved), and keeps the previous file in the crew file's history.
+
+### The crew file's history
+
+Every change of the crew file keeps the version it replaced in `crew.d/history/` beside it, one file per version
+(`<UTC time>-<hash>.yaml`, with a `.json` of who and how), the newest 30. Each is also one `crew-changed` event in
+`zmina log`: the role it is about when it is one, what changed (`dev: model, args`, `added scribe`, `crew: notify`)
+and by which command (`zmina seat set`, `zmina retire`, `zmina crew history --restore 2`). An edit made outside
+zmina (an editor, a role writing `crew.yaml` itself) is seen by the next command that loads the file, which keeps it
+as a version `edited by hand` and logs it the same way; a command that finds the file as last recorded writes
+nothing, so the ticker's every beat costs one small read.
+
+| Command | Does |
+|---|---|
+| `zmina crew history [--json]` | the versions, newest first: number (0 is the file as it is now), when, who, what changed and how. |
+| `zmina crew history --diff <n>` | what changed between version `n` and the file as it is now (unified diff). |
+| `zmina crew history --restore <n>` | put version `n` back. It must load; what it replaces is kept as a version, so a restore can be undone. Works when the file now does not load. |
 
 ## Usage
 

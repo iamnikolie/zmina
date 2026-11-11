@@ -154,12 +154,17 @@ func (a *app) editSeat(role, detail string, fn func(s *shift.Shift, e *crew.Edit
 			return err
 		}
 
+		e.Note(by(), crewCommandOf(did))
+
 		if err := e.Save(); err != nil {
 			return err
 		}
 
+		logCrewVersions(eventLog(s.Crew), e.Saved.Versions)
+		a.warnCrewHistory(e.Saved)
+
 		s.Log(role, "seat", "", strings.TrimSpace(did+" "+detail))
-		fmt.Fprintf(a.out, "%s %s in %s (old file: %s.bak)\n", role, did, s.Crew.Path, s.Crew.Path)
+		fmt.Fprintf(a.out, "%s %s in %s (the version it replaced is kept: zmina crew history)\n", role, did, s.Crew.Path)
 
 		return nil
 	})

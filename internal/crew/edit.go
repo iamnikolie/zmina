@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/iamnikolie/zmina/internal/fsx"
 	"gopkg.in/yaml.v3"
 )
 
@@ -25,7 +24,15 @@ var listKeys = []string{"args", "drop_tools", "keep_tools"}
 type Edit struct {
 	path string
 	doc  yaml.Node
+
+	by, how string
+
+	// Saved is what the last Save kept in the crew file's history; the command that saved logs it.
+	Saved Saved
 }
+
+// Note says who changes the file and by which command, for the history ("zmina seat set dev").
+func (e *Edit) Note(by, how string) { e.by, e.how = by, how }
 
 // Open reads the crew file for editing.
 func Open(path string) (*Edit, error) {
@@ -135,8 +142,8 @@ func (e *Edit) SetCrewKey(key, value string) {
 	}
 }
 
-// Save checks the edited file loads, a role's dir having to exist too, keeps the old one as crew.yaml.bak, and writes
-// it. A file that would not load is not written.
+// Save checks the edited file loads, a role's dir having to exist too, keeps the old one in the crew file's history
+// (crew.d/history, see History), and writes it. A file that would not load is not written.
 func (e *Edit) Save() error { return e.save(LoadStrict) }
 
 // SaveCrewKeys is Save for an edit that touches no role: the file is held to what Load asks, since a crew is retired
@@ -153,31 +160,41 @@ func (e *Edit) save(check func(string) (*Crew, error)) error {
 		return fmt.Errorf("crew: %w", err)
 	}
 
-	tmp := e.path + ".tmp"
-	if err := os.WriteFile(tmp, buf.Bytes(), 0o600); err != nil {
-		return fmt.Errorf("crew: %w", err)
+	how := e.how
+	if how == "" {
+		how = "zmina"
+	}
+
+	saved, err := commit(e.path, buf.Bytes(), check, e.by, how)
+	e.Saved = saved
+
+	return err
+}
+
+// Restore puts raw back as the crew file at path, as a change of its own: it must load (Load), what is there now is
+// kept, and raw becomes the newest version.
+func Restore(path string, raw []byte, by, how string) (Saved, error) {
+	return commit(path, raw, Load, by, how)
+}
+
+// commit is the end of every change of the crew file: raw has to load, then the history keeps the file as it is and
+// writes raw over it.
+func commit(path string, raw []byte, check func(string) (*Crew, error), by, how string) (Saved, error) {
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+		return Saved{}, fmt.Errorf("crew: %w", err)
 	}
 
 	// Loading the temp file checks it, with dir defaults resolved as for the real one.
 	if _, err := check(tmp); err != nil {
 		_ = os.Remove(tmp)
 
-		return fmt.Errorf("not saved, the crew would not load: %w", err)
+		return Saved{}, fmt.Errorf("not saved, the crew would not load: %w", err)
 	}
 
 	_ = os.Remove(tmp)
 
-	if old, err := os.ReadFile(e.path); err == nil {
-		if err := fsx.WriteFile(e.path+".bak", old, 0o600); err != nil {
-			return fmt.Errorf("crew: %w", err)
-		}
-	}
-
-	if err := fsx.WriteFile(e.path, buf.Bytes(), 0o600); err != nil {
-		return fmt.Errorf("crew: %w", err)
-	}
-
-	return nil
+	return HistoryOf(path).Commit(path, raw, by, how)
 }
 
 func (e *Edit) roles(create bool) *yaml.Node {

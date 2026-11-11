@@ -107,9 +107,15 @@ func checkHygiene(c *crew.Crew, st *shift.State, now time.Time, add func(name, l
 			clipList(old))
 	}
 
-	if copies := crewCopies(c.Path); len(copies) > 1 {
-		add("crew", "warn", "%d copies of the crew file next to it (%s): zmina seat keeps one, crew.yaml.bak; "+
-			"the others are hand-made", len(copies), clipList(copies))
+	if copies := crewCopies(c.Path); len(copies) > 0 {
+		noun := "copies"
+		if len(copies) == 1 {
+			noun = "copy"
+		}
+
+		add("crew", "warn", "%d %s of the crew file next to it (%s): zmina keeps the file's versions itself now "+
+			"(zmina crew history lists them, --diff and --restore use them); the copies are old or hand-made, remove "+
+			"them when you no longer need them", len(copies), noun, clipList(copies))
 	}
 
 	checkWorktrees(c, st, add)
