@@ -552,6 +552,8 @@ func (c *Client) AttachArgv(name string) []string {
 }
 
 func (c *Client) run(args ...string) (string, error) {
+	defer track(args)()
+
 	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
 	defer cancel()
 
