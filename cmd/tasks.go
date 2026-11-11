@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -130,6 +131,8 @@ func (a *app) taskNewCommand() *cobra.Command {
 		"ticker tells the dispatcher")
 	c.Flags().BoolVar(&routed, "route", false, "the crew file's routes pick the role (leave <role> out): see zmina route")
 	c.Flags().StringVar(&because, "because", "", "why this role, when it is not the one the routes name (a role picked by hand)")
+	c.Flags().StringArrayVar(&n.Criteria, "criteria", nil, "what must be true for the task to count as finished, one line; "+
+		"repeat the flag for each criterion (the handoff packet carries them)")
 	ask.flags(c)
 	c.Flags().BoolVar(&asJSON, "json", false, "JSON output")
 
@@ -263,6 +266,14 @@ func (a *app) taskShowCommand() *cobra.Command {
 					fmt.Fprintln(a.out, "asked:", asked)
 				}
 
+				if len(t.Criteria) > 0 {
+					fmt.Fprintln(a.out, "criteria:")
+
+					for i, c := range t.Criteria {
+						fmt.Fprintf(a.out, "  %d. %s\n", i+1, c)
+					}
+				}
+
 				if p := t.Where(); p != "" {
 					fmt.Fprintln(a.out, "project:", p)
 				}
@@ -355,11 +366,15 @@ type taskChange struct {
 	title, project, url string
 	budget              string
 	force               bool
+	// criteria is the values of --criteria; setCriteria the list they make when the flag was given (set only).
+	criteria    []string
+	setCriteria *[]string
 }
 
 func (o *taskChange) flags(c *cobra.Command, withRole bool) {
 	c.Flags().StringVar(&o.note, "note", "", "a note on the task")
-	c.Flags().BoolVar(&o.force, "force", false, "close it although its worktree has uncommitted changes")
+	c.Flags().BoolVar(&o.force, "force", false, "close it although its worktree has uncommitted changes, or (done) "+
+		"it has criteria and no result")
 
 	if withRole {
 		c.Flags().StringVar(&o.role, "role", "", "hand the task to another role")
@@ -367,6 +382,8 @@ func (o *taskChange) flags(c *cobra.Command, withRole bool) {
 		c.Flags().StringVar(&o.project, "project", "", "the project or product it is for (- clears it)")
 		c.Flags().StringVar(&o.url, "url", "", "the live thing to look at (- clears it)")
 		c.Flags().StringVar(&o.budget, "budget", "", "what the task may cost, API-equivalent dollars (- clears it)")
+		c.Flags().StringArrayVar(&o.criteria, "criteria", nil, "what must be true for the task to count as finished, "+
+			"one line, the flag repeated for each; it replaces the list (an empty value alone clears it)")
 		c.Flags().StringVar(&o.on, "on", "", "with waiting: who it waits on when not the owner — a role or a person "+
 			"(- the owner again); it stays off the owner's todo")
 	}
@@ -378,10 +395,19 @@ func (a *app) taskSetCommand() *cobra.Command {
 	c := &cobra.Command{
 		Use: "set <id> [state]",
 		Short: "Change a task: state (open, waiting [--on who], done, dropped), --note, --role, --title, --project, " +
-			"--url, --budget",
+			"--url, --budget, --criteria",
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var st task.State
+
+			if cmd.Flags().Changed("criteria") {
+				list, err := replacementCriteria(o.criteria)
+				if err != nil {
+					return err
+				}
+
+				o.setCriteria = &list
+			}
 
 			if len(args) == 2 {
 				var err error
@@ -405,7 +431,7 @@ func (a *app) taskCloseCommand(use string, st task.State) *cobra.Command {
 
 	c := &cobra.Command{
 		Use:   use + " <id>",
-		Short: "Close a task as " + string(st) + " (refuses a worktree with uncommitted changes without --force)",
+		Short: "Close a task as " + string(st) + " (refuses " + closeRefuses(st) + " without --force)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if resultFile != "" {
@@ -424,6 +450,30 @@ func (a *app) taskCloseCommand(use string, st task.State) *cobra.Command {
 	o.flags(c, false)
 
 	return c
+}
+
+// closeRefuses is what closing as st refuses without --force, for the command's short text.
+func closeRefuses(st task.State) string {
+	if st == task.Done {
+		return "a worktree with uncommitted changes, and a task with criteria and no saved result,"
+	}
+
+	return "a worktree with uncommitted changes"
+}
+
+// replacementCriteria is the list a task's criteria are replaced with by the values of a repeated --criteria: an
+// empty value alone clears the list.
+func replacementCriteria(values []string) ([]string, error) {
+	if len(values) == 1 && strings.TrimSpace(values[0]) == "" {
+		return []string{}, nil
+	}
+
+	list, err := task.CleanCriteria(values)
+	if err != nil {
+		return nil, fmt.Errorf("%w (an empty --criteria alone clears the list)", err)
+	}
+
+	return list, nil
 }
 
 func (a *app) taskParkCommand() *cobra.Command {
@@ -478,7 +528,7 @@ func (a *app) setTask(id string, st task.State, o taskChange) error {
 		}
 
 		t, err := a.ledger(s).Set(id, ledger.Change{State: st, On: o.on, Note: o.note, Role: o.role, Force: o.force,
-			Title: o.title, Project: o.project, URL: o.url, Budget: o.budget, By: by()})
+			Title: o.title, Project: o.project, URL: o.url, Budget: o.budget, Criteria: o.setCriteria, By: by()})
 		if err != nil {
 			return err
 		}
