@@ -118,7 +118,8 @@ trust.
 
 `zmina doctor` (setup), `zmina ls` (first line: when the ticker last beat), `zmina queue ls`
 (what waits, what failed), `zmina log --since 12h` (what happened), `zmina state recover` (a
-state file zmina cannot read), `zmina stop` / `zmina start` (the whole shift).
+state file zmina cannot read), `zmina lock` (who holds the state lock while a command hangs),
+`zmina stop` / `zmina start` (the whole shift).
 
 ## License
 

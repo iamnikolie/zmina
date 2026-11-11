@@ -297,15 +297,18 @@ type Locked struct {
 	*State
 
 	path string
-	lock *os.File
+	lock *hold
 	// legacy is the raw first-format file this state was converted from, kept as a backup on the first save.
 	legacy []byte
 }
 
 // Lock takes the lock in dir and reads the state. It waits up to LockWait for another zmina, then fails naming it.
 // A state file that cannot be read, or one from a newer zmina, is an error: nothing may write over it.
-func Lock(dir string) (*Locked, error) {
-	f, err := takeLock(dir)
+func Lock(dir string) (*Locked, error) { return LockAs(dir, LockOpts{}) }
+
+// LockAs is Lock for a command that names itself (the holder record, the lock-wait and lock-held events).
+func LockAs(dir string, opts LockOpts) (*Locked, error) {
+	f, err := takeLock(dir, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -355,11 +358,11 @@ func Read(dir string) (*State, error) {
 // Recover moves an unreadable state file aside as state.json.broken-<time> so zmina starts fresh, and returns the
 // new name. A readable file is left alone.
 func Recover(dir string, now time.Time) (string, error) {
-	f, err := takeLock(dir)
+	f, err := takeLock(dir, LockOpts{Verb: "state recover"})
 	if err != nil {
 		return "", err
 	}
-	defer func() { _ = f.Close() }()
+	defer f.release()
 
 	path := crew.Layout{Dir: dir}.State()
 
@@ -387,7 +390,7 @@ func stateError(path string, err error) error {
 }
 
 // takeLock opens and locks the lock file in dir, waiting up to LockWait, and writes this pid into it.
-func takeLock(dir string) (*os.File, error) {
+func takeLock(dir string, opts LockOpts) (*hold, error) {
 	if err := fsx.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("state: %w", err)
 	}
@@ -399,7 +402,8 @@ func takeLock(dir string) (*os.File, error) {
 		return nil, fmt.Errorf("state: %w", err)
 	}
 
-	deadline := time.Now().Add(LockWait)
+	w := newWaiter(dir, opts)
+	deadline := w.start.Add(LockWait)
 
 	for {
 		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
@@ -413,33 +417,29 @@ func takeLock(dir string) (*os.File, error) {
 			return nil, fmt.Errorf("state: lock: %w", err)
 		}
 
-		if time.Now().After(deadline) {
+		w.poll()
+
+		if lockNow().After(deadline) {
 			_ = f.Close()
 
-			holder := "another zmina"
-			if raw, err := os.ReadFile(path); err == nil {
-				if pid, err := strconv.Atoi(strings.TrimSpace(string(raw))); err == nil {
-					holder = "zmina pid " + strconv.Itoa(pid)
-				}
-			}
-
-			return nil, fmt.Errorf("state: %s has held %s for %s; try again, or see what it is doing (ps -p)",
-				holder, path, LockWait)
+			return nil, w.gaveUp(path)
 		}
 
-		time.Sleep(100 * time.Millisecond)
+		lockSleep(100 * time.Millisecond)
 	}
 
 	_ = f.Truncate(0)
 	_, _ = f.WriteAt([]byte(strconv.Itoa(os.Getpid())+"\n"), 0)
 
-	return f, nil
+	return w.took(f), nil
 }
 
 // Save writes the state and releases the lock. The first save of a converted first-format file keeps the original
 // as state.json.v1.bak.
 func (l *Locked) Save() error {
 	defer l.Release()
+
+	l.Mark("save", "")
 
 	return l.write()
 }
@@ -482,8 +482,15 @@ func (l *Locked) write() error {
 // Release drops the lock without writing.
 func (l *Locked) Release() {
 	if l.lock != nil {
-		_ = l.lock.Close()
+		l.lock.release()
 		l.lock = nil
+	}
+}
+
+// Mark notes that the holder has reached a step (see Shift.Mark); a lock already let go notes nothing.
+func (l *Locked) Mark(phase, detail string) {
+	if l != nil && l.lock != nil {
+		l.lock.mark(phase, detail)
 	}
 }
 

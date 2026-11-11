@@ -176,6 +176,8 @@ type Shift struct {
 	Warn func(error)
 	// Flush writes the state at once, keeping the lock (Locked.Flush); nil in tests that keep state in memory.
 	Flush func() error
+	// Mark notes the step the beat has reached, for the lock's holder record (Locked.Mark); nil: not noted.
+	Mark func(phase, detail string)
 	// flushErr is the first flush that failed: the beat then types, posts and starts nothing more.
 	flushErr error
 

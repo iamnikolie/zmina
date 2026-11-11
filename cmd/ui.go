@@ -267,7 +267,9 @@ func uiCrews(extra string) []uiCrew {
 }
 
 // forCrew is this run of the command line aimed at one crew file.
-func (a *app) forCrew(path string) *app { return &app{out: a.out, err: io.Discard, crew: path} }
+func (a *app) forCrew(path string) *app {
+	return &app{out: a.out, err: io.Discard, crew: path, verb: a.verb}
+}
 
 // crewApp resolves a page call's crew key to one of the crews found, never to a path the page names.
 func (a *app) crewApp(key string) (*app, error) {

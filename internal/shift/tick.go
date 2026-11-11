@@ -56,11 +56,13 @@ const (
 // beat. It returns what it did, for the log.
 func (s *Shift) Tick() []string {
 	now := s.Now()
+	s.mark("reconcile", "")
 	if s.ReconcileMessages != nil {
 		if err := s.ReconcileMessages(s); err != nil && s.Warn != nil {
 			s.Warn(err)
 		}
 	}
+	s.mark("notices", "")
 	for _, name := range s.Names() {
 		s.pruneTaskInbox(name)
 	}
@@ -74,10 +76,12 @@ func (s *Shift) Tick() []string {
 	s.pruneAbsent(now)
 
 	// Alarms first: a role an alarm starts is up for the rest of the beat.
+	s.mark("alarms", "")
 	did, notes := s.ring(now, stopped)
 	did = append(did, s.reportUnreadable(now)...)
 
 	for _, name := range s.Names() {
+		s.mark("roles", name)
 		r, err := s.Role(name)
 		if err != nil {
 			continue
@@ -198,6 +202,7 @@ func (s *Shift) Tick() []string {
 		}
 	}
 
+	s.mark("notes", "")
 	s.addNotes(notes)
 	did = append(did, notes...)
 
@@ -206,6 +211,7 @@ func (s *Shift) Tick() []string {
 	// Each line typed or posted is saved at once (flush): a beat killed after it, or a save that fails at its end,
 	// does not type it again. After a failed flush nothing more is typed this beat.
 	typed := map[string]bool{}
+	s.mark("deliver", "")
 	if line := s.deliver(now); line != "" {
 		typed[s.Crew.Dispatcher] = true
 		did = append(did, "told the dispatcher: "+line)
@@ -216,6 +222,7 @@ func (s *Shift) Tick() []string {
 			continue
 		}
 
+		s.mark("deliver", name)
 		if line := s.deliverInbox(name, now); line != "" {
 			typed[name] = true
 			did = append(did, line)
@@ -224,12 +231,14 @@ func (s *Shift) Tick() []string {
 
 	for _, name := range s.Names() {
 		if r, err := s.Role(name); err == nil && !typed[name] {
+			s.mark("trim", name)
 			if line := s.trim(name, r, now, held[name]); line != "" {
 				did = append(did, line)
 			}
 		}
 	}
 
+	s.mark("reconcile-end", "")
 	if s.ReconcileMessages != nil {
 		if err := s.ReconcileMessages(s); err != nil && s.Warn != nil {
 			s.Warn(err)
