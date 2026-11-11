@@ -550,3 +550,21 @@ func TestCodexLineTakenBetweenTheLooksIsNotGivenBack(t *testing.T) {
 	assert.Zero(t, f.eventCount("requeued"))
 	assert.True(t, f.ev.has("dev", "seen"))
 }
+
+// A line giveBack leaves out because its reader acked it is not logged as requeued: the log says what happened.
+func TestRequeueLogsWhatActuallyWentBack(t *testing.T) {
+	f, _ := nativeFixture(t, crewYAML)
+	upNative(t, f, "designer")
+
+	rs := f.s.State.Role("designer")
+	rs.Posted = []Posted{{Line: "[dev] look at T-1 (zmina S-9)", MsgID: "m-9", Session: "sid-designer", At: *f.now, IDs: []string{"S-9"}}}
+	// S-9 waits for no ack: its reader acked it (or the ack is long gone), and giveBack leaves the line out.
+
+	require.NoError(t, f.s.Down("designer", DownOptions{}))
+	f.s.Tick()
+
+	assert.Empty(t, rs.Posted)
+	assert.Empty(t, rs.Inbox, "the reader has it")
+	assert.True(t, f.ev.has("designer", "acked-queued"))
+	assert.Zero(t, f.eventCount("requeued"), "nothing went back")
+}

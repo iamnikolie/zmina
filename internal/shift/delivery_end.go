@@ -105,9 +105,16 @@ func (s *Shift) requeuePosted(name string, p Posted) []string {
 		}
 	}
 
-	s.log(name, "requeued", "", "its conversation ended before it showed: "+p.Line)
+	// What goes back is what giveBack returns for the queue, and the signals and notes it puts back on theirs; what
+	// its reader acked meanwhile it leaves out (and logs), and then nothing was requeued.
+	before := len(s.State.Signals) + len(s.State.Notes)
+	lines := s.giveBack(name, p.Line, p.IDs, parts)
 
-	return s.giveBack(name, p.Line, p.IDs, parts)
+	if len(lines) > 0 || len(s.State.Signals)+len(s.State.Notes) > before {
+		s.log(name, "requeued", "", "its conversation ended before it showed: "+p.Line)
+	}
+
+	return lines
 }
 
 // What zmina writes to one conversation only. Matched by the words each line opens with, the way queueRecovery knows
