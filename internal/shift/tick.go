@@ -130,6 +130,12 @@ func (s *Shift) Tick() []string {
 			_ = s.Tmux.Kill(name)
 		}
 
+		// A role with no session leaves nothing posted or typed behind: settled once, here, whether it ended, was put
+		// down or released, or its state was kept from before.
+		if !up {
+			s.settleEnded(name, now)
+		}
+
 		if !up && !stopped && r.Keep == crew.KeepAlways && !rs.Held && !rs.Broken && s.flushErr == nil &&
 			s.registryFor(name).LiveByName(r.Session) == nil && now.Sub(rs.Started) >= reopenPause {
 			if err := s.start(name, UpOptions{}); err != nil {

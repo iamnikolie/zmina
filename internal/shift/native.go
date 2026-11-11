@@ -130,6 +130,13 @@ func newTag() string { return strings.ToLower(rand.Text()[:12]) }
 // that is over (the role restarted) goes back to the head of its queue; one an idle session never showed within
 // postedWait is kept as failed (zmina queue). It reports whether a posted line is still unseen.
 func (s *Shift) followPosted(name string, now time.Time) bool {
+	return s.followPostedAs(name, now, false)
+}
+
+// followPostedAs is followPosted for a role whose session is known to be gone (gone: the role is not up, so no
+// conversation will ever show its posted lines): a line that is not shown is settled as one whose conversation ended
+// (settleEnded).
+func (s *Shift) followPostedAs(name string, now time.Time, gone bool) bool {
 	rs := s.State.Role(name)
 	ch, ns := s.peerFor(name)
 
@@ -152,9 +159,8 @@ func (s *Shift) followPosted(name string, now time.Time) bool {
 				s.stageIDs(p.IDs, "submitted")
 				s.closeInfo(name, p.Parts, "seen")
 			}
-		case sess != nil && sess.SessionID != p.Session:
+		case gone || sess != nil && sess.SessionID != p.Session:
 			back = append(back, p)
-			s.log(name, "requeued", "", "its conversation ended before it showed: "+p.Line)
 		case sess != nil && now.Sub(p.At) >= postedWait && s.quiet(name, sess):
 			rs.Failed = append(rs.Failed, Failed{Line: p.Line, Error: postedNever, At: now, IDs: p.IDs, Parts: p.Parts})
 			s.log(name, "type-failed", "", postedNever+": "+p.Line)
@@ -169,7 +175,7 @@ func (s *Shift) followPosted(name string, now time.Time) bool {
 	if len(back) > 0 {
 		lines := make([]string, 0, len(back)+len(rs.Inbox))
 		for _, p := range back {
-			lines = append(lines, s.giveBack(name, p.Line, p.IDs, p.Parts)...)
+			lines = append(lines, s.requeuePosted(name, p)...)
 		}
 
 		rs.Inbox = append(lines, rs.Inbox...)

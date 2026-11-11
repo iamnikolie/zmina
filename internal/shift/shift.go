@@ -846,6 +846,9 @@ func (s *Shift) start(name string, o UpOptions) error {
 
 	defer s.flush() // the session runs: a beat killed later must not start a second one
 
+	// What the session this one replaces left posted or typed is settled before the new one starts its own.
+	s.settleEnded(name, s.Now())
+
 	rs.Started, rs.Up, rs.Downing, rs.Pending, rs.Dir = s.Now(), true, time.Time{}, nil, o.Dir
 	rs.Releasing, rs.ReleaseTasks, rs.ReleaseIdle = time.Time{}, nil, 0
 	rs.Sent, rs.NoPrompt, rs.BlockedNoted, rs.Trusted, rs.Booted = nil, time.Time{}, false, false, time.Time{}
