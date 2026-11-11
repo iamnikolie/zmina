@@ -128,3 +128,77 @@ func TestAgeSweepLeavesWaitingInboxLinesAlone(t *testing.T) {
 	assert.Zero(t, f.eventCount("delivery-aged"))
 	assert.NotContains(t, strings.Join(f.s.State.Notes, "|"), "delivery: dropped")
 }
+
+// A post that was in fact shown, found by a beat after a long gap (the machine slept), is closed the normal way, seen,
+// with its tell stage: the sweep looks before it judges, and does not report it dropped by age.
+func TestAgeSweepClosesWhatWasShownBeforeItJudges(t *testing.T) {
+	shortAges(t, time.Hour, time.Hour)
+
+	f, p := nativeFixture(t, crewYAML)
+	upNative(t, f, "dispatcher")
+
+	_, id, _, err := f.s.NoteSentAs("remote box/ops", tellText, *f.now)
+	require.NoError(t, err)
+	f.s.BindMessage(TellPrefix+"e-1", id)
+	require.NotEmpty(t, f.s.deliver(*f.now))
+	p.showAll()
+
+	*f.now = f.now.Add(5 * time.Hour)
+	f.status("dispatcher", "idle", *f.now)
+	f.s.Tick()
+
+	for _, p := range f.s.State.Role("dispatcher").Posted {
+		assert.True(t, p.At.After(f.now.Add(-time.Hour)), "the old post is closed; this one is the beat's own: %s", p.Line)
+	}
+
+	assert.True(t, f.ev.has("dispatcher", "seen"))
+	assert.Contains(t, f.s.State.MessageStages[TellPrefix+"e-1"], "submitted")
+	assert.Zero(t, f.eventCount("delivery-aged"), "it was shown: not aged")
+	assert.NotContains(t, strings.Join(f.s.State.Notes, "|"), "delivery: dropped")
+}
+
+// A typed line that landed lingers as a record until the next delivery looks at it: a beat past the age limit settles it
+// as landed, and does not report it dropped.
+func TestAgeSweepClosesATypedLineThatLandedBeforeItJudges(t *testing.T) {
+	shortAges(t, time.Hour, time.Hour)
+
+	f := fixtureWith(t, crewYAML)
+	require.NoError(t, f.s.Up("designer"))
+	f.status("designer", "idle", *f.now)
+	*f.now = f.now.Add(3 * time.Minute)
+
+	require.NoError(t, f.s.Queue("designer", "[dev] look at T-1"))
+	require.NotEmpty(t, f.s.deliverInbox("designer", *f.now))
+	require.NotNil(t, f.s.State.Role("designer").Sent)
+
+	*f.now = f.now.Add(5 * time.Hour)
+	f.s.Tick()
+
+	assert.Nil(t, f.s.State.Role("designer").Sent)
+	assert.Empty(t, f.s.State.Role("designer").Failed)
+	assert.Zero(t, f.eventCount("delivery-aged"))
+}
+
+// A line posted to a Codex role's bridge inbox that nothing has taken yet is waiting for the next bridge, like an inbox
+// line of a role that is down: not aged out however long the role stays down.
+func TestAgeSweepLeavesACodexLineWaitingInItsFile(t *testing.T) {
+	shortAges(t, time.Hour, time.Hour)
+
+	f, dir := codexFixture(t)
+	bridge(t, f, dir, "thread-1")
+
+	_, err := f.s.QueueTracked("dev", "[dispatcher] look at T-1")
+	require.NoError(t, err)
+	require.NotEmpty(t, f.s.deliverInbox("dev", *f.now))
+
+	delete(f.tm.up, "dev")
+
+	for range 3 {
+		*f.now = f.now.Add(5 * time.Hour)
+		f.s.Tick()
+	}
+
+	assert.Len(t, f.s.State.Role("dev").Posted, 1)
+	assert.Len(t, waitingFiles(t, dir), 1)
+	assert.Zero(t, f.eventCount("delivery-aged"))
+}

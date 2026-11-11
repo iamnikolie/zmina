@@ -40,7 +40,7 @@ func (s *Shift) sweepDelivery(now time.Time) []string {
 	)
 
 	note := func(name, kind string, at time.Time, carried []string, limit time.Duration) bool {
-		if at.IsZero() || now.Sub(at) < limit {
+		if !aged(now, at, limit) {
 			return false
 		}
 
@@ -58,9 +58,24 @@ func (s *Shift) sweepDelivery(now time.Time) []string {
 
 	for _, name := range slices.Sorted(maps.Keys(s.State.Roles)) {
 		rs := s.State.Roles[name]
+		ch, dir := s.peerFor(name)
+
+		// Look before judging: a record this old may be one nothing has looked at since (the beats stopped, the machine
+		// slept). A line the conversation did show closes as it always does (followPosted), a typed one that landed as
+		// it always does (closeTyped), and neither is reported as dropped.
+		if slices.ContainsFunc(rs.Posted, func(p Posted) bool { return aged(now, p.At, inFlightMaxAge) }) {
+			s.followPosted(name, now)
+		}
+
+		if sent := rs.Sent; sent != nil && aged(now, sent.At, inFlightMaxAge) {
+			if landed, _ := s.typedLanded(name, sent); landed {
+				s.closeTyped(name)
+			}
+		}
 
 		rs.Posted = slices.DeleteFunc(rs.Posted, func(p Posted) bool {
-			return note(name, "posted", p.At, p.IDs, inFlightMaxAge)
+			// A line waiting in a bridge's inbox waits for the next bridge, as an inbox line waits for its role.
+			return !stillQueued(ch, dir, p) && note(name, "posted", p.At, p.IDs, inFlightMaxAge)
 		})
 
 		if rs.Sent != nil && note(name, "sent", rs.Sent.At, rs.Sent.IDs, inFlightMaxAge) {
@@ -107,6 +122,9 @@ func (s *Shift) sweepDelivery(now time.Time) []string {
 
 	return []string{text}
 }
+
+// aged reports a record stamped at, past limit by now; one with no stamp is not aged: its age is not known.
+func aged(now, at time.Time, limit time.Duration) bool { return !at.IsZero() && now.Sub(at) >= limit }
 
 // dropUndelivered drops the acks of lines that were never delivered, which no queue carries any more.
 func (s *Shift) dropUndelivered(ids []string) {
