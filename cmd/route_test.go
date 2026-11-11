@@ -141,6 +141,7 @@ func TestRouteJSONHasTheDecision(t *testing.T) {
 	assert.Equal(t, 6, *got.Rule)
 	assert.Equal(t, "pool by limits", got.Name)
 	assert.Equal(t, "claude 7d 41% < codex week 50%", got.Why)
+	assert.Contains(t, out, `"why": "claude 7d 41% < codex week 50%"`, "a < is printed as it is, not as \\u003c")
 	assert.Equal(t, []struct{ To, Why string }{{"dev2", "down"}, {"codex-dev", "codex week 50%"}}, got.Alternatives)
 	require.NotNil(t, got.Limits.Claude)
 	assert.Equal(t, 41, *got.Limits.Claude)

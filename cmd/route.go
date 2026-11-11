@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -57,7 +58,7 @@ Exit 0 with an answer, 2 when no rule matched (pick by hand) or the crew file ha
 				}
 
 				if asJSON {
-					err = a.printJSON(d.JSON(explain))
+					err = a.printRouteJSON(d.JSON(explain))
 				} else {
 					err = a.writeRoute(d, ask, strings.Join(args, " "), explain)
 				}
@@ -80,6 +81,15 @@ Exit 0 with an answer, 2 when no rule matched (pick by hand) or the crew file ha
 	c.Flags().BoolVar(&asJSON, "json", false, "JSON output: to, action, rule, name, why, alternatives, limits, stale (--explain adds the rules asked)")
 
 	return c
+}
+
+// printRouteJSON prints the answer's JSON as it reads: a < in a reason (claude 7d 41% < codex week 50%) stays one.
+func (a *app) printRouteJSON(v any) error {
+	enc := json.NewEncoder(a.out)
+	enc.SetIndent("", "  ")
+	enc.SetEscapeHTML(false)
+
+	return enc.Encode(v)
 }
 
 // decideRoute answers for the work, reading the seats' state and the plans' limits and changing nothing.
