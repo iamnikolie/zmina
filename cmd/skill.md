@@ -122,6 +122,7 @@ running crew changes unless its file does. `zmina doctor` reports each crew-leve
 that names the key to set, and lists in one line the roles whose own value is past them; a role the owner talks to
 directly may keep a higher value, and nothing silences that line. Codex roles are not measured, since the sizes
 come from Claude crews, and the dispatcher only by `context_max`: it is never restarted for its context.
+`zmina init` writes the three values into the starter file it creates; a crew file that exists is not rewritten.
 
 ### Codex roles
 

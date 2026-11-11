@@ -47,11 +47,15 @@ dir: %s         # default working directory
 agents: %s      # <role>/AGENT.md is a role's default boot document
 dispatcher: dispatcher                # never sleeps, routes tasks, hears the ticker
 stuck_minutes: %d                     # busy longer than this -> the dispatcher hears of it
+context_max: %dk                     # a role idle with more than this in its conversation is compacted
+restart_at: %dk                      # a role holding a task this full restarts fresh from its checkpoint note
+restart_done: %dk                     # a role whose task closed, this full, restarts fresh: a session per task
 
 roles:
   dispatcher:
     about: routes tasks to roles, starts and stops them, watches their health
-`, starterNamespace(), defaultDir, agents, defaultStuckMinutes)
+`, starterNamespace(), defaultDir, agents, defaultStuckMinutes, RecommendedContextMax/1000, RecommendedRestartAt/1000,
+		RecommendedRestartDone/1000)
 
 	for _, r := range roles {
 		fmt.Fprintf(&b, "  %s:\n    keep: manual   # manual | always\n", r)
