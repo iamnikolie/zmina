@@ -20,6 +20,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -31,6 +32,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -94,8 +96,21 @@ func main() {
 	os.Exit(1)
 }
 
+// gitTimeout is how long one git call may take: the check runs in a hook and in CI, where a git that never answers
+// (a stuck lock, a hook of the repository) must fail the check, not hold it. A variable so a test can shorten it.
+var gitTimeout = 2 * time.Minute
+
 func git(args ...string) (string, error) {
-	out, err := exec.Command("git", args...).Output()
+	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.WaitDelay = 2 * time.Second
+
+	out, err := cmd.Output()
+	if err != nil && ctx.Err() != nil {
+		err = fmt.Errorf("git %s: no answer in %s", args[0], gitTimeout)
+	}
 
 	return string(out), err
 }
