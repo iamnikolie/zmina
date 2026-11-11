@@ -321,3 +321,44 @@ func TestAgeSweepWaitsForAnOrdinaryBeatAfterALongGap(t *testing.T) {
 	assert.Empty(t, rs.Posted, "an ordinary beat does")
 	assert.Equal(t, 1, f.eventCount("delivery-aged"))
 }
+
+// A typed line whose Enter was lost sits in the input line for over a day: the sweep leaves it, and the next line
+// queued makes landed press Enter again, so both arrive.
+func TestAgeSweepLeavesATypedLineThatSitsInTheInputLine(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	require.NoError(t, f.s.Up("designer"))
+	f.status("designer", "idle", *f.now)
+	*f.now = f.now.Add(3 * time.Minute)
+	f.tm.enterLost = map[string]int{"designer": 1}
+
+	first := "[dev] look at T-1"
+	require.NoError(t, f.s.Queue("designer", first))
+	require.NotEmpty(t, f.s.deliverInbox("designer", *f.now))
+
+	rs := f.s.State.Role("designer")
+	require.NotNil(t, rs.Sent)
+
+	f.tm.drafts["designer"] = first
+
+	for range 24*60 + 10 {
+		*f.now = f.now.Add(time.Minute)
+		f.s.Tick()
+	}
+
+	require.NotNil(t, rs.Sent, "a line still in the input line is not aged out")
+
+	second := "[dev] look at T-2"
+	require.NoError(t, f.s.Queue("designer", second))
+
+	for range 30 {
+		*f.now = f.now.Add(time.Minute)
+		f.s.Tick()
+	}
+
+	for _, e := range f.ev.list {
+		require.NotEqual(t, "delivery-aged", e.Event)
+	}
+
+	require.Contains(t, f.tm.typed["designer"], second)
+	require.Empty(t, rs.Inbox)
+}

@@ -337,7 +337,8 @@ typed and not yet seen to land goes the same way when its session ends: dropped,
 in the acks and is said again. A record that nothing settled does not stay for ever: one posted or typed more than 24
 hours ago for a role the beat found up, or kept as failed more than 7 days ago, is dropped by the beat (after it has
 looked whether the line showed or landed; a role that is not up, or that tmux did not answer for, is left alone, and so
-is every posted or typed record on the first beat after a gap of more than 5 minutes), with one event (`delivery-aged`)
+is a typed line still sitting in the input line; the first beat after a gap of more than 5 minutes drops nothing by
+age), with one event (`delivery-aged`)
 and one `FYI` line to the dispatcher that name how many, of which kinds and which ids; lines waiting in the inbox of a
 role that is down are not touched. `zmina queue ls` shows posted lines not yet seen and failed lines with their age. An
 ack takes a line out of every place it stands, failed and posted included, and a typed one once it has landed (one still

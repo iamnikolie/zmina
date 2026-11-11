@@ -70,7 +70,7 @@ func (s *Shift) sweepDelivery(now time.Time, up map[string]bool) []string {
 		// answer). One that is not up is settleEnded's: it gives its lines back or drops them by their kind, a beat later
 		// than the one that saw it end, and a sweep that ran in between would report as dropped what that beat gives
 		// back.
-		if up[name] && rs.Downing.IsZero() {
+		if up[name] && rs.Up && rs.Downing.IsZero() {
 			// Look before judging: a record this old may be one nothing has looked at since (the beats stopped, the
 			// machine slept). A line the conversation did show closes as it always does (followPosted), a typed one that
 			// landed as it always does (closeTyped), and neither is reported as dropped.
@@ -78,10 +78,17 @@ func (s *Shift) sweepDelivery(now time.Time, up map[string]bool) []string {
 				s.followPosted(name, now)
 			}
 
+			// A typed line still in the input line is not judged: dropping its record would leave the text there, which
+			// the next delivery takes for a draft and waits behind for ever. landed finishes it when the next line comes.
+			inInput := false
+
 			if sent := rs.Sent; sent != nil && aged(now, sent.At, inFlightMaxAge) {
-				if landed, _ := s.typedLanded(name, sent); landed {
+				landed, unsent := s.typedLanded(name, sent)
+				if landed {
 					s.closeTyped(name)
 				}
+
+				inInput = unsent
 			}
 
 			rs.Posted = slices.DeleteFunc(rs.Posted, func(p Posted) bool {
@@ -89,7 +96,7 @@ func (s *Shift) sweepDelivery(now time.Time, up map[string]bool) []string {
 				return !stillQueued(ch, dir, p) && note(name, "posted", p.At, p.IDs, inFlightMaxAge)
 			})
 
-			if rs.Sent != nil && note(name, "sent", rs.Sent.At, rs.Sent.IDs, inFlightMaxAge) {
+			if rs.Sent != nil && !inInput && note(name, "sent", rs.Sent.At, rs.Sent.IDs, inFlightMaxAge) {
 				rs.Sent = nil
 			}
 		}
