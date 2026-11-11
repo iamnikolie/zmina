@@ -80,19 +80,40 @@ type Check struct {
 // returns its raw JSON answer (claude -p --output-format json).
 type Seat func(ctx context.Context, dir, prompt, schema string, budget float64) ([]byte, error)
 
+// SeatTimeout is how long one call of the Claude seat may take; a variable so tests can shorten it. The run's budget
+// bounds what a seat may spend, not how long it may sit without an answer.
+var SeatTimeout = 20 * time.Minute
+
 // ClaudeSeat is the seat on Claude Code: a headless run that may only read (Read, Grep, Glob), with no MCP servers,
 // stopped at the budget by the CLI itself, its answer held to the schema.
 func ClaudeSeat(model string) Seat {
-	return func(ctx context.Context, dir, prompt, schema string, budget float64) ([]byte, error) {
+	return func(parent context.Context, dir, prompt, schema string, budget float64) ([]byte, error) {
+		ctx, cancel := context.WithTimeout(parent, SeatTimeout)
+		defer cancel()
+
 		cmd := exec.CommandContext(ctx, "claude", SeatArgs(model, schema, budget)...)
 		cmd.Dir = dir
 		cmd.Stdin = strings.NewReader(prompt)
+		cmd.WaitDelay = gitWaitDelay
+
+		// The budget stops a run that spends; a call that hangs spends nothing and is stopped by the deadline, with
+		// what it started (as a git call is), when no terminal drives the run.
+		if !terminalDriven() {
+			ownGroup(cmd)
+		}
 
 		var stderr bytes.Buffer
 
 		cmd.Stderr = &stderr
 
 		out, err := cmd.Output()
+		switch {
+		case err != nil && parent.Err() != nil:
+			return nil, fmt.Errorf("claude: stopped: %w", parent.Err())
+		case err != nil && ctx.Err() != nil:
+			return nil, fmt.Errorf("claude: no answer in %s", SeatTimeout)
+		}
+
 		if err != nil && len(out) == 0 {
 			return nil, fmt.Errorf("claude: %w: %s", err, strings.TrimSpace(lastLine(stderr.String())))
 		}
