@@ -248,6 +248,28 @@ func TestUIGuard(t *testing.T) {
 	}), "a cookie that carries the token, as an earlier cockpit set it, signs nobody in")
 }
 
+// TestUISnapshotCarriesTheVersionThatServesIt: the page compares it with the one it was loaded with and says when an
+// update came (the new-version notice).
+func TestUISnapshotCarriesTheVersionThatServesIt(t *testing.T) {
+	uiHome(t)
+
+	was := version
+	version = "v-example"
+
+	t.Cleanup(func() { version = was })
+
+	srv, _ := uiServer(t, true, "")
+
+	resp, err := http.Get(srv.URL + "/api/state")
+	require.NoError(t, err)
+
+	defer func() { _ = resp.Body.Close() }()
+
+	var snap uiSnapshot
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&snap))
+	assert.Equal(t, "v-example", snap.Version)
+}
+
 func TestUIRefusesAnOpenBindWithoutAToken(t *testing.T) {
 	uiHome(t)
 

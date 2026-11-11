@@ -1226,7 +1226,9 @@ process on this one, and the page types into every role: `zmina ui` makes a toke
 browser it opens signs in with its one-time code, `zmina ui` again opens the running one signed in, another browser
 signs in with a code from `zmina connect`; a browser signed in to an earlier run signs in again the same way. Any other
 client gets 401, the terminal socket included.
-Live over server-sent events; the files are inside the binary. Each update is patched in: what did not change stays
+Live over server-sent events; the files are inside the binary. Every snapshot carries the version of the zmina that
+serves it (`version`): a page left open across an update (the phone's home-screen app stays alive for days) shows
+«New version of zmina. Reload» and keeps it until pressed, and loads again by itself the next time it goes out of sight. Each update is patched in: what did not change stays
 the very element it was, so its focus, its scroll and an agent's reference to it hold; an element with a handler is
 always the one just drawn, so it acts on what it shows (`testdata/patch.html` checks it in a browser).
 

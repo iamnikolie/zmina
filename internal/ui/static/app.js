@@ -28,6 +28,7 @@ const W = {
   notSent: "Not sent: ", rec: "Recommended: ", more: (n) => n + " more", less: "show less", hands: "By hand:",
   waits: (r) => "waits on " + r, from: (r) => "from " + r, doneText: "done", waitOn: (n, who) => n + " waiting on " + who,
   setAside: (n) => n + " set aside by you",
+  newVersion: "New version of zmina.", reload: "Reload",
   doneToday: "done today: ", history: "history", signOut: "sign out", historyH: "What happened", andHistory: "and history",
   allN: (n) => "All " + n, olderWeek: "Older than a week", thisWeek: "This week", comesBack: "Comes back", doneTab: "Done today", historyTab: "History",
   shift: "shift", kb: "tasks", kbGo: "in progress", kbYou: "waiting on you", kbOthers: "waiting on others", kbLater: "parked", kbNone: "empty", stack: "stack", spread: "spread", moreN: (n) => "+" + n + " more", stackIdle: "stack idle", idleN: (n) => "+" + n + " idle",
@@ -2786,13 +2787,21 @@ document.addEventListener("pointerdown", () => { pointerDown = true; }, true);
 document.addEventListener("pointerup", () => { pointerDown = false; setTimeout(settle, 0); }, true);
 
 // A rollout reaches a page left open (the phone's home-screen app stays alive for days): the build it was loaded
-// with is the first snapshot's; once a snapshot says another build serves it, the page loads again the next time it
-// goes out of sight or comes back, never under the owner's hands. A draft survives it (its text in localStorage, its
-// files in IndexedDB).
+// with is the first snapshot's; once a snapshot says another build serves it, the page says so with a Reload button
+// that stays until it is pressed, and loads again by itself the next time it goes out of sight or comes back, never
+// under the owner's hands. A draft survives it (its text in localStorage, its files in IndexedDB).
 let built = "", rebuilt = false;
 const reloadIfRebuilt = () => { if (rebuilt) location.reload(); };
 document.addEventListener("visibilitychange", reloadIfRebuilt);
 addEventListener("pageshow", (e) => { if (e.persisted) reloadIfRebuilt(); });
+
+// newVersion puts the notice where toasts go (bottom of the page, above the phone's tab bar) and keeps it there.
+function newVersion() {
+  const t = el("div", "toast");
+  t.id = "newver";
+  t.append(el("span", "", W.newVersion), " ", button("", W.reload, () => location.reload()));
+  $("toasts").append(t);
+}
 
 function connect() {
   const es = new EventSource("api/stream");
@@ -2800,7 +2809,7 @@ function connect() {
     snap = JSON.parse(e.data);
     got = Date.now();
     if (!built) built = snap.version || "";
-    else if (snap.version && snap.version !== built && !rebuilt) { rebuilt = true; if (document.hidden) location.reload(); }
+    else if (snap.version && snap.version !== built && !rebuilt) { rebuilt = true; if (document.hidden) location.reload(); else newVersion(); }
     snap.tints = snap.tints || {};
     $("mark").classList.remove("lost");
     document.body.classList.remove("lost");
