@@ -1,7 +1,6 @@
 package shift
 
 import (
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -29,8 +28,6 @@ const (
 	infoRule = "A zmina line marked `FYI` carries no id and needs no ack."
 )
 
-// taskRef is a task's id in a line's text.
-var taskRef = regexp.MustCompile(`\bT-[0-9]+\b`)
 
 // markInfo makes a line for the dispatcher an info line, by the text it waits under; the first time counts.
 func (s *Shift) markInfo(text string, now time.Time) {
