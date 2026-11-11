@@ -17,8 +17,9 @@ import (
 	"github.com/iamnikolie/zmina/internal/task"
 )
 
-// An id in a message is a task (T-n), a parked item (L-n) or an ask (A-n) of the crew the conversation is with. Chat
-// asks for every id its messages name at once, and opens one as a card (design D-15).
+// An id in a message is a task (T-n), a parked item (L-n) or an ask (A-n) of the crew the conversation is with, or
+// one of the plain families zmina show reads: a line (S-n), a reminder (R-n), a lesson (LS-n). Chat asks for every id
+// its messages name at once, and opens one as a card (design D-15).
 
 // itemIDsMax is how many ids one request resolves.
 const itemIDsMax = 200
@@ -26,7 +27,12 @@ const itemIDsMax = 200
 // chainMax bounds a chain's walk: a task parked and taken again is one piece of work, T → L → T → …
 const chainMax = 40
 
-var itemIDRe = regexp.MustCompile(`^[TLA]-[0-9]{1,7}$`)
+var itemIDRe = regexp.MustCompile(`^(?:[TLASR]|LS)-[0-9]{1,7}$`)
+
+// plainID is an id of the families with no chain (see plainCard).
+func plainID(id string) bool {
+	return strings.HasPrefix(id, "S-") || strings.HasPrefix(id, "R-") || strings.HasPrefix(id, "LS-")
+}
 
 // itemStep is one item of a chain as the card shows it.
 type itemStep struct {
@@ -74,12 +80,14 @@ type itemDecision struct {
 type itemCard struct {
 	ID    string `json:"id"`
 	Found bool   `json:"found"`
-	Kind  string `json:"kind,omitempty"` // task | later | ask
+	Kind  string `json:"kind,omitempty"` // task | later | ask | line | alarm | lesson
 	// Chain is the piece of work, its root (the owner's ask) first and its head (the newest item) last; At is the
 	// id's place in it. An ask has none.
 	Chain []itemStep `json:"chain,omitempty"`
 	At    int        `json:"at"`
 	Ask   *itemAsk   `json:"ask,omitempty"`
+	// Plain is a line's, reminder's or lesson's card, as zmina show says it: the head, the details, the command.
+	Plain *textCard `json:"plain,omitempty"`
 	// State is the head's in a word the page puts in plain words: need (waiting on the owner), busy (its role works on
 	// it), with (taken, its role not working now), queued (handed, not taken yet), on (waiting on Who), parked, done,
 	// dropped.
@@ -373,7 +381,8 @@ func askDecision(a asks.Ask) *itemDecision {
 	return &itemDecision{ID: a.ID, Action: "answer", Text: "Yes", Word: "Yes"}
 }
 
-// itemIDs reads a request's comma-separated ids: each one T-n, L-n or A-n, at most itemIDsMax, no repeats.
+// itemIDs reads a request's comma-separated ids: each one T-n, L-n, A-n, S-n, R-n or LS-n, at most itemIDsMax, no
+// repeats.
 func itemIDs(list string) ([]string, error) {
 	var ids []string
 
@@ -386,7 +395,7 @@ func itemIDs(list string) ([]string, error) {
 		}
 
 		if !itemIDRe.MatchString(id) {
-			return nil, errors.New("ids: T-n, L-n or A-n, comma-separated")
+			return nil, errors.New("ids: T-n, L-n, A-n, S-n, R-n or LS-n, comma-separated")
 		}
 
 		seen[id] = true
@@ -416,8 +425,19 @@ func (a *app) localItems(key, list string) ([]byte, error) {
 	out := map[string]itemCard{}
 
 	err = c.readState(func(s *shift.Shift) error {
-		x := readItemIndex(s)
+		var x *itemIndex
+
 		for _, id := range ids {
+			if plainID(id) {
+				out[id] = plainCard(s, id)
+
+				continue
+			}
+
+			if x == nil {
+				x = readItemIndex(s)
+			}
+
 			out[id] = x.card(id)
 		}
 

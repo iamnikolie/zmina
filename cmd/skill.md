@@ -749,7 +749,7 @@ the answers chosen and `Not answered · <why>` under it.
 Reading Chat does not resume a Codex thread or attach another native app writer. Chat is not a tmux
 attachment and does not pin an idle role against the configured release policy.
 
-**Ids as cards.** Every `T-n`, `L-n` and `A-n` in a message (not in code or a link; a `<node>/<crew>/` before it stays
+**Ids as cards.** Every `T-n`, `L-n`, `A-n`, `S-n`, `R-n` and `LS-n` in a message (not in code or a link; a `<node>/<crew>/` before it stays
 part of it and names that crew when the mesh knows the node; with any other prefix, a path, the whole stays text) is
 a link. In a run of the role's messages (since the owner last spoke) the first
 mention of a piece of work carries its short title after it; a dot before the id says it waits on the owner or is in
@@ -763,12 +763,16 @@ title is the first task's, its state the newest item's. Its one answer, only whi
 todo answer does (`todo yes` the recommendation, `done` a check, else `answer … Yes`), no confirm; a parked head offers
 Bring back. «Talk to <role>» (who holds it, the role it was parked from, the role that asked) opens that role's
 conversation with the item on the field as a chip; the message goes as `Re <id> (<title>): <text>`, and the owner's
-bubble shows `↳ <id> · <short title>` over the text.
+bubble shows `↳ <id> · <short title>` over the text. A line (`S-n`), a reminder (`R-n`) and a lesson (`LS-n`) open as
+a card of what `zmina show` says of them (the same code): the id and what it is, the words, where it stands, `why` or
+`error` as rows; no answer and no Talk. Their first mention carries a short title too.
 
 `GET /api/items?node=&crew=&ids=T-1,L-2,A-3` (up to 200 ids) resolves them on that crew, closed ones too: per id
 `found`, `kind`, `chain` (root first: id, kind, title, state, role, on, project, note, result summary, dates) and
 `at`, an `ask`, the head's `state` (`need`, `busy`, `with`, `queued`, `on`, `parked`, `done`, `dropped`), `who`, `since`,
-`idle`, `overdue`, the `decision` (`id`, `action`, `text`, `word`), `talk` and `back`. A peer's crew is read on its own
+`idle`, `overdue`, the `decision` (`id`, `action`, `text`, `word`), `talk` and `back`. An `S-n`, `R-n` or `LS-n` has `kind`
+`line`, `alarm` or `lesson` and a `plain` card (`head`, `lines`, `act`: what `zmina show` prints). The page asks for these
+apart from the rest, so a peer that does not know them yet refuses only their request. A peer's crew is read on its own
 node with the owner-signed mesh op `item/read`. `POST /api/todo` also takes this node's own crew as `<node>/<crew>`.
 
 Remote `chat/read`, `chat/send`, `chat/action` use the same owner-signed mesh requests and relay routes
