@@ -708,3 +708,24 @@ func TestMorning(t *testing.T) {
 	_, err = Load(write(t, "dir: "+dir+"\nmorning: soon\nroles:\n  dispatcher:\n"))
 	require.ErrorContains(t, err, `morning "soon": a time of day such as 08:00, or off`)
 }
+
+// info_lines is on unless the crew file turns it off; yes/no words read as they do for every switch.
+func TestInfoLinesSwitch(t *testing.T) {
+	const roles = "namespace: /ns\nroles:\n  dispatcher:\n"
+
+	for body, want := range map[string]bool{
+		"":                    true,
+		"info_lines: true\n":  true,
+		"info_lines: on\n":    true,
+		"info_lines: false\n": false,
+		"info_lines: off\n":   false,
+	} {
+		c, err := Load(write(t, body+roles))
+		require.NoError(t, err, body)
+		assert.Equal(t, want, c.InfoLinesOn(), body)
+		assert.Empty(t, c.Warnings, body)
+	}
+
+	_, err := Load(write(t, "info_lines: sometimes\n"+roles))
+	assert.Error(t, err)
+}

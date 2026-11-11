@@ -55,6 +55,7 @@ read_guard: true                         # big cat/sed/Read become zmina read (p
 delivery: native                         # how lines reach roles: native (default: the agent's own channel) | tmux (per role too)
 delivery_mid_turn: true                  # the dispatcher's acked lines may go into a turn it is in (default true; false: at its end)
 renotify: 30m                            # an unacked line is said again this often (default 30m; off)
+info_lines: true                         # lines that ask nothing of the dispatcher go as FYI, no id, no ack (default true; false: an id and an ack each, as before)
 morning: 08:00                           # when (in timezone:) the dispatcher hears yesterday's cost in one line (default 08:00; off)
 drop_env: [MY_TERMINAL_*]                # variables kept from the roles, on top of the built-in list
 drop_tools: [Artifact, Workflow]         # Claude Code tools every role starts without (--disallowedTools)

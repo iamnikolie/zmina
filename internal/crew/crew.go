@@ -297,6 +297,10 @@ type Crew struct {
 	// own queue still wait for the turn's end, and nothing goes into a dialog. Default true; false waits for every
 	// turn's end.
 	DeliveryMidTurn *bool `yaml:"delivery_mid_turn"`
+	// InfoLines lets the dispatcher's lines that ask nothing of it (a result ready, a role released, a keep: always
+	// role started again) go as `FYI …` lines with no ack id, closed once its conversation shows them. Default true;
+	// false gives every such line the id and the wait for an ack it had before.
+	InfoLines *bool `yaml:"info_lines"`
 	// BootGrace is how long a started role is left to boot before lines are typed into it (default 2m).
 	BootGrace string `yaml:"boot_grace"`
 	// DropEnv lists environment variables (NAME, or PREFIX*) kept from the roles, on top of the built-in list.
@@ -577,6 +581,10 @@ func (c *Crew) DeliveryFor(r *Role) string {
 
 // MidTurn reports whether the dispatcher's acked lines may be posted into a turn it is in (delivery_mid_turn).
 func (c *Crew) MidTurn() bool { return c.DeliveryMidTurn == nil || *c.DeliveryMidTurn }
+
+// InfoLinesOn reports whether the dispatcher's lines that ask nothing of it go as FYI lines without an ack id
+// (info_lines).
+func (c *Crew) InfoLinesOn() bool { return c.InfoLines == nil || *c.InfoLines }
 
 // SystemdUnit is the crew's ticker on Linux: zmina (.service and .timer), or zmina-<name>.
 func (c *Crew) SystemdUnit() string { return suffixed("zmina", "-", c.Name) }
