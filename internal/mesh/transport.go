@@ -86,12 +86,20 @@ func (Exec) Dial(ctx context.Context, a Addr) (io.ReadWriteCloser, error) {
 	return s, nil
 }
 
+const (
+	// sshAliveEvery and sshAliveMax make a dead link end ssh itself: it asks the far side every few seconds and
+	// gives up after that many answers missed, so a stalled link ends a session in about 15 s, not when TCP gives up.
+	sshAliveEvery = "ServerAliveInterval=5"
+	sshAliveMax   = "ServerAliveCountMax=3"
+)
+
 // Command runs the peer's zmina at a with args: plain words this package or the command line chose (a node name
 // at most), never a peer's text.
 func Command(ctx context.Context, a Addr, args ...string) *exec.Cmd {
 	words := strings.Join(args, " ")
 	if a.SSH != "" {
-		return exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "--", a.SSH,
+		return exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", sshAliveEvery,
+			"-o", sshAliveMax, "--", a.SSH,
 			`PATH="$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:$PATH" zmina `+words)
 	}
 
@@ -109,6 +117,9 @@ func OwnerCommand(ctx context.Context, a Addr, tty bool, args ...string) (*exec.
 		argv := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=10"}
 		if tty {
 			argv = append(argv, "-t")
+		} else {
+			// A terminal session ends by its owner's hand; a call that only collects output ends when the link dies.
+			argv = append(argv, "-o", sshAliveEvery, "-o", sshAliveMax)
 		}
 
 		return exec.CommandContext(ctx, "ssh", append(argv, "--", a.SSH,
