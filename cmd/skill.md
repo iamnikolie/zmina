@@ -1593,7 +1593,8 @@ there stops the beat's further typing and starting, and says so.
    owner's line or another conversation calls the ask off (`restart-off`; asked again after 30 min; a role that
    closed or parked its last task instead is not paused: after a task, below, applies to that close); no note within
    10 min gives it up for that conversation (`restart-off`, and the dispatcher hears `<role>: wrote no note
-   within 10m0s …`), and `context_max` trims it as before. The log has `restart-due`, `restart-note`, `restart-asked`, `restarted` (with why and
+   within 10m0s …`), and `context_max` trims it as before; a role that wrote its note and then was not plainly
+   idle for those 10 min (a line came as the note's turn ended) is called off, not given up. The log has `restart-due`, `restart-note`, `restart-asked`, `restarted` (with why and
    the notes' revisions), `restart-off` and `restart-failed` (the dispatcher hears the `up --task … --fresh` that
    starts it by hand); `zmina usage` counts the restarts. A role asked for its note is not trimmed or released
    meanwhile. A peer's `SendMessage` that reaches the old session in the seconds between its `/exit` and its end

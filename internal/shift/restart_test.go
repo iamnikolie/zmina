@@ -825,3 +825,27 @@ func TestRestartStateWithoutTheFlagLoads(t *testing.T) {
 	f.s.Tick()
 	assert.True(t, f.ev.has("designer", "restart-asked"), "no flag: the settle, as before")
 }
+
+// A role that wrote the note it was asked for and went on working (a line reached it as the note's turn ended) is
+// called off, not given up: it is asked again later in the same conversation.
+func TestRestartWithItsNoteButBusyIsCalledOff(t *testing.T) {
+	f := restarting(t, "", 262_000, 6*time.Minute)
+	f.s.Tick()
+	require.True(t, f.ev.has("designer", "restart-asked"))
+
+	*f.now = f.now.Add(time.Minute)
+	f.note(t, "T-1", *f.now)
+	f.status("designer", "busy", *f.now)
+	*f.now = f.now.Add(restartNoteWait)
+	did := f.s.Tick()
+	assert.Contains(t, did, "designer: restart called off, its note is there, but it was not between turns within 10m0s")
+	rs := f.s.State.Role("designer")
+	assert.Empty(t, rs.RestartGaveUp)
+	assert.NotContains(t, strings.Join(f.s.State.Notes, "|"), "wrote no note")
+	assert.Empty(t, f.s.Restarts)
+
+	*f.now = f.now.Add(trimPause)
+	f.idle("designer", 280_000, 6*time.Minute)
+	f.s.Tick()
+	assert.Equal(t, 2, f.ev.count("designer", "restart-asked"), "asked again in this conversation")
+}

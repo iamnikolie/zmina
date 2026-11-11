@@ -262,7 +262,9 @@ func (s *Shift) restartAsked(name string, now time.Time, tasks []string, sess *r
 	}
 
 	mine := s.heldTasks(name)
-	if s.notesLanded(mine, rs.RestartAsked) {
+
+	landed := s.notesLanded(mine, rs.RestartAsked)
+	if landed {
 		act, ok := s.plainIdle(name, now, sess)
 		if ok {
 			return s.beginRestart(name, mine, rs.RestartWhy, "")
@@ -275,6 +277,12 @@ func (s *Shift) restartAsked(name string, now time.Time, tasks []string, sess *r
 
 	if now.Sub(rs.RestartAsked) < restartNoteWait {
 		return ""
+	}
+
+	// The note came and the role went on working (a line it got as the note's turn ended): called off, not given
+	// up. It wrote what was asked; its next turn's end over restart_at asks again once the pause is over.
+	if landed {
+		return s.restartOff(name, "its note is there, but it was not between turns within "+restartNoteWait.String())
 	}
 
 	rs.RestartGaveUp = sess.SessionID
