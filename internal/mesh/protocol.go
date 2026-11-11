@@ -161,7 +161,7 @@ func (n *Node) ServeTerminals(ctx context.Context, rw io.ReadWriter, deliver Del
 		return fail(err)
 	}
 
-	if err := n.current(*hi.Cert); err != nil {
+	if err := n.admitCert(*hi.Cert, now()); err != nil {
 		return fail(err)
 	}
 
@@ -359,6 +359,10 @@ func (n *Node) Hold(rw io.ReadWriter, want string, deliver Deliver, now func() t
 // open is the hello: both sides prove their keys and tell each other the nodes they know. It returns the peer's
 // name.
 func (n *Node) open(c *conn, want string, now func() time.Time) (string, error) {
+	if err := n.Cert.Expired(now()); err != nil {
+		return "", err
+	}
+
 	mine, err := nonce()
 	if err != nil {
 		return "", err
@@ -390,7 +394,7 @@ func (n *Node) open(c *conn, want string, now func() time.Time) (string, error) 
 		return "", err
 	}
 
-	if err := n.current(*hi.Cert); err != nil {
+	if err := n.admitCert(*hi.Cert, now()); err != nil {
 		return "", err
 	}
 
@@ -584,6 +588,11 @@ func (n *Node) metPeer(cert Cert, told []Peer, caps Peer, now time.Time) error {
 				continue
 			}
 
+			// A certificate that ran out is not a node to meet.
+			if t.Cert.Expired(now) != nil {
+				continue
+			}
+
 			ps = upsert(ps, *t.Cert, "told", func(p *Peer) {
 				p.Through = slices.DeleteFunc(p.Through, func(s string) bool { return s == cert.Name })
 				if t.Direct && relay {
@@ -764,11 +773,15 @@ func (n *Node) receive(envs []Envelope, deliver Deliver, now time.Time) ([]strin
 // trying again.
 var ErrRefused = errors.New("refused")
 
-// admit checks an envelope before it is taken: the writer's signature, its size, its age, and that its
-// certificate is the newest this node knows for that node (a replaced key no longer writes).
+// admit checks an envelope before it is taken: the writer's signature, its size, its age, and that its certificate
+// counts (not run out) and is the newest this node knows for that node (a replaced key no longer writes).
 func (n *Node) admit(e Envelope, book []Peer, now time.Time) error {
 	if err := e.Verify(n.Owner); err != nil {
 		return err
+	}
+
+	if err := e.Cert.Expired(now); err != nil {
+		return fmt.Errorf("%s: %w", e.ID, err)
 	}
 
 	if len(e.Body) > BodyMax {
@@ -795,9 +808,14 @@ func replaced(book []Peer, c Cert) bool {
 	})
 }
 
-// current refuses a session with a certificate the book knows was replaced: a retired or stolen key of a node the
-// owner re-certified opens no session, so it neither pulls that node's envelopes nor reaches its terminals.
-func (n *Node) current(c Cert) error {
+// admitCert decides whether a session may go on with the certificate a peer showed, after the owner's signature on it
+// was checked: it must not have run out, and its key must not be replaced. A retired or stolen key of a node the owner
+// re-certified opens no session, so it neither pulls that node's envelopes nor reaches its terminals.
+func (n *Node) admitCert(c Cert, now time.Time) error {
+	if err := c.Expired(now); err != nil {
+		return err
+	}
+
 	book, err := n.Peers()
 	if err != nil {
 		return err

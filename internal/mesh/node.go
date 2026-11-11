@@ -127,16 +127,21 @@ func MakeOwner(dir string, now time.Time) error {
 		return err
 	}
 
-	g, err := grant(owner, Request{Name: nf.Name, Key: key.Public().(ed25519.PublicKey)}, now)
+	g, err := grant(owner, Request{Name: nf.Name, Key: key.Public().(ed25519.PublicKey)}, now, DefaultCertLife)
 	if err != nil {
 		return err
 	}
 
-	return Accept(dir, g)
+	return AcceptAt(dir, g, now)
 }
 
-// SignRequest certifies another node with the owner key under dir.
+// SignRequest certifies another node with the owner key under dir, for DefaultCertLife.
 func SignRequest(dir string, r Request, now time.Time) (Grant, error) {
+	return SignRequestFor(dir, r, now, DefaultCertLife)
+}
+
+// SignRequestFor is SignRequest for another lifetime: 0 certifies with no expiry, which every zmina reads (see SignFor).
+func SignRequestFor(dir string, r Request, now time.Time, life time.Duration) (Grant, error) {
 	owner, err := readKey(filepath.Join(dir, "owner.key"))
 	if errors.Is(err, os.ErrNotExist) {
 		return Grant{}, errors.New("this node does not hold the owner key")
@@ -146,15 +151,15 @@ func SignRequest(dir string, r Request, now time.Time) (Grant, error) {
 		return Grant{}, err
 	}
 
-	return grant(owner, r, now)
+	return grant(owner, r, now, life)
 }
 
-func grant(owner ed25519.PrivateKey, r Request, now time.Time) (Grant, error) {
+func grant(owner ed25519.PrivateKey, r Request, now time.Time, life time.Duration) (Grant, error) {
 	if len(r.Key) != ed25519.PublicKeySize {
 		return Grant{}, errors.New("request: bad key")
 	}
 
-	c, err := Sign(owner, r.Name, r.Key, now)
+	c, err := SignFor(owner, r.Name, r.Key, now, life)
 	if err != nil {
 		return Grant{}, err
 	}
@@ -162,8 +167,33 @@ func grant(owner ed25519.PrivateKey, r Request, now time.Time) (Grant, error) {
 	return Grant{Cert: c, Owner: owner.Public().(ed25519.PublicKey)}, nil
 }
 
-// Accept stores the owner's grant for the node under dir: it must certify this node's own key and name.
-func Accept(dir string, g Grant) error {
+// Renew, on the owner's node, certifies this node again for life (0: with no expiry) and keeps the certificate: the
+// same key and name, a new date and expiry.
+func Renew(dir string, now time.Time, life time.Duration) (Cert, error) {
+	var nf nodeFile
+	if err := readJSON(filepath.Join(dir, "node.json"), &nf); errors.Is(err, os.ErrNotExist) {
+		return Cert{}, ErrNoNode
+	} else if err != nil {
+		return Cert{}, err
+	}
+
+	if nf.Cert == nil {
+		return Cert{}, errors.New("this node has no certificate to renew")
+	}
+
+	g, err := SignRequestFor(dir, Request{Name: nf.Name, Key: nf.Cert.Key}, now, life)
+	if err != nil {
+		return Cert{}, err
+	}
+
+	return g.Cert, AcceptAt(dir, g, now)
+}
+
+// Accept stores the owner's grant for the node under dir: it must certify this node's own key and name, and count now.
+func Accept(dir string, g Grant) error { return AcceptAt(dir, g, time.Now()) }
+
+// AcceptAt is Accept with the clock in the caller's hand.
+func AcceptAt(dir string, g Grant, now time.Time) error {
 	key, err := readKey(filepath.Join(dir, "node.key"))
 	if err != nil {
 		return fmt.Errorf("no node key here: %w", err)
@@ -175,6 +205,10 @@ func Accept(dir string, g Grant) error {
 	}
 
 	if err := g.Cert.Verify(g.Owner); err != nil {
+		return err
+	}
+
+	if err := g.Cert.Expired(now); err != nil {
 		return err
 	}
 
