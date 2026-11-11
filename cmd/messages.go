@@ -9,6 +9,7 @@ import (
 	"github.com/iamnikolie/zmina/internal/shift"
 	"github.com/spf13/cobra"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -292,12 +293,20 @@ func (a *app) reconcileMessages(s *shift.Shift) error {
 	return errors.Join(a.reconcileReports(s), a.reconcileTells(s))
 }
 
+// reconcileReports is the local work for every stored report. One message that does not read, or whose work fails,
+// does not stop the others: each such failure is said once (an event and a warning, remembered in the store so the
+// next beat does not say it again) and zmina doctor names it for as long as it lasts.
 func (a *app) reconcileReports(s *shift.Shift) error {
 	store := messages(s)
-	all, err := store.All()
+	all, bad, err := store.Scan()
 	if err != nil {
 		return err
 	}
+	problems := map[string]string{}
+	for _, p := range bad {
+		problems[p.File] = p.Err.Error()
+	}
+	defer func() { sayReportProblems(s, store, problems) }()
 	if len(all) == 0 {
 		return nil
 	}
@@ -317,120 +326,149 @@ func (a *app) reconcileReports(s *shift.Shift) error {
 	}
 	local := mesh.Address{Node: me.Name, Crew: crewKey}.String()
 	for _, m := range all {
-		for _, revision := range message.Revisions(m) {
-			v := m.Revisions[revision]
-			if err := refreshReportTransport(me, v); err != nil {
+		if err := reconcileReport(s, store, me, crewKey, local, m); err != nil {
+			problems[m.ID+".json"] = err.Error()
+		}
+	}
+	return nil
+}
+
+// sayReportProblems says each failure of this reconcile that it did not already say with the same error: an event
+// and a warning. What it remembers is the set of failures now, so a failure that went away is said again if it
+// comes back.
+func sayReportProblems(s *shift.Shift, store message.Store, now map[string]string) {
+	said := store.Reported()
+	if len(said) == 0 && len(now) == 0 {
+		return
+	}
+	for _, file := range slices.Sorted(maps.Keys(now)) {
+		if said[file] == now[file] {
+			continue
+		}
+		s.Log("", "message-skipped", "", file+": "+now[file])
+		if s.Warn != nil {
+			s.Warn(fmt.Errorf("report reconcile skips %s: %s (said once; zmina doctor names it)", file, now[file]))
+		}
+	}
+	_ = store.SetReported(now)
+}
+
+// reconcileReport is the work for one message: its envelopes made, its receipts due made, everything committed
+// before it is queued. An error ends this message's turn; what it committed before stays.
+func reconcileReport(s *shift.Shift, store message.Store, me *mesh.Node, crewKey, local string, m message.Message) error {
+	for _, revision := range message.Revisions(m) {
+		v := m.Revisions[revision]
+		if err := refreshReportTransport(me, v); err != nil {
+			return err
+		}
+		r := v.Report
+		if r.From == local {
+			if _, ok := v.Intents["report"]; !ok {
+				body, err := message.Encode(message.Wire{Kind: "report", Report: &r})
+				if err != nil {
+					return err
+				}
+				to, _ := mesh.ParseAddress(r.To)
+				env, err := me.NewEnvelope(crewKey, to, body, s.Now())
+				if err != nil {
+					return err
+				}
+				v.Intents["report"] = message.Intent{Envelope: env}
+			}
+			if err := message.Advance(v, "queued_origin", s.Now()); err != nil {
 				return err
 			}
-			r := v.Report
-			if r.From == local {
-				if _, ok := v.Intents["report"]; !ok {
-					body, err := message.Encode(message.Wire{Kind: "report", Report: &r})
-					if err != nil {
-						return err
-					}
-					to, _ := mesh.ParseAddress(r.To)
-					env, err := me.NewEnvelope(crewKey, to, body, s.Now())
-					if err != nil {
-						return err
-					}
-					v.Intents["report"] = message.Intent{Envelope: env}
+		}
+		if r.To == local {
+			// Recover a crash after report persistence but before inbox/queue persistence.
+			if _, received := v.Observed["received"]; !received {
+				source, _ := mesh.ParseAddress(r.From)
+				if err := s.Inbox.Put(inbox.Entry{ID: reportInbox(r), From: remoteSource(source), Remote: true, Body: r.Body}); err != nil {
+					return err
 				}
-				if err := message.Advance(v, "queued_origin", s.Now()); err != nil {
+				if err := message.Advance(v, "received", s.Now()); err != nil {
 					return err
 				}
 			}
-			if r.To == local {
-				// Recover a crash after report persistence but before inbox/queue persistence.
-				if _, received := v.Observed["received"]; !received {
-					source, _ := mesh.ParseAddress(r.From)
-					if err := s.Inbox.Put(inbox.Entry{ID: reportInbox(r), From: remoteSource(source), Remote: true, Body: r.Body}); err != nil {
-						return err
+			if s.State.MessageStages == nil {
+				s.State.MessageStages = map[string]map[string]time.Time{}
+			}
+			marker := reportMarker(r)
+			if v.Superseded {
+				removeReportNotice(s, marker)
+			}
+			if s.State.MessageStages[marker] == nil {
+				s.State.MessageStages[marker] = map[string]time.Time{}
+			}
+			if _, queued := s.State.MessageStages[marker]["queued_dispatcher"]; !queued && !v.Superseded && message.StageRank(v.Stage) < message.StageRank("read") {
+				src, _ := mesh.ParseAddress(r.From)
+				locator := fmt.Sprintf("Report %s stored as data; read zmina --crew %s message show %s --revision %s; explicitly mark message read after consuming it", reportMarker(r), quoteCommandArg(s.Crew.Path), r.ID, r.Revision)
+				text, _ := remoteText(locator, reportInbox(r))
+				if note, sigID, _, err := s.NoteSentAs(remoteSource(src), text, r.At); err != nil {
+					v.LastError = err.Error()
+				} else {
+					s.State.MessageStages[marker]["queued_dispatcher"] = s.Now().UTC()
+					if s.State.MessageLines == nil {
+						s.State.MessageLines = map[string]string{}
 					}
-					if err := message.Advance(v, "received", s.Now()); err != nil {
-						return err
-					}
+					s.State.MessageLines[marker] = note
+					s.BindMessage(marker, sigID)
+					v.LastError = ""
 				}
-				if s.State.MessageStages == nil {
-					s.State.MessageStages = map[string]map[string]time.Time{}
+			}
+			sent := s.State.Role(s.Crew.Dispatcher).Sent
+			if sent != nil && strings.Contains(sent.Line, reportMarker(r)) {
+				if _, ok := s.State.MessageStages[marker]["submitted"]; !ok {
+					s.State.MessageStages[marker]["submitted"] = s.Now().UTC()
 				}
-				marker := reportMarker(r)
-				if v.Superseded {
-					removeReportNotice(s, marker)
+			}
+			for stage, at := range s.CommittedMessageStages[marker] {
+				if err := message.Advance(v, stage, at); err != nil {
+					return err
 				}
-				if s.State.MessageStages[marker] == nil {
-					s.State.MessageStages[marker] = map[string]time.Time{}
-				}
-				if _, queued := s.State.MessageStages[marker]["queued_dispatcher"]; !queued && !v.Superseded && message.StageRank(v.Stage) < message.StageRank("read") {
-					src, _ := mesh.ParseAddress(r.From)
-					locator := fmt.Sprintf("Report %s stored as data; read zmina --crew %s message show %s --revision %s; explicitly mark message read after consuming it", reportMarker(r), quoteCommandArg(s.Crew.Path), r.ID, r.Revision)
-					text, _ := remoteText(locator, reportInbox(r))
-					if note, sigID, _, err := s.NoteSentAs(remoteSource(src), text, r.At); err != nil {
-						v.LastError = err.Error()
-					} else {
-						s.State.MessageStages[marker]["queued_dispatcher"] = s.Now().UTC()
-						if s.State.MessageLines == nil {
-							s.State.MessageLines = map[string]string{}
-						}
-						s.State.MessageLines[marker] = note
-						s.BindMessage(marker, sigID)
-						v.LastError = ""
-					}
-				}
-				sent := s.State.Role(s.Crew.Dispatcher).Sent
-				if sent != nil && strings.Contains(sent.Line, reportMarker(r)) {
-					if _, ok := s.State.MessageStages[marker]["submitted"]; !ok {
-						s.State.MessageStages[marker]["submitted"] = s.Now().UTC()
-					}
-				}
-				for stage, at := range s.CommittedMessageStages[marker] {
-					if err := message.Advance(v, stage, at); err != nil {
-						return err
-					}
-				}
-				_, v.Notified = s.CommittedMessageStages[marker]["queued_dispatcher"]
+			}
+			_, v.Notified = s.CommittedMessageStages[marker]["queued_dispatcher"]
 
-				for _, stage := range []string{"received", "queued_dispatcher", "submitted", "read", "relayed"} {
-					at, ok := v.Observed[stage]
-					if !ok {
-						continue
-					}
-					intentKey := "receipt/" + stage
-					if _, ok := v.Intents[intentKey]; !ok {
-						reportVersion := 1
-						if r.ContentHash != "" {
-							reportVersion = 2
-						}
-						rec := message.Receipt{ReportVersion: reportVersion, ID: r.ID, Revision: r.Revision, Sequence: r.Sequence, Origin: r.From, Recipient: r.To, Stage: stage, At: at}
-						body, err := message.Encode(message.Wire{Kind: "receipt", Receipt: &rec})
-						if err != nil {
-							return err
-						}
-						dest, _ := mesh.ParseAddress(r.From)
-						env, err := me.NewEnvelope(crewKey, dest, body, s.Now())
-						if err != nil {
-							return err
-						}
-						v.Intents[intentKey] = message.Intent{Envelope: env}
-					}
-				}
-			}
-			// Commit intents before queuing them; replay uses the same signed envelope ID after a crash.
-			if err := store.Save(m); err != nil {
-				return err
-			}
-			for key, intent := range v.Intents {
-				if intent.Queued {
+			for _, stage := range []string{"received", "queued_dispatcher", "submitted", "read", "relayed"} {
+				at, ok := v.Observed[stage]
+				if !ok {
 					continue
 				}
-				if err := me.Queue(intent.Envelope); err != nil {
-					return err
+				intentKey := "receipt/" + stage
+				if _, ok := v.Intents[intentKey]; !ok {
+					reportVersion := 1
+					if r.ContentHash != "" {
+						reportVersion = 2
+					}
+					rec := message.Receipt{ReportVersion: reportVersion, ID: r.ID, Revision: r.Revision, Sequence: r.Sequence, Origin: r.From, Recipient: r.To, Stage: stage, At: at}
+					body, err := message.Encode(message.Wire{Kind: "receipt", Receipt: &rec})
+					if err != nil {
+						return err
+					}
+					dest, _ := mesh.ParseAddress(r.From)
+					env, err := me.NewEnvelope(crewKey, dest, body, s.Now())
+					if err != nil {
+						return err
+					}
+					v.Intents[intentKey] = message.Intent{Envelope: env}
 				}
-				intent.Queued = true
-				v.Intents[key] = intent
-				if err := store.Save(m); err != nil {
-					return err
-				}
+			}
+		}
+		// Commit intents before queuing them; replay uses the same signed envelope ID after a crash.
+		if err := store.Save(m); err != nil {
+			return err
+		}
+		for key, intent := range v.Intents {
+			if intent.Queued {
+				continue
+			}
+			if err := me.Queue(intent.Envelope); err != nil {
+				return err
+			}
+			intent.Queued = true
+			v.Intents[key] = intent
+			if err := store.Save(m); err != nil {
+				return err
 			}
 		}
 	}
@@ -497,9 +535,12 @@ func (a *app) messageCommand() *cobra.Command {
 	show.Flags().BoolVar(&asJSON, "json", false, "all revisions, counters, observations and transport intents")
 	ls := &cobra.Command{Use: "ls", Short: "List the lines this crew sent to other crews and the reports it got, with their stage", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, args []string) error {
 		return a.readState(func(s *shift.Shift) error {
-			all, err := messages(s).All()
+			all, bad, err := messages(s).Scan()
 			if err != nil {
 				return err
+			}
+			for _, p := range bad {
+				fmt.Fprintln(a.err, "zmina: warning: message file does not read:", p)
 			}
 			for _, m := range all {
 				v := m.Revisions[m.Latest]

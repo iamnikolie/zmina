@@ -1699,7 +1699,8 @@ each with who did it (`hand`, `ticker`, `schedule`, or the role) and, after a ta
 `--full` whole. File `~/.zmina/events.jsonl`,
 rotated at 10 MB: `events.jsonl.1` is the newest older file, up to `.5` the oldest, and a sixth is dropped (log reads them
 all). The rotation takes a lock (`events.jsonl.lock`), so two processes that log at once lose no line and replace no
-file.
+file. `message-skipped` is a report record that reconcile skipped (once per file and error: `message-skipped <id>.json:
+why`, zmina doctor names it).
 
 The state lock leaves two events, crew-wide (no role): `lock-wait` when a command waited 5 s or more for the lock
 (`waited=12.4s holder=tick holder_pid=4242 holder_for=11m2s holder_phase=roles/dev`, `gave_up=yes` when it ran out of
@@ -2101,7 +2102,9 @@ create tasks. `--status` may explicitly supersede an earlier status revision; or
 requests stay intact. Repeated deliveries coalesce instead of adding another notification.
 
 `zmina message ls` and `message show <id> [--revision <hash>] [--json]` expose observations and pending
-errors, and the lines this crew sent with plain `tell` and their receipts (Nodes). Stages are `queued_origin`, `received`, `queued_dispatcher`, `submitted`, `read`, `relayed`.
+errors (`ls` lists the records that read and warns on stderr of a file that does not; one such file, or one message whose
+work fails, stops nothing for the others: reconcile skips it and says so once, as a `message-skipped` event and a warning,
+and `zmina doctor` names the file until it is mended or moved away; a record is written only when it changed), and the lines this crew sent with plain `tell` and their receipts (Nodes). Stages are `queued_origin`, `received`, `queued_dispatcher`, `submitted`, `read`, `relayed`.
 A transport ACK alone never proves dispatcher submission or reading. Queued/submitted receipts require
 committed queue state; a crash before that commit leaves confirmation pending. Source and local observation
 times are separate; monotonic revision/stage ordering does not trust clock ordering between nodes.
