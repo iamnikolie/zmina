@@ -496,7 +496,7 @@ func TestTickDeliversToIdleBootedDispatcher(t *testing.T) {
 	rg.byPID[dpid] = &registry.Session{Status: "idle"}
 	s.Tick()
 	require.Len(t, tm.typed["dispatcher"], 1)
-	assert.Equal(t, "[zmina] harvester: started again (keep: always)", tm.typed["dispatcher"][0])
+	assert.Equal(t, "[zmina] FYI harvester: started again (keep: always)", tm.typed["dispatcher"][0])
 	assert.Empty(t, s.State.Notes)
 }
 
@@ -970,7 +970,7 @@ func TestNoteReachesIdleDispatcherAsOneLine(t *testing.T) {
 	*f.now = f.now.Add(bootPause)
 	f.s.Tick()
 	require.Len(t, f.tm.typed["dispatcher"], 1)
-	assert.Equal(t, "[zmina] mr-watch: !35 — 4 new threads (reviewer X) (repeated 2 times) · harvester: started again (keep: always)",
+	assert.Equal(t, "[zmina] mr-watch: !35 — 4 new threads (reviewer X) (repeated 2 times) · FYI harvester: started again (keep: always)",
 		f.tm.typed["dispatcher"][0])
 	assert.Empty(t, f.s.State.Signals)
 	assert.True(t, f.ev.has("dispatcher", "noted"))

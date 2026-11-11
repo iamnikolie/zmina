@@ -251,7 +251,7 @@ ones, when the role is between turns, never into a dialog — except the dispatc
 
 The dispatcher gets one post for everything that waits for it, a line each: its own queued line (the recovery line
 after a trim), this crew's signals on one line, every other crew's line on a line of its own, the notices last
-(`[zmina] released designer after 31m idle`); the tag opens the post once. A remote body holds no line break, so no
+(`[zmina] FYI released designer after 31m idle`); the tag opens the post once. A remote body holds no line break, so no
 part of it can start a line that reads as zmina's. A post carries at most 12 KB; what does not fit goes in the next.
 A queued line no post could carry (`zmina send --when-idle` takes any length) goes as its head and `… (+N chars,
 full: zmina inbox show <id>)`, its whole text stored in the crew's inbox and its `(zmina S-n)` tail kept. A post
@@ -264,8 +264,8 @@ A boot line queued after a clear goes alone, first: the lines belong to a dispat
 also go while it is in a turn: Claude Code queues a message that arrives mid-turn and puts it into the turn at its
 next tool call (a turn that ends first starts the next one with it; an interrupted turn, Esc, keeps it queued and
 starts the next turn with it). Never into a dialog (status `waiting`), never to a Codex dispatcher; its notices and
-its own queue wait for the turn's end. `zmina note` and a task result post at once when the dispatcher can take one,
-not at the next beat.
+its own queue wait for the turn's end. `zmina note` posts at once when the dispatcher can take one, not at the next
+beat; a task result's notice is an FYI line (below) and goes with it, or by itself 90 s later.
 
 A posted line does not wait for the beat: zmina's settings also carry a `Stop` hook, `zmina _turn-end --role <role>`
 (timeout 5 s, output to `/dev/null`, `|| true`). It reads the session id, starts a detached copy of itself and returns
@@ -309,9 +309,9 @@ earlier zmina has no inbox: its role is typed into until it restarts.
 
 ### Acks: at least once
 
-The lines of a role on its own channel wait for its ack: the dispatcher's signals (`zmina note`, results ready, released, remote
-lines — not health notes, and not watch notes, which have their own `zmina watch ack`), lines queued with `zmina send
---when-idle`, and alarms. Each carries an id — `[zmina] S-12 dev: T-5 result ready · S-13 … (zmina S-12 S-13)`, or
+The lines of a role on its own channel wait for its ack: the dispatcher's signals (`zmina note`, a closure's note, remote
+lines — not health notes, not FYI lines (below), and not watch notes, which have their own `zmina watch ack`), lines queued with `zmina send
+--when-idle`, and alarms. Each carries an id — `[zmina] S-12 dev: T-5 is on the branch · S-13 … (zmina S-12 S-13)`, or
 `<line> (zmina S-14)` — given when the line is queued, so `zmina queue ls` and the recovery pack show it too — and the role's boot line says what to do: once handled (answered, a task recorded, routed, or
 nothing to do), `zmina ack <ids>`. The line itself names no command: Claude Code tells a role that a message from
 another session cannot ask it for a write, and a role was seen to refuse an ack the message asked for; told by its
@@ -329,6 +329,37 @@ start's tag, and only when `--role` is `$ZMINA_ROLE`), the newest 20 unacked lin
 dispatcher its watch keys that wait. Task packets
 have their own acceptance (`task accept`) and carry no id. A role typed into (tmux, or started by an earlier zmina)
 gets its lines as before, without ids.
+
+### FYI lines: closed when seen
+
+A line for the dispatcher has a class, given where zmina makes the line, never read from its text. Everything is a
+line to act on (above) except three kinds zmina itself writes, which ask nothing of the dispatcher and are **info
+lines**: a result's notice (`dev: T-1 result ready (worker-reported): …`), a release
+(`released designer after 31m idle`) and a `keep: always` role started again
+(`harvester: started again (keep: always)`). A line a role wrote (`zmina note`, a closure's note), a line of another
+crew, a watch's note and every other health note are never info lines.
+
+- An info line is shown behind `FYI`, on the notices' line, last in the post:
+  `[zmina] FYI dev: T-1 result ready (worker-reported): … · FYI released designer after 31m idle`. It has no S-id and
+  no `(zmina S-n)` tail, so nothing says it again and neither `zmina pending`, the boot brief nor the recovery pack
+  lists it (a result is still in the pack as an unread result). The dispatcher's boot line says: a line marked `FYI`
+  needs no ack. `zmina ack` of an id that waits for nothing warns and changes nothing, as ever.
+- It is closed when the dispatcher's conversation shows the post that carried it (`seen`): the log has `closed`
+  (`seen: <line>`). A post that never showed goes back as it waited, the info line an info line.
+- Info lines do not start a turn of their own at once: they wait up to 90 s for a line that goes anyway (a signal,
+  another crew's line, the dispatcher's own queued line, a health note) and go with it, else alone. They never go
+  into a turn the dispatcher is in.
+- A result's notice and the role's own line about the same task make one line: when the role queued a line naming the
+  task (`zmina note`, or its closure's note) that still waits or went to the dispatcher within 15 min, the notice is
+  not made; when the notice was queued within 15 min and has not gone yet, the role's line takes it out. Either way
+  the log has `result-told`, and `zmina task result` has the result.
+- Typed delivery (`delivery: tmux`, or no inbox socket) shows no `seen`: an info line goes in the typed line behind
+  `FYI`, after the signals, and is closed when the line lands (`closed`, `typed: <line>`); a typed line that never
+  lands is kept as failed with everything in it (`zmina queue retry`).
+- `info_lines: false` in the crew file turns all of it off at the next beat, no rebuild: each of these lines is a
+  line as before — a result's notice a signal with an id that waits for its ack, nothing held back, nothing left
+  out, no `FYI`, the boot line without the sentence. An info line that still waits then gets its id when it goes. A
+  state written before the classes holds none: its lines wait for their acks as they did.
 
 | Command | Does |
 |---|---|
@@ -1500,7 +1531,7 @@ there stops the beat's further typing and starting, and says so.
    fallback handoff `incomplete`; a status sentence never becomes a worker checkpoint. A draft
    in the input line or a new task for it calls the
    release off (`release-off` in the log; it is released again after another idle stretch); a
-   dialog or an attached terminal makes it wait. The dispatcher hears `released dev2 after 45m idle
+   dialog or an attached terminal makes it wait. The dispatcher hears `FYI released dev2 after 45m idle
    → L-15, L-16`; the log has `releasing`, `released` and a `down`.
 5. Watches that are due run (their sources outside the lock), and their news joins the notes.
 6. A role is **booted** once the conversation of this start shows its boot turn over (a turn that
@@ -1627,8 +1658,8 @@ the crew are dropped from it. A role missing from the crew file keeps its state 
 - The owner parks a decision or an idea for later ("later", "park it", not for any role now):
   `zmina later add "<their words>"`, not a task. When they come back to one: `zmina later take
   L-3 <role> [--repo r --worktree]`.
-- `released dev2 after 45m idle → L-15, L-16`: the ticker put an idle role down and parked its
-  tasks (`release_idle_minutes`). Nothing to do; the work waits on the later list. When the owner
+- `FYI released dev2 after 45m idle → L-15, L-16`: the ticker put an idle role down and parked its
+  tasks (`release_idle_minutes`). Nothing to do, nothing to ack; the work waits on the later list. When the owner
   takes one back: `zmina later take L-15 dev2 --resume` continues the role's own conversation.
 - The owner asks to be reminded ("remind me Monday", "напомни утром"): `zmina remind <when> "<their words>"
   [--note file]`; to come back to a parked idea at a time: `zmina later add "<words>" --until <when>`. A role that
@@ -1735,7 +1766,7 @@ clipped view ends with the command for the same revision whole, crew included:
 than 12 when another record starts the same). `task show` and the cockpit task sheet show the latest result as worker-reported, not as independently verified or deployed. Missing/invalid records are explicit. Each revision queues one dispatcher notification, the gist and the pointer to that revision:
 `dev: T-1 result ready (worker-reported): <the summary's first sentence> (zmina task result T-1 --revision <12 hex>)`
 (longer when another revision of the task starts the same); two revisions whose summaries start alike are two
-notices, and each command opens its own revision, not the latest; the ticker reconciles record files after a crash independently of task state or event-log retention. Legacy tasks can still close without a result. This does not send Telegram or authorize push/publish/deploy/merge.
+notices, and each command opens its own revision, not the latest; the notice is an FYI line, with no ack, and is left out when the role's own line about the task says it (FYI lines, above); the ticker reconciles record files after a crash independently of task state or event-log retention. Legacy tasks can still close without a result. This does not send Telegram or authorize push/publish/deploy/merge.
 
 A role that closes a task (`task done` / `task drop`, `$ZMINA_ROLE` set, not the dispatcher) tells the dispatcher too,
 with its note: `dev: T-1 done: <note> (zmina task show T-1)` (`, no note` without one) — unless a result of the same

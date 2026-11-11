@@ -107,6 +107,7 @@ func TestReleaseWithoutTasksGoesDownAtOnce(t *testing.T) {
 	assert.False(t, f.tm.Has("designer"))
 	assert.Equal(t, []string{"/exit"}, f.tm.typed["designer"])
 	assert.Contains(t, f.s.State.Notes, "released designer after 31m idle")
+	assert.True(t, f.s.isInfo("released designer after 31m idle"), "an info line")
 	assert.Empty(t, f.lt.list)
 }
 

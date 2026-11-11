@@ -137,3 +137,49 @@ func TestCheckpointFreshnessUsesTaskSnapshotAndExplicitRevalidation(t *testing.T
 		}
 	}
 }
+
+// A role's own line about its task (zmina note) and the task's result right after make one line for the dispatcher:
+// the result's notice is left out. Without that line the notice waits as an info line, with no id; with info_lines
+// off both wait, each with its id as before.
+func TestResultNoticeGivesWayToTheRolesNote(t *testing.T) {
+	const handoff = "  support:\n    handoff:\n      sections:\n        - name: draft\n          guidance: Proposed response\n"
+
+	for _, c := range []struct {
+		name, crew string
+		note       bool
+		results    int
+	}{
+		{"the role's note first", handoff, true, 0},
+		{"no note", handoff, false, 1},
+		{"info_lines off", handoff + "info_lines: false\n", true, 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			file := testCrew(t, c.crew)
+			_, _, err := zm(t, file, "task", "new", "support", "Answer the question")
+			require.NoError(t, err)
+
+			if c.note {
+				t.Setenv("ZMINA_ROLE", "support")
+				_, _, err = zm(t, file, "note", "T-1 is answered, the draft is in the result")
+				require.NoError(t, err)
+				t.Setenv("ZMINA_ROLE", "")
+			}
+
+			body := filepath.Join(t.TempDir(), "result.json")
+			require.NoError(t, os.WriteFile(body, []byte(`{"draft":"Reply"}`), 0600))
+			_, _, err = zm(t, file, "task", "result", "1", "--file", body)
+			require.NoError(t, err)
+
+			out, _, err := zm(t, file, "queue", "ls")
+			require.NoError(t, err)
+			assert.Equal(t, c.results, strings.Count(out, "T-1 result ready (worker-reported)"), out)
+
+			if c.note {
+				assert.Contains(t, out, "support: T-1 is answered, the draft is in the result")
+			}
+
+			_, _, err = zm(t, file, "ack", "S-99")
+			assert.NoError(t, err, "an id that waits for no ack is a warning, not an error")
+		})
+	}
+}

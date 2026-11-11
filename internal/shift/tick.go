@@ -137,7 +137,10 @@ func (s *Shift) Tick() []string {
 
 				did = append(did, "started "+name)
 				if name != s.Crew.Dispatcher {
-					notes = append(notes, name+": started again (keep: always)")
+					// What zmina did, told once: an info line.
+					note := name + ": started again (keep: always)"
+					s.markInfo(note, now)
+					notes = append(notes, note)
 				}
 			}
 		}
@@ -774,6 +777,7 @@ func (s *Shift) atPrompt(name string, now time.Time) bool {
 func (s *Shift) deliverOnce(now time.Time) string {
 	d := s.Crew.Dispatcher
 	s.pruneTaskInbox(d)
+	s.pruneInfo()
 
 	var local, remote []string
 
@@ -842,6 +846,13 @@ func (s *Shift) postDispatcher(d string, sess *registry.Session, local, remote, 
 		remote = slices.DeleteFunc(slices.Clone(remote), acked)
 		notes = nil
 	}
+
+	// Info lines alone wait a while for a line that goes anyway (infoRide); they go on the notices' line.
+	if len(own) == 0 && len(remote) == 0 && s.infoWaits(local, now) {
+		local, notes = nil, nil
+	}
+
+	local, info := s.splitInfo(local)
 
 	var (
 		lines, ids, fresh []string
@@ -944,8 +955,26 @@ func (s *Shift) postDispatcher(d string, sess *registry.Session, local, remote, 
 		ids = append(ids, tail...)
 	}
 
-	if len(notes) > 0 && add("[zmina] "+strings.Join(notes, " · ")) {
-		took["\x00notes"] = true
+	// The notices' line: the info lines (signals with no id, each kept as a part to go back as it waited), then the
+	// notes. It goes whole or waits whole.
+	var last []string
+	for _, sig := range info {
+		p, _ := part(sig)
+		last = append(last, s.fyi(sig, p))
+	}
+
+	last = append(last, notes...)
+
+	if len(last) > 0 && add("[zmina] "+strings.Join(last, " · ")) {
+		for _, sig := range info {
+			took[sig] = true
+		}
+
+		if len(notes) > 0 {
+			took["\x00notes"] = true
+		}
+	} else {
+		sigParts = sigParts[:len(sigParts)-len(info)]
 	}
 
 	if len(lines) == 0 {
@@ -1001,6 +1030,7 @@ func (s *Shift) postDispatcher(d string, sess *registry.Session, local, remote, 
 		s.State.Signals = slices.DeleteFunc(s.State.Signals, func(v string) bool { return v == sig })
 		delete(s.State.SignalCounts, sig)
 		delete(s.State.SignalSent, sig)
+		s.roleLineWent(sig, now)
 	}
 
 	if took["\x00notes"] {
@@ -1096,6 +1126,14 @@ func (s *Shift) typeDispatcher(d string, local, remote, notes []string, now time
 		return ""
 	}
 
+	// Info lines alone wait a while for a line that goes anyway (infoRide); in the line they follow the signals.
+	if len(remote) == 0 && s.infoWaits(local, now) {
+		return ""
+	}
+
+	act, info := s.splitInfo(local)
+	local = append(act, info...)
+
 	// Never into a draft: the owner's half-typed words would go out joined with the line.
 	if draft, ok, err := s.Tmux.Prompt(d); err == nil && ok && draft != "" {
 		return ""
@@ -1120,7 +1158,7 @@ func (s *Shift) typeDispatcher(d string, local, remote, notes []string, now time
 		}
 		kept = append(kept, k)
 
-		return repeated(p, s.State.SignalCounts[sig])
+		return s.fyi(sig, repeated(p, s.State.SignalCounts[sig]))
 	}
 
 	var parts []string
@@ -1164,6 +1202,7 @@ func (s *Shift) typeDispatcher(d string, local, remote, notes []string, now time
 		}
 		for _, sig := range local {
 			delete(s.State.SignalCounts, sig)
+			s.roleLineWent(sig, now)
 		}
 		s.State.Signals, s.State.Notes = remote, nil
 		s.State.NoticeMeta = nil

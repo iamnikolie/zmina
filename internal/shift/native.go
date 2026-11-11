@@ -150,6 +150,7 @@ func (s *Shift) followPosted(name string, now time.Time) bool {
 
 			if name == s.Crew.Dispatcher {
 				s.stageIDs(p.IDs, "submitted")
+				s.closeInfo(name, p.Parts, "seen")
 			}
 		case sess != nil && sess.SessionID != p.Session:
 			back = append(back, p)

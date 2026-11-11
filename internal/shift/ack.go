@@ -138,9 +138,9 @@ func (s *Shift) delivered(ids []string, now time.Time) {
 func SignalBody(sig string) string { return signalBody(sig) }
 
 // noteID is the id a new signal for the dispatcher waits for its ack under, "" for none: a watch's note has its
-// own ack, and a dispatcher started by an earlier zmina is not told of acks.
+// own ack, an info line waits for none, and a dispatcher started by an earlier zmina is not told of acks.
 func (s *Shift) noteID(note string) string {
-	if src, _, _ := strings.Cut(note, ": "); s.Crew.Watches[src] != nil || !s.acking(s.Crew.Dispatcher) {
+	if src, _, _ := strings.Cut(note, ": "); s.Crew.Watches[src] != nil || s.isInfo(note) || !s.acking(s.Crew.Dispatcher) {
 		return ""
 	}
 

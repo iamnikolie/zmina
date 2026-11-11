@@ -87,7 +87,7 @@ func (s *Shift) reportUnreadable(now time.Time) []string {
 
 	text := "files that do not read, so they are in no list and hold no role: " + named + "; zmina doctor and " +
 		"zmina log name each with why; mend each file or move it out of its directory"
-	if _, _, err := s.note("zmina", text, false); err != nil {
+	if _, _, err := s.note("zmina", text, false, false); err != nil {
 		return []string{"unreadable files not told yet (" + err.Error() + "): " + strings.Join(fresh, ", ")}
 	}
 
