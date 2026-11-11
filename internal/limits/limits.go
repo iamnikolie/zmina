@@ -49,6 +49,21 @@ func (w *Window) same(o *Window) bool {
 	return w.Resets == nil || w.Resets.Equal(*o.Resets)
 }
 
+// latest is the window that stands when w, a reading just drawn, meets o, the one stored: o when w is older by its own
+// evidence (it resets before o does, or at the same moment with less spent), else w. A window that says nothing of its
+// reset has no evidence of age, and w stands.
+func (w *Window) latest(o *Window) *Window {
+	if w == nil || o == nil || w.Resets == nil || o.Resets == nil {
+		return w
+	}
+
+	if w.Resets.Before(*o.Resets) || (w.Resets.Equal(*o.Resets) && w.Used < o.Used) {
+		return o
+	}
+
+	return w
+}
+
 // Claude is what Claude Code's status line last said about the plan. It is also the file the tap writes.
 type Claude struct {
 	FiveHour *Window `json:"five_hour,omitempty"`

@@ -2,6 +2,7 @@ package limits
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -164,6 +165,90 @@ func TestTapRefreshesAnUnchangedReadingOncePerHeartbeat(t *testing.T) {
 	c, err := ReadClaude(dir)
 	require.NoError(t, err)
 	assert.True(t, c.At.Equal(noon.Add(Heartbeat)))
+}
+
+func reading(five, fiveResets, seven, sevenResets int) []byte {
+	return []byte(fmt.Sprintf(`{"rate_limits":{"five_hour":{"used_percentage":%d,"resets_at":%d},"seven_day":{"used_percentage":%d,"resets_at":%d}}}`,
+		five, fiveResets, seven, sevenResets))
+}
+
+// A session that redraws with figures it saw before the window the file holds must not take the file back to them.
+func TestTapKeepsTheStoredReadingWhenTheIncomingOneIsOlder(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "claude.json")
+
+	_, err := Tap(dir, reading(20, 1893500000, 41, 1894000000), noon)
+	require.NoError(t, err)
+
+	before, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	// Both windows reset earlier than the stored ones: the previous windows, however full they were.
+	wrote, err := Tap(dir, reading(99, 1893480000, 90, 1893900000), noon.Add(Heartbeat+time.Minute))
+	require.NoError(t, err)
+	assert.False(t, wrote, "an older reading writes nothing, the heartbeat included")
+
+	after, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after))
+
+	// The same reset with less spent is the same window seen earlier.
+	wrote, err = Tap(dir, reading(15, 1893500000, 30, 1894000000), noon.Add(2*Heartbeat))
+	require.NoError(t, err)
+	assert.False(t, wrote)
+
+	c, err := ReadClaude(dir)
+	require.NoError(t, err)
+	assert.Equal(t, 20.0, c.FiveHour.Used)
+	assert.Equal(t, 41.0, c.SevenDay.Used)
+	assert.True(t, c.At.Equal(noon), "the file still says when its figures were seen")
+}
+
+// Each window is judged on its own reset: a stale one is kept while the other moves on.
+func TestTapJudgesEachWindowOnItsOwn(t *testing.T) {
+	dir := t.TempDir()
+
+	_, err := Tap(dir, reading(20, 1893500000, 41, 1894000000), noon)
+	require.NoError(t, err)
+
+	// Five-hour: the next window (later reset, less spent). Seven-day: an older window.
+	wrote, err := Tap(dir, reading(3, 1893518000, 77, 1893400000), noon.Add(time.Minute))
+	require.NoError(t, err)
+	assert.True(t, wrote)
+
+	c, err := ReadClaude(dir)
+	require.NoError(t, err)
+	assert.Equal(t, 3.0, c.FiveHour.Used, "a later reset is a new window, whatever it has spent")
+	assert.Equal(t, time.Unix(1893518000, 0).UTC(), c.FiveHour.Resets.UTC())
+	assert.Equal(t, 41.0, c.SevenDay.Used, "an earlier reset is an old window")
+	assert.Equal(t, time.Unix(1894000000, 0).UTC(), c.SevenDay.Resets.UTC())
+	assert.True(t, c.At.Equal(noon.Add(time.Minute)))
+
+	// More spent at the same reset is later in the window.
+	wrote, err = Tap(dir, reading(3, 1893518000, 45, 1894000000), noon.Add(2*time.Minute))
+	require.NoError(t, err)
+	assert.True(t, wrote)
+
+	c, err = ReadClaude(dir)
+	require.NoError(t, err)
+	assert.Equal(t, 45.0, c.SevenDay.Used)
+}
+
+// A window with no reset moment tells nothing of its age: it is taken as before.
+func TestTapTakesAWindowWithoutAResetAsItIs(t *testing.T) {
+	dir := t.TempDir()
+
+	_, err := Tap(dir, reading(20, 1893500000, 41, 1894000000), noon)
+	require.NoError(t, err)
+
+	wrote, err := Tap(dir, []byte(`{"rate_limits":{"five_hour":{"used_percentage":5},"seven_day":{"used_percentage":41,"resets_at":1894000000}}}`), noon.Add(time.Minute))
+	require.NoError(t, err)
+	assert.True(t, wrote)
+
+	c, err := ReadClaude(dir)
+	require.NoError(t, err)
+	assert.Equal(t, 5.0, c.FiveHour.Used)
+	assert.Nil(t, c.FiveHour.Resets)
 }
 
 func TestTapIgnoresAStatuslineWithoutFigures(t *testing.T) {

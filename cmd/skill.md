@@ -1496,7 +1496,9 @@ policy   claude: pinned work only from 80%, nothing from 99% · codex: pinned wo
 ```
 
 - **Claude** is the 5-hour and the 7-day window as the status line of a Claude role last drew them. The status-line
-  tap writes them to `limits/claude.json` in the crew's directory.
+  tap writes them to `limits/claude.json` in the crew's directory. The file never goes back: a window whose reset is
+  earlier than the stored one's (a session redrawing with an old status line input) is not taken, and at the same reset
+  the higher `used` stays; a draw with nothing newer leaves the file, `at` included, as it is.
 - **Codex** is the weekly window (10080 minutes), read from the newest rollout under `sessions/` of each Codex home the
   crew knows: `~/.codex` and every Codex seat's `codex_home`. The newest is found by modification time across all days'
   folders, and in it the last `rate_limits` line counts. Of the homes, the reading recorded last wins; `(codex-dev)`
