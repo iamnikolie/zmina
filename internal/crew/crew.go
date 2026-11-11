@@ -329,6 +329,8 @@ type Crew struct {
 	// Lessons is the daily triage of the roles' lessons into one draft MR on the crew's agentic-os; off unless
 	// the crew file says lessons: on (or gives a block).
 	Lessons Lessons `yaml:"lessons"`
+	// Limits states how the crew spends its Claude and Codex plans (see Limits); empty: the defaults.
+	Limits *Limits `yaml:"limits"`
 
 	bootGrace time.Duration
 	renotify  time.Duration
@@ -817,6 +819,10 @@ func (c *Crew) check() error {
 	}
 
 	if err := c.Handoff.check(); err != nil {
+		return err
+	}
+
+	if err := c.checkLimits(); err != nil {
 		return err
 	}
 

@@ -40,6 +40,10 @@ func (l Layout) Reads() string { return filepath.Join(l.Dir, "reads.jsonl") }
 // ReadsRate holds each session's count of reader calls in its current minute (the meter's bulk mark).
 func (l Layout) ReadsRate() string { return filepath.Join(l.Dir, "reads-rate.json") }
 
+// Limits holds what the plans' limits were last seen at: the Claude status-line tap writes claude.json here
+// (zmina limits reads it; the Codex figures come from Codex's own rollouts and are not kept).
+func (l Layout) Limits() string { return filepath.Join(l.Dir, "limits") }
+
 // Screens holds the last screens of ended roles.
 func (l Layout) Screens() string { return filepath.Join(l.Dir, "screens") }
 

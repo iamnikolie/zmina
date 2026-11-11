@@ -79,6 +79,9 @@ quiet_hours: 23:00-08:00                 # in timezone:; blocking and ask pushes
 notify_again: 24h                        # an item that still blocks is pushed again this often (default 24h, 1h at least; off)
 timezone: Europe/Warsaw                  # the clock reminder times are read on (default: this machine's)
 lessons: on                              # daily triage of the roles' lessons into one draft MR on the crew's agentic-os (default off; see Lessons)
+limits:                                  # how the crew spends its plans, in % of the 7-day (Claude) and weekly (Codex) window
+  claude: {pinned: 80, stop: 99}         # from pinned only work that needs Claude goes to it, from stop nothing (defaults 80 and 99)
+  codex: {pinned: 80}                    # from pinned only work that needs Codex goes to it (default 80)
 day_start: "09:00"                       # when morning, tomorrow, thu or a date rings (default 09:00)
 # name: ops                              # a second crew: tmux -L zmina-ops, its own ticker
 # prefix: ops-                           # default session names (default zm-); no '/': it reads as <node>/<crew>
