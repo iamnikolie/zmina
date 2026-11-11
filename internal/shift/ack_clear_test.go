@@ -242,7 +242,7 @@ func TestAckLeavesATypedLineThatSitsInTheInputLine(t *testing.T) {
 	acked, _ := f.s.AckLines([]string{"S-1"}, false, "", "hand")
 	require.Equal(t, []string{"S-1"}, acked)
 	require.NotNil(t, rs.Sent, "not landed: the line is still in the input line")
-	assert.True(t, rs.Sent.Acked, "its ack is recorded on it, for landed")
+	assert.Equal(t, []string{"S-1"}, rs.Sent.AckedIDs, "its ack is recorded on it, for landed")
 
 	for range typeTries + 1 {
 		*f.now = f.now.Add(confirmAfter + time.Second)
@@ -327,4 +327,54 @@ func TestAckOfACodexLineTheBridgeTookLeavesItsMark(t *testing.T) {
 	marks, err := os.ReadDir(filepath.Join(dir, "taken"))
 	require.NoError(t, err)
 	assert.Len(t, marks, 1)
+}
+
+// A typed line that carries two ids is acked when both were acked: an id that merely is not among the acks (evicted)
+// is not an ack. With one acked and its sibling gone, nobody has read the other, and the line that never landed fails
+// as an unconfirmed one does; with both acked, landed closes it without a failed mark.
+func TestTypedLineIsAckedOnlyWhenEveryIDWasAcked(t *testing.T) {
+	for _, both := range []bool{false, true} {
+		f := fixtureWith(t, crewYAML)
+		require.NoError(t, f.s.Up("designer"))
+		f.status("designer", "idle", *f.now)
+		*f.now = f.now.Add(3 * time.Minute)
+
+		line := "[dev] look at T-1"
+		rs := f.s.State.Role("designer")
+		rs.Sent = &Sent{Line: line, At: *f.now, IDs: []string{"S-1", "S-2"}}
+		f.s.State.Acks = map[string]*Ack{"S-2": {ID: "S-2", Role: "designer", Text: line, First: *f.now, Last: *f.now}}
+
+		if both {
+			f.s.State.Acks["S-1"] = &Ack{ID: "S-1", Role: "designer", Text: line, First: *f.now, Last: *f.now}
+		} // else S-1 was evicted: it is in no ack
+
+		f.tm.drafts["designer"] = line // typed, Enter not taken
+
+		ids := []string{"S-2"}
+		if both {
+			ids = []string{"S-1", "S-2"}
+		}
+
+		acked, _ := f.s.AckLines(ids, false, "designer", "designer")
+		require.Equal(t, ids, acked)
+		require.NotNil(t, rs.Sent, "not landed: the line is still in the input line")
+		assert.ElementsMatch(t, ids, rs.Sent.AckedIDs, "the ids that were acked, by name")
+
+		for range typeTries + 1 {
+			*f.now = f.now.Add(confirmAfter + time.Second)
+			f.s.landed("designer", *f.now)
+		}
+
+		assert.Nil(t, rs.Sent)
+
+		if both {
+			assert.Empty(t, rs.Failed, "both acked: its readers have it")
+			assert.Equal(t, 1, f.eventCount("acked-cleared"))
+
+			continue
+		}
+
+		require.Len(t, rs.Failed, 1, "S-1 was never acked: its absence says nothing")
+		assert.Zero(t, f.eventCount("acked-cleared"))
+	}
 }

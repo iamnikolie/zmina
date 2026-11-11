@@ -570,30 +570,30 @@ func TestRequeueLogsWhatActuallyWentBack(t *testing.T) {
 	assert.Zero(t, f.eventCount("requeued"), "nothing went back")
 }
 
-// The two flags a record carries (Sent.Acked, Posted.Boot) are optional in state.json: a state written without them
-// reads as before, one written with them is read by a zmina that does not know them (unknown fields are ignored), and
-// they are not written when false.
+// The two things a record carries beyond its line (Sent.AckedIDs, Posted.Boot) are optional in state.json: a state
+// written without them reads as before, one written with them is read by a zmina that does not know them (unknown
+// fields are ignored), and they are not written when empty.
 func TestRecordFlagsAreOptionalInState(t *testing.T) {
 	old := `{"version":2,"roles":{"dev":{"sent":{"line":"a","at":"2026-01-02T10:00:00Z"},` +
 		`"posted":[{"line":"b","msg_id":"m-1","session":"s-1","at":"2026-01-02T10:00:00Z"}]}}}`
 
 	st, _, err := decode([]byte(old))
 	require.NoError(t, err)
-	assert.False(t, st.Roles["dev"].Sent.Acked)
+	assert.Empty(t, st.Roles["dev"].Sent.AckedIDs)
 	assert.False(t, st.Roles["dev"].Posted[0].Boot)
 
 	raw, err := json.Marshal(st)
 	require.NoError(t, err)
-	assert.NotContains(t, string(raw), `"acked"`)
+	assert.NotContains(t, string(raw), `"acked_ids"`)
 	assert.NotContains(t, string(raw), `"boot"`)
 
-	st.Roles["dev"].Sent.Acked, st.Roles["dev"].Posted[0].Boot = true, true
+	st.Roles["dev"].Sent.AckedIDs, st.Roles["dev"].Posted[0].Boot = []string{"S-1"}, true
 	raw, err = json.Marshal(st)
 	require.NoError(t, err)
 
 	back, _, err := decode(raw)
 	require.NoError(t, err)
-	assert.True(t, back.Roles["dev"].Sent.Acked)
+	assert.Equal(t, []string{"S-1"}, back.Roles["dev"].Sent.AckedIDs)
 	assert.True(t, back.Roles["dev"].Posted[0].Boot)
 }
 

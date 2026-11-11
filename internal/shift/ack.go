@@ -391,7 +391,7 @@ func (s *Shift) dropQueued(a *Ack) {
 // as it was, to be seen, failed or given back by its parts as without the ack (giveBack leaves the acked ones out). A
 // posted line closes as it does when it shows. A typed line closes as it does when it lands, and only then: one still
 // in the input line has not landed, and landed finishes it (presses Enter again, or clears the input), where an ack
-// that dropped the record would leave a draft nothing clears. The ack is recorded on that record (Sent.Acked), so that
+// that dropped the record would leave a draft nothing clears. The ack is recorded on that record (Sent.AckedIDs), so that
 // landed can tell a line its reader acked from one whose ack is merely gone.
 func (s *Shift) clearInFlight(rs *RoleState, a *Ack) {
 	mine := func(ids []string, parts []Part) bool { return slices.Contains(ids, a.ID) && s.ackedWhole(ids, parts) }
@@ -427,15 +427,25 @@ func (s *Shift) clearInFlight(rs *RoleState, a *Ack) {
 		return true
 	})
 
-	if sent := rs.Sent; sent != nil && mine(sent.IDs, sent.Parts) {
-		if landed, _ := s.typedLanded(a.Role, sent); landed {
+	if sent := rs.Sent; sent != nil && slices.Contains(sent.IDs, a.ID) {
+		// The ack is recorded on the line, id by id: landed needs to know which of its ids were acked, not which are
+		// missing among the acks.
+		if !slices.Contains(sent.AckedIDs, a.ID) {
+			sent.AckedIDs = append(sent.AckedIDs, a.ID)
+		}
+
+		if landed, _ := s.typedLanded(a.Role, sent); landed && mine(sent.IDs, sent.Parts) {
 			s.log(a.Role, "acked-cleared", "", "typed: "+sent.Line)
 			s.closeTyped(a.Role)
-		} else {
-			// Not landed: the record stays for landed to finish, and says its reader acked it.
-			sent.Acked = true
 		}
 	}
+}
+
+// ackedExplicitly reports whether every id a typed line carries was acked by name (AckedIDs) and none of its parts lacks
+// an id: only then is the line one its readers have, whatever the acks hold.
+func ackedExplicitly(sent *Sent) bool {
+	return len(sent.IDs) > 0 && !slices.ContainsFunc(sent.IDs, func(id string) bool { return !slices.Contains(sent.AckedIDs, id) }) &&
+		!slices.ContainsFunc(sent.Parts, func(p Part) bool { return len(p.IDs) == 0 })
 }
 
 // ackedWhole reports whether an in-flight record is acked in full: a line (no parts) when every id it carries is, a

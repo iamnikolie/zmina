@@ -284,9 +284,10 @@ func (s *Shift) landed(name string, now time.Time) bool {
 			s.clearInput(name, sent.Line)
 		}
 
-		// Acked meanwhile, in full (clearInFlight recorded it): its reader has it, so there is nothing to inspect or
-		// retry. An id that is merely not among the acks (evicted, dropped) says nothing: nobody read the line.
-		if sent.Acked {
+		// Acked meanwhile, every id of it by name (clearInFlight recorded them): its readers have it, so there is
+		// nothing to inspect or retry. An id that is merely not among the acks (evicted, dropped) says nothing: nobody
+		// read the line.
+		if ackedExplicitly(sent) {
 			rs.Sent = nil
 			s.log(name, "acked-cleared", "", "typed: "+sent.Line)
 
