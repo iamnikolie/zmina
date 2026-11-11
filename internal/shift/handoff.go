@@ -80,12 +80,23 @@ func (s *Shift) HandTask(name string, t task.Task) (string, error) {
 
 	prefix := "[zmina " + t.ID + "] Read handoff packet "
 	for _, rs := range s.State.Roles {
+		head := ""
+		if len(rs.Inbox) > 0 {
+			head = rs.Inbox[0]
+		}
+
 		rs.Inbox = slices.DeleteFunc(rs.Inbox, func(old string) bool { return strings.HasPrefix(old, prefix) && old != line })
+
+		// The failed tries counted were the old first line's: the line that is first now starts with none.
+		if head != "" && (len(rs.Inbox) == 0 || rs.Inbox[0] != head) {
+			rs.clearTries()
+		}
 	}
 	// A line already on its way to the role (posted and not yet seen, typed and not yet landed) is not queued again,
 	// unless the role started since: a command that delivers at once (DeliverTo) takes it out of the queue long
-	// before the beat would have, and the packet must not reach the same session twice.
-	if rs := s.State.Role(name); !slices.Contains(rs.Inbox, line) && (renew || !onItsWay(rs, line)) {
+	// before the beat would have, and the packet must not reach the same session twice. Only a session that lives
+	// has a line on its way: what a dead one was typed is dropped when it is settled, so it is queued for the next.
+	if rs := s.State.Role(name); !slices.Contains(rs.Inbox, line) && (renew || !s.onItsWay(name, line)) {
 		if err := s.Queue(name, line); err != nil {
 			return "", err
 		}
@@ -93,9 +104,19 @@ func (s *Shift) HandTask(name string, t task.Task) (string, error) {
 	return path, nil
 }
 
-// onItsWay reports whether a line was posted or typed to the role and has not yet been seen or landed.
-func onItsWay(rs *RoleState, line string) bool {
-	return rs.Sent != nil && rs.Sent.Line == line || slices.ContainsFunc(rs.Posted, func(p Posted) bool { return p.Line == line })
+// onItsWay reports whether a line was posted or typed to the role's live conversation and has not yet been seen or
+// landed there. A role with no live session has nothing on its way, and neither does a post made to a conversation
+// that is no longer the role's (cleared since).
+func (s *Shift) onItsWay(name, line string) bool {
+	sess := s.session(name)
+	if sess == nil {
+		return false
+	}
+
+	rs := s.State.Role(name)
+
+	return rs.Sent != nil && rs.Sent.Line == line ||
+		slices.ContainsFunc(rs.Posted, func(p Posted) bool { return p.Line == line && p.Session == sess.SessionID })
 }
 
 func shellWord(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'" }
