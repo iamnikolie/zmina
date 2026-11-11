@@ -61,6 +61,14 @@ type wire struct {
 	Via      []string         `json:"via,omitempty"`
 	Text     string           `json:"text,omitempty"`
 	Chat     *chat.Snapshot   `json:"chat,omitempty"`
+	// TerminalV2, in a hello, says the node takes (and, for the owner, sends) owner-signed requests bound to the node
+	// they are for; its signature, over the other side's nonce, is TerminalV2Sig (in the server's hello, in the
+	// client's auth).
+	TerminalV2    bool   `json:"terminal_v2,omitempty"`
+	TerminalV2Sig []byte `json:"terminal_v2_sig,omitempty"`
+	// Revoked, in a hello, is the highest revocation list the sender holds: the owner's signature is on it, so it
+	// needs no capability word, and an older zmina ignores it.
+	Revoked *Revocations `json:"revoked,omitempty"`
 }
 
 type conn struct {
@@ -68,6 +76,10 @@ type conn struct {
 	enc       *json.Encoder
 	dec       *wireDecoder
 	challenge []byte
+	// serverKey is, on the calling side, the key the far node proved in its hello: what a bound request is addressed to.
+	serverKey ed25519.PublicKey
+	// now is the serving side's clock.
+	now func() time.Time
 }
 
 func newConn(rw io.ReadWriter) *conn {
@@ -127,6 +139,7 @@ func (n *Node) ServeTerminals(ctx context.Context, rw io.ReadWriter, deliver Del
 	services *TerminalServices, transport Transport,
 ) error {
 	c := newConn(rw)
+	c.now = now
 
 	fail := func(err error) error {
 		_ = c.send(wire{Op: "err", Err: err.Error()})
@@ -151,7 +164,7 @@ func (n *Node) ServeTerminals(ctx context.Context, rw io.ReadWriter, deliver Del
 		return fail(err)
 	}
 
-	if err := n.current(*hi.Cert); err != nil {
+	if err := n.admitCert(*hi.Cert, hi.Revoked, now()); err != nil {
 		return fail(err)
 	}
 
@@ -168,10 +181,20 @@ func (n *Node) ServeTerminals(ctx context.Context, rw io.ReadWriter, deliver Del
 
 	crews := n.crewData()
 
-	err = c.send(wire{Op: "hello", V: protocolVersion, Cert: &n.Cert, Nonce: mine, Crews: crews,
+	held, err := n.Revocations()
+	if err != nil {
+		return fail(err)
+	}
+
+	if held.Has(n.Cert.Key) {
+		return fail(fmt.Errorf("the key of %s was revoked by its owner: this node opens no session", n.Name))
+	}
+
+	err = c.send(wire{Op: "hello", V: protocolVersion, Cert: &n.Cert, Nonce: mine, Crews: crews, Revoked: revocationsIfAny(held),
 		CrewsSig: ed25519.Sign(n.Key, crewsMessage("server", hi.Nonce, crews)),
 		Sig:      ed25519.Sign(n.Key, helloMessage("server", hi.Nonce)), Peers: told, BodyMax: BodyMax, ReportsV1: true, ReportsV2: true, PublicationsSig: ed25519.Sign(n.Key, publicationCapabilityMessage("server", hi.Nonce, BodyMax, true)), CapsSig: ed25519.Sign(n.Key, capabilityMessage("server", hi.Nonce, BodyMax, true)),
-		TellReceipts: true, TellReceiptsSig: ed25519.Sign(n.Key, tellReceiptCapabilityMessage("server", hi.Nonce, BodyMax))})
+		TellReceipts: true, TellReceiptsSig: ed25519.Sign(n.Key, tellReceiptCapabilityMessage("server", hi.Nonce, BodyMax)),
+		TerminalV2: true, TerminalV2Sig: ed25519.Sign(n.Key, terminalV2CapabilityMessage("server", hi.Nonce))})
 	if err != nil {
 		return err
 	}
@@ -199,11 +222,14 @@ func (n *Node) ServeTerminals(ctx context.Context, rw io.ReadWriter, deliver Del
 	if hi.TellReceipts && !ed25519.Verify(hi.Cert.Key, tellReceiptCapabilityMessage("client", mine, hi.BodyMax), auth.TellReceiptsSig) {
 		return fail(errors.New("unauthenticated tell_receipts capability"))
 	}
+	if hi.TerminalV2 && !ed25519.Verify(hi.Cert.Key, terminalV2CapabilityMessage("client", mine), auth.TerminalV2Sig) {
+		return fail(errors.New("unauthenticated terminal_v2 capability"))
+	}
 	if len(hi.Crews) > 0 && !ed25519.Verify(hi.Cert.Key, crewsMessage("client", mine, hi.Crews), auth.CrewsSig) {
 		return fail(errors.New("unauthenticated crew health"))
 	}
 	c.peer = Peer{Name: caller, BodyMax: hi.BodyMax, ReportsV1: hi.ReportsV1, ReportsV2: hi.ReportsV2, TellReceipts: hi.TellReceipts,
-		Crews: readCrewHealth(hi.Crews)}
+		TerminalV2: hi.TerminalV2, Crews: readCrewHealth(hi.Crews)}
 	if err := n.metPeer(*hi.Cert, hi.Peers, c.peer, now()); err != nil {
 		return fail(err)
 	}
@@ -345,6 +371,19 @@ func (n *Node) Hold(rw io.ReadWriter, want string, deliver Deliver, now func() t
 // open is the hello: both sides prove their keys and tell each other the nodes they know. It returns the peer's
 // name.
 func (n *Node) open(c *conn, want string, now func() time.Time) (string, error) {
+	if err := n.Cert.Expired(now()); err != nil {
+		return "", err
+	}
+
+	held, err := n.Revocations()
+	if err != nil {
+		return "", err
+	}
+
+	if held.Has(n.Cert.Key) {
+		return "", fmt.Errorf("the key of %s was revoked by its owner: this node opens no session", n.Name)
+	}
+
 	mine, err := nonce()
 	if err != nil {
 		return "", err
@@ -357,8 +396,8 @@ func (n *Node) open(c *conn, want string, now func() time.Time) (string, error) 
 
 	crews := n.crewData()
 
-	if err := c.send(wire{Op: "hello", V: protocolVersion, Cert: &n.Cert, Nonce: mine, Peers: told, Crews: crews,
-		BodyMax: BodyMax, ReportsV1: true, ReportsV2: true, TellReceipts: true}); err != nil {
+	if err := c.send(wire{Op: "hello", V: protocolVersion, Cert: &n.Cert, Nonce: mine, Peers: told, Crews: crews, Revoked: revocationsIfAny(held),
+		BodyMax: BodyMax, ReportsV1: true, ReportsV2: true, TellReceipts: true, TerminalV2: true}); err != nil {
 		return "", err
 	}
 
@@ -376,7 +415,7 @@ func (n *Node) open(c *conn, want string, now func() time.Time) (string, error) 
 		return "", err
 	}
 
-	if err := n.current(*hi.Cert); err != nil {
+	if err := n.admitCert(*hi.Cert, hi.Revoked, now()); err != nil {
 		return "", err
 	}
 
@@ -393,6 +432,9 @@ func (n *Node) open(c *conn, want string, now func() time.Time) (string, error) 
 	if hi.TellReceipts && !ed25519.Verify(hi.Cert.Key, tellReceiptCapabilityMessage("server", mine, hi.BodyMax), hi.TellReceiptsSig) {
 		return "", errors.New("unauthenticated tell_receipts capability")
 	}
+	if hi.TerminalV2 && !ed25519.Verify(hi.Cert.Key, terminalV2CapabilityMessage("server", mine), hi.TerminalV2Sig) {
+		return "", errors.New("unauthenticated terminal_v2 capability")
+	}
 	if len(hi.Crews) > 0 && !ed25519.Verify(hi.Cert.Key, crewsMessage("server", mine, hi.Crews), hi.CrewsSig) {
 		return "", errors.New("unauthenticated crew health")
 	}
@@ -402,6 +444,7 @@ func (n *Node) open(c *conn, want string, now func() time.Time) (string, error) 
 
 	if err := c.send(wire{Op: "auth", Sig: ed25519.Sign(n.Key, helloMessage("client", hi.Nonce)), CapsSig: ed25519.Sign(n.Key, capabilityMessage("client", hi.Nonce, BodyMax, true)), PublicationsSig: ed25519.Sign(n.Key, publicationCapabilityMessage("client", hi.Nonce, BodyMax, true)),
 		TellReceiptsSig: ed25519.Sign(n.Key, tellReceiptCapabilityMessage("client", hi.Nonce, BodyMax)),
+		TerminalV2Sig:   ed25519.Sign(n.Key, terminalV2CapabilityMessage("client", hi.Nonce)),
 		CrewsSig:        ed25519.Sign(n.Key, crewsMessage("client", hi.Nonce, crews))}); err != nil {
 		return "", err
 	}
@@ -411,7 +454,9 @@ func (n *Node) open(c *conn, want string, now func() time.Time) (string, error) 
 	}
 
 	c.peer = Peer{Name: hi.Cert.Name, BodyMax: hi.BodyMax, ReportsV1: hi.ReportsV1, ReportsV2: hi.ReportsV2, TellReceipts: hi.TellReceipts,
-		Crews: readCrewHealth(hi.Crews)}
+		TerminalV2: hi.TerminalV2, Crews: readCrewHealth(hi.Crews)}
+	c.serverKey = hi.Cert.Key
+
 	return hi.Cert.Name, n.metPeer(*hi.Cert, hi.Peers, c.peer, now())
 }
 
@@ -525,6 +570,12 @@ func publicationCapabilityMessage(side string, nonce []byte, max int, legacy boo
 	return append([]byte("zmina-reports-v2\x00"), capabilityMessage(side, nonce, max, legacy)...)
 }
 
+// terminalV2CapabilityMessage is what a node signs to say it takes owner requests bound to the node they are for
+// (terminal_v2): the side and the other side's nonce, so the word cannot be replayed on another connection.
+func terminalV2CapabilityMessage(side string, nonce []byte) []byte {
+	return []byte(fmt.Sprintf("zmina-terminal-v2-cap\x00%s\x00%x", side, nonce))
+}
+
 // tellReceiptCapabilityMessage is what a node signs to say it sends and takes receipts for plain lines.
 func tellReceiptCapabilityMessage(side string, nonce []byte, max int) []byte {
 	return append([]byte("zmina-tell-receipts-v1\x00"), capabilityMessage(side, nonce, max, true)...)
@@ -537,12 +588,15 @@ func (n *Node) metCapabilities(cert Cert, told []Peer, bodyMax int, reports bool
 
 // metPeer records a peer met in a session: what it authenticated on it (caps) replaces what the book held.
 func (n *Node) metPeer(cert Cert, told []Peer, caps Peer, now time.Time) error {
+	revoked, _ := n.Revocations()
+
 	return n.UpdatePeers(func(ps []Peer) []Peer {
 		ps = upsert(ps, cert, "called", func(p *Peer) {
 			p.OK, p.Err, p.BodyMax = now, "", caps.BodyMax
 			p.ReportsV1 = caps.ReportsV1
 			p.ReportsV2 = caps.ReportsV1 && caps.ReportsV2
 			p.TellReceipts = caps.TellReceipts
+			p.TerminalV2 = caps.TerminalV2
 			p.Crews, p.CrewsAt = caps.Crews, now
 		})
 		// Only a relay the owner named may carry: a peer's own claim that it reaches a node is not enough.
@@ -554,6 +608,11 @@ func (n *Node) metPeer(cert Cert, told []Peer, caps Peer, now time.Time) error {
 			}
 
 			if t.Cert == nil || t.Cert.Name != t.Name || t.Name == n.Name || t.Cert.Verify(n.Owner) != nil {
+				continue
+			}
+
+			// A key that no longer counts, or a certificate that ran out, is not a node to meet.
+			if revoked.Has(t.Cert.Key) || t.Cert.Expired(now) != nil {
 				continue
 			}
 
@@ -674,6 +733,11 @@ func (n *Node) receive(envs []Envelope, deliver Deliver, now time.Time) ([]strin
 			return err
 		}
 
+		revoked, err := n.Revocations()
+		if err != nil {
+			return err
+		}
+
 		for _, e := range envs {
 			if !ValidID(e.ID) {
 				continue
@@ -685,7 +749,7 @@ func (n *Node) receive(envs []Envelope, deliver Deliver, now time.Time) ([]strin
 				continue
 			}
 
-			if err := n.admit(e, book, now); err != nil {
+			if err := n.admit(e, book, revoked, now); err != nil {
 				// It will not pass on a second try either: take it off the giver and say why.
 				ids = append(ids, e.ID)
 				errs = append(errs, err)
@@ -737,11 +801,20 @@ func (n *Node) receive(envs []Envelope, deliver Deliver, now time.Time) ([]strin
 // trying again.
 var ErrRefused = errors.New("refused")
 
-// admit checks an envelope before it is taken: the writer's signature, its size, its age, and that its
-// certificate is the newest this node knows for that node (a replaced key no longer writes).
-func (n *Node) admit(e Envelope, book []Peer, now time.Time) error {
+// admit checks an envelope before it is taken: the writer's signature, its size, its age, that its certificate counts
+// (not run out) and is the newest this node knows for that node (a replaced key no longer writes), and that its key
+// is not revoked.
+func (n *Node) admit(e Envelope, book []Peer, revoked Revocations, now time.Time) error {
 	if err := e.Verify(n.Owner); err != nil {
 		return err
+	}
+
+	if err := e.Cert.Expired(now); err != nil {
+		return fmt.Errorf("%s: %w", e.ID, err)
+	}
+
+	if revoked.Has(e.Cert.Key) {
+		return fmt.Errorf("%s: signed with a revoked key of %s", e.ID, e.Cert.Name)
 	}
 
 	if len(e.Body) > BodyMax {
@@ -768,9 +841,30 @@ func replaced(book []Peer, c Cert) bool {
 	})
 }
 
-// current refuses a session with a certificate the book knows was replaced: a retired or stolen key of a node the
-// owner re-certified opens no session, so it neither pulls that node's envelopes nor reaches its terminals.
-func (n *Node) current(c Cert) error {
+// admitCert decides whether a session may go on with the certificate a peer showed, after the owner's signature on it
+// was checked: it must not have run out, the revocation list the peer carried is kept when it is higher than this
+// node's, and the key must not be revoked or replaced. A retired or stolen key of a node the owner re-certified opens no
+// session, so it neither pulls that node's envelopes nor reaches its terminals; nor does a revoked one.
+func (n *Node) admitCert(c Cert, theirs *Revocations, now time.Time) error {
+	if err := c.Expired(now); err != nil {
+		return err
+	}
+
+	if theirs != nil {
+		if _, err := n.AcceptRevocations(*theirs); err != nil {
+			return fmt.Errorf("%s sent a revocation list this owner did not sign: %w", c.Name, err)
+		}
+	}
+
+	revoked, err := n.Revocations()
+	if err != nil {
+		return err
+	}
+
+	if revoked.Has(c.Key) {
+		return fmt.Errorf("the key of %s was revoked by its owner", c.Name)
+	}
+
 	book, err := n.Peers()
 	if err != nil {
 		return err
@@ -781,6 +875,15 @@ func (n *Node) current(c Cert) error {
 	}
 
 	return nil
+}
+
+// revocationsIfAny is the list to tell in a hello: none while this node holds none.
+func revocationsIfAny(r Revocations) *Revocations {
+	if r.Version == 0 {
+		return nil
+	}
+
+	return &r
 }
 
 // Book is the node's address book as a Discovery.

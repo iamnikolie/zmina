@@ -57,7 +57,7 @@ func TestTellOnThisNode(t *testing.T) {
 
 	out, _, err = zm(t, def, "node", "ls")
 	require.NoError(t, err)
-	assert.Equal(t, "node laptop · owner · crews: default (zm-dispatcher), ops (ops-dispatcher)\n", out)
+	assert.Regexp(t, `^node laptop · owner · crews: default \(zm-dispatcher\), ops \(ops-dispatcher\)\n  certificate: expires \d{4}-\d\d-\d\d \(in 365 days\)\n$`, out)
 
 	out, _, err = zm(t, def, "node", "ls", "--json")
 	require.NoError(t, err)

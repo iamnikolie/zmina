@@ -25,6 +25,12 @@ type Node struct {
 	Owner ed25519.PublicKey
 	// Health is how this node's crews stand, told in every hello; nil tells nothing.
 	Health func() []CrewHealth
+	// StrictRequests, set in node.json (zmina node strict on), refuses owner requests in the old form, the ones that
+	// name no node: it is for once every node runs a zmina that sends the bound form.
+	StrictRequests bool
+	// Notice, when set, is told what the node should say to its owner (an event in the crews' logs): a kind and a
+	// sentence. A caller of the node sets it; the mesh stays quiet without.
+	Notice func(kind, detail string)
 }
 
 // ErrNoNode is returned while this ~/.zmina has no node yet (`zmina node init`).
@@ -36,6 +42,8 @@ type nodeFile struct {
 	Name  string            `json:"name"`
 	Owner ed25519.PublicKey `json:"owner,omitempty"`
 	Cert  *Cert             `json:"cert,omitempty"`
+	// StrictRequests: refuse owner requests that name no node (see Node.StrictRequests).
+	StrictRequests bool `json:"strict_requests,omitempty"`
 }
 
 // Request is what a new node hands the owner to sign: its name and public key.
@@ -119,16 +127,21 @@ func MakeOwner(dir string, now time.Time) error {
 		return err
 	}
 
-	g, err := grant(owner, Request{Name: nf.Name, Key: key.Public().(ed25519.PublicKey)}, now)
+	g, err := grant(owner, Request{Name: nf.Name, Key: key.Public().(ed25519.PublicKey)}, now, DefaultCertLife)
 	if err != nil {
 		return err
 	}
 
-	return Accept(dir, g)
+	return AcceptAt(dir, g, now)
 }
 
-// SignRequest certifies another node with the owner key under dir.
+// SignRequest certifies another node with the owner key under dir, for DefaultCertLife.
 func SignRequest(dir string, r Request, now time.Time) (Grant, error) {
+	return SignRequestFor(dir, r, now, DefaultCertLife)
+}
+
+// SignRequestFor is SignRequest for another lifetime: 0 certifies with no expiry, which every zmina reads (see SignFor).
+func SignRequestFor(dir string, r Request, now time.Time, life time.Duration) (Grant, error) {
 	owner, err := readKey(filepath.Join(dir, "owner.key"))
 	if errors.Is(err, os.ErrNotExist) {
 		return Grant{}, errors.New("this node does not hold the owner key")
@@ -138,15 +151,15 @@ func SignRequest(dir string, r Request, now time.Time) (Grant, error) {
 		return Grant{}, err
 	}
 
-	return grant(owner, r, now)
+	return grant(owner, r, now, life)
 }
 
-func grant(owner ed25519.PrivateKey, r Request, now time.Time) (Grant, error) {
+func grant(owner ed25519.PrivateKey, r Request, now time.Time, life time.Duration) (Grant, error) {
 	if len(r.Key) != ed25519.PublicKeySize {
 		return Grant{}, errors.New("request: bad key")
 	}
 
-	c, err := Sign(owner, r.Name, r.Key, now)
+	c, err := SignFor(owner, r.Name, r.Key, now, life)
 	if err != nil {
 		return Grant{}, err
 	}
@@ -154,8 +167,33 @@ func grant(owner ed25519.PrivateKey, r Request, now time.Time) (Grant, error) {
 	return Grant{Cert: c, Owner: owner.Public().(ed25519.PublicKey)}, nil
 }
 
-// Accept stores the owner's grant for the node under dir: it must certify this node's own key and name.
-func Accept(dir string, g Grant) error {
+// Renew, on the owner's node, certifies this node again for life (0: with no expiry) and keeps the certificate: the
+// same key and name, a new date and expiry.
+func Renew(dir string, now time.Time, life time.Duration) (Cert, error) {
+	var nf nodeFile
+	if err := readJSON(filepath.Join(dir, "node.json"), &nf); errors.Is(err, os.ErrNotExist) {
+		return Cert{}, ErrNoNode
+	} else if err != nil {
+		return Cert{}, err
+	}
+
+	if nf.Cert == nil {
+		return Cert{}, errors.New("this node has no certificate to renew")
+	}
+
+	g, err := SignRequestFor(dir, Request{Name: nf.Name, Key: nf.Cert.Key}, now, life)
+	if err != nil {
+		return Cert{}, err
+	}
+
+	return g.Cert, AcceptAt(dir, g, now)
+}
+
+// Accept stores the owner's grant for the node under dir: it must certify this node's own key and name, and count now.
+func Accept(dir string, g Grant) error { return AcceptAt(dir, g, time.Now()) }
+
+// AcceptAt is Accept with the clock in the caller's hand.
+func AcceptAt(dir string, g Grant, now time.Time) error {
 	key, err := readKey(filepath.Join(dir, "node.key"))
 	if err != nil {
 		return fmt.Errorf("no node key here: %w", err)
@@ -167,6 +205,10 @@ func Accept(dir string, g Grant) error {
 	}
 
 	if err := g.Cert.Verify(g.Owner); err != nil {
+		return err
+	}
+
+	if err := g.Cert.Expired(now); err != nil {
 		return err
 	}
 
@@ -202,7 +244,51 @@ func Open(dir string) (*Node, error) {
 		return nil, err
 	}
 
-	return &Node{Dir: dir, Name: nf.Name, Key: key, Cert: *nf.Cert, Owner: nf.Owner}, nil
+	return &Node{Dir: dir, Name: nf.Name, Key: key, Cert: *nf.Cert, Owner: nf.Owner, StrictRequests: nf.StrictRequests}, nil
+}
+
+// SetStrictRequests turns the refusal of owner requests that name no node on or off for the node under dir.
+func SetStrictRequests(dir string, on bool) error {
+	var nf nodeFile
+	if err := readJSON(filepath.Join(dir, "node.json"), &nf); errors.Is(err, os.ErrNotExist) {
+		return ErrNoNode
+	} else if err != nil {
+		return err
+	}
+
+	nf.StrictRequests = on
+
+	return writeJSON(filepath.Join(dir, "node.json"), nf)
+}
+
+// NoticeDue says whether the notice called key may be made now, and counts it as made when so: once per every. The
+// stamps are a file of the node, because each session is a process of its own.
+func (n *Node) NoticeDue(key string, now time.Time, every time.Duration) bool {
+	due := false
+
+	_ = n.locked(func() error {
+		m := map[string]time.Time{}
+		if err := readJSON(n.path("noticed.json"), &m); err != nil && !errors.Is(err, os.ErrNotExist) {
+			m = map[string]time.Time{}
+		}
+
+		if last, ok := m[key]; ok && now.Sub(last) < every && !now.Before(last) {
+			return nil
+		}
+
+		for k, at := range m {
+			if now.Sub(at) > 30*24*time.Hour {
+				delete(m, k)
+			}
+		}
+
+		m[key] = now
+		due = writeJSON(n.path("noticed.json"), m) == nil
+
+		return nil
+	})
+
+	return due
 }
 
 // IsOwner reports whether this node holds the owner key.
@@ -239,6 +325,9 @@ type Peer struct {
 	// TellReceipts: the peer authenticated tell_receipts in its last session with this node — it takes receipts
 	// for the plain lines it sent, and sends them for the lines it took.
 	TellReceipts bool `json:"tell_receipts,omitempty"`
+	// TerminalV2: the peer authenticated terminal_v2 in its last session with this node — it takes owner requests
+	// bound to the node they are for, and the owner's node sends them so.
+	TerminalV2 bool `json:"terminal_v2,omitempty"`
 	// Crews is how the peer's crews stood in its last session with this node, CrewsAt when that was; none from an
 	// older zmina.
 	Crews   []CrewHealth `json:"crews,omitempty"`

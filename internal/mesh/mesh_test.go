@@ -54,6 +54,8 @@ type pipes struct {
 	nodes   map[string]*Node
 	inboxes map[string]*inbox
 	down    map[string]bool
+	// now is the serving side's clock; time.Now when nil.
+	now func() time.Time
 }
 
 func (p *pipes) Dial(_ context.Context, a Addr) (io.ReadWriteCloser, error) {
@@ -64,8 +66,13 @@ func (p *pipes) Dial(_ context.Context, a Addr) (io.ReadWriteCloser, error) {
 
 	c1, c2 := net.Pipe()
 
+	now := p.now
+	if now == nil {
+		now = time.Now
+	}
+
 	go func() {
-		_ = n.Serve(c2, p.inboxes[a.Cmd].deliver, time.Now)
+		_ = n.Serve(c2, p.inboxes[a.Cmd].deliver, now)
 		_ = c2.Close()
 	}()
 

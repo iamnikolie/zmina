@@ -199,6 +199,7 @@ func (a *app) diagnose() []check {
 	checkStores(c, time.Now(), add)
 	a.checkSockets(c, add)
 	checkVersions(c, st, add)
+	a.checkNode(add)
 
 	return out
 }

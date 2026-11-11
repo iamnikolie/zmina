@@ -43,7 +43,7 @@ func (a *app) nodeCommand() *cobra.Command {
 	}
 
 	c.AddCommand(a.nodeInit(), a.nodeSign(), a.nodeAccept(), a.nodeEnroll(), a.nodePeer(), a.nodeLs(), a.nodeSync(),
-		a.nodeServe())
+		a.nodeRenew(), a.nodeRevoke(), a.nodeStrict(), a.nodeServe())
 
 	return c
 }
@@ -124,17 +124,33 @@ func (a *app) nodeInit() *cobra.Command {
 }
 
 func (a *app) nodeSign() *cobra.Command {
-	return &cobra.Command{
-		Use:   "sign",
+	var days int
+
+	c := &cobra.Command{
+		Use:   "sign [--days <n>]",
 		Short: "On the owner's node: read a node's request (zmina node init --json) on stdin, print its certificate",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			life, err := certLife(days)
+			if err != nil {
+				return err
+			}
+
 			var r mesh.Request
 			if err := json.NewDecoder(cmd.InOrStdin()).Decode(&r); err != nil {
 				return fmt.Errorf("request: %w", err)
 			}
 
-			g, err := mesh.SignRequest(meshDir(), r, time.Now())
+			me, err := openNode()
+			if err != nil {
+				return err
+			}
+
+			if err := checkLife(me, life); err != nil {
+				return err
+			}
+
+			g, err := mesh.SignRequestFor(meshDir(), r, time.Now(), life)
 			if err != nil {
 				return err
 			}
@@ -142,6 +158,10 @@ func (a *app) nodeSign() *cobra.Command {
 			return json.NewEncoder(a.out).Encode(g)
 		},
 	}
+
+	daysFlag(c, &days)
+
+	return c
 }
 
 func (a *app) nodeAccept() *cobra.Command {
@@ -174,10 +194,13 @@ func addrFlags(c *cobra.Command, a *mesh.Addr) {
 }
 
 func (a *app) nodeEnroll() *cobra.Command {
-	var addr mesh.Addr
+	var (
+		addr mesh.Addr
+		days int
+	)
 
 	c := &cobra.Command{
-		Use:   "enroll <node> (--ssh <host> | --cmd <command>)",
+		Use:   "enroll <node> (--ssh <host> | --cmd <command>) [--days <n>]",
 		Short: "On the owner's node: make a node at that address, certify it, and add it as a peer",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -190,6 +213,11 @@ func (a *app) nodeEnroll() *cobra.Command {
 				return err
 			}
 
+			life, err := certLife(days)
+			if err != nil {
+				return err
+			}
+
 			me, err := openNode()
 			if err != nil {
 				return err
@@ -197,6 +225,10 @@ func (a *app) nodeEnroll() *cobra.Command {
 
 			if !me.IsOwner() {
 				return errors.New("this node does not hold the owner key: enroll from the owner's node")
+			}
+
+			if err := checkLife(me, life); err != nil {
+				return err
 			}
 
 			ctx, cancel := context.WithTimeout(cmd.Context(), time.Minute)
@@ -212,7 +244,7 @@ func (a *app) nodeEnroll() *cobra.Command {
 				return fmt.Errorf("its zmina answered %q: is it new enough (zmina node)?", strings.TrimSpace(string(out)))
 			}
 
-			g, err := mesh.SignRequest(meshDir(), r, time.Now())
+			g, err := mesh.SignRequestFor(meshDir(), r, time.Now(), life)
 			if err != nil {
 				return err
 			}
@@ -233,6 +265,7 @@ func (a *app) nodeEnroll() *cobra.Command {
 	}
 
 	addrFlags(c, &addr)
+	daysFlag(c, &days)
 
 	return c
 }
@@ -401,6 +434,13 @@ type nodeView struct {
 	Health []mesh.CrewHealth `json:"health,omitempty"`
 	Peers  []mesh.Peer       `json:"peers"`
 	Outbox []mesh.Envelope   `json:"outbox"`
+	// StrictRequests: this node refuses owner requests that name no node (zmina node strict on).
+	StrictRequests bool `json:"strict_requests,omitempty"`
+	// Cert is where this node's certificate stands; PeerCerts is the same for each peer's the book holds.
+	Cert      *certView           `json:"cert,omitempty"`
+	PeerCerts map[string]certView `json:"peer_certs,omitempty"`
+	// Revoked is the revocation list this node holds, the highest it has seen; absent while there is none.
+	Revoked *mesh.Revocations `json:"revoked,omitempty"`
 }
 
 func (a *app) nodeLs() *cobra.Command {
@@ -416,13 +456,33 @@ func (a *app) nodeLs() *cobra.Command {
 				return err
 			}
 
-			v := nodeView{Name: me.Name, Owner: me.IsOwner(), Crews: crewKeys(), CrewFiles: crewFiles(), Dispatchers: crewDispatchers(), Health: crewHealth()}
+			v := nodeView{Name: me.Name, Owner: me.IsOwner(), Crews: crewKeys(), CrewFiles: crewFiles(), Dispatchers: crewDispatchers(), Health: crewHealth(),
+				StrictRequests: me.StrictRequests}
 			if v.Peers, err = me.Peers(); err != nil {
 				return err
 			}
 
 			if v.Outbox, err = me.Outbox(); err != nil {
 				return err
+			}
+
+			now := time.Now()
+			own := viewCert(me.Cert, now)
+			v.Cert, v.PeerCerts = &own, map[string]certView{}
+
+			for _, p := range v.Peers {
+				if p.Cert != nil {
+					v.PeerCerts[p.Name] = viewCert(*p.Cert, now)
+				}
+			}
+
+			list, err := me.Revocations()
+			if err != nil {
+				return err
+			}
+
+			if list.Version > 0 {
+				v.Revoked = &list
 			}
 
 			if asJS {
@@ -448,11 +508,26 @@ func (a *app) nodeLs() *cobra.Command {
 				crews = append(crews, word)
 			}
 
+			if v.StrictRequests {
+				owner += " · strict requests"
+			}
+
 			fmt.Fprintf(a.out, "node %s%s · crews: %s\n", v.Name, owner, strings.Join(crews, ", "))
 
-			now := time.Now()
+			level, text := certLine(me.Cert, now)
+			fmt.Fprintf(a.out, "  certificate%s: %s\n", map[string]string{"ok": "", "warn": " [warn]", "fail": " [fail]"}[level], text)
+
+			if v.Revoked != nil {
+				var names []string
+				for _, r := range v.Revoked.Revoked {
+					names = append(names, fmt.Sprintf("%s (key %s…)", r.Name, keyWord(r.Key)))
+				}
+
+				fmt.Fprintf(a.out, "  revoked (list version %d): %s\n", v.Revoked.Version, strings.Join(names, ", "))
+			}
+
 			for _, p := range v.Peers {
-				fmt.Fprintf(a.out, "  %s\n", peerLine(p, now))
+				fmt.Fprintf(a.out, "  %s%s\n", peerLine(p, now), peerCertNote(p, now, list))
 			}
 
 			for _, e := range v.Outbox {
@@ -494,6 +569,12 @@ func peerLine(p mesh.Peer, now time.Time) string {
 
 	if !p.OK.IsZero() {
 		parts = append(parts, "last ok "+now.Sub(p.OK).Round(time.Second).String()+" ago")
+
+		if p.TerminalV2 {
+			parts = append(parts, "terminal_v2")
+		} else {
+			parts = append(parts, "no terminal_v2")
+		}
 	}
 
 	if p.Err != "" {
@@ -613,6 +694,7 @@ func (a *app) nodeServe() *cobra.Command {
 
 			// stdout is the session: nothing else may write there.
 			quiet := &app{out: io.Discard, err: a.err}
+			me.Notice = nodeEvent
 
 			return me.ServeTerminals(cmd.Context(), stdioRW{cmd.InOrStdin(), cmd.OutOrStdout()},
 				quiet.deliverFrom(), time.Now, quiet.terminalServices(), mesh.Exec{})
@@ -1061,6 +1143,9 @@ func (a *app) meshTick() {
 	if err := a.pumpLocalReports(); err != nil {
 		a.printTick([]string{"mesh local reports: " + err.Error()})
 	}
+
+	a.certBeat(me, time.Now())
+
 	if time.Since(me.LastSync()) < syncEvery {
 		return
 	}
@@ -1093,4 +1178,25 @@ func (a *app) meshTick() {
 	}
 
 	a.printTick(lines)
+}
+
+// peerCertNote is what a peer's line adds about its certificate: only what needs a hand — a revoked key, an expiry that
+// is near or past. A peer that is fine, or has no expiry yet, says nothing here.
+func peerCertNote(p mesh.Peer, now time.Time, revoked mesh.Revocations) string {
+	if p.Cert == nil {
+		return ""
+	}
+
+	if revoked.Has(p.Cert.Key) {
+		return " · key revoked"
+	}
+
+	switch state, at := p.Cert.State(now); state {
+	case mesh.CertExpiring:
+		return " · certificate expires " + at.UTC().Format(time.DateOnly) + " (" + inDays(at, now) + ")"
+	case mesh.CertExpired:
+		return " · certificate expired (zmina node renew " + p.Name + ")"
+	}
+
+	return ""
 }

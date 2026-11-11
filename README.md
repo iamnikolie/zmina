@@ -135,7 +135,9 @@ does not open another native Codex writer. Start role uses its configured runtim
 Open **Terminal** from Chat to attach to an existing role from a desktop or phone browser.
 Select a mesh node and its crew/role; keyboard input, output and resize travel over the authenticated mesh
 transport, including live routes through the peers marked `zmina node peer add <node> --relay`. The role stays in its original tmux session when the browser disconnects.
-Run the gateway on the owner node; remote terminals require a fresh owner signature, not merely a peer certificate.
+Run the gateway on the owner node; remote terminals require a fresh owner signature, not merely a peer certificate,
+and the signature names the node the request is for, so a peer that was handed one cannot pass it on to another node.
+Node certificates last a year by default (`zmina node renew`), and `zmina node revoke <node>` takes a leaked key off the mesh.
 For private access through Tailscale, use the existing UI token and a tailnet listener or a private reverse proxy
 with WebSocket support. Update the gateway, worker and relays to this version.
 
