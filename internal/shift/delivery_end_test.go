@@ -461,3 +461,39 @@ func TestPostedBootIsDroppedAtSessionEnd(t *testing.T) {
 	assert.Zero(t, f.eventCount("requeued"))
 	assert.Equal(t, 1, f.eventCount("dropped"))
 }
+
+// A release line posted to a Codex bridge that dies before it takes the file is session-bound: it would be run by the
+// next bridge in the new session, which is not released. It is withdrawn from the inbox and dropped with an event; a
+// line meant for the role stays in its file for the next bridge.
+func TestCodexSessionBoundLineIsWithdrawnWithItsSession(t *testing.T) {
+	f, dir := codexFixture(t)
+	bridge(t, f, dir, "thread-1")
+
+	sess := f.s.session("dev")
+	require.NotNil(t, sess)
+	require.NoError(t, f.s.post("dev", sess, releaseLine(time.Hour, []string{"T-1"}), *f.now))
+	require.NoError(t, f.s.post("dev", sess, "[dispatcher] look at T-1", *f.now))
+
+	rs := f.s.State.Role("dev")
+	require.Len(t, rs.Posted, 2)
+	require.Len(t, waitingFiles(t, dir), 2)
+
+	delete(f.tm.up, "dev") // the bridge dies before it takes either file
+
+	for range 3 {
+		*f.now = f.now.Add(time.Minute)
+		f.s.Tick()
+	}
+
+	require.Len(t, rs.Posted, 1, "the line for the role is still posted")
+	assert.Contains(t, rs.Posted[0].Line, "look at T-1")
+	assert.Equal(t, 1, f.eventCount("dropped"))
+	assert.Empty(t, rs.Inbox)
+
+	files := waitingFiles(t, dir)
+	require.Len(t, files, 1, "the release line's file is gone")
+
+	raw, err := os.ReadFile(files[0])
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), "look at T-1")
+}

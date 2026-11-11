@@ -170,3 +170,40 @@ func TestInboxWaitingUntilTaken(t *testing.T) {
 	require.NoError(t, take(dir, path, l.ID))
 	assert.False(t, Inbox{}.Waiting(dir, id), "taken")
 }
+
+// Withdraw takes a line no bridge has taken back out of the inbox, once, and never touches one the bridge took.
+func TestInboxWithdraw(t *testing.T) {
+	dir := InboxDir(t.TempDir(), "zm-dev")
+	require.NoError(t, openInbox(dir))
+	s := &registry.Session{Inbox: dir}
+
+	id, err := Inbox{}.Post("", s, "first")
+	require.NoError(t, err)
+	other, err := Inbox{}.Post("", s, "second")
+	require.NoError(t, err)
+
+	assert.False(t, Inbox{}.Withdraw(dir, ""))
+	assert.False(t, Inbox{}.Withdraw("", id))
+	assert.False(t, Inbox{}.Withdraw(dir, "*"), "an id is no pattern")
+	assert.False(t, Inbox{}.Withdraw(dir, "../"+id))
+	assert.True(t, Inbox{}.Waiting(dir, id), "none of that touched it")
+
+	assert.True(t, Inbox{}.Withdraw(dir, id))
+	assert.False(t, Inbox{}.Waiting(dir, id))
+	assert.False(t, Inbox{}.Withdraw(dir, id), "once")
+	assert.True(t, Inbox{}.Waiting(dir, other), "another line is left")
+
+	l, _, err := nextLine(dir)
+	require.NoError(t, err)
+	require.NotNil(t, l)
+	assert.Equal(t, "second", l.Text, "the bridge never sees the withdrawn line")
+
+	// A line the bridge already started a turn with (its taken mark is there) is not touched, whatever file is left.
+	files, _ := filepath.Glob(filepath.Join(dir, "*-"+other+".line"))
+	require.Len(t, files, 1)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "taken", other), nil, 0o600))
+	assert.False(t, Inbox{}.Withdraw(dir, other))
+
+	_, err = os.Stat(files[0])
+	assert.NoError(t, err, "its file stays")
+}

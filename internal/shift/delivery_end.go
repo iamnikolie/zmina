@@ -19,6 +19,29 @@ type Waiter interface {
 	Waiting(dir, msgID string) bool
 }
 
+// Withdrawer is a Waiter that can take such a line back out of the inbox: true only when it removed the file, never for
+// a line the bridge already took.
+type Withdrawer interface {
+	Withdraw(dir, msgID string) bool
+}
+
+// withdraw takes a posted line back out of a bridge's inbox, reporting whether it removed it.
+func withdraw(ch Peer, dir string, p Posted) bool {
+	w, ok := ch.(Withdrawer)
+
+	return ok && w.Withdraw(dir, p.MsgID)
+}
+
+// postedBound reports a posted record that is session-bound whole: a line that is (or the boot), or a post made only of
+// lines that are. A post that also carries signals or notes is not: its file could not be taken apart.
+func (s *Shift) postedBound(name string, p Posted) bool {
+	if len(p.Parts) == 0 {
+		return p.Boot || s.sessionBound(name, p.Line)
+	}
+
+	return !slices.ContainsFunc(p.Parts, func(part Part) bool { return part.Line == "" || !s.sessionBound(name, part.Line) })
+}
+
 // stillQueued reports a post that waits in a bridge's inbox untaken. It is not given back to the role's queue (the
 // next bridge runs the file, a second one would run it twice) and not aged out; its record stays until the file is
 // taken (Delivered) or gone. The line cannot be lost this way: while the file exists a bridge will take it, and when it

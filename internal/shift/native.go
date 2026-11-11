@@ -160,7 +160,15 @@ func (s *Shift) followPostedAs(name string, now time.Time, gone bool) bool {
 				s.closeInfo(name, p.Parts, "seen")
 			}
 		case (gone || sess != nil && sess.SessionID != p.Session) && stillQueued(ch, ns, p):
-			// Its file waits in a bridge's inbox: the next bridge takes it, and this record closes then.
+			// Its file waits in a bridge's inbox: the next bridge takes it, and this record closes then. Unless it meant
+			// the conversation that ended alone: its file is taken out, so that no bridge runs it in the next one. When
+			// the file could not be taken out (a bridge took it meanwhile) the record stays, and closes on Delivered.
+			if s.postedBound(name, p) && withdraw(ch, ns, p) {
+				s.log(name, "dropped", "", "withdrawn from its bridge's inbox, meant for the conversation that ended: "+p.Line)
+
+				break
+			}
+
 			keep = append(keep, p)
 		case gone || sess != nil && sess.SessionID != p.Session:
 			back = append(back, p)
