@@ -150,16 +150,12 @@ func (s *Shift) followPostedAs(name string, now time.Time, gone bool) bool {
 
 	for _, p := range rs.Posted {
 		seen, err := ch.Delivered(ns, p.Session, p.MsgID)
+		ended := gone || sess != nil && sess.SessionID != p.Session
 
 		switch {
 		case err == nil && seen:
-			s.log(name, "seen", "", p.Line)
-
-			if name == s.Crew.Dispatcher {
-				s.stageIDs(p.IDs, "submitted")
-				s.closeInfo(name, p.Parts, "seen")
-			}
-		case (gone || sess != nil && sess.SessionID != p.Session) && stillQueued(ch, ns, p):
+			s.postShown(name, p)
+		case ended && stillQueued(ch, ns, p):
 			// Its file waits in a bridge's inbox: the next bridge takes it, and this record closes then. Unless it meant
 			// the conversation that ended alone: its file is taken out, so that no bridge runs it in the next one. When
 			// the file could not be taken out (a bridge took it meanwhile) the record stays, and closes on Delivered.
@@ -170,7 +166,15 @@ func (s *Shift) followPostedAs(name string, now time.Time, gone bool) bool {
 			}
 
 			keep = append(keep, p)
-		case gone || sess != nil && sess.SessionID != p.Session:
+		case ended:
+			// A live bridge may have taken the file between the look above and the one at the file: look once more
+			// before the line goes back, or it would run twice.
+			if again, err := ch.Delivered(ns, p.Session, p.MsgID); err == nil && again {
+				s.postShown(name, p)
+
+				break
+			}
+
 			back = append(back, p)
 		case sess != nil && now.Sub(p.At) >= postedWait && s.quiet(name, sess):
 			rs.Failed = append(rs.Failed, Failed{Line: p.Line, Error: postedNever, At: now, IDs: p.IDs, Parts: p.Parts})
@@ -193,6 +197,16 @@ func (s *Shift) followPostedAs(name string, now time.Time, gone bool) bool {
 	}
 
 	return len(keep) > 0
+}
+
+// postShown closes a posted line its conversation showed.
+func (s *Shift) postShown(name string, p Posted) {
+	s.log(name, "seen", "", p.Line)
+
+	if name == s.Crew.Dispatcher {
+		s.stageIDs(p.IDs, "submitted")
+		s.closeInfo(name, p.Parts, "seen")
+	}
 }
 
 // postable reports whether a queued line can go to the inbox socket: a slash command is typed, since a posted one

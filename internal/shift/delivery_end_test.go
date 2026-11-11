@@ -497,3 +497,56 @@ func TestCodexSessionBoundLineIsWithdrawnWithItsSession(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(raw), "look at T-1")
 }
+
+// racingInbox is a Codex inbox whose bridge takes the line right after zmina's first look at it: that look finds the
+// line untaken, and by the time zmina asks whether its file still waits it is gone, taken.
+type racingInbox struct {
+	codex.Inbox
+	armed bool
+}
+
+func (r *racingInbox) Delivered(dir, session, id string) (bool, error) {
+	seen, err := r.Inbox.Delivered(dir, session, id)
+
+	if r.armed && !seen {
+		r.armed = false
+
+		files, _ := filepath.Glob(filepath.Join(dir, "*-"+id+".line"))
+		for _, file := range files {
+			_ = os.WriteFile(filepath.Join(dir, "taken", id), nil, 0o600)
+			_ = os.Remove(file)
+		}
+	}
+
+	return seen, err
+}
+
+// A live new bridge may take the file between zmina's look at whether the line was delivered and its look at whether
+// the file waits: the line is then delivered, and giving it back would run it twice. The look is taken once more
+// before a line goes back.
+func TestCodexLineTakenBetweenTheLooksIsNotGivenBack(t *testing.T) {
+	f, dir := codexFixture(t)
+	race := &racingInbox{}
+	f.s.CodexInbox = race
+	bridge(t, f, dir, "thread-1")
+
+	_, err := f.s.QueueTracked("dev", "[dispatcher] look at T-1")
+	require.NoError(t, err)
+	require.NotEmpty(t, f.s.deliverInbox("dev", *f.now))
+
+	// The bridge dies and a new one starts on the same session name, with a new thread.
+	delete(f.tm.up, "dev")
+	require.NoError(t, f.s.Up("dev"))
+	bridge(t, f, dir, "thread-2")
+
+	rs := f.s.State.Role("dev")
+	require.Len(t, rs.Posted, 1, "its file waits for the new bridge")
+
+	race.armed = true
+	f.s.deliverInbox("dev", *f.now)
+
+	assert.Empty(t, rs.Inbox, "delivered by the new bridge: not given back")
+	assert.Empty(t, rs.Posted)
+	assert.Zero(t, f.eventCount("requeued"))
+	assert.True(t, f.ev.has("dev", "seen"))
+}
