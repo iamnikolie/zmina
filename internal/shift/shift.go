@@ -412,7 +412,11 @@ func (s *Shift) Views() []View {
 
 // Command is the claude command line of a role. The name goes before the first message and again after
 // --remote-control, which comes last because it takes an optional name and would read the message as one.
-func (s *Shift) Command(r *crew.Role, resume string) []string {
+func (s *Shift) Command(r *crew.Role, resume string) []string { return s.commandIn(r, resume, "") }
+
+// commandIn is Command for a session that starts in dir (a task's worktree): the status line the role's settings wrap
+// is looked up there first. Empty is the role's own dir.
+func (s *Shift) commandIn(r *crew.Role, resume, dir string) []string {
 	if r.IsCodex() {
 		return s.codexCommand(r, resume)
 	}
@@ -423,7 +427,7 @@ func (s *Shift) Command(r *crew.Role, resume string) []string {
 
 	argv = append(argv, r.Args...)
 	if s.inbound(r) {
-		argv = append(argv, "--settings", s.roleSettings(r.Name))
+		argv = append(argv, "--settings", s.roleSettingsIn(r.Name, dir))
 	} else if set := r.Settings(); len(set) > 0 {
 		raw, _ := json.Marshal(set)
 		argv = append(argv, "--settings", string(raw))
@@ -834,7 +838,7 @@ func (s *Shift) start(name string, o UpOptions) error {
 	}
 	s.resumed[name] = resume
 
-	if err := s.Tmux.Start(name, dir, s.Env(r), s.Command(r, resume)); err != nil {
+	if err := s.Tmux.Start(name, dir, s.Env(r), s.commandIn(r, resume, dir)); err != nil {
 		return fmt.Errorf("%s: %w", name, err)
 	}
 

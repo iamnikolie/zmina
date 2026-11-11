@@ -1507,7 +1507,9 @@ policy   claude: pinned work only from 80%, nothing from 99% · codex: pinned wo
 ```
 
 - **Claude** is the 5-hour and the 7-day window as the status line of a Claude role last drew them. The status-line
-  tap writes them to `limits/claude.json` in the crew's directory.
+  tap writes them to `limits/claude.json` in the crew's directory. The file never goes back: a window whose reset is
+  earlier than the stored one's (a session redrawing with an old status line input) is not taken, and at the same reset
+  the higher `used` stays; a draw with nothing newer leaves the file, `at` included, as it is.
 - **Codex** is the weekly window (10080 minutes), read from the newest rollout under `sessions/` of each Codex home the
   crew knows: `~/.codex` and every Codex seat's `codex_home`. The newest is found by modification time across all days'
   folders, and in it the last `rate_limits` line counts. Of the homes, the reading recorded last wins; `(codex-dev)`
@@ -1530,11 +1532,15 @@ policy   claude: pinned work only from 80%, nothing from 99% · codex: pinned wo
   figure changed (and, to say the status line is still drawn, at most every 5 minutes when none did), then runs the
   command it wraps with the same bytes on stdin and prints that command's output and exit code as they are. With
   no command it prints nothing. One word after `--` is a shell command line, more words are a program and its
-  arguments. It never breaks a status line: any error of its own is dropped and the wrapped command runs anyway.
+  arguments. It never breaks a status line: any error of its own is dropped and the wrapped command runs anyway. The
+  command runs in a process group of its own and has 5 seconds: past that the group is killed and the tap ends with
+  exit code 0 and what the command printed so far, no error text; a tap that is sent SIGTERM, SIGINT or SIGHUP kills the
+  group too and exits with 128 plus the signal.
 - **Where the tap is installed**: in the `statusLine` of the `--settings` zmina passes a Claude role that takes its lines
   on its own channel (Delivery), next to its hooks. It wraps the status line Claude Code would have drawn for that role —
-  the `statusLine` command of its dir's `.claude/settings.local.json`, then `.claude/settings.json`, then the
-  namespace's `settings.json` — so the pane looks as before; with none configured the tap draws nothing of its own. The
+  the `statusLine` command of `.claude/settings.local.json`, then `.claude/settings.json` in the directory it starts in
+  (a task's worktree when it is started with one), then in its configured dir, then the namespace's `settings.json` —
+  so the pane looks as before; with none configured the tap draws nothing of its own. The
   owner's settings files are only read, never edited, and the sessions the owner starts keep their own status line. A
   role typed to (`delivery: tmux`), a Codex role, one whose `args` pass their own `--settings` and one an earlier zmina
   started (until its next start) have no tap, so their status lines record nothing. The line is a command line a

@@ -127,6 +127,12 @@ func ReadClaude(dir string) (*Claude, error) {
 // Tap records one status line's figures in dir: the file is written, whole or not at all, when a figure differs from
 // the one in the file, and otherwise at most every Heartbeat to say the status line is still drawn. It reports
 // whether it wrote. A status line without figures writes nothing.
+//
+// Sessions share the file, and one that redraws with figures it saw long ago (a stale status line input) must not
+// take back a newer reading: a window whose reset is earlier than the stored one's is the stored window's past, and
+// at the same reset the higher percentage is the later figure (a window only fills). The stored window stays then,
+// and a draw that brought nothing newer than the file leaves it as it is, At included: the file says when its figures
+// were seen, not when an old one was drawn again.
 func Tap(dir string, raw []byte, now time.Time) (bool, error) {
 	c := ParseStatusline(raw, now)
 	if c == nil {
@@ -134,9 +140,19 @@ func Tap(dir string, raw []byte, now time.Time) (bool, error) {
 	}
 
 	// A file that cannot be read is simply replaced.
-	if old, _ := ReadClaude(dir); old != nil && old.sameFigures(c) {
-		if d := now.Sub(old.At); d >= 0 && d < Heartbeat {
-			return false, nil
+	if old, _ := ReadClaude(dir); old != nil {
+		drawnAgain := old.sameFigures(c)
+
+		c.FiveHour, c.SevenDay = c.FiveHour.latest(old.FiveHour), c.SevenDay.latest(old.SevenDay)
+
+		if old.sameFigures(c) {
+			if !drawnAgain {
+				return false, nil
+			}
+
+			if d := now.Sub(old.At); d >= 0 && d < Heartbeat {
+				return false, nil
+			}
 		}
 	}
 

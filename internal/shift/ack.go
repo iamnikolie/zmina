@@ -643,7 +643,10 @@ const turnEndTimeout = 5
 // owner's own line as before (tapStatusLine). The commands and flags these hooks and this line name are an API: a
 // session keeps them for its life and runs them with every later zmina: a new line or flag goes into
 // cmd/testdata/hook-lines.txt (TestHookCommandsResolve).
-func (s *Shift) roleSettings(name string) string {
+func (s *Shift) roleSettings(name string) string { return s.roleSettingsIn(name, "") }
+
+// roleSettingsIn is roleSettings for a session that starts in dir (a task's worktree); empty is the role's own dir.
+func (s *Shift) roleSettingsIn(name, dir string) string {
 	settings := map[string]any{"crossSessionInbound": "accept"}
 
 	// skills: the skill list trimmed (description cap, skills by name only or left out); output_cap.bash
@@ -672,7 +675,7 @@ func (s *Shift) roleSettings(name string) string {
 		}
 
 		settings["hooks"] = hooks
-		settings["statusLine"] = s.tapStatusLine(name, base)
+		settings["statusLine"] = s.tapStatusLine(name, base, dir)
 	}
 
 	raw, _ := json.Marshal(settings)
