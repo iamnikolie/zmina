@@ -379,6 +379,59 @@ func (s *Shift) dropQueued(a *Ack) {
 			s.log(a.Role, "acked-queued", "", line)
 		}
 	}
+
+	s.clearInFlight(rs, a)
+}
+
+// clearInFlight takes what its reader acked out of the records that follow a line after it left the queue: the failed
+// lines, the lines posted and not yet seen, the line typed and not yet landed. The reader has it, so none of them may
+// stay (a failed mark nothing would ever clear, a posted line that turns failed once it is over ten minutes old). A
+// record that carries other ids too stays until they are acked as well, as in giveBack. A posted or typed line
+// closes as it does when it shows or lands.
+func (s *Shift) clearInFlight(rs *RoleState, a *Ack) {
+	mine := func(ids []string) bool { return slices.Contains(ids, a.ID) && s.acked(ids) }
+	dispatcher := a.Role == s.Crew.Dispatcher
+
+	rs.Failed = slices.DeleteFunc(rs.Failed, func(f Failed) bool {
+		if !mine(f.IDs) {
+			return false
+		}
+
+		s.log(a.Role, "acked-cleared", "", "failed: "+f.Line)
+
+		return true
+	})
+
+	rs.Posted = slices.DeleteFunc(rs.Posted, func(p Posted) bool {
+		if !mine(p.IDs) {
+			return false
+		}
+
+		s.log(a.Role, "acked-cleared", "", "posted: "+p.Line)
+
+		if dispatcher {
+			s.stageIDs(p.IDs, "submitted")
+			s.closeInfo(a.Role, p.Parts, "seen")
+		}
+
+		return true
+	})
+
+	if sent := rs.Sent; sent != nil && mine(sent.IDs) {
+		s.log(a.Role, "acked-cleared", "", "typed: "+sent.Line)
+
+		if dispatcher {
+			s.closeInfo(a.Role, sent.Parts, "typed")
+		}
+
+		rs.Sent = nil
+	}
+}
+
+// acked reports whether every id of an item was acked meanwhile: it carries some, and none still waits. An item
+// with no ids is never acked, whatever its text says.
+func (s *Shift) acked(ids []string) bool {
+	return len(ids) > 0 && !slices.ContainsFunc(ids, func(id string) bool { return s.State.Acks[id] != nil })
 }
 
 // giveBack puts what never reached a role back where it waited, each item with its own ids: a line or post to the
@@ -386,12 +439,8 @@ func (s *Shift) dropQueued(a *Ack) {
 // notes), any other line whole. An item whose every id its reader acked meanwhile stays out: the reader has it. It
 // returns the lines for the head of the role's queue.
 func (s *Shift) giveBack(name, line string, ids []string, parts []Part) []string {
-	acked := func(ids []string) bool {
-		return len(ids) > 0 && !slices.ContainsFunc(ids, func(id string) bool { return s.State.Acks[id] != nil })
-	}
-
 	if len(parts) == 0 {
-		if acked(ids) {
+		if s.acked(ids) {
 			s.log(name, "acked-queued", "", line)
 
 			return nil
@@ -406,7 +455,7 @@ func (s *Shift) giveBack(name, line string, ids []string, parts []Part) []string
 
 	for _, p := range parts {
 		switch {
-		case acked(p.IDs):
+		case s.acked(p.IDs):
 			s.log(name, "acked-queued", "", p.Line+p.Signal)
 		case p.Line != "":
 			lines = append(lines, p.Line)
