@@ -1249,6 +1249,8 @@ while one is open closes it within seconds.
   waits too); 30 from all addresses do the same for everyone. A right secret clears the address; 15 quiet minutes clear
   the counts. The counts are in memory: a restart starts again. A proxy that does not set `X-Forwarded-For` shows every
   client as one address.
+- `--token` (or `$ZMINA_UI_TOKEN`) must be at least 16 characters, or `zmina ui` refuses to start; with none given it
+  makes a long one for the run. Prefer the environment: an argument shows in `ps`.
 
 ### Connect a phone
 

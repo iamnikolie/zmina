@@ -19,6 +19,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
@@ -42,6 +43,8 @@ const (
 	uiPing = 15 * time.Second
 	// uiCookie carries a session's id once a browser signed in; never the token.
 	uiCookie = "zmina_ui"
+	// uiTokenMin is the shortest token an owner may give: a guessable secret is no use behind a login.
+	uiTokenMin = 16
 )
 
 func (a *app) uiCommand() *cobra.Command {
@@ -59,6 +62,10 @@ func (a *app) uiCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if token == "" {
 				token = os.Getenv("ZMINA_UI_TOKEN")
+			}
+			if token != "" && utf8.RuneCountInString(token) < uiTokenMin {
+				return fmt.Errorf("the token is %d characters: use at least %d (for example $(openssl rand -hex 24) in "+
+					"$ZMINA_UI_TOKEN); with none given zmina ui makes a long one for the run", utf8.RuneCountInString(token), uiTokenMin)
 			}
 			if len(allowHosts) > 0 && token == "" {
 				return errors.New("--allow-host needs --token (or $ZMINA_UI_TOKEN)")
@@ -178,8 +185,9 @@ func (a *app) uiCommand() *cobra.Command {
 	}
 
 	c.Flags().StringVar(&addr, "addr", "127.0.0.1:7517", "address to listen on; a non-loopback one needs --token")
-	c.Flags().StringVar(&token, "token", "", "secret the page needs (?token= on a page signs a browser in once, then "+
-		"it holds a session); default $ZMINA_UI_TOKEN, else one made for this run (signed in by a one-time code)")
+	c.Flags().StringVar(&token, "token", "", "secret the page needs (at least 16 characters; ?token= on a page signs a "+
+		"browser in once, then it holds a session); default $ZMINA_UI_TOKEN, else one made for this run (signed in by a "+
+		"one-time code)")
 	c.Flags().BoolVar(&noOpen, "no-open", false, "print the address, do not open a browser")
 	c.Flags().StringSliceVar(&allowHosts, "allow-host", nil, "additional exact Host for a private reverse proxy; requires a token")
 	c.Flags().StringVar(&codeCommand, "code-command", "", "shell command that sends a sign-in code to the owner (the "+
