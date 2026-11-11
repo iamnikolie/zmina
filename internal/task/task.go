@@ -122,6 +122,19 @@ type Task struct {
 	// Closed is who closed the task, when, and with what note; nil while it is active, or closed by a zmina that
 	// did not keep it.
 	Closed *Closure `json:"closed,omitempty"`
+	// Route is what the crew file's routes said when the task was made, when the crew has routes (zmina route).
+	Route *Route `json:"route,omitempty"`
+}
+
+// Route is the crew file's routes' answer for a task: the rule that answered (its number, 0 or 2 to 6, and name) and
+// why. When the task went to another seat than the one the routes named, Said is that seat and Override why it was
+// picked by hand (task new --because; empty when none was given).
+type Route struct {
+	Rule     int    `json:"rule"`
+	Name     string `json:"name,omitempty"`
+	Why      string `json:"why,omitempty"`
+	Said     string `json:"said,omitempty"`
+	Override string `json:"override,omitempty"`
 }
 
 // Closure is how a task was closed: by whom (a role, "hand" for the owner), when, as what, and the note it was

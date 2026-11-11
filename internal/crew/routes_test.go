@@ -69,7 +69,7 @@ route_override: required
 
 	assert.Equal(t, route.Rule{Kind: route.OtherCrew, Under: realDir, UnderText: "acme-lg", Tell: "box/acme"}, got.Rules[0],
 		"a relative directory is relative to the crew file, as every path in it")
-	assert.Equal(t, ExpandHome("~/work/erp"), got.Rules[1].Under, "a ~ is the home directory")
+	assert.Equal(t, ResolvePath("", ExpandHome("~/work/erp")), got.Rules[1].Under, "a ~ is the home directory")
 	assert.Equal(t, "~/work/erp", got.Rules[1].UnderText, "messages say it as the file wrote it")
 	assert.Equal(t, 70, got.Rules[2].FreshOver)
 	assert.Equal(t, map[string]string{"app": "dev", "docs": "writer"}, got.Rules[3].Owners)
@@ -165,4 +165,22 @@ func TestARoleKnowsHowMuchContextIsFull(t *testing.T) {
 	c, err = Load(write(t, routesRoles+"    restart_at: off\n"))
 	require.NoError(t, err)
 	assert.Zero(t, c.Roles["writer"].ContextBudget(), "no limit, no share")
+}
+
+func TestResolvePathFollowsLinksAsFarAsThePathIsThere(t *testing.T) {
+	root := t.TempDir()
+	real := filepath.Join(root, "real")
+	require.NoError(t, os.MkdirAll(real, 0o700))
+	require.NoError(t, os.Symlink(real, filepath.Join(root, "link")))
+
+	want, err := filepath.EvalSymlinks(real)
+	require.NoError(t, err)
+
+	assert.Equal(t, want, ResolvePath("", filepath.Join(root, "link")))
+	assert.Equal(t, filepath.Join(want, "a", "b"), ResolvePath("", filepath.Join(root, "link", "a", "b")), "a path not there yet is below the link's target")
+	assert.Equal(t, filepath.Join(want, "x"), ResolvePath(filepath.Join(root, "link"), "x"), "relative to the crew file's directory")
+	home, err := filepath.EvalSymlinks(ExpandHome("~"))
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(home, "x"), ResolvePath("/nowhere", "~/x"))
+	assert.Equal(t, "/nowhere/at/all", ResolvePath("", "/nowhere/./at//all"))
 }

@@ -913,7 +913,7 @@ Watches are edited by hand in the crew file. Log events: `watch-run`, `watch-not
 
 One file per task in `~/.zmina/tasks/T-<n>.json`. States: `open` (handed, in work), `waiting`
 (the role waits for the owner; it stays up), `done`, `dropped`, `parked` (moved to the later list,
-`later: "L-15"` in its file, shown `parked L-15`). "Active" = open or waiting (and a
+`later: "L-15"` in its file, shown `parked L-15`; a task made while the crew file has routes also keeps `route:`, below). "Active" = open or waiting (and a
 state this zmina does not know, so nothing runs over it). The first name of `waiting`,
 `waiting-<owner>`, is still read and accepted. A new task is numbered above every `T-<n>.json` in the
 directory, readable or not, and never replaces a file; `task ls` and `doctor` name damaged files. A task file
@@ -937,7 +937,9 @@ which edit files in a repository checkout.
 
 | Command | Does |
 |---|---|
-| `zmina task new <role> <asked...>` | record a task; prints `T-14 · dev`. If the role is already running, also queues its current handoff packet for explicit acceptance; does not restart the role or change its working directory. A role that is down is not started: stderr names the `zmina --crew <file> up <role> --task T-14` that starts it on the task, and if the task still sits there unaccepted after 5 min the ticker tells the dispatcher once (`<role>: down, has not taken T-14; zmina --crew … up …`, one notice per task, dropped before delivery once the role is up or the task taken; not while the role sleeps or the shift is stopped). `--repo <name or path>` (a name is a directory under the crew's dir), `--note`, `--title "<short plain sentence>"`, `--project <name>`, `--url <live thing>`, `--budget <dollars>` (what it may cost, see Usage), `--json`. |
+| `zmina task new <role> <asked...>` | record a task; prints `T-14 · dev`. If the role is already running, also queues its current handoff packet for explicit acceptance; does not restart the role or change its working directory. A role that is down is not started: stderr names the `zmina --crew <file> up <role> --task T-14` that starts it on the task, and if the task still sits there unaccepted after 5 min the ticker tells the dispatcher once (`<role>: down, has not taken T-14; zmina --crew … up …`, one notice per task, dropped before delivery once the role is up or the task taken; not while the role sleeps or the shift is stopped). `--repo <name or path>` (a name is a directory under the crew's dir), `--note`, `--title "<short plain sentence>"`, `--project <name>`, `--url <live thing>`, `--budget <dollars>` (what it may cost, see Usage), `--json`. With `routes:` in the crew file the routes can pick the role (`--route`) and every task made records where it went against them (see Routes). |
+| `zmina task new --route [--kind k] [--repo r] [--project p] [--after T-n] [--of T-n [--rereview]] <asked...>` | the role is left out and the crew file's routes pick it (`zmina route` takes the same flags, see Routes): prints `T-15 · dev2 (rule 6: claude 7d 41% < codex week 50%)`. Nothing is made when no rule matched or the answer is another crew's (`tell`): the error says so, and the task is made by hand with `zmina task new <role> …`. A role down is not started, as above (a copy `dev#2`: `up dev --as 2 --task T-15`). |
+| `zmina task new <role> [--because "<why>"] <asked...>` | a role picked by hand, with the routes' answer kept beside it (see Routes). `--because` says why it is not the routes' pick; optional unless the crew file has `route_override: required`. Without `routes:` it does nothing. |
 | `zmina task new <role> --repo r --worktree <asked...>` | also gives it its own git worktree `~/.zmina/worktrees/<repo>-T-14` on a new branch `zmina/t-14` (`zmina/<crew>-t-14` for a named crew) from the repo's current branch (`--base` another). The role works there, never in the repo's checkout. The task is written before the worktree is made: if git fails, it stays as `dropped` with the error in its note. |
 | `zmina task ls [<node>/<crew>] [--all] [--role r] [--json]` | active tasks (`--all`: closed too); with an address, that crew's (see `zmina ls <node>/<crew>`). |
 | `zmina task show [<node>/<crew>] <id> [--full]` | one task: what was asked and its latest note (each clipped to 300 characters), its handoff, result and checkpoint in one line each (revision, time, the summary's start), its cost line (see Usage) and its last 8 events, one line each. `--full`: the asked text, note, result and checkpoint whole and the last 20 events. Ids: `T-14`, `t-14` or `14`. |
@@ -1537,7 +1539,8 @@ a free seat of the same plan from the first `pool:` (idle, then down). `busy: po
 With none of those the seat keeps it and the task queues behind its work, said so. A copy is advice: starting one
 stays the owner's call, as in For the dispatcher.
 
-**`route_override`** is `optional` (the default) or `required`; see below.
+**`route_override`** is `optional` (the default) or `required`: whether a role picked by hand against the routes has to say
+why, with `--because` (below).
 
 **`zmina route [<asked...>]`** says which seat takes a piece of work. It reads the crew file, the seats and the plans'
 limits and changes nothing: no state lock, no task, no event. What the work is comes from flags, never from parsing
@@ -1589,6 +1592,31 @@ no rule matched: kind movie has no seat in routes (design, film): pick by hand
 - **The printed commands** carry `--crew` or `--config` when this run was given one. A project's repo gets
   `--worktree` unless the work goes on from a task or reviews one; the title is yours to write.
 
+**Tasks and the routes.** `zmina task new --route …` leaves the role out and lets the routes pick it; the line it prints
+says the rule (`T-15 · dev2 (rule 6: claude 7d 41% < codex week 50%)`), so the dispatcher does not have to name it in
+its reply. `zmina task new <role> …` picks by hand, and while the crew file has routes the routes are asked all the
+same, with the same flags (`--repo`, `--project`, `--kind`, `--after`, `--of`, `--rereview`):
+
+```
+$ zmina task new dev3 --because "alex named it" --kind code --repo ~/work/site "fix the login form"
+T-15 · dev3 (route said dev2, rule 6; override: alex named it)
+```
+
+- **The line** after the role says `(rule 6: …)` when the routes picked it, `(rule 6, as the routes say)` when the hand
+  agreed, `(route said dev2, rule 6)` when it did not (`; override: <why>` with `--because`), and nothing when no rule
+  matched. The first line stays `T-<n> · <role>`.
+- **`--because "<why>"`** is optional by default, so a shadow period shows where the table and the hand differ before
+  anyone is made to explain. With `route_override: required` a pick that differs from what the routes name is refused,
+  and no task is made, until it says why; a pick the routes agree with, a pick when no rule matched and `--route` need no
+  reason. `--because` with `--route` is an error: the routes picked. Without `routes:` it is ignored.
+- **One `route` event** is logged for every `task new` made while the crew file has routes, with `--route` or without:
+  `{"event": "route", "task": "T-15", "role": "dev3", "picked": "dev3", "rule": 6, "route_said": "dev2", "because": "alex
+  named it"}` (`rule` and `route_said` are left out when no rule matched; `route_said` may be a `<node>/<crew>`). It is
+  the shadow log: `zmina log --json` over a week shows which rule loses. A crew file without `routes:` logs none.
+- **The task keeps** `route: {"rule": 6, "name": "pool by limits", "why": "…"}` in its file, and `said` (the seat the
+  routes named) and `override` (the `--because`) when it went to another seat. `zmina task show` prints it as `route:`.
+  Absent when the crew had no routes or no rule matched; a task file without it reads as before.
+
 **The crew file is checked** (`zmina doctor`, every command that loads it): an unknown rule kind, a rule that is not
 one key, a key a rule does not have, a role no seat exists for (a copy is no seat of a rule), an empty or missing
 pool, a `tell` that is not `<node>/<crew>`, a `fresh_over` outside 1 to 100, a `busy` or `route_override` value that is
@@ -1598,7 +1626,8 @@ be removed with `zmina seat rm` while it does.
 ## Log
 
 `zmina log [--since 12h|3d] [--role r] [--task T-14] [-n|--last 50] [--full] [--json]` — ups, downs, ends, broken
-roles, stuck/idle/expired notes, lines told or typed, keys, sends, tasks, seats, scheduled runs, restarts,
+roles, stuck/idle/expired notes, lines told or typed, keys, sends, tasks, seats, `route` (which seat a new task went to
+and what the routes said, see Routes), scheduled runs, restarts,
 each with who did it (`hand`, `ticker`, `schedule`, or the role) and, after a task's or parked item's id, its title
 (`accepted T-14 (fix the login)`); one line of at most 160 characters per event,
 `--full` whole. File `~/.zmina/events.jsonl`,
@@ -1823,9 +1852,12 @@ the crew are dropped from it. A role missing from the crew file keeps its state 
 - A zmina line with ids (`S-12 …`) and a line ending `(zmina S-14)` wait for your ack: once each is handled — a task recorded, routed, answered, or nothing to do — `zmina ack S-12 S-14`, one
   call for the batch. `still pending since …` is one you did not ack: handle it now or ack it. `zmina pending` lists
   them; the recovery pack has them as `unacked`.
-- Which seat takes a piece of work, when the crew file has `routes:`: `zmina route [--repo r] [--project p] [--kind k]
-  [--after T-n] [--of T-n [--rereview]] [--explain] "<asked>"` (Routes). Say the kind and the project yourself: they
-  are your judgment, the table is not. Exit 2: no rule matched, pick by hand.
+- Which seat takes a piece of work, when the crew file has `routes:`: `zmina task new --route [--kind k] [--repo r]
+  [--project p] [--after T-n] [--of T-n [--rereview]] --title "…" "<asked>"` records the task for the seat the routes pick
+  and prints the rule; `zmina route …` (`--explain`, `--json`) only asks. Say the kind and the project yourself: they are
+  your judgment, the table is not. When the owner named a seat or the table is wrong for this case, pick by hand and say
+  why: `zmina task new <role> --because "<why>" …`. Exit 2 of `zmina route`, or `task new --route` refusing: no rule
+  matched or the work is another crew's (`zmina tell`); pick by hand. Tell the owner the line `task new` printed.
 - How full the plans are, before a piece of work is routed by plan: `zmina limits` (`--json`). A plan printed
   `unknown (…)` has no reading you may trust: do not guess it; the policy line says where work narrows (Limits).
 - `budget: …` — a role or a task went past its budget (API-equivalent dollars). Nothing is stopped: tell the

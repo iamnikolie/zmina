@@ -82,15 +82,25 @@ func (r *Role) ContextBudget() int {
 }
 
 // ResolvePath makes a path absolute the way the crew file's own paths are (a leading ~, else relative to dir), clean,
-// and with symbolic links followed when the path is there.
+// and with symbolic links followed as far as the path is there, so a directory and a path below it that is not there
+// yet are compared on the same footing.
 func ResolvePath(dir, p string) string {
 	p = filepath.Clean(anchor(dir, ExpandHome(p)))
 
-	if real, err := filepath.EvalSymlinks(p); err == nil {
-		return real
-	}
+	rest, cur := "", p
 
-	return p
+	for {
+		if real, err := filepath.EvalSymlinks(cur); err == nil {
+			return filepath.Join(real, rest)
+		}
+
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return p
+		}
+
+		rest, cur = filepath.Join(filepath.Base(cur), rest), parent
+	}
 }
 
 var ruleKinds = func() string {
