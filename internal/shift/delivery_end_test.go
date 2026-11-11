@@ -596,3 +596,105 @@ func TestRecordFlagsAreOptionalInState(t *testing.T) {
 	assert.True(t, back.Roles["dev"].Sent.Acked)
 	assert.True(t, back.Roles["dev"].Posted[0].Boot)
 }
+
+// A /clear ends a conversation and starts another in the same process: the boot a clear queued is posted while the
+// registry still shows the old conversation, and the id then changes under the live process. That is not the end of a
+// session (the process lives): the boot goes back to the queue, still known as the boot, and reaches the new
+// conversation, which has no other.
+func TestClearedConversationGetsItsBoot(t *testing.T) {
+	f, p := nativeFixture(t, trimCrew)
+	upNative(t, f, "dev")
+
+	f.rg.context["sid-dev"] = 120_000
+	f.status("dev", "idle", f.now.Add(-time.Hour))
+	f.s.Tick()
+	require.Equal(t, []string{"/clear"}, f.tm.typed["dev"])
+
+	rs := f.s.State.Role("dev")
+	boot := rs.QueuedBoot
+	require.NotEmpty(t, boot)
+
+	if len(rs.Posted) == 0 {
+		f.s.Tick()
+	}
+
+	require.Len(t, rs.Posted, 1, "the boot is posted to the old conversation")
+	require.True(t, rs.Posted[0].Boot)
+
+	// The clear started another conversation.
+	f.rg.byPID[f.tm.up["dev"]].SessionID = "sid-dev-2"
+	f.rg.context["sid-dev-2"] = 10_000
+
+	for range 3 {
+		*f.now = f.now.Add(time.Minute)
+		f.s.Tick()
+	}
+
+	assert.Zero(t, f.eventCount("dropped"), "the process lives: nothing is dropped")
+	require.Len(t, p.posted["sid-dev-2"], 1, "the boot reached the new conversation, once")
+	assert.Equal(t, boot, p.posted["sid-dev-2"][0])
+	assert.Equal(t, boot, rs.QueuedBoot, "and is still known as the boot")
+	require.Len(t, rs.Posted, 1)
+	assert.True(t, rs.Posted[0].Boot)
+}
+
+// The dispatcher's deliver forgets QueuedBoot once the boot has left the queue; a boot given back because only its
+// conversation ended is known as the boot again.
+func TestClearedDispatcherGetsItsBootAgain(t *testing.T) {
+	f, _ := nativeFixture(t, crewYAML)
+	upNative(t, f, "dispatcher")
+
+	rs := f.s.State.Role("dispatcher")
+	boot := "read d and boot\n\n[zmina] the rules"
+	rs.QueuedBoot, rs.Inbox = boot, []string{boot}
+
+	require.NotEmpty(t, f.s.deliverInbox("dispatcher", *f.now))
+	f.s.deliver(*f.now)
+	require.Empty(t, rs.QueuedBoot)
+
+	f.rg.byPID[f.tm.up["dispatcher"]].SessionID = "sid-dispatcher-2"
+	f.s.followPosted("dispatcher", *f.now)
+
+	assert.Empty(t, rs.Posted)
+	assert.Equal(t, []string{boot}, rs.Inbox)
+	assert.Equal(t, boot, rs.QueuedBoot, "known as the boot, so it still goes alone and first")
+	assert.Zero(t, f.eventCount("dropped"))
+}
+
+// Likewise a release line: the conversation changed under a live process, which is not released by that. It goes back
+// as it did before the session's end was settled; only a session that is gone drops it.
+func TestReleaseLineGoesBackWhenOnlyTheConversationChanged(t *testing.T) {
+	f, _ := nativeFixture(t, crewYAML)
+	upNative(t, f, "designer")
+
+	line := releaseLine(time.Hour, []string{"T-1"})
+	require.NoError(t, f.s.post("designer", f.s.session("designer"), line, *f.now))
+
+	f.rg.byPID[f.tm.up["designer"]].SessionID = "sid-designer-2"
+	f.s.followPosted("designer", *f.now)
+
+	rs := f.s.State.Role("designer")
+	assert.Empty(t, rs.Posted)
+	assert.Equal(t, []string{line}, rs.Inbox)
+	assert.Zero(t, f.eventCount("dropped"))
+	assert.Equal(t, 1, f.eventCount("requeued"))
+}
+
+// A session-bound line waiting in a Codex file is withdrawn only with a session that is gone: the bridge process
+// lives on, its thread changed, and it takes the file in that thread.
+func TestCodexSessionBoundLineStaysWhenOnlyTheThreadChanged(t *testing.T) {
+	f, dir := codexFixture(t)
+	bridge(t, f, dir, "thread-1")
+
+	require.NoError(t, f.s.post("dev", f.s.session("dev"), releaseLine(time.Hour, []string{"T-1"}), *f.now))
+	require.Len(t, waitingFiles(t, dir), 1)
+
+	bridge(t, f, dir, "thread-2") // the same process, another thread
+
+	f.s.followPosted("dev", *f.now)
+
+	rs := f.s.State.Role("dev")
+	assert.Len(t, rs.Posted, 1, "its file waits for the bridge")
+	assert.Len(t, waitingFiles(t, dir), 1, "not withdrawn")
+	assert.Zero(t, f.eventCount("dropped"))
+}

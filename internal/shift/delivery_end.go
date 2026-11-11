@@ -78,19 +78,23 @@ func (s *Shift) settleEnded(name string, now time.Time) {
 	}
 }
 
-// requeuePosted gives back a posted line whose conversation ended before it showed (followPosted), except what only
-// that conversation was meant for: a line, or a part of a post to the dispatcher (an own queued line), that is
-// sessionBound is dropped with an event. It returns the lines for the head of the role's queue.
-func (s *Shift) requeuePosted(name string, p Posted) []string {
+// requeuePosted gives back a posted line whose conversation ended before it showed (followPosted). When the session is
+// gone (gone: the process is, settleEnded) what only that conversation was meant for is dropped with an event: a line, or
+// a part of a post to the dispatcher (an own queued line), that is sessionBound. When only the conversation changed
+// under a process that lives (a /clear starts another one in it) nothing is dropped: that conversation has no boot of
+// its own to replace the boot a clear queued, and is not released by a release line meant for the one before. A boot
+// given back is known as the boot again (QueuedBoot, which the dispatcher's deliver forgets once the boot left the
+// queue). It returns the lines for the head of the role's queue.
+func (s *Shift) requeuePosted(name string, p Posted, gone bool) []string {
 	parts := p.Parts
 
-	if len(parts) == 0 {
+	if gone && len(parts) == 0 {
 		if p.Boot || s.sessionBound(name, p.Line) {
 			s.log(name, "dropped", "", "meant for the conversation that ended, never shown in it: "+p.Line)
 
 			return nil
 		}
-	} else {
+	} else if gone {
 		parts = slices.DeleteFunc(slices.Clone(parts), func(part Part) bool {
 			bound := part.Line != "" && s.sessionBound(name, part.Line)
 			if bound {
@@ -109,6 +113,10 @@ func (s *Shift) requeuePosted(name string, p Posted) []string {
 	// its reader acked meanwhile it leaves out (and logs), and then nothing was requeued.
 	before := len(s.State.Signals) + len(s.State.Notes)
 	lines := s.giveBack(name, p.Line, p.IDs, parts)
+
+	if p.Boot && slices.Contains(lines, p.Line) {
+		s.State.Role(name).QueuedBoot = p.Line
+	}
 
 	if len(lines) > 0 || len(s.State.Signals)+len(s.State.Notes) > before {
 		s.log(name, "requeued", "", "its conversation ended before it showed: "+p.Line)

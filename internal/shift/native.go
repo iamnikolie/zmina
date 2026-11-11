@@ -157,9 +157,10 @@ func (s *Shift) followPostedAs(name string, now time.Time, gone bool) bool {
 			s.postShown(name, p)
 		case ended && stillQueued(ch, ns, p):
 			// Its file waits in a bridge's inbox: the next bridge takes it, and this record closes then. Unless it meant
-			// the conversation that ended alone: its file is taken out, so that no bridge runs it in the next one. When
-			// the file could not be taken out (a bridge took it meanwhile) the record stays, and closes on Delivered.
-			if s.postedBound(name, p) && withdraw(ch, ns, p) {
+			// the session that is gone alone: its file is taken out, so that no bridge runs it in the next one (a bridge
+			// that lives and changed its thread takes it in that thread). When the file could not be taken out (a bridge
+			// took it meanwhile) the record stays, and closes on Delivered.
+			if gone && s.postedBound(name, p) && withdraw(ch, ns, p) {
 				s.log(name, "dropped", "", "withdrawn from its bridge's inbox, meant for the conversation that ended: "+p.Line)
 
 				break
@@ -190,7 +191,7 @@ func (s *Shift) followPostedAs(name string, now time.Time, gone bool) bool {
 	if len(back) > 0 {
 		lines := make([]string, 0, len(back)+len(rs.Inbox))
 		for _, p := range back {
-			lines = append(lines, s.requeuePosted(name, p)...)
+			lines = append(lines, s.requeuePosted(name, p, gone)...)
 		}
 
 		rs.Inbox = append(lines, rs.Inbox...)
