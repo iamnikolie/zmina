@@ -989,13 +989,16 @@ which edit files in a repository checkout.
 | `zmina task set <id> [state] [--on <who>] [--note …] [--role r] [--title …] [--project …] [--url …] [--budget …] [--criteria …]` | change state, note, title, project, url or budget (`-` clears one), or hand it to another role. `--criteria "<one line>"`, repeated, replaces the task's criteria; an empty `--criteria ""` alone clears them. `waiting --on <who>`: it waits on someone other than the owner — a role of the crew or a person (`--on -`: the owner again); it stays off the owner's todo. Any other state clears it. |
 | `zmina task done <id>` / `task drop <id>` | close it, and print its cost line when turns are found for it; closed by a role, the dispatcher gets a signal with the note (see results). Refuses while its worktree has uncommitted changes (`--force` closes anyway; the worktree stays). `done` also refuses a task that has criteria and no saved result (`task result`, or `done --result <file>`); `--force` closes it anyway. |
 | `zmina task park <id> [--note "<what remains>"]` | move an active task to the later list: a new `L-n` with what remains (default: the task's title), note `from T-48 (designer)`, and the role and its conversation (the running one, else its last) for `later take --resume`. The task closes as `parked L-n`; its worktree stays as it is. `task set <id> parked` is refused: parking goes through here. Prints `T-48 · designer · parked L-15`, then its cost line. |
-| `zmina task gc [--dry-run]` | remove worktrees and branches of closed tasks once clean and merged into their base. `--force` also removes dropped tasks' unmerged branches. |
+| `zmina task gc [--dry-run]` | remove worktrees and branches of closed tasks once clean and merged into their base. `--force` also removes dropped tasks' unmerged branches. Tasks whose repository is no longer at the path they record (moved, deleted) are one plain line for each repository, `repository moved or gone: <path>, N closed tasks`, not a git error for each: git cannot say whether their work is merged, so a worktree directory that exists stays (point the records at the new place with `task relocate`). `--drop-gone` also drops the worktree record (worktree, branch and base) of a done or dropped task whose repository and worktree directory are both gone: nothing is left to lose, and the record stops being listed. A last line counts what was removed, dropped and kept. |
+| `zmina task relocate <old-repo-path> <new-repo-path> [--dry-run]` | a repository moved: every task record (closed and open) whose repo is `<old-repo-path>` gets `<new-repo-path>`, which must be the top level of a git repository (refused otherwise). Only the repo field is rewritten, each record through the task store; an event `relocate` carries the count. Then `git worktree repair` runs in the new repository (one minute at most) and what it said is printed, so worktrees that stayed in `~/.zmina/worktrees` find their repository again. Nothing is deleted. `--dry-run` prints each task that would change and what would run. `task gc` then judges the tasks in their repository's new place. |
 
 **Daily sweep.** `worktree_gc: daily` in the crew file has the ticker run `zmina task gc` (never `--force`) at most
 once every 24 h: closed tasks whose branch is merged and whose worktree is clean lose theirs, nothing else. It runs
 after the beat's locked steps and holds no state lock, so a slow git blocks no other zmina command; it stops at a 60 s
 deadline and what it did not reach waits for the next day's sweep. Each removal is a `worktree removed` event in
-`zmina log`; `zmina doctor` shows the last sweep. Default off (`off` or absent).
+`zmina log`; closed tasks of a repository that moved are one line each in the beat's output (`worktree sweep:
+repository moved or gone: <path>, N closed tasks`) and one `worktree-sweep` event, and the sweep never drops a worktree
+record (`task gc --drop-gone` is by hand); `zmina doctor` shows the last sweep. Default off (`off` or absent).
 
 **What the work is.** `--title` is the work in one short plain sentence in the owner's language ("Landing page —
 rework"), `--project` the project or product it is for (default: the repo's directory name), `--url` the live thing
@@ -1300,7 +1303,12 @@ on every version, option or not. Then it reads the MR back with `glab`, or `gl` 
 (`$GL_CONFIG` first), and logs `lessons-draft`: `draft <url>`, `NOT A DRAFT <url>`, or the pushed ref when nothing on
 the node could read it. A remote without push options gets the branch, and the todo says to open the MR by hand. The run's budget is the smaller of `budget` and what is left of `week_budget`; a
 spent week skips the run (`triage-skipped`). Each run's cost is logged (`lessons-cost`) and `zmina usage` shows
-`Lessons triage $x: <crew> $y (n times)` per crew, peers too with `--all`.
+`Lessons triage $x: <crew> $y (n times)` per crew, peers too with `--all`. Every git call of a run ends: two minutes
+for a local one, five for one that talks to the remote (`fetch`, `push`, `ls-remote`), killed with what it started
+when no terminal drives the run (the daily run is detached); a remote that never answers fails the run, it does not
+hold it. A lesson, or the owner's todo, that a run could not save does not stop it recording its MR: the failure is a
+`lesson-state-failed` event, a note for the dispatcher and the run's last error (`ls`, doctor), and `zmina lesson
+triage` by hand exits with it.
 
 The owner gets one todo per MR: its url, each lesson and its file, what was dropped and why, the questions, and how
 many new lessons wait for it (new ones wait while it is open; `zmina ls` shows `lessons: 4 waiting · MR open <url>`).

@@ -431,7 +431,11 @@ func (a *app) lessonTriage(ctx context.Context, dry, scheduled bool) error {
 
 	if dry {
 		a.printPlan(res)
-		_, _ = lesson.Git(run.cfg.Repo, "branch", "-D", res.Branch)
+
+		// The dry run's branch is only the plan's scaffolding: one left behind is said, and the run goes on.
+		if _, err := lesson.Git(run.cfg.Repo, "branch", "-D", res.Branch); err != nil && res.Branch != "" {
+			fmt.Fprintf(a.err, "zmina: warning: the dry run's branch %s was not deleted: %v\n", res.Branch, err)
+		}
 
 		return a.withState(func(s *shift.Shift) error { return lessonFinish(s, run, res, terr, true) })
 	}
@@ -616,11 +620,18 @@ func lessonFinish(s *shift.Shift, run lessonRun, res lesson.Result, runErr error
 	store := lessonStore(s.Crew)
 	mr := or(res.MRURL, res.Branch)
 
-	var ids []string
+	var (
+		ids      []string
+		problems lessonProblems
+	)
 
+	// A lesson that cannot be read or written stays as it was: the run goes on (its MR is pushed, its state must be
+	// recorded), and the failure is told when the record is made.
 	mark := func(id string, state lesson.State, verdict, reason string) {
 		l, err := store.Get(id)
 		if err != nil {
+			problems.add("lesson "+id, err)
+
 			return
 		}
 
@@ -629,7 +640,9 @@ func lessonFinish(s *shift.Shift, run lessonRun, res lesson.Result, runErr error
 			l.MR = mr
 		}
 
-		_ = store.Put(l)
+		if err := store.Put(l); err != nil {
+			problems.add("lesson "+id, err)
+		}
 	}
 
 	var applied []string
@@ -660,25 +673,64 @@ func lessonFinish(s *shift.Shift, run lessonRun, res lesson.Result, runErr error
 
 	switch {
 	case res.Pushed:
+		// The MR is on the remote: it is recorded as open even when the owner's todo could not be written, or the
+		// next day's run would open another.
 		ask, err := askStore(s.Crew).Add(asks.Ask{Kind: asks.Check, Title: "Lessons MR to review",
 			Text: text, Role: "ticker", By: "ticker"}, s.Now())
 		if err != nil {
-			return err
+			// Add names the ask it failed to write: the open MR must not point at a todo that is not there.
+			problems.add("the owner's todo for the MR", err)
+
+			ask.ID = ""
 		}
 
 		st.Open = &lesson.Open{Branch: res.Branch, Target: run.cfg.Branch, URL: res.MRURL, Base: res.Base, Tip: res.Tip,
 			IDs: ids, Applied: applied, Todo: ask.ID, Opened: s.Now()}
-		s.Log("ticker", "lessons-mr", "", or(res.MRURL, res.Branch)+" "+ask.ID)
+		s.Log("ticker", "lessons-mr", "", strings.TrimSpace(or(res.MRURL, res.Branch)+" "+ask.ID))
 		s.Log("ticker", "lessons-draft", "", lessonDraftLine(res, run.cfg.Remote))
 	case len(res.Questions) > 0:
 		ask, err := askStore(s.Crew).Add(asks.Ask{Kind: asks.Check, Title: "Lessons: questions",
 			Text: text, Role: "ticker", By: "ticker"}, s.Now())
-		if err == nil {
+		if err != nil {
+			problems.add("the owner's todo with the questions", err)
+		} else {
 			s.Log("ticker", "lessons-asked", "", ask.ID)
 		}
 	}
 
+	if perr := problems.report(s); perr != nil {
+		st.LastError = perr.Error()
+
+		// What was saved is kept (the notes, the event) and the command fails with what was not.
+		return shift.Partial(errors.Join(perr, lesson.SaveState(run.dir, st)))
+	}
+
 	return lesson.SaveState(run.dir, st)
+}
+
+// lessonProblems collects what a record of lessons could not read or write. Such a failure must not stop the record
+// (the state of an MR that was pushed has to be saved all the same), and must not go unseen: report makes it an event
+// of the log and a note for the dispatcher, and an error for the caller.
+type lessonProblems struct{ errs []error }
+
+func (p *lessonProblems) add(what string, err error) {
+	p.errs = append(p.errs, fmt.Errorf("%s: %w", what, err))
+}
+
+// report logs and notes the problems, and returns them as one error; nil when there are none.
+func (p *lessonProblems) report(s *shift.Shift) error {
+	if len(p.errs) == 0 {
+		return nil
+	}
+
+	err := errors.Join(p.errs...)
+	what := strings.ReplaceAll(err.Error(), "\n", "; ")
+
+	s.Log("ticker", "lesson-state-failed", "", what)
+	s.AddNotes([]string{clip(fmt.Sprintf("lessons: %d records could not be saved, a lesson may be offered again: %s",
+		len(p.errs), what), 300)})
+
+	return err
 }
 
 func questionFor(questions []string, id string) string {
@@ -898,7 +950,9 @@ func (a *app) lessonsFollow(c *crew.Crew, st lesson.RunState, waiting int, now t
 		}
 	}
 
-	_ = a.withState(func(s *shift.Shift) error {
+	// A beat has nobody to return an error to: what could not be saved is an event of the log and a note for the
+	// dispatcher (lessonProblems), and what stopped the record altogether a line of the beat's output.
+	err := a.withState(func(s *shift.Shift) error {
 		cur, err := lesson.LoadState(lessonDir(c))
 		if err != nil || cur.Open == nil || cur.Open.Branch != open.Branch {
 			return err
@@ -906,25 +960,37 @@ func (a *app) lessonsFollow(c *crew.Crew, st lesson.RunState, waiting int, now t
 
 		cur.Checked = st.Checked
 
+		var problems lessonProblems
+
 		if !done {
 			if waiting != cur.Open.Waiting {
 				if ask, err := askStore(s.Crew).Get(cur.Open.Todo); err == nil && ask.Open() {
 					ask.Text = withWaiting(ask.Text, waiting)
 					ask.Updated = s.Now()
-					_ = askStore(s.Crew).Put(ask)
+
+					// Said once, not at every beat: the count is remembered whether or not the todo took it.
+					if err := askStore(s.Crew).Put(ask); err != nil {
+						problems.add("todo "+ask.ID, err)
+					}
 				}
 
 				cur.Open.Waiting = waiting
 			}
 
-			return lesson.SaveState(lessonDir(c), cur)
+			return shift.Partial(errors.Join(problems.report(s), lesson.SaveState(lessonDir(c), cur)))
 		}
 
 		store := lessonStore(s.Crew)
 
 		for _, id := range cur.Open.IDs {
 			l, err := store.Get(id)
-			if err != nil || l.State != lesson.InMR {
+			if err != nil {
+				problems.add("lesson "+id, err)
+
+				continue
+			}
+
+			if l.State != lesson.InMR {
 				continue
 			}
 
@@ -935,7 +1001,9 @@ func (a *app) lessonsFollow(c *crew.Crew, st lesson.RunState, waiting int, now t
 				l.Reason = "the MR was closed without a merge"
 			}
 
-			_ = store.Put(l)
+			if err := store.Put(l); err != nil {
+				problems.add("lesson "+id, err)
+			}
 		}
 
 		what := "closed"
@@ -944,20 +1012,28 @@ func (a *app) lessonsFollow(c *crew.Crew, st lesson.RunState, waiting int, now t
 		}
 
 		if ask, err := askStore(s.Crew).Get(cur.Open.Todo); err == nil && ask.Open() {
-			_, _ = askStore(s.Crew).Close(ask.ID, asks.Done, "the MR was "+what, s.Now())
+			if _, err := askStore(s.Crew).Close(ask.ID, asks.Done, "the MR was "+what, s.Now()); err != nil {
+				problems.add("todo "+ask.ID, err)
+			}
 		}
 
 		if catchupCmd != "" {
-			_, _ = askStore(s.Crew).Add(asks.Ask{Kind: asks.Check, Title: "Pull the merged lessons",
+			_, err := askStore(s.Crew).Add(asks.Ask{Kind: asks.Check, Title: "Pull the merged lessons",
 				Text: "The lessons MR is merged, but the checkout the roles read is ahead, dirty or on another branch, " +
 					"so zmina left it alone. Bring it up with: " + catchupCmd, Role: "ticker", By: "ticker"}, s.Now())
+			if err != nil {
+				problems.add("the todo to pull the merged lessons", err)
+			}
 		}
 
 		s.Log("ticker", "lessons-"+what, "", or(cur.Open.URL, cur.Open.Branch))
 		cur.Open, cur.Catchup = nil, catchupCmd
 
-		return lesson.SaveState(lessonDir(c), cur)
+		return shift.Partial(errors.Join(problems.report(s), lesson.SaveState(lessonDir(c), cur)))
 	})
+	if err != nil {
+		a.printTick([]string{"lessons: " + strings.ReplaceAll(err.Error(), "\n", "; ")})
+	}
 }
 
 // withWaiting rewrites the todo's last line about waiting lessons.
