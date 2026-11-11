@@ -84,6 +84,8 @@ func serveBrowserTerminal(w http.ResponseWriter, r *http.Request, open terminalO
 	defer func() { _ = ws.Close() }()
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
+	// A session ended while the socket is open ends the request's context (uiAuth.watched): the socket goes with it.
+	defer context.AfterFunc(ctx, func() { _ = ws.Close() })()
 	setup := time.AfterFunc(30*time.Second, func() { cancel(); _ = ws.Close() })
 	tty, err := open(ctx, r.URL.Query().Get("node"), r.URL.Query().Get("crew"), r.URL.Query().Get("role"), uint16(cols), uint16(rows))
 	setup.Stop()

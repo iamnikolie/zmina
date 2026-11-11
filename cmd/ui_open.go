@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -144,7 +143,7 @@ func runningCockpitAt(addr, token string) (string, bool) {
 	return cockpitHandoff(url, secret, token)
 }
 
-// uiProbe is the client for the calls that carry the handoff secret or the token (as the cookie) to a cockpit: it
+// uiProbe is the client for the calls that carry the handoff secret or the token (as a Bearer header) to a cockpit: it
 // follows no redirect, so neither reaches another address; a 3xx is not that cockpit's answer and fails as one.
 func uiProbe() *http.Client {
 	return &http.Client{Timeout: 2 * time.Second,
@@ -168,7 +167,7 @@ func recordedCockpit() (uiRunning, bool) {
 }
 
 // cockpitHandoff asks the cockpit at url for a one-time login code, showing the handoff secret or the token
-// (as the page's cookie, never in the address).
+// (as a Bearer header, never in the address).
 func cockpitHandoff(url, secret, token string) (string, bool) {
 	req, err := http.NewRequest(http.MethodPost, strings.TrimSuffix(url, "/")+"/api/handoff", nil)
 	if err != nil {
@@ -182,7 +181,7 @@ func cockpitHandoff(url, secret, token string) (string, bool) {
 	}
 
 	if token != "" {
-		req.AddCookie(&http.Cookie{Name: uiCookie, Value: token})
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	resp, err := uiProbe().Do(req)
@@ -208,8 +207,10 @@ func cockpitHandoff(url, secret, token string) (string, bool) {
 	return url, true
 }
 
-// serveLogin answers the handoff call and spends ?login= codes; it reports whether it answered the request.
-func serveLogin(w http.ResponseWriter, r *http.Request, l *uiLogins, token string, allowHosts []string) bool {
+// serveLogin answers the handoff call and spends ?login= codes; it reports whether it answered the request. The token
+// shown to the handoff call, and a login code, are counted by the limiter like any secret presented.
+func serveLogin(w http.ResponseWriter, r *http.Request, a *uiAuth, allowHosts []string) bool {
+	l := a.logins
 	if l == nil {
 		return false
 	}
@@ -228,9 +229,18 @@ func serveLogin(w http.ResponseWriter, r *http.Request, l *uiLogins, token strin
 		}
 
 		code, ok := l.mint(secret)
-		if !ok && token != "" {
+		if given, has := bearer(r); !ok && has && a.token != "" {
 			// A zmina ui that knows the token (--addr of a cockpit it did not record) signs in the same way.
-			if c, err := r.Cookie(uiCookie); err == nil && subtle.ConstantTimeCompare([]byte(c.Value), []byte(token)) == 1 {
+			addr := clientAddr(r, allowHosts)
+			if wait := a.limiter.take(addr); wait > 0 {
+				tooMany(w, wait)
+
+				return true
+			}
+
+			if a.tokenOK(given) {
+				a.limiter.refund(addr)
+
 				code, ok = l.code(), true
 			}
 		}
@@ -242,7 +252,7 @@ func serveLogin(w http.ResponseWriter, r *http.Request, l *uiLogins, token strin
 		}
 
 		w.Header().Set("Cache-Control", "no-store")
-		writeJSON(w, map[string]any{"code": code, "login": token != ""})
+		writeJSON(w, map[string]any{"code": code, "login": a.token != ""})
 
 		return true
 	}
@@ -252,20 +262,23 @@ func serveLogin(w http.ResponseWriter, r *http.Request, l *uiLogins, token strin
 		return false
 	}
 
-	if l.take(code) && token != "" {
-		setUICookie(w, r, token, allowHosts)
+	addr := clientAddr(r, allowHosts)
+	if wait := a.limiter.take(addr); wait > 0 {
+		tooMany(w, wait)
+
+		return true
+	}
+
+	if l.take(code) {
+		a.limiter.refund(addr)
+
+		if a.token != "" && !a.startSession(w, r, allowHosts) {
+			return true
+		}
 	}
 
 	// The code leaves the address bar and the history either way.
-	q := r.URL.Query()
-	q.Del("login")
-
-	// Always a path on this cockpit: "//host/x" or "/\\host/x" would send the browser to another site, and so would a
-	// control character a browser strips ("/\t/host/x"): the path is encoded, a tab goes out as %09.
-	target := (&url.URL{Path: "/" + strings.TrimLeft(r.URL.Path, "/\\"), RawQuery: q.Encode()}).String()
-
-	w.Header().Set("Cache-Control", "no-store")
-	http.Redirect(w, r, target, http.StatusSeeOther)
+	redirectWithout(w, r, "login")
 
 	return true
 }

@@ -3,7 +3,6 @@ package cmd
 import (
 	"bytes"
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,7 +40,7 @@ const (
 	uiPoll = 2 * time.Second
 	// uiPing keeps an idle stream open through proxies and tells the page it is still connected.
 	uiPing = 15 * time.Second
-	// uiCookie carries the token once a non-loopback page was opened with ?token=.
+	// uiCookie carries a session's id once a browser signed in; never the token.
 	uiCookie = "zmina_ui"
 )
 
@@ -179,12 +178,14 @@ func (a *app) uiCommand() *cobra.Command {
 	}
 
 	c.Flags().StringVar(&addr, "addr", "127.0.0.1:7517", "address to listen on; a non-loopback one needs --token")
-	c.Flags().StringVar(&token, "token", "", "secret the page needs (?token= once, then a cookie); default "+
-		"$ZMINA_UI_TOKEN, else one made for this run (signed in by a one-time code)")
+	c.Flags().StringVar(&token, "token", "", "secret the page needs (?token= on a page signs a browser in once, then "+
+		"it holds a session); default $ZMINA_UI_TOKEN, else one made for this run (signed in by a one-time code)")
 	c.Flags().BoolVar(&noOpen, "no-open", false, "print the address, do not open a browser")
 	c.Flags().StringSliceVar(&allowHosts, "allow-host", nil, "additional exact Host for a private reverse proxy; requires a token")
 	c.Flags().StringVar(&codeCommand, "code-command", "", "shell command that sends a sign-in code to the owner (the "+
 		"message on its stdin), so a new device signs in with a code; requires a token; default $ZMINA_UI_CODE_COMMAND")
+
+	c.AddCommand(a.uiSessionsCommand())
 
 	return c
 }
@@ -202,8 +203,8 @@ func isLoopback(host string) bool {
 // runningUI is the page's address when a zmina ui already answers on addr, else empty: an older one, which hands out
 // no login codes.
 func runningUI(addr, token string) string {
-	// The token goes in no address, this ping's or the one opened: a browser signed in has the cookie, another
-	// signs in once.
+	// The token goes in no address, this ping's or the one opened, and in no cookie: it is the Bearer header of this
+	// one call. A browser signed in has its session, another signs in once.
 	url := "http://" + addr + "/"
 
 	req, err := http.NewRequest(http.MethodGet, url+"api/ping", nil)
@@ -212,7 +213,7 @@ func runningUI(addr, token string) string {
 	}
 
 	if token != "" {
-		req.AddCookie(&http.Cookie{Name: uiCookie, Value: token})
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	resp, err := uiProbe().Do(req)
@@ -465,7 +466,8 @@ func (a *app) uiHandler(bound string, loopback bool, token string, allowHosts ..
 		writeJSON(w, map[string]string{"done": line})
 	})
 
-	return guardLogins(hub.dropAfterChanges(mux), bound, loopback, token, a.uiLogins, a.uiSignin, allowHosts...)
+	auth := newUIAuth(token, a.uiLogins, a.uiSignin, a.uiSessions)
+	return guardLogins(hub.dropAfterChanges(mux), bound, loopback, auth, allowHosts...)
 }
 
 // alarmAction is the page's set, move and off; the caller holds the lock. set is a reminder for the owner, or for a
@@ -526,22 +528,16 @@ func (a *app) takeBack(s *shift.Shift, id string) (string, error) {
 	return t.ID + " · mine · waits on you", nil
 }
 
-// guard keeps the page to its owner. On loopback: the Host header must name this server (a DNS-rebinding page
-// cannot read or write through the owner's browser). With a token: ?token= once sets a cookie, every request needs
-// one of them. A write must carry X-Zmina, which a cross-site form or fetch cannot send without a preflight this
-// server never answers.
-func guard(next http.Handler, bound string, loopback bool, token string, allowHosts ...string) http.Handler {
-	return guardLogins(next, bound, loopback, token, nil, nil, allowHosts...)
-}
-
-// guardLogins is guard that also takes one-time login codes (?login=) and hands them out to a second zmina ui
-// that shows the handoff secret (POST /api/handoff), when logins is set; with signin, a browser not signed in gets
-// the sign-in page and signs in with a code sent to the owner.
-func guardLogins(next http.Handler, bound string, loopback bool, token string, logins *uiLogins, signin *uiSignin,
-	allowHosts ...string) http.Handler {
+// guardLogins keeps the page to its owner. On loopback: the Host header must name this server (a DNS-rebinding page
+// cannot read or write through the owner's browser). With a token, every request must be signed in (auth.gate): a
+// session cookie, or the token as a Bearer header; ?token= on a page signs a browser in once, and a one-time login
+// code (?login=, and POST /api/handoff that hands them out to a second zmina ui showing the handoff secret) or a
+// six-digit sign-in code does the same, the browser landing on the sign-in page when it has none. A write must carry
+// X-Zmina, which a cross-site form or fetch cannot send without a preflight this server never answers.
+func guardLogins(next http.Handler, bound string, loopback bool, auth *uiAuth, allowHosts ...string) http.Handler {
 	_, port, _ := net.SplitHostPort(bound)
 	hosts := map[string]bool{bound: true, "localhost:" + port: true, "127.0.0.1:" + port: true, "[::1]:" + port: true}
-	if token != "" {
+	if auth.token != "" {
 		for _, host := range allowHosts {
 			hosts[host] = true
 		}
@@ -554,19 +550,21 @@ func guardLogins(next http.Handler, bound string, loopback bool, token string, l
 			return
 		}
 
-		if serveLogin(w, r, logins, token, allowHosts) || serveConnect(w, r, logins, signin, bound, allowHosts) {
+		if serveLogin(w, r, auth, allowHosts) || serveConnect(w, r, auth.logins, auth.signin, bound, allowHosts) {
 			return
 		}
 
-		if token != "" {
-			given := r.URL.Query().Get("token")
-			if c, err := r.Cookie(uiCookie); given == "" && err == nil {
-				given = c.Value
+		if auth.token != "" {
+			sid, ok, answered := auth.gate(w, r, allowHosts)
+			if answered {
+				return
 			}
 
-			if subtle.ConstantTimeCompare([]byte(given), []byte(token)) != 1 {
-				if signin != nil {
-					if serveSignin(w, r, signin, token, allowHosts) {
+			if !ok {
+				dropStaleCookie(w, r, allowHosts)
+
+				if auth.signin != nil {
+					if serveSignin(w, r, auth, allowHosts) {
 						return
 					}
 					if r.Method == http.MethodGet && signinAsset(r.URL.Path) {
@@ -575,7 +573,7 @@ func guardLogins(next http.Handler, bound string, loopback bool, token string, l
 
 						return
 					}
-					if r.Method == http.MethodGet && (r.URL.Path == "/" || strings.HasSuffix(r.URL.Path, ".html")) {
+					if isPage(r) {
 						signinPage(w)
 
 						return
@@ -594,10 +592,10 @@ func guardLogins(next http.Handler, bound string, loopback bool, token string, l
 				return
 			}
 
-			page := r.Method == http.MethodGet && (r.URL.Path == "/" || strings.HasSuffix(r.URL.Path, ".html"))
-			if r.URL.Query().Get("token") != "" || page {
-				setUICookie(w, r, token, allowHosts)
-			}
+			var done context.CancelFunc
+
+			r, done = auth.watched(r, sid)
+			defer done()
 		}
 
 		if r.Method != http.MethodGet && r.Header.Get("X-Zmina") != "1" {
@@ -619,11 +617,11 @@ func guardLogins(next http.Handler, bound string, loopback bool, token string, l
 	})
 }
 
-// setUICookie signs the browser in for 90 days (renewed on every page load).
-func setUICookie(w http.ResponseWriter, r *http.Request, token string, allowHosts []string) {
-	const lifetime = 90 * 24 * time.Hour
-	http.SetCookie(w, &http.Cookie{Name: uiCookie, Value: token, Path: "/", HttpOnly: true,
-		MaxAge: int(lifetime / time.Second), Expires: time.Now().Add(lifetime).UTC(),
+// setUICookie signs the browser in: the cookie holds a session's id, never the token. It outlives every session (90
+// days, the longest one lasts); the server decides when a session ends.
+func setUICookie(w http.ResponseWriter, r *http.Request, sessionID string, allowHosts []string) {
+	http.SetCookie(w, &http.Cookie{Name: uiCookie, Value: sessionID, Path: "/", HttpOnly: true,
+		MaxAge: int(uiSessionMax / time.Second), Expires: time.Now().Add(uiSessionMax).UTC(),
 		Secure: secureUIRequest(r, allowHosts), SameSite: http.SameSiteStrictMode})
 }
 

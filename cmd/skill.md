@@ -824,7 +824,7 @@ no mesh enrollment. The UI's token and Host guard still apply; WebSocket upgrade
 exact same-origin browser. For Tailscale, bind the UI to its tailnet address with `--token` (or
 `ZMINA_UI_TOKEN`), or keep it on loopback behind a private reverse proxy that preserves Host/Origin and
 supports WebSocket upgrades. For the latter use `--allow-host <exact-hostname[:port]>` with the token to
-allow that proxy hostname through the loopback Host guard (repeat or comma-separate for multiple hosts). Open `?token=...` once to set the HttpOnly, SameSite Strict cookie. It lasts 90 days and renews on each authenticated HTML page load. Secure is set for native TLS or HTTPS forwarded by a loopback proxy on an explicitly allowed hostname. Missing authentication returns an uncached HTML sign-in hint; with a token, a device that is not signed in gets a sign-in page that takes a six-digit code instead: one `zmina connect` printed on this machine (see Connect a phone), or, with `--code-command <shell command>` (or `$ZMINA_UI_CODE_COMMAND`; needs a token), one sent when the page asks: **Send code** runs the command with the message on its stdin (never in its argv; its output is dropped), so it reaches the owner through their own notifier — e.g. a Telegram bot's send command reading the text from stdin; the chat and the bot stay in that command, not in zmina. The code is six digits, single use, 5 minutes, ended by 5 wrong tries; one may be asked for a minute, 10 an hour (a failed send counts). A sent code and a `zmina connect` code live apart: asking for one never replaces the other, a wrong code counts as a try on each live one, a right one spends only its own. A right code sets the same cookie as `?token=`. Every send, refusal and wrong try is logged to the server's stderr without the code. `?token=` keeps working.
+allow that proxy hostname through the loopback Host guard (repeat or comma-separate for multiple hosts). Open `?token=...` on a page once: it signs the browser in and sends it to the page without the token (the token is never kept in a cookie; see Sessions below). Secure is set on the session cookie for native TLS or HTTPS forwarded by a loopback proxy on an explicitly allowed hostname. Missing authentication returns an uncached HTML sign-in hint; with a token, a device that is not signed in gets a sign-in page that takes a six-digit code instead: one `zmina connect` printed on this machine (see Connect a phone), or, with `--code-command <shell command>` (or `$ZMINA_UI_CODE_COMMAND`; needs a token), one sent when the page asks: **Send code** runs the command with the message on its stdin (never in its argv; its output is dropped), so it reaches the owner through their own notifier — e.g. a Telegram bot's send command reading the text from stdin; the chat and the bot stay in that command, not in zmina. The code is six digits, single use, 5 minutes, ended by 5 wrong tries; one may be asked for a minute, 10 an hour (a failed send counts). A sent code and a `zmina connect` code live apart: asking for one never replaces the other, a wrong code counts as a try on each live one, a right one spends only its own. A right code signs in like `?token=`. Every send, refusal and wrong try is logged to the server's stderr without the code. `?token=` keeps working on a page.
 
 The mesh uses its existing SSH/command addresses, not a separate terminal port on each worker. If the destination
 has no direct address, a learned `Through` route opens authenticated live tunnels through intermediary nodes
@@ -1124,8 +1124,8 @@ A machine without peers is a mesh of one. It opens the page in the browser.
   `…/?login=<code>`, which signs the browser in and leaves the address bar; the token is never put in a URL, a
   shell's history or a process's arguments. With `--addr` it binds that address as before; when a cockpit already
   answers there, it opens that one signed in the same way: the handoff secret goes only to the cockpit `ui.json`
-  records at that very address, any other is asked with `--token` (or `$ZMINA_UI_TOKEN`), sent as the page's
-  cookie, never in an address. These calls follow no redirect: a 3xx there is not a cockpit, and neither the
+  records at that very address, any other is asked with `--token` (or `$ZMINA_UI_TOKEN`), sent as a Bearer header,
+  never in an address or a cookie. These calls follow no redirect: a 3xx there is not a cockpit, and neither the
   secret nor the token reaches the address it names. An older `zmina ui` there, without login codes, opens unsigned: a browser not signed
   in uses `?token=` once.
 
@@ -1216,7 +1216,7 @@ Todo answers never type into a role. The separate Terminals page attaches direct
 
 Bound to 127.0.0.1 by default and only answers requests that name it (`Host`), so another web page cannot read or
 write through the browser. Writes need the page's own header. A non-loopback `--addr` is refused unless
-`--token <secret>` (or `$ZMINA_UI_TOKEN`) is set: the page then needs `?token=` once on a new device (it is kept in a 90-day HttpOnly, SameSite Strict cookie, renewed on authenticated page loads); on this machine `zmina ui` signs the browser in with a one-time login code, and the address it prints carries no token.
+`--token <secret>` (or `$ZMINA_UI_TOKEN`) is set: the page then needs `?token=` on a page once on a new device (it signs in a session, see Sessions); on this machine `zmina ui` signs the browser in with a one-time login code, and the address it prints carries no token.
 On loopback with no token given the page still needs one — loopback keeps out other machines, not another account or
 process on this one, and the page types into every role: `zmina ui` makes a token for the run that nobody types. The
 browser it opens signs in with its one-time code, `zmina ui` again opens the running one signed in, another browser
@@ -1225,6 +1225,29 @@ client gets 401, the terminal socket included.
 Live over server-sent events; the files are inside the binary. Each update is patched in: what did not change stays
 the very element it was, so its focus, its scroll and an agent's reference to it hold; an element with a handler is
 always the one just drawn, so it acts on what it shows (`testdata/patch.html` checks it in a browser).
+
+### Sessions
+
+A browser signs in once — `?token=` on a page, a one-time login code, or a six-digit sign-in code — and then holds a
+**session**: the cockpit makes a random 256-bit id, keeps only its SHA-256 with when it began, when it was last seen
+and when it ends in `~/.zmina/ui-sessions.json` (0600), and puts the id in an HttpOnly, SameSite Strict cookie
+(Secure over TLS). The token is never in a cookie, and a cookie that carries it (an earlier zmina's) signs nobody in;
+the browser drops it and signs in once more. A session ends 30 days after it was last seen and at the latest 90 days
+after it began; the file keeps 64 at most. A script may present the token itself as `Authorization: Bearer <token>`,
+request by request, with no session. The stream and the terminal socket pass the same check, and a session ended
+while one is open closes it within seconds.
+
+- `zmina ui sessions` lists them: the short id (8 characters), when each signed in, when it was last seen, when it ends.
+  `zmina ui sessions --revoke <id>` ends one by the id listed (a unique start of at least 4 characters),
+  `zmina ui sessions --all` ends every one. They edit the file; the cockpit need not run, and one that runs sees it on
+  its next request. Changing the token does not end sessions: revoke them.
+- A wrong token, login code or sign-in code counts against the address it came from (the connection's peer; behind an
+  `--allow-host` proxy on loopback, the last address the proxy put in `X-Forwarded-For`; an IPv6 address counts as its
+  /64) and against all addresses together. Five wrong tries from one address are free, then each further try waits
+  5 s, 10 s, 20 s … up to 5 minutes (`429` with `Retry-After`; the secret is not looked at meanwhile, so the right one
+  waits too); 30 from all addresses do the same for everyone. A right secret clears the address; 15 quiet minutes clear
+  the counts. The counts are in memory: a restart starts again. A proxy that does not set `X-Forwarded-For` shows every
+  client as one address.
 
 ### Connect a phone
 
@@ -1252,7 +1275,7 @@ zmina ui --addr "$(tailscale ip -4)":7517 --no-open
 zmina connect --qr                              # scan the address, type the code
 ```
 
-The phone keeps the cookie for 90 days. To have the page send codes as well, a `--code-command` reads the message
+The phone stays signed in as a session (see Sessions). To have the page send codes as well, a `--code-command` reads the message
 on its stdin, e.g. ntfy: `--code-command 'curl -fsS -d @- ntfy.sh/<private topic>'`; mail:
 `--code-command 'mail -s "zmina code" alex@example.com'`.
 

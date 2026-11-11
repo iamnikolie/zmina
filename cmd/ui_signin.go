@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"net/http"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -244,8 +245,9 @@ func signinAsset(path string) bool { return path == "/signin.js" || path == "/si
 
 // serveSignin answers the sign-in API for a browser not signed in: GET /api/signin (whether codes can be sent, so
 // the page knows which way to offer), POST /api/signin/code, POST /api/signin/verify; false when the request is not
-// one of them.
-func serveSignin(w http.ResponseWriter, r *http.Request, s *uiSignin, token string, allowHosts []string) bool {
+// one of them. A code tried is counted by the limiter besides its own five tries.
+func serveSignin(w http.ResponseWriter, r *http.Request, a *uiAuth, allowHosts []string) bool {
+	s := a.signin
 	if s == nil || (r.URL.Path != "/api/signin" && r.URL.Path != "/api/signin/code" && r.URL.Path != "/api/signin/verify") {
 		return false
 	}
@@ -300,6 +302,15 @@ func serveSignin(w http.ResponseWriter, r *http.Request, s *uiSignin, token stri
 		return true
 	}
 
+	addr := clientAddr(r, allowHosts)
+	if wait := a.limiter.take(addr); wait > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(int((wait+time.Second-1)/time.Second)))
+		w.WriteHeader(http.StatusTooManyRequests)
+		writeJSON(w, map[string]any{"error": "too many wrong tries", "wait": int((wait + time.Second - 1) / time.Second)})
+
+		return true
+	}
+
 	if !s.check(strings.TrimSpace(body.Code)) {
 		w.WriteHeader(http.StatusUnauthorized)
 		writeJSON(w, map[string]any{"error": "wrong or expired code"})
@@ -307,7 +318,12 @@ func serveSignin(w http.ResponseWriter, r *http.Request, s *uiSignin, token stri
 		return true
 	}
 
-	setUICookie(w, r, token, allowHosts)
+	a.limiter.refund(addr)
+
+	if !a.startSession(w, r, allowHosts) {
+		return true
+	}
+
 	writeJSON(w, map[string]any{"ok": true})
 
 	return true
