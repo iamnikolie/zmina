@@ -133,7 +133,6 @@ func TestAckClearsAPostedAndATypedLine(t *testing.T) {
 	require.NoError(t, g.s.Up("designer"))
 	g.s.State.Role("designer").Inbound = true
 	g.status("designer", "idle", *g.now)
-	g.tm.onType = nil
 	*g.now = g.now.Add(3 * time.Minute)
 
 	typed, err := g.s.QueueTracked("designer", "[dev] look at T-2")
@@ -161,4 +160,94 @@ func TestAckOfAPostedDispatcherLineRecordsItsStage(t *testing.T) {
 	assert.Empty(t, f.s.State.Role("dispatcher").Posted)
 	assert.Contains(t, f.s.State.MessageStages[TellPrefix+"e-1"], "submitted")
 	assert.Contains(t, f.s.State.MessageStages[TellPrefix+"e-1"], "read")
+}
+
+// An ack of one signal of a post that also carries a note (a part with no id) closes that signal and nothing else: the
+// note is still in flight, and when the dispatcher's conversation ends before the post shows, it goes back.
+func TestAckOfOneSignalLeavesTheNoteOfItsPost(t *testing.T) {
+	f, _ := nativeFixture(t, crewYAML)
+	upNative(t, f, "dispatcher")
+
+	_, err := f.s.Note("dev", "T-2 result ready", false)
+	require.NoError(t, err)
+	f.s.AddNotes([]string{"released designer after 31m idle"})
+	require.NotEmpty(t, f.s.deliver(*f.now))
+
+	rs := f.s.State.Role("dispatcher")
+	require.Len(t, rs.Posted, 1)
+
+	id := ackIDOf(t, f.s, "dev: T-2 result ready")
+	f.s.AckLines([]string{id}, false, "dispatcher", "dispatcher")
+	require.Len(t, rs.Posted, 1, "the note is still in flight")
+
+	f.s.State.Stopped = *f.now // nothing starts a new dispatcher
+	delete(f.tm.up, "dispatcher")
+
+	for range 3 {
+		*f.now = f.now.Add(time.Minute)
+		f.s.Tick()
+	}
+
+	assert.Empty(t, rs.Posted)
+	assert.Contains(t, f.s.State.Notes, "released designer after 31m idle", "the note went back")
+	assert.Empty(t, f.s.State.Signals, "the acked signal did not")
+}
+
+// The same for a post kept as failed: acking its signal leaves its note, which a retry gives back.
+func TestAckOfOneSignalLeavesTheNoteOfAFailedPost(t *testing.T) {
+	f, _ := nativeFixture(t, crewYAML)
+	upNative(t, f, "dispatcher")
+
+	_, err := f.s.Note("dev", "T-2 result ready", false)
+	require.NoError(t, err)
+	f.s.AddNotes([]string{"released designer after 31m idle"})
+	require.NotEmpty(t, f.s.deliver(*f.now))
+
+	id := ackIDOf(t, f.s, "dev: T-2 result ready")
+	*f.now = f.now.Add(postedWait)
+	f.s.followPosted("dispatcher", *f.now)
+
+	rs := f.s.State.Role("dispatcher")
+	require.Len(t, rs.Failed, 1)
+
+	f.s.AckLines([]string{id}, false, "dispatcher", "dispatcher")
+	require.Len(t, rs.Failed, 1, "its note is not acked")
+
+	f.s.State.Notes = nil
+	_, err = f.s.Retry("dispatcher")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"released designer after 31m idle"}, f.s.State.Notes)
+	assert.Empty(t, f.s.State.Signals)
+}
+
+// A line acked while it still sits in the role's input line has not landed: its record stays for landed to finish,
+// which presses Enter again and then clears the input, and the acked line is not kept as failed. Cleared by the ack, it
+// would leave a draft nothing presses Enter on and nothing clears, which blocks every later typed line.
+func TestAckLeavesATypedLineThatSitsInTheInputLine(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	require.NoError(t, f.s.Up("designer"))
+	f.status("designer", "idle", f.now.Add(-time.Hour))
+	*f.now = f.now.Add(3 * time.Minute)
+
+	line := "[dev] look at T-1 (zmina S-1)"
+	f.s.State.AckSeq = 1
+	f.s.State.Acks = map[string]*Ack{"S-1": {ID: "S-1", Role: "designer", Text: "[dev] look at T-1", First: *f.now, Last: *f.now}}
+
+	rs := f.s.State.Role("designer")
+	rs.Sent = &Sent{Line: line, At: *f.now, IDs: []string{"S-1"}}
+	f.tm.drafts["designer"] = line // typed, Enter not taken
+
+	acked, _ := f.s.AckLines([]string{"S-1"}, false, "", "hand")
+	require.Equal(t, []string{"S-1"}, acked)
+	require.NotNil(t, rs.Sent, "not landed: the line is still in the input line")
+
+	for range typeTries + 1 {
+		*f.now = f.now.Add(confirmAfter + time.Second)
+		f.s.landed("designer", *f.now)
+	}
+
+	assert.Nil(t, rs.Sent)
+	assert.Empty(t, f.tm.drafts["designer"], "the input line is cleared")
+	assert.Empty(t, rs.Failed, "its reader has it: nothing to inspect")
+	assert.NotContains(t, strings.Join(f.s.State.Notes, "|"), "delivery failed")
 }

@@ -261,20 +261,12 @@ func (s *Shift) landed(name string, now time.Time) bool {
 	}
 
 	sent := rs.Sent
-	draft, ok, err := s.Tmux.Prompt(name)
-	unsent := err == nil && ok && holds(draft, sent.Line)
 
-	if !unsent {
-		if sess := s.session(name); sess != nil && sess.StatusUpdatedAt > sent.At.UnixMilli() {
-			// A typed line shows no seen: the info lines it carried are closed when it lands.
-			if name == s.Crew.Dispatcher {
-				s.closeInfo(name, sent.Parts, "typed")
-			}
+	landed, unsent := s.typedLanded(name, sent)
+	if landed {
+		s.closeTyped(name)
 
-			rs.Sent = nil
-
-			return true
-		}
+		return true
 	}
 
 	if now.Sub(sent.At) < confirmAfter || !unsent && !s.atPrompt(name, now) {
@@ -292,6 +284,14 @@ func (s *Shift) landed(name string, now time.Time) bool {
 			s.clearInput(name, sent.Line)
 		}
 
+		// Acked meanwhile, in full: its reader has it, so there is nothing to inspect or retry.
+		if s.ackedWhole(sent.IDs, sent.Parts) {
+			rs.Sent = nil
+			s.log(name, "acked-cleared", "", "typed: "+sent.Line)
+
+			return true
+		}
+
 		rs.Failed = append(rs.Failed, Failed{Line: sent.Line, Error: reason, At: now, IDs: sent.IDs, Parts: sent.Parts})
 		rs.Sent = nil
 		s.log(name, "type-failed", "", reason+": "+sent.Line)
@@ -306,6 +306,31 @@ func (s *Shift) landed(name string, now time.Time) bool {
 	s.log(name, "pressed-again", "", sent.Line)
 
 	return false
+}
+
+// typedLanded reports whether the line typed last has been taken: it is no longer in the role's input line and the
+// role's status changed since it was typed. unsent is that it still sits in the input line.
+func (s *Shift) typedLanded(name string, sent *Sent) (landed, unsent bool) {
+	draft, ok, err := s.Tmux.Prompt(name)
+	if err == nil && ok && holds(draft, sent.Line) {
+		return false, true
+	}
+
+	sess := s.session(name)
+
+	return sess != nil && sess.StatusUpdatedAt > sent.At.UnixMilli(), false
+}
+
+// closeTyped closes the record of a typed line that landed. A typed line shows no seen: the info lines it carried are
+// closed when it lands.
+func (s *Shift) closeTyped(name string) {
+	rs := s.State.Role(name)
+
+	if name == s.Crew.Dispatcher {
+		s.closeInfo(name, rs.Sent.Parts, "typed")
+	}
+
+	rs.Sent = nil
 }
 
 // deliveryFailure makes a stalled handoff visible without waiting for an idle notice.

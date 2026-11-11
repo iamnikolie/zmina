@@ -386,14 +386,18 @@ func (s *Shift) dropQueued(a *Ack) {
 // clearInFlight takes what its reader acked out of the records that follow a line after it left the queue: the failed
 // lines, the lines posted and not yet seen, the line typed and not yet landed. The reader has it, so none of them may
 // stay (a failed mark nothing would ever clear, a posted line that turns failed once it is over ten minutes old). A
-// record that carries other ids too stays until they are acked as well, as in giveBack. A posted or typed line
-// closes as it does when it shows or lands.
+// record goes when everything it carries is acked (ackedWhole): a post to the dispatcher made of parts goes when every
+// part is an acked signal, and while a note or an info line (a part with no id, which no ack closes) is in it, it stays
+// as it was, to be seen, failed or given back by its parts as without the ack (giveBack leaves the acked ones out). A
+// posted line closes as it does when it shows. A typed line closes as it does when it lands, and only then: one still
+// in the input line has not landed, and landed finishes it (presses Enter again, or clears the input), where an ack
+// that dropped the record would leave a draft nothing clears.
 func (s *Shift) clearInFlight(rs *RoleState, a *Ack) {
-	mine := func(ids []string) bool { return slices.Contains(ids, a.ID) && s.acked(ids) }
+	mine := func(ids []string, parts []Part) bool { return slices.Contains(ids, a.ID) && s.ackedWhole(ids, parts) }
 	dispatcher := a.Role == s.Crew.Dispatcher
 
 	rs.Failed = slices.DeleteFunc(rs.Failed, func(f Failed) bool {
-		if !mine(f.IDs) {
+		if !mine(f.IDs, f.Parts) {
 			return false
 		}
 
@@ -403,7 +407,7 @@ func (s *Shift) clearInFlight(rs *RoleState, a *Ack) {
 	})
 
 	rs.Posted = slices.DeleteFunc(rs.Posted, func(p Posted) bool {
-		if !mine(p.IDs) {
+		if !mine(p.IDs, p.Parts) {
 			return false
 		}
 
@@ -417,15 +421,22 @@ func (s *Shift) clearInFlight(rs *RoleState, a *Ack) {
 		return true
 	})
 
-	if sent := rs.Sent; sent != nil && mine(sent.IDs) {
-		s.log(a.Role, "acked-cleared", "", "typed: "+sent.Line)
-
-		if dispatcher {
-			s.closeInfo(a.Role, sent.Parts, "typed")
+	if sent := rs.Sent; sent != nil && mine(sent.IDs, sent.Parts) {
+		if landed, _ := s.typedLanded(a.Role, sent); landed {
+			s.log(a.Role, "acked-cleared", "", "typed: "+sent.Line)
+			s.closeTyped(a.Role)
 		}
-
-		rs.Sent = nil
 	}
+}
+
+// ackedWhole reports whether an in-flight record is acked in full: a line (no parts) when every id it carries is, a
+// post made of parts when every part is. A part with no id is never acked, whatever its text says.
+func (s *Shift) ackedWhole(ids []string, parts []Part) bool {
+	if len(parts) == 0 {
+		return s.acked(ids)
+	}
+
+	return !slices.ContainsFunc(parts, func(p Part) bool { return !s.acked(p.IDs) })
 }
 
 // acked reports whether every id of an item was acked meanwhile: it carries some, and none still waits. An item
