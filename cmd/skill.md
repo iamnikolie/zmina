@@ -81,6 +81,7 @@ notify_again: 24h                        # an item that still blocks is pushed a
 timezone: Europe/Warsaw                  # the clock reminder times are read on (default: this machine's)
 lessons: on                              # daily triage of the roles' lessons into one draft MR on the crew's agentic-os (default off; see Lessons)
 worktree_gc: daily                       # the ticker runs `task gc` once a day: closed tasks' merged, clean worktrees go (default off)
+retention: 45d                           # how long finished work stays where it is before the ticker's daily pass moves it to archive/ (30d at least, or off; default 30d; see Retention)
 limits:                                  # how the crew spends its plans, in % of the 7-day (Claude) and weekly (Codex) window; see Limits
   claude: {pinned: 80, stop: 99}         # from pinned only work that needs Claude goes to it, from stop nothing (defaults 80 and 99)
   codex: {pinned: 80}                    # from pinned only work that needs Codex goes to it (default 80)
@@ -446,7 +447,8 @@ goes over the crew's field by field; a change applies at the role's next start. 
 | `zmina stop` | the ticker starts nothing any more (no keep: always role, no scheduled run), then every role goes down, the dispatcher too; a role with a draft or a dialog stays up and is named (`--clear` as with `down`). `ls` shows `STOPPED`. |
 | `zmina start` | lifts the stop and starts the dispatcher. A retired crew refuses it, naming the live one. |
 | `zmina retire [--moved-to <node>/<crew>] [--clear]` / `retire --off` | the owner's word that this crew is no longer the live one: `retired:` and `moved_to:` in the crew file (a state file recovered or a stop lifted does not lose them), then as `zmina stop`. `--off` takes the mark off; the shift stays stopped until `zmina start`. Only this mark says one crew went on as another: two crews with one name are never taken for one. |
-| `zmina doctor [--json]` | checks crew file, tmux (3.2 or newer), claude as roles find it (their PATH; a binary in a temp dir fails) and the flags zmina passes, Claude Code's session registry (zmina reads it to tell idle from busy; it is not a public interface — doctor says when its shape changed), ticker beat, state, lock (the holder now with its age and phase, and the holds over 20 s and waits over 5 s of the last 24 h from the log), task files, crews sharing a tmux server, versions (this zmina's; a cockpit, a Codex bridge or Claude roles that another zmina started); what zmina's own rules add to a fresh role's prefix (`boot`: characters on average and the role with most, by what read_guard, lessons, delivery and Codex seats turn on) and whether `skills:` trims the skill list; whether `context_max`, `restart_at` and `restart_done` are at or below the recommended context sizes (`context`, advice only: The crew file); whether the crew's namespace is logged in (`login`, from `claude auth status`: not logged in fails, a login expiring within 7 days warns); what piles up: owner asks open over 7 days, parked items over 14 days, hand-made copies of the crew file beside it (seat keeps one `.bak`), closed tasks that keep their worktree (`worktrees`). Exit 1 on a fail. |
+| `zmina doctor [--json]` | checks crew file, tmux (3.2 or newer), claude as roles find it (their PATH; a binary in a temp dir fails) and the flags zmina passes, Claude Code's session registry (zmina reads it to tell idle from busy; it is not a public interface — doctor says when its shape changed), ticker beat, state, lock (the holder now with its age and phase, and the holds over 20 s and waits over 5 s of the last 24 h from the log), task files, crews sharing a tmux server, versions (this zmina's; a cockpit, a Codex bridge or Claude roles that another zmina started); what zmina's own rules add to a fresh role's prefix (`boot`: characters on average and the role with most, by what read_guard, lessons, delivery and Codex seats turn on) and whether `skills:` trims the skill list; whether `context_max`, `restart_at` and `restart_done` are at or below the recommended context sizes (`context`, advice only: The crew file); whether the crew's namespace is logged in (`login`, from `claude auth status`: not logged in fails, a login expiring within 7 days warns); what piles up: owner asks open over 7 days, parked items over 14 days, hand-made copies of the crew file beside it (seat keeps one `.bak`), closed tasks that keep their worktree (`worktrees`); report records that do not read, or whose work fails, each named by its file (`messages`, a warning for as long as it lasts); the retention pass (`retention`: its span, the last pass and what it moved, a warning when none ran for 3 days). Exit 1 on a fail. |
+| `zmina retention [--dry-run]` | the ticker's daily retention pass, run now (see Retention): finished work older than the crew's retention span moves to `archive/retention/<yyyy-mm>/`, old lines leave `reads.jsonl`, `tick.log` is cut to its tail. `--dry-run` lists each thing that would move and moves nothing. Runs whatever `retention:` says (`off` only stops the ticker); prints what it moved, and logs one `retention` event. |
 | `zmina queue ls [--full] [--json]` | what waits to be typed: the dispatcher's signals and health notes, each role's inbox, lines posted to its inbox socket not yet seen in its conversation, and its failed lines (a line tmux refused three beats in a row); each line clipped to 160 characters, `--full` whole. |
 | `zmina queue retry <role>` / `queue drop <role> [--all]` | put failed lines back at the head of the inbox / drop them (`--all`: the inbox too; for the dispatcher its signals and notes). Without `--all`, any retained inbox count and the command needed to drop it are printed. The hint includes the resolved `--crew` path and shell-quotes both path and role, so it still targets this crew when pasted into another shell. |
 | `zmina state show` | the state as zmina reads it (JSON). |
@@ -996,6 +998,21 @@ once every 24 h: closed tasks whose branch is merged and whose worktree is clean
 after the beat's locked steps and holds no state lock, so a slow git blocks no other zmina command; it stops at a 60 s
 deadline and what it did not reach waits for the next day's sweep. Each removal is a `worktree removed` event in
 `zmina log`; `zmina doctor` shows the last sweep. Default off (`off` or absent).
+
+**Retention.** Stores that only grow are kept down by a pass the ticker runs once every 24 h (`retention: 30d`, or
+`45d`, `90d`; at least 30 days; `off` turns it off; default 30d), after the beat's locked steps. It holds no state
+lock (its own `retention.lock` file keeps two passes apart), is stamped by its own small file `retention.json`, stops
+at a 60 s deadline (what it did not reach waits for the next pass) and fails nothing: a problem is a line in the
+beat's output. It moves, never deletes, into `archive/retention/<yyyy-mm>/` beside the crew file: the `handoffs/<task>/`,
+`results/<task>/` and `checkpoints/<task>/` directories of tasks closed (done or dropped) longer ago than the span (a
+directory no task names moves when its files are that old; a note `archived.txt` in an emptied `results/` or
+`checkpoints/` directory says where its files went; move them back to read them again); the files of `releases/` and
+`restarts/` older than the span that `state.json` does not name; finished report records (every revision read by its
+destination or superseded, all envelopes queued, nothing new for the span) from `messages/` to `messages/archive/`,
+where `message show <id>` still finds them. What an open, waiting, parked or recently closed task points at stays, and
+so does everything while a task file does not read. `reads.jsonl` loses the lines older than the span to
+`archive/retention/<yyyy-mm>/reads.jsonl`; `tick.log` past 5 MB is cut to its last 1 MB. One `retention` event in
+`zmina log` carries the counts. `zmina retention --dry-run` lists what the next pass would move.
 
 **What the work is.** `--title` is the work in one short plain sentence in the owner's language ("Landing page —
 rework"), `--project` the project or product it is for (default: the repo's directory name), `--url` the live thing
@@ -1700,7 +1717,7 @@ each with who did it (`hand`, `ticker`, `schedule`, or the role) and, after a ta
 rotated at 10 MB: `events.jsonl.1` is the newest older file, up to `.5` the oldest, and a sixth is dropped (log reads them
 all). The rotation takes a lock (`events.jsonl.lock`), so two processes that log at once lose no line and replace no
 file. `message-skipped` is a report record that reconcile skipped (once per file and error: `message-skipped <id>.json:
-why`, zmina doctor names it).
+why`, zmina doctor names it), `retention` the daily pass's counts.
 
 The state lock leaves two events, crew-wide (no role): `lock-wait` when a command waited 5 s or more for the lock
 (`waited=12.4s holder=tick holder_pid=4242 holder_for=11m2s holder_phase=roles/dev`, `gave_up=yes` when it ran out of
@@ -1715,7 +1732,8 @@ arguments. `zmina doctor` counts them for the last 24 h.
 
 `zmina ticker install | uninstall | status` — every minute, PATH captured at install; its output
 goes to `tick.log` next to the crew file. `status` also shows the last beat and the end of
-tick.log. A PATH that changes later (claude moved by an upgrade) needs `ticker install` again.
+tick.log. A PATH that changes later (claude moved by an upgrade) needs `ticker install` again. `tick.log` past 5 MB is
+cut to its last 1 MB by the retention pass.
 
 - macOS: launchd agent `io.iamnikolie.zmina` (`.<name>` for a named crew) in `~/Library/LaunchAgents`.
 - Linux: systemd user units `zmina.service` + `zmina.timer` (`zmina-<name>` for a named crew) in
