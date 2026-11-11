@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/iamnikolie/zmina/internal/ledger"
 	"github.com/iamnikolie/zmina/internal/shift"
 )
 
@@ -20,7 +22,7 @@ var worktreeSweepTimeout = time.Minute
 // from its start, and a beat that overlaps one that sweeps finds it claimed.
 //
 // It fails nothing: what goes wrong is a line in the ticker's output and the next sweep is tomorrow's. Each removal
-// is an event in the log, as `task gc` makes it.
+// is an event in the log, as `task gc` makes it. It never drops a worktree record (task gc --drop-gone is by hand).
 func (a *app) worktreeBeat(now time.Time) {
 	due := false
 
@@ -61,9 +63,10 @@ func (a *app) worktreeBeat(now time.Time) {
 
 	got, err := a.ledger(s).GCContext(ctx, false, false)
 
+	rest, missing := ledger.GroupMissing(got)
 	removed := 0
 
-	for _, c := range got {
+	for _, c := range rest {
 		if c.Removed {
 			removed++
 		}
@@ -73,6 +76,18 @@ func (a *app) worktreeBeat(now time.Time) {
 
 	if removed > 0 {
 		lines = append(lines, fmt.Sprintf("worktree sweep: removed %d", removed))
+	}
+
+	// A repository that moved is one line, not a line for each of its tasks; the same words are the day's one event.
+	var gone []string
+
+	for _, m := range missing {
+		lines = append(lines, "worktree sweep: "+m.Line())
+		gone = append(gone, m.Line())
+	}
+
+	if len(gone) > 0 {
+		s.Log("", "worktree-sweep", "", strings.Join(gone, "; ")+" (zmina task relocate)")
 	}
 
 	switch {

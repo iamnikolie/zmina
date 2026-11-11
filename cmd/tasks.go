@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,7 +26,7 @@ func (a *app) taskCommand() *cobra.Command {
 
 	c.AddCommand(a.taskNewCommand(), a.taskLsCommand(), a.taskShowCommand(), a.taskSetCommand(),
 		a.taskCloseCommand("done", task.Done), a.taskCloseCommand("drop", task.Dropped), a.taskParkCommand(),
-		a.taskGCCommand(), a.taskHandoffCommand(), a.taskRecordCommand("result"), a.taskRecordCommand("checkpoint"), a.taskAcceptCommand())
+		a.taskGCCommand(), a.taskRelocateCommand(), a.taskHandoffCommand(), a.taskRecordCommand("result"), a.taskRecordCommand("checkpoint"), a.taskAcceptCommand())
 
 	return c
 }
@@ -560,7 +561,7 @@ func (a *app) setTask(id string, st task.State, o taskChange) error {
 }
 
 func (a *app) taskGCCommand() *cobra.Command {
-	var dryRun, force bool
+	var dryRun, force, dropGone bool
 
 	c := &cobra.Command{
 		Use:   "gc",
@@ -568,7 +569,7 @@ func (a *app) taskGCCommand() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.withState(func(s *shift.Shift) error {
-				got, err := a.ledger(s).GC(dryRun, force)
+				got, err := a.ledger(s).GCWith(context.Background(), ledger.GCOptions{DryRun: dryRun, Force: force, DropGone: dropGone})
 				if err != nil {
 					return err
 				}
@@ -577,16 +578,7 @@ func (a *app) taskGCCommand() *cobra.Command {
 					fmt.Fprintln(a.out, "nothing to collect")
 				}
 
-				for _, c := range got {
-					switch {
-					case c.Kept != "":
-						fmt.Fprintf(a.out, "%s: kept: %s\n", c.ID, c.Kept)
-					case dryRun:
-						fmt.Fprintf(a.out, "%s: would remove %s\n", c.ID, c.Detail)
-					default:
-						fmt.Fprintf(a.out, "%s: removed %s\n", c.ID, c.Detail)
-					}
-				}
+				a.printCollected(got, dryRun, dropGone)
 
 				return nil
 			})
@@ -595,8 +587,77 @@ func (a *app) taskGCCommand() *cobra.Command {
 
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "say what would be removed")
 	c.Flags().BoolVar(&force, "force", false, "also remove dropped tasks' unmerged branches and changes")
+	c.Flags().BoolVar(&dropGone, "drop-gone", false,
+		"also drop the worktree record of a closed task whose repository and worktree directory are both gone")
 
 	return c
+}
+
+// printCollected is what `task gc` says: a line for each task, one line for each repository that is not where its
+// tasks record it, and a summary.
+func (a *app) printCollected(got []ledger.Collected, dryRun, dropGone bool) {
+	rest, missing := ledger.GroupMissing(got)
+
+	removed, dropped, kept := 0, 0, 0
+
+	for _, c := range rest {
+		switch {
+		case c.Kept != "":
+			kept++
+
+			fmt.Fprintf(a.out, "%s: kept: %s\n", c.ID, c.Kept)
+		case c.Dropped && dryRun:
+			dropped++
+
+			fmt.Fprintf(a.out, "%s: would drop the worktree record of %s\n", c.ID, c.Detail)
+		case c.Dropped:
+			dropped++
+
+			fmt.Fprintf(a.out, "%s: dropped the worktree record of %s\n", c.ID, c.Detail)
+		case dryRun:
+			removed++
+
+			fmt.Fprintf(a.out, "%s: would remove %s\n", c.ID, c.Detail)
+		default:
+			removed++
+
+			fmt.Fprintf(a.out, "%s: removed %s\n", c.ID, c.Detail)
+		}
+	}
+
+	noTree := 0
+
+	for _, m := range missing {
+		kept += len(m.Tasks)
+		noTree += m.NoTree
+
+		fmt.Fprintln(a.out, m.Line())
+	}
+
+	if len(missing) > 0 {
+		fmt.Fprintln(a.out, "zmina task relocate <old-repo-path> <new-repo-path> points their records at the new place")
+	}
+
+	if noTree > 0 && !dropGone {
+		fmt.Fprintf(a.out, "%d of them have no worktree directory left: zmina task gc --drop-gone drops those worktree records\n", noTree)
+	}
+
+	if len(got) == 0 {
+		return
+	}
+
+	verb := [3]string{"removed", "dropped", "kept"}
+	if dryRun {
+		verb = [3]string{"would remove", "would drop", "kept"}
+	}
+
+	summary := fmt.Sprintf("%s %d", verb[0], removed)
+
+	if dropGone || dropped > 0 {
+		summary += fmt.Sprintf(", %s %d worktree records", verb[1], dropped)
+	}
+
+	fmt.Fprintf(a.out, "%s, %s %d\n", summary, verb[2], kept)
 }
 
 func (a *app) printJSON(v any) error {
