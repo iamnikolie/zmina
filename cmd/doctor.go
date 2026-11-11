@@ -115,6 +115,7 @@ func (a *app) diagnose() []check {
 	}
 	checkBoot(c, add)
 	checkContext(c, add)
+	checkModels(c, add)
 	if hasCodex {
 		a.checkCodex(c, add)
 	}

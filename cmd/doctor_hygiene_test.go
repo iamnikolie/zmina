@@ -183,3 +183,44 @@ func TestDoctorLoginDeadlineHoldsForChildren(t *testing.T) {
 		})
 	}
 }
+
+// A role that names no model is a warning, not a failure; one that does, in model: or in its args, is not named.
+func TestDoctorModels(t *testing.T) {
+	crewFile := testCrew(t, "  pinned:\n    model: sonnet\n  by-args:\n    args: [--model, opus]\n  by-flag:\n    args: [--model=opus]\n"+
+		"  open:\n  open2: {}\n")
+	fakeAuth(t, filepath.Dir(crewFile), `{"loggedIn": true}`)
+
+	out, _, err := zm(t, crewFile, "doctor")
+	require.NoError(t, err, "a role without a model does not fail doctor")
+	assert.Contains(t, out, "warn  models    3 roles with no model: (dispatcher, open, open2) run on whatever default")
+	assert.NotContains(t, out, "pinned")
+	assert.NotContains(t, out, "by-args")
+
+	body := string(mustRead(t, crewFile))
+	body = strings.Replace(body, "  dispatcher:\n    boot: hello\n", "  dispatcher:\n    boot: hello\n    model: sonnet\n", 1)
+	body = strings.Replace(body, "  open:\n", "  open:\n    model: opus\n", 1)
+	body = strings.Replace(body, "  open2: {}\n", "  open2:\n    model: opus\n", 1)
+	require.NoError(t, os.WriteFile(crewFile, []byte(body), 0o600))
+
+	out, _, err = zm(t, crewFile, "doctor")
+	require.NoError(t, err)
+	assert.Contains(t, out, "ok    models    every role names its model")
+}
+
+// A Codex seat is pinned by its model or by a profile, which carries one of its own.
+func TestCheckModelsCodexSeats(t *testing.T) {
+	crewFile := testCrew(t, "  cdx:\n    runtime: codex\n  cdx-model:\n    runtime: codex\n    model: gpt-x\n"+
+		"  cdx-profile:\n    runtime: codex\n    profile: fast\n")
+
+	c, err := crew.Load(crewFile)
+	require.NoError(t, err)
+
+	var lines []string
+
+	checkModels(c, func(name, level, format string, args ...any) {
+		lines = append(lines, level+" "+name+" "+fmt.Sprintf(format, args...))
+	})
+
+	require.Len(t, lines, 1)
+	assert.Contains(t, lines[0], "warn models 2 roles with no model: (dispatcher, cdx)")
+}
