@@ -209,6 +209,8 @@ func (s *Shift) Tick() []string {
 	}
 
 	s.mark("notes", "")
+	// Delivery records past their age limit go, told once (one more note).
+	notes = append(notes, s.sweepDelivery(now)...)
 	s.addNotes(notes)
 	did = append(did, notes...)
 
