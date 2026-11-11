@@ -6,10 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"regexp"
 	"strings"
 	"sync"
+	"syscall"
+	"time"
 )
 
 // Addr is one way to reach a node. SSH is [user@]host and may be told to other nodes; Cmd is a command line on
@@ -65,6 +68,7 @@ func (Exec) Dial(ctx context.Context, a Addr) (io.ReadWriteCloser, error) {
 	}
 
 	c := Command(ctx, a, "node", "serve", "--stdio")
+	ownGroup(c)
 
 	in, err := c.StdinPipe()
 	if err != nil {
@@ -76,26 +80,62 @@ func (Exec) Dial(ctx context.Context, a Addr) (io.ReadWriteCloser, error) {
 		return nil, err
 	}
 
-	s := &cmdStream{cmd: c, in: in, out: out}
+	s := &cmdStream{cmd: c, in: in, out: out, ctx: ctx, done: make(chan struct{})}
 	c.Stderr = &s.stderr
 
 	if err := c.Start(); err != nil {
 		return nil, err
 	}
 
+	go s.abortWith(ctx)
+
 	return s, nil
 }
 
+const (
+	// waitDelay is how long a command's Wait keeps waiting for its output to end once the command itself has: a
+	// process the command started may hold the pipe open far longer than the command lived.
+	waitDelay = 3 * time.Second
+
+	// sshAliveEvery and sshAliveMax make a dead link end ssh itself: it asks the far side every few seconds and
+	// gives up after that many answers missed, so a stalled link ends a session in about 15 s, not when TCP gives up.
+	sshAliveEvery = "ServerAliveInterval=5"
+	sshAliveMax   = "ServerAliveCountMax=3"
+)
+
 // Command runs the peer's zmina at a with args: plain words this package or the command line chose (a node name
-// at most), never a peer's text.
+// at most), never a peer's text. When ctx ends the command is killed and Wait returns within waitDelay, even if
+// something it started still holds the pipes.
 func Command(ctx context.Context, a Addr, args ...string) *exec.Cmd {
 	words := strings.Join(args, " ")
+
+	var c *exec.Cmd
 	if a.SSH != "" {
-		return exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "--", a.SSH,
+		c = exec.CommandContext(ctx, "ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", sshAliveEvery,
+			"-o", sshAliveMax, "--", a.SSH,
 			`PATH="$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:$PATH" zmina `+words)
+	} else {
+		c = exec.CommandContext(ctx, "sh", "-c", a.Cmd+" "+words)
 	}
 
-	return exec.CommandContext(ctx, "sh", "-c", a.Cmd+" "+words)
+	c.WaitDelay = waitDelay
+
+	return c
+}
+
+// ownGroup runs c in a process group of its own, and has the end of its context kill the whole group: ssh's proxy
+// and a shell's children die with the command instead of outliving it holding its pipes. Only for a command no
+// terminal drives (a sync session): a command in the background group of a terminal stops when it asks for it.
+func ownGroup(c *exec.Cmd) {
+	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	c.Cancel = func() error {
+		err := syscall.Kill(-c.Process.Pid, syscall.SIGKILL)
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+
+		return err
+	}
 }
 
 // OwnerCommand runs the peer's zmina at a with args for the owner at this terminal (zmina ls/peek/attach <node>/<crew>),
@@ -109,10 +149,16 @@ func OwnerCommand(ctx context.Context, a Addr, tty bool, args ...string) (*exec.
 		argv := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=10"}
 		if tty {
 			argv = append(argv, "-t")
+		} else {
+			// A terminal session ends by its owner's hand; a call that only collects output ends when the link dies.
+			argv = append(argv, "-o", sshAliveEvery, "-o", sshAliveMax)
 		}
 
-		return exec.CommandContext(ctx, "ssh", append(argv, "--", a.SSH,
-			`PATH="$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:$PATH" zmina `+words)...), nil
+		c := exec.CommandContext(ctx, "ssh", append(argv, "--", a.SSH,
+			`PATH="$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:$PATH" zmina `+words)...)
+		c.WaitDelay = waitDelay
+
+		return c, nil
 	}
 
 	line, err := ownerLine(a.Cmd, tty)
@@ -182,10 +228,23 @@ func ownerLine(line string, tty bool) (string, error) {
 type cmdStream struct {
 	cmd    *exec.Cmd
 	in     io.WriteCloser
-	out    io.Reader
+	out    io.ReadCloser
+	ctx    context.Context
+	done   chan struct{} // closed by Close: the stream is over, nothing left to abort
 	once   sync.Once
 	err    error
 	stderr lockedBuffer
+}
+
+// abortWith ends the stream when ctx ends. exec kills the command then, but a Read blocked on its stdout stays
+// blocked while anything the command started holds the other end of the pipe; closing our ends frees it at once.
+func (s *cmdStream) abortWith(ctx context.Context) {
+	select {
+	case <-ctx.Done():
+		_ = s.in.Close()
+		_ = s.out.Close()
+	case <-s.done:
+	}
 }
 
 // lockedBuffer is the command's stderr: os/exec copies into it from its own goroutine until Wait returns, while
@@ -211,6 +270,11 @@ func (b *lockedBuffer) String() string {
 
 func (s *cmdStream) Read(p []byte) (int, error) {
 	n, err := s.out.Read(p)
+	if errors.Is(err, os.ErrClosed) && s.ctx.Err() != nil {
+		// Closed under this Read by abortWith: the context's end is the reason, not a closed file.
+		return n, s.ctx.Err()
+	}
+
 	if errors.Is(err, io.EOF) {
 		// The peer's side ended: say why, if it said.
 		if msg := s.why(); msg != "" {
@@ -225,6 +289,7 @@ func (s *cmdStream) Write(p []byte) (int, error) { return s.in.Write(p) }
 
 func (s *cmdStream) Close() error {
 	s.once.Do(func() {
+		close(s.done)
 		_ = s.in.Close()
 		if err := s.cmd.Wait(); err != nil {
 			s.err = err

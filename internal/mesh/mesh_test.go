@@ -485,9 +485,12 @@ func TestOwnerCommand(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-t", "--", "box"}, c.Args[:8])
 	assert.True(t, strings.HasSuffix(c.Args[8], " zmina attach dev"))
+	assert.NotContains(t, c.Args, "ServerAliveInterval=5", "a terminal session ends by its owner's hand")
 	c, err = OwnerCommand(context.Background(), Addr{SSH: "box"}, false, "ls")
 	require.NoError(t, err)
 	assert.NotContains(t, c.Args, "-t")
+	assert.Equal(t, []string{"-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=3"}, c.Args[5:9],
+		"a call that only collects output ends when the link dies")
 
 	for line, want := range map[string]string{
 		"ssh -o BatchMode=yes box sudo -n -iu ops zmina": "ssh -o BatchMode=yes -o BatchMode=yes -t box sudo -n -iu ops zmina",
