@@ -396,6 +396,7 @@ func (s *Shift) dropQueued(a *Ack) {
 func (s *Shift) clearInFlight(rs *RoleState, a *Ack) {
 	mine := func(ids []string, parts []Part) bool { return slices.Contains(ids, a.ID) && s.ackedWhole(ids, parts) }
 	dispatcher := a.Role == s.Crew.Dispatcher
+	ch, dir := s.peerFor(a.Role)
 
 	rs.Failed = slices.DeleteFunc(rs.Failed, func(f Failed) bool {
 		if !mine(f.IDs, f.Parts) {
@@ -413,6 +414,10 @@ func (s *Shift) clearInFlight(rs *RoleState, a *Ack) {
 		}
 
 		s.log(a.Role, "acked-cleared", "", "posted: "+p.Line)
+
+		// A line still waiting in a bridge's inbox as a file goes with its record: the next bridge would run a line its
+		// reader has already. One the bridge took is left alone (Withdraw).
+		withdraw(ch, dir, p)
 
 		if dispatcher {
 			s.stageIDs(p.IDs, "submitted")

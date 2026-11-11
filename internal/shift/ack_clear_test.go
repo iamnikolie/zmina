@@ -2,6 +2,8 @@ package shift
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -286,4 +288,43 @@ func TestTypedLineWhoseAckWasEvictedStillFails(t *testing.T) {
 	require.Len(t, rs.Failed, 1, "kept as failed: nobody acked it")
 	assert.Contains(t, rs.Failed[0].Line, "look at T-1")
 	assert.Zero(t, f.eventCount("acked-cleared"))
+}
+
+// A Codex line acked while its file still waits in the bridge's inbox is withdrawn with its record: the next bridge
+// would run a line its reader already has.
+func TestAckWithdrawsACodexLineWaitingInItsFile(t *testing.T) {
+	f, dir := codexFixture(t)
+	bridge(t, f, dir, "thread-1")
+
+	id, err := f.s.QueueTracked("dev", "[dispatcher] look at T-1")
+	require.NoError(t, err)
+	require.NotEmpty(t, f.s.deliverInbox("dev", *f.now))
+	require.Len(t, waitingFiles(t, dir), 1)
+
+	f.s.AckLines([]string{id}, false, "dev", "dev")
+
+	assert.Empty(t, f.s.State.Role("dev").Posted)
+	assert.Empty(t, waitingFiles(t, dir), "no bridge will run it")
+}
+
+// A line the bridge took before the ack is not touched: the taken mark is its record.
+func TestAckOfACodexLineTheBridgeTookLeavesItsMark(t *testing.T) {
+	f, dir := codexFixture(t)
+	bridge(t, f, dir, "thread-1")
+
+	id, err := f.s.QueueTracked("dev", "[dispatcher] look at T-1")
+	require.NoError(t, err)
+	require.NotEmpty(t, f.s.deliverInbox("dev", *f.now))
+
+	files := waitingFiles(t, dir)
+	require.Len(t, files, 1)
+	take(t, dir, files[0])
+
+	f.s.AckLines([]string{id}, false, "dev", "dev")
+
+	assert.Empty(t, f.s.State.Role("dev").Posted)
+
+	marks, err := os.ReadDir(filepath.Join(dir, "taken"))
+	require.NoError(t, err)
+	assert.Len(t, marks, 1)
 }
