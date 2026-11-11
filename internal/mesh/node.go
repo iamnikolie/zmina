@@ -261,9 +261,9 @@ func SetStrictRequests(dir string, on bool) error {
 	return writeJSON(filepath.Join(dir, "node.json"), nf)
 }
 
-// noticeDue says whether the notice called key may be made now, and counts it as made when so: once per every. The
+// NoticeDue says whether the notice called key may be made now, and counts it as made when so: once per every. The
 // stamps are a file of the node, because each session is a process of its own.
-func (n *Node) noticeDue(key string, now time.Time, every time.Duration) bool {
+func (n *Node) NoticeDue(key string, now time.Time, every time.Duration) bool {
 	due := false
 
 	_ = n.locked(func() error {

@@ -154,7 +154,7 @@ func (n *Node) legacyRequest(c *conn, op string) {
 	if c.now != nil {
 		now = c.now
 	}
-	if !n.noticeDue("terminal-unbound:"+c.peer.Name, now(), legacyNoticeEvery) {
+	if !n.NoticeDue("terminal-unbound:"+c.peer.Name, now(), legacyNoticeEvery) {
 		return
 	}
 	n.Notice("terminal-unbound", fmt.Sprintf("took %s from %s signed in the old form, bound to no node (the caller says terminal_v2: %t); "+
