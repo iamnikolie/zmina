@@ -27,9 +27,24 @@ type fakeTrees struct {
 	// onRemove runs after each removal; mergedErr, when set, is what Merged answers.
 	onRemove  func()
 	mergedErr error
+	// repaired lists the repos Repair was asked about; topErr, when set, is what TopLevel answers.
+	repaired []string
+	topErr   error
 }
 
-func (f *fakeTrees) TopLevel(dir string) (string, error) { return dir, nil }
+func (f *fakeTrees) TopLevel(dir string) (string, error) {
+	if f.topErr != nil {
+		return "", f.topErr
+	}
+
+	return dir, nil
+}
+
+func (f *fakeTrees) Repair(_ context.Context, repo string) (string, error) {
+	f.repaired = append(f.repaired, repo)
+
+	return "", nil
+}
 
 func (f *fakeTrees) ResolveBase(_, base string) (string, error) {
 	if base == "" {

@@ -27,6 +27,9 @@ type Trees interface {
 	Dirty(t worktree.Tree) (string, error)
 	Merged(t worktree.Tree) (bool, error)
 	Remove(t worktree.Tree, force bool) error
+	// Repair re-points the linked worktrees of repo, which has moved, at it (git worktree repair); it says what git
+	// said.
+	Repair(ctx context.Context, repo string) (string, error)
 }
 
 // Git is Trees over the git command.
@@ -53,6 +56,11 @@ func (Git) Merged(t worktree.Tree) (bool, error) { return t.Merged() }
 
 // Remove is Tree.Remove.
 func (Git) Remove(t worktree.Tree, force bool) error { return t.Remove(force) }
+
+// Repair is worktree.Repair.
+func (Git) Repair(ctx context.Context, repo string) (string, error) {
+	return worktree.Repair(ctx, repo)
+}
 
 // Ledger is one crew's tasks.
 type Ledger struct {
@@ -333,19 +341,44 @@ type Collected struct {
 	Removed bool
 	Kept    string
 	Detail  string
+	// RepoGone is the repository path the task records when nothing is there any more (moved, or deleted); Kept
+	// says so. Git cannot judge such a task's work, so it stays; GroupMissing makes one line of every repository.
+	RepoGone string
+	// NoTree is set with RepoGone when the worktree directory is gone too: nothing is left on disk.
+	NoTree bool
+	// Dropped is set when the task's worktree record was dropped (or would be, on a dry run): see
+	// GCOptions.DropGone.
+	Dropped bool
+}
+
+// GCOptions is what a collection may do.
+type GCOptions struct {
+	// DryRun says what would be done and does none of it.
+	DryRun bool
+	// Force also removes a dropped task's unmerged branch and changes.
+	Force bool
+	// DropGone drops the worktree record (the task's worktree, branch and base) of a done or dropped task whose
+	// repository and worktree directory are both gone: nothing is left to lose. A directory that still exists is
+	// never touched, and the record of a task whose directory exists stays whatever its repository.
+	DropGone bool
 }
 
 // GC removes the worktrees and branches of closed tasks once that loses nothing: the worktree is clean and the
 // branch merged into its base. force also removes a dropped task's unmerged branch and changes. Tasks with nothing
 // left are not reported.
 func (l *Ledger) GC(dryRun, force bool) ([]Collected, error) {
-	return l.GCContext(context.Background(), dryRun, force)
+	return l.GCWith(context.Background(), GCOptions{DryRun: dryRun, Force: force})
 }
 
 // GCContext is GC under a deadline, for a caller that cannot wait for git (the ticker's daily sweep). Once ctx is
 // done no task is begun and no removal started, a git call that only reads is ended, and what was collected so far
 // comes back with ctx's error. A removal already under way is let finish (see worktree.Tree.Ctx).
 func (l *Ledger) GCContext(ctx context.Context, dryRun, force bool) ([]Collected, error) {
+	return l.GCWith(ctx, GCOptions{DryRun: dryRun, Force: force})
+}
+
+// GCWith is GCContext with the options of a collection.
+func (l *Ledger) GCWith(ctx context.Context, o GCOptions) ([]Collected, error) {
 	all, err := l.Store.All()
 	if err != nil {
 		return nil, err
@@ -362,7 +395,10 @@ func (l *Ledger) GCContext(ctx context.Context, dryRun, force bool) ([]Collected
 			continue
 		}
 
-		if c, ok := l.collect(ctx, t, dryRun, force && t.State == task.Dropped); ok {
+		each := o
+		each.Force = o.Force && t.State == task.Dropped
+
+		if c, ok := l.collect(ctx, t, each); ok {
 			out = append(out, c)
 		}
 	}
@@ -372,7 +408,8 @@ func (l *Ledger) GCContext(ctx context.Context, dryRun, force bool) ([]Collected
 
 // collect reports what became of one closed task's worktree. A task the deadline cut short is not reported (false):
 // what git said before it was cut says nothing of the task.
-func (l *Ledger) collect(ctx context.Context, t task.Task, dryRun, force bool) (Collected, bool) {
+func (l *Ledger) collect(ctx context.Context, t task.Task, o GCOptions) (Collected, bool) {
+	dryRun, force := o.DryRun, o.Force
 	tr := treeCtx(ctx, t)
 	c := Collected{ID: t.ID, Detail: t.Worktree + " and branch " + t.Branch}
 
@@ -384,6 +421,12 @@ func (l *Ledger) collect(ctx context.Context, t task.Task, dryRun, force bool) (
 		c.Kept = err.Error()
 
 		return c, true
+	}
+
+	// A repository that is not where the task records it (moved, deleted) is no git error per task: the answer is
+	// the same for all of its tasks, and git would only say it cannot change to the directory.
+	if t.Repo != "" && missing(t.Repo) {
+		return l.collectMissingRepo(ctx, t, c, o)
 	}
 
 	merged, err := l.Trees.Merged(tr)
@@ -433,6 +476,51 @@ func (l *Ledger) collect(ctx context.Context, t task.Task, dryRun, force bool) (
 			l.log(t.Role, "task", t.ID, "worktree removed: "+c.Detail)
 		}
 	}
+
+	return c, true
+}
+
+// missing reports whether nothing is at path (not: it cannot be read).
+func missing(path string) bool {
+	_, err := os.Stat(path)
+
+	return errors.Is(err, os.ErrNotExist)
+}
+
+// collectMissingRepo is collect for a task whose repository is not at its recorded path. Whatever is left of its
+// worktree stays: git cannot say whether its branch is merged, and a directory that exists may hold work. Only a
+// done or dropped task with no worktree directory either, and only when asked (GCOptions.DropGone), loses its
+// worktree record.
+func (l *Ledger) collectMissingRepo(ctx context.Context, t task.Task, c Collected, o GCOptions) (Collected, bool) {
+	c.RepoGone = t.Repo
+	c.Kept = "repository moved or gone: " + t.Repo
+	c.NoTree = missing(t.Worktree)
+
+	if !c.NoTree || !o.DropGone || t.State == task.Parked {
+		return c, true
+	}
+
+	if o.DryRun {
+		c.Kept, c.RepoGone, c.NoTree, c.Dropped = "", "", false, true
+
+		return c, true
+	}
+
+	if ctx.Err() != nil {
+		return c, false
+	}
+
+	t.Worktree, t.Branch, t.Base = "", "", ""
+
+	if err := l.Store.Put(t); err != nil {
+		// The error is this task's own: it stands alone, not in its repository's line.
+		c.Kept, c.RepoGone, c.NoTree = "worktree record not dropped: "+err.Error(), "", false
+
+		return c, true
+	}
+
+	c.Kept, c.RepoGone, c.NoTree, c.Dropped = "", "", false, true
+	l.log(t.Role, "task", t.ID, "worktree record dropped: "+c.Detail+" (repository "+t.Repo+" and the directory are gone)")
 
 	return c, true
 }
