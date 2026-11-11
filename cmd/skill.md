@@ -314,7 +314,10 @@ earlier zmina wrote and run them with the new executable: the hidden commands an
 keeps its old name. A Codex role's bridge and a running `zmina ui` keep the earlier zmina's code until they are started
 again. `zmina doctor` says which (`versions`): a cockpit or a Codex bridge of another version warns, Claude roles
 started by another version are listed without a warning; `zmina restart <role> --continue` starts one with this
-zmina. A `zmina ui` that finds the cockpit running says so when that one is of another version.
+zmina. A `zmina ui` that finds the cockpit running says so when that one is of another version. The ticker tells
+the dispatcher what runs another zmina's code (`version: ...` health note, `version-skew` event): the cockpit and
+each Codex bridge, once a day for each while it lasts (`versions.json` next to the crew file keeps when); Claude
+roles are not told, their hooks keep working.
 
 Typed into the input line as before: a slash command (a posted one is plain text), the owner's own message from Chat
 (below: his own turn, never another session's message), a role whose `args`
@@ -1358,9 +1361,9 @@ costs money and pushes a branch.
 
 | Command | Does |
 |---|---|
-| `zmina lesson add "<rule>" --why "<why>" --applies every\|role\|task\|unsure [--in-file p] [--task T-n]` | file a lesson (role from `$ZMINA_ROLE`, `--from` to name another); prints `LS-<n>`. `--file <md>` (or `-`) takes several in the format `### rule` / `Why:` / `Applies to: every seat \| this role \| one task \| not sure` / `In a file already: <path> \| no`. A lesson that carries a secret or a customer's data is refused whole, naming the rule and line, never the text: provider tokens, private keys, JWTs, URLs with a password, Stripe keys, Telegram bot tokens, long random strings (not a git hash, not names made of words), hex runs of 48 or more, IPv4 outside the documentation ranges, mail other than example.* and no-reply, and the crew's own words (`lessons.deny`). |
+| `zmina lesson add "<rule>" --why "<why>" --applies every\|role\|task\|unsure [--in-file p] [--task T-n]` | file a lesson (role from `$ZMINA_ROLE`, `--from` to name another); prints `LS-<n>`. `--file <md>` (or `-`) takes several in the format `### rule` / `Why:` / `Applies to: every seat \| this role \| one task \| not sure` / `In a file already: <path> \| no`. A lesson that carries a secret or a customer's data is refused whole, naming its place in the input (`item n`, never an id: ids are `LS-n`), the rule and line, never the text: provider tokens, private keys, JWTs, URLs with a password, Stripe keys, Telegram bot tokens, long random strings (not a git hash, not names made of words), hex runs of 48 or more, IPv4 outside the documentation ranges, mail other than example.* and no-reply, and the crew's own words (`lessons.deny`). |
 | a checkpoint or result with a `lessons` section | the section (same markdown) is filed as lessons and leaves the record; a refused one is said on stderr, the record is saved. Add `lessons` to the crew's handoff shape to ask for it. |
-| `zmina lesson ls [--all]` / `show <id>` / `drop <id...> [--reason]` | the waiting lessons (all: also in an MR, merged, dropped) and the line ls shows; one whole; drop waiting ones. |
+| `zmina lesson ls [--all]` / `show <id>` / `drop <id...> [--reason]` | the waiting lessons (all: also in an MR, merged, dropped) and the line ls shows; one whole; drop waiting ones. A lesson is `LS-n` everywhere it is shown; `show` and `drop` also read `ls-n` and a bare `n`. |
 | `zmina lesson triage [--dry-run]` | run now (the ticker runs it daily); `--dry-run` runs both passes and prints the plan, pushes nothing, works with lessons off. |
 
 The crew file: `lessons: on`, or a block — `repo` (default: the git toplevel of the crew's `agents:` dir, i.e. its own
@@ -1394,7 +1397,8 @@ spent week skips the run (`triage-skipped`). Each run's cost is logged (`lessons
 `Lessons triage $x: <crew> $y (n times)` per crew, peers too with `--all`. Every git call of a run ends: two minutes
 for a local one, five for one that talks to the remote (`fetch`, `push`, `ls-remote`), killed with what it started
 when no terminal drives the run (the daily run is detached); a remote that never answers fails the run, it does not
-hold it. A lesson, or the owner's todo, that a run could not save does not stop it recording its MR: the failure is a
+hold it; so does a call of the sorting or checking seat (`claude -p`): twenty minutes, then it fails the run the same
+way. A lesson, or the owner's todo, that a run could not save does not stop it recording its MR: the failure is a
 `lesson-state-failed` event, a note for the dispatcher and the run's last error (`ls`, doctor), and `zmina lesson
 triage` by hand exits with it.
 
@@ -1828,7 +1832,9 @@ arguments. `zmina doctor` counts them for the last 24 h.
 `zmina ticker install | uninstall | status` — every minute, PATH captured at install; its output
 goes to `tick.log` next to the crew file. `status` also shows the last beat and the end of
 tick.log. A PATH that changes later (claude moved by an upgrade) needs `ticker install` again. `tick.log` past 5 MB is
-cut to its last 1 MB by the retention pass.
+cut to its last 1 MB by the retention pass. Every program zmina asks a question of ends at a deadline: `launchctl`,
+`systemctl` and `loginctl` at 30 s (a service manager whose bus is gone fails the command, it does not hold it), `ps`
+at 5 s.
 
 - macOS: launchd agent `io.iamnikolie.zmina` (`.<name>` for a named crew) in `~/Library/LaunchAgents`.
 - Linux: systemd user units `zmina.service` + `zmina.timer` (`zmina-<name>` for a named crew) in

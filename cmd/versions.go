@@ -16,20 +16,15 @@ import (
 // by the new executable. The hook names and flags those lines use are an API kept across versions
 // (TestHookCommandsResolve); the rest only a restart brings up to date. doctor names what runs another version.
 
-// checkVersions is the doctor's versions check: the cockpit and the roles up that another zmina started.
-func checkVersions(c *crew.Crew, st *shift.State, add func(name, level, format string, args ...any)) {
-	add("versions", "ok", "this zmina is %s", version)
+// staleRole is a role up that another zmina started: its name and the version that did.
+type staleRole struct{ name, version string }
 
-	if r, ok := recordedCockpit(); ok && r.Version != version {
-		add("versions", "warn", "%s", cockpitSkew(r))
-	}
+func (r staleRole) String() string { return r.name + " (" + r.version + ")" }
 
-	if st == nil {
-		return
-	}
-
-	var codexOld, claudeOld, unknown []string
-
+// staleRoles sorts the roles up that this zmina did not start: Codex roles, whose bridge runs that zmina's code;
+// Claude roles, whose hooks keep the command lines that one wrote; and roles started by a zmina that did not record
+// its version. A role that is down is not named.
+func staleRoles(c *crew.Crew, st *shift.State) (codex, claude []staleRole, unknown []string) {
 	for _, name := range slices.Sorted(maps.Keys(st.Roles)) {
 		rs := st.Roles[name]
 		if !rs.Up || rs.Version == version {
@@ -43,21 +38,47 @@ func checkVersions(c *crew.Crew, st *shift.State, add func(name, level, format s
 		case rs.Version == "":
 			unknown = append(unknown, name)
 		case known && r.IsCodex():
-			codexOld = append(codexOld, name+" ("+rs.Version+")")
+			codex = append(codex, staleRole{name, rs.Version})
 		default:
-			claudeOld = append(claudeOld, name+" ("+rs.Version+")")
+			claude = append(claude, staleRole{name, rs.Version})
 		}
 	}
 
+	return codex, claude, unknown
+}
+
+func joinStale(rs []staleRole) string {
+	parts := make([]string, len(rs))
+	for i, r := range rs {
+		parts[i] = r.String()
+	}
+
+	return strings.Join(parts, ", ")
+}
+
+// checkVersions is the doctor's versions check: the cockpit and the roles up that another zmina started.
+func checkVersions(c *crew.Crew, st *shift.State, add func(name, level, format string, args ...any)) {
+	add("versions", "ok", "this zmina is %s", version)
+
+	if r, ok := recordedCockpit(); ok && r.Version != version {
+		add("versions", "warn", "%s", cockpitSkew(r))
+	}
+
+	if st == nil {
+		return
+	}
+
+	codexOld, claudeOld, unknown := staleRoles(c, st)
+
 	if len(codexOld) > 0 {
 		add("versions", "warn", "Codex roles whose bridge runs the code of another zmina: %s; zmina restart <role> "+
-			"--continue starts each with this one", strings.Join(codexOld, ", "))
+			"--continue starts each with this one", joinStale(codexOld))
 	}
 
 	if len(claudeOld) > 0 {
 		add("versions", "ok", "roles started by another zmina: %s; their hooks run this zmina with the command "+
 			"lines that one wrote, the rest of their settings and boot text is that one's until zmina restart <role> "+
-			"--continue", strings.Join(claudeOld, ", "))
+			"--continue", joinStale(claudeOld))
 	}
 
 	if len(unknown) > 0 {

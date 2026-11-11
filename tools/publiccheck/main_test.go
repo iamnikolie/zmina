@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSSHHosts(t *testing.T) {
@@ -193,5 +194,31 @@ func TestPushDenylist(t *testing.T) {
 
 	if rules, err = banned(home, "HEAD"); err != nil || len(rules) != 0 {
 		t.Fatalf("rules = %d, %v; want none", len(rules), err)
+	}
+}
+
+// A git that does not answer fails the call at its deadline instead of holding the check.
+func TestGitEndsWhenItDoesNotAnswer(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte("#!/bin/sh\nexec sleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	keep := gitTimeout
+	gitTimeout = 150 * time.Millisecond
+
+	t.Cleanup(func() { gitTimeout = keep })
+
+	start := time.Now()
+	_, err := git("rev-list", "HEAD")
+
+	if err == nil || !strings.Contains(err.Error(), "no answer in 150ms") {
+		t.Fatalf("err = %v, want the deadline", err)
+	}
+
+	if time.Since(start) > 5*time.Second {
+		t.Fatalf("the call took %s", time.Since(start))
 	}
 }
