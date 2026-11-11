@@ -42,6 +42,20 @@ var revisionID = regexp.MustCompile(`^[a-f0-9]{64}$`)
 // revisionPrefix is what --revision takes: the whole hash or its start, eight hex digits at least.
 var revisionPrefix = regexp.MustCompile(`^[a-f0-9]{8,64}$`)
 
+// ArchiveRoot is where zmina retention moves the records of tasks closed long ago, under the crew's directory:
+// <ArchiveRoot>/<yyyy-mm>/<kind>s/<task>/<revision>.json. Reads fall back to it (read-only: nothing is moved back or
+// written there), and a directory whose files went has a StubFile saying so.
+var ArchiveRoot = filepath.Join("archive", "retention")
+
+// StubFile is the note retention leaves in a records directory it emptied.
+const StubFile = "archived.txt"
+
+// archived is the files of kind under task id in the archive that match name, the newest month last.
+func archived(dir, kind, id, name string) []string {
+	paths, _ := filepath.Glob(filepath.Join(dir, ArchiveRoot, "*", kind+"s", id, name))
+	return paths
+}
+
 // ShortLen is how many hex digits a revision is shown with: enough to tell it apart, short enough to read.
 const ShortLen = 12
 
@@ -91,7 +105,7 @@ func Find(dir, kind string, ids []string, prefix string) (string, string, error)
 	}
 	switch len(found) {
 	case 0:
-		return "", "", fmt.Errorf("no %s revision %s for %s", kind, prefix, strings.Join(unique(ids), " or "))
+		return "", "", fmt.Errorf("no %s revision %s for %s%s", kind, prefix, strings.Join(unique(ids), " or "), stubNotes(dir, kind, ids))
 	case 1:
 		return found[0].id, found[0].rev, nil
 	}
@@ -117,13 +131,26 @@ func revisions(dir, kind, id, prefix string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	paths = append(paths, archived(dir, kind, id, prefix+"*.json")...)
 	var out []string
 	for _, p := range paths {
-		if rev := strings.TrimSuffix(filepath.Base(p), ".json"); revisionID.MatchString(rev) {
+		if rev := strings.TrimSuffix(filepath.Base(p), ".json"); revisionID.MatchString(rev) && !slices.Contains(out, rev) {
 			out = append(out, rev)
 		}
 	}
 	return out, nil
+}
+
+// stubNotes is what the notes retention left in the tasks' emptied records directories say, for an error: the
+// archived files are the likeliest reason a revision is not found.
+func stubNotes(dir, kind string, ids []string) string {
+	var out string
+	for _, id := range unique(ids) {
+		if note, err := os.ReadFile(filepath.Join(dir, kind+"s", id, StubFile)); err == nil {
+			out += " (archived and not in the archive: " + strings.TrimSpace(string(note)) + ")"
+		}
+	}
+	return out
 }
 
 func unique(ids []string) []string {
@@ -178,7 +205,7 @@ func Save(dir string, d Document) (Ref, error) {
 	}
 	if old, err := Load(dir, d.Kind, d.Task, rev); err == nil {
 		return Ref{Task: d.Task, Revision: rev, At: old.At}, nil
-	} else if !os.IsNotExist(err) {
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return Ref{}, err
 	}
 	d.At = at
@@ -201,6 +228,14 @@ func Load(dir, kind, id, revision string) (Document, error) {
 		return Document{}, err
 	}
 	raw, err := os.ReadFile(p)
+	if errors.Is(err, os.ErrNotExist) {
+		// Moved by retention: read the archived copy (the newest month when a task was archived twice).
+		if found := archived(dir, kind, id, revision+".json"); len(found) > 0 {
+			raw, err = os.ReadFile(found[len(found)-1])
+		} else if note, nerr := os.ReadFile(filepath.Join(filepath.Dir(p), StubFile)); nerr == nil {
+			err = fmt.Errorf("%s was archived and is not in the archive: %s: %w", p, strings.TrimSpace(string(note)), os.ErrNotExist)
+		}
+	}
 	if err != nil {
 		return Document{}, err
 	}

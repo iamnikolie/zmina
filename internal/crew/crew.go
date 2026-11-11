@@ -337,6 +337,10 @@ type Crew struct {
 	// WorktreeGC is daily or off (the default): daily has the ticker run `zmina task gc` (never --force) once a
 	// day, so the worktrees of closed tasks whose branch is merged do not pile up.
 	WorktreeGC string `yaml:"worktree_gc"`
+	// Retention is how long finished work (handoff packets of closed tasks, their results, old messages, ...) stays
+	// where it is before the ticker's daily pass moves it to the archive directory: a span of 30 days at least
+	// (45d), or off. Empty: 30d.
+	Retention string `yaml:"retention"`
 	// Limits states how the crew spends its Claude and Codex plans (see Limits); empty: the defaults.
 	Limits *Limits `yaml:"limits"`
 	// Routes are the dispatcher's routing rules in order, as the file wrote them (see checkRoutes); Busy says what a
@@ -855,6 +859,10 @@ func (c *Crew) check() error {
 	}
 
 	if err := checkWorktreeGC(c.WorktreeGC); err != nil {
+		return err
+	}
+
+	if err := checkRetention(c.Retention); err != nil {
 		return err
 	}
 	sessions := map[string]string{}

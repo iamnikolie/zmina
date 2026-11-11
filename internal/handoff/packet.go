@@ -12,6 +12,14 @@ import (
 	"github.com/iamnikolie/zmina/internal/task"
 )
 
+// The directories under the crew's state directory the packets are written to: a task's packets each in a directory
+// of the task's id, release and restart requests as files of their own.
+const (
+	PacketsDir  = "handoffs"
+	ReleasesDir = "releases"
+	RestartsDir = "restarts"
+)
+
 // Packet preserves the full task, including multiline requests and the latest note.
 type Packet struct {
 	Shape        crew.HandoffShape `json:"shape"`
@@ -26,12 +34,12 @@ func Write(dir string, p Packet) (string, error) {
 	if task.Normalize(p.Task.ID) != p.Task.ID || filepath.Base(p.Task.ID) != p.Task.ID {
 		return "", fmt.Errorf("invalid task ID %q", p.Task.ID)
 	}
-	return publish(filepath.Join(dir, "handoffs", p.Task.ID), p)
+	return publish(filepath.Join(dir, PacketsDir, p.Task.ID), p)
 }
 
 // Release writes one short-locator request containing all role-shaped checkpoint packets.
 func Release(dir, role string, packets []Packet) (string, error) {
-	return publish(filepath.Join(dir, "releases"), struct {
+	return publish(filepath.Join(dir, ReleasesDir), struct {
 		Role         string   `json:"role"`
 		Tasks        []Packet `json:"tasks"`
 		Instructions string   `json:"instructions"`
@@ -40,7 +48,7 @@ func Release(dir, role string, packets []Packet) (string, error) {
 
 // Restart writes one short-locator request for the role's handoff notes before zmina restarts it fresh.
 func Restart(dir, role string, packets []Packet) (string, error) {
-	return publish(filepath.Join(dir, "restarts"), struct {
+	return publish(filepath.Join(dir, RestartsDir), struct {
 		Role         string   `json:"role"`
 		Tasks        []Packet `json:"tasks"`
 		Instructions string   `json:"instructions"`

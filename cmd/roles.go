@@ -26,7 +26,7 @@ import (
 
 func (a *app) roleCommands() []*cobra.Command {
 	return []*cobra.Command{a.initCommand(), a.lsCommand(), a.upCommand(), a.downCommand(), a.restartCommand(),
-		a.sendCommand(), a.peekCommand(), a.keysCommand(), a.attachCommand(), a.tickCommand()}
+		a.sendCommand(), a.peekCommand(), a.keysCommand(), a.attachCommand(), a.tickCommand(), a.retentionCommand()}
 }
 
 func (a *app) initCommand() *cobra.Command {
@@ -1130,6 +1130,7 @@ func (a *app) tickCommand() *cobra.Command {
 			a.pushTick(time.Now())
 			a.lessonsBeat(time.Now())
 			a.worktreeBeat(time.Now())
+			a.retentionBeat(time.Now())
 
 			return err
 		},
