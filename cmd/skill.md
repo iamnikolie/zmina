@@ -990,6 +990,12 @@ which edit files in a repository checkout.
 | `zmina task park <id> [--note "<what remains>"]` | move an active task to the later list: a new `L-n` with what remains (default: the task's title), note `from T-48 (designer)`, and the role and its conversation (the running one, else its last) for `later take --resume`. The task closes as `parked L-n`; its worktree stays as it is. `task set <id> parked` is refused: parking goes through here. Prints `T-48 · designer · parked L-15`, then its cost line. |
 | `zmina task gc [--dry-run]` | remove worktrees and branches of closed tasks once clean and merged into their base. `--force` also removes dropped tasks' unmerged branches. |
 
+**Daily sweep.** `worktree_gc: daily` in the crew file has the ticker run `zmina task gc` (never `--force`) at most
+once every 24 h: closed tasks whose branch is merged and whose worktree is clean lose theirs, nothing else. It runs
+after the beat's locked steps and holds no state lock, so a slow git blocks no other zmina command; it stops at a 60 s
+deadline and what it did not reach waits for the next day's sweep. Each removal is a `worktree removed` event in
+`zmina log`; `zmina doctor` shows the last sweep. Default off (`off` or absent).
+
 **What the work is.** `--title` is the work in one short plain sentence in the owner's language ("Landing page —
 rework"), `--project` the project or product it is for (default: the repo's directory name), `--url` the live thing
 to look at. The ui page is built around them; without a title it shows the start of the asked text. The dispatcher
