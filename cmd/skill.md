@@ -323,23 +323,28 @@ earlier zmina (no settings: until its next start), and a session with no inbox s
 A post that never started is tried three beats, then kept as failed; one whose write broke after it started is
 followed like a posted line (`post-broken` in the log: the role may have it), never posted again. A posted line an idle session never shows within 10 min is kept as failed (`posted to its
 inbox socket, never seen in its conversation (held or dropped); inspect before retry`); one that went to a
-conversation that is over (the role restarted, was put down, released or ended) goes back to the head of its queue,
-once, unless it meant that conversation alone — the boot line a clear queued, the release and restart requests, the
-pointer to a recovery pack — which is dropped (event `dropped`). A role counts as ended when two beats in a row find it
+conversation that is over (the role restarted, was put down, released or ended, or a `/clear` started another in the
+same process) goes back to the head of its queue, once. A session that is gone (below) drops, with event `dropped`, what
+it alone was meant for — the boot line a clear queued, the release and restart requests, the pointer to a recovery
+pack — where a conversation that only changed under a process that lives (a clear) gets them back: it has no boot of its
+own, and a boot given back is known as the boot again. A role counts as ended when two beats in a row find it
 not up and no session of its name lives in the registry (a down by command counts at once), and when a new start
 replaces its session; one beat that cannot see it settles nothing. A line posted to a Codex bridge's inbox that no
 bridge has taken yet stays posted: its file waits for the next bridge, and is neither queued again nor aged out — unless
-it meant the ended conversation alone, when its file is withdrawn with it (and an ack withdraws the file of the line it
+it meant the session that is gone alone, when its file is withdrawn with it (and an ack withdraws the file of the line it
 clears). A posted boot is known by its record, not by the queue, which forgets it once posted. A line
 typed and not yet seen to land goes the same way when its session ends: dropped, never typed again; a tracked one stays
 in the acks and is said again. A record that nothing settled does not stay for ever: one posted or typed more than 24
-hours ago for a role that is up, or kept as failed more than 7 days ago, is dropped by the beat (after it has looked
-whether the line showed or landed; a role that is not up is left to the settling above), with one event (`delivery-aged`) and one `FYI` line to the dispatcher that name how many, of which kinds and
-which ids; lines waiting in the inbox of a role that is down are not touched. `zmina queue ls` shows posted lines not
-yet seen and failed lines with their age. An ack takes a line out of every place it stands, failed and posted included,
-and a typed one once it has landed (one still in the input line is finished by the next delivery, which presses Enter
-again or clears the input, the ack being recorded on it so that an ack merely gone does not clear it); a post to the dispatcher made of several items is cleared when all of its signals are acked,
-and while a note or an `FYI` line is in it, it is left to show or go back as it was.
+hours ago for a role the beat found up, or kept as failed more than 7 days ago, is dropped by the beat (after it has
+looked whether the line showed or landed; a role that is not up, or that tmux did not answer for, is left alone, and so
+is every posted or typed record on the first beat after a gap of more than 5 minutes), with one event (`delivery-aged`)
+and one `FYI` line to the dispatcher that name how many, of which kinds and which ids; lines waiting in the inbox of a
+role that is down are not touched. `zmina queue ls` shows posted lines not yet seen and failed lines with their age. An
+ack takes a line out of every place it stands, failed and posted included, and a typed one once it has landed (one still
+in the input line is finished by the next delivery, which presses Enter again or clears the input; the ids acked are
+recorded on it, and it is closed without a failed mark only when every one of its ids was acked by name, not when one is
+merely missing among the acks); a post to the dispatcher made of several items is cleared when all of its signals are
+acked, and while a note or an `FYI` line is in it, it is left to show or go back as it was.
 
 A Codex role's bridge keeps an inbox, `<crew state>/codex/inbox/<session>/`, and says where in its record
 (`zminaInbox`). zmina writes one file per line there; the bridge starts a turn with the oldest once its thread is idle
