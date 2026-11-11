@@ -43,7 +43,7 @@ func (a *app) nodeCommand() *cobra.Command {
 	}
 
 	c.AddCommand(a.nodeInit(), a.nodeSign(), a.nodeAccept(), a.nodeEnroll(), a.nodePeer(), a.nodeLs(), a.nodeSync(),
-		a.nodeServe())
+		a.nodeStrict(), a.nodeServe())
 
 	return c
 }
@@ -401,6 +401,8 @@ type nodeView struct {
 	Health []mesh.CrewHealth `json:"health,omitempty"`
 	Peers  []mesh.Peer       `json:"peers"`
 	Outbox []mesh.Envelope   `json:"outbox"`
+	// StrictRequests: this node refuses owner requests that name no node (zmina node strict on).
+	StrictRequests bool `json:"strict_requests,omitempty"`
 }
 
 func (a *app) nodeLs() *cobra.Command {
@@ -416,7 +418,8 @@ func (a *app) nodeLs() *cobra.Command {
 				return err
 			}
 
-			v := nodeView{Name: me.Name, Owner: me.IsOwner(), Crews: crewKeys(), CrewFiles: crewFiles(), Dispatchers: crewDispatchers(), Health: crewHealth()}
+			v := nodeView{Name: me.Name, Owner: me.IsOwner(), Crews: crewKeys(), CrewFiles: crewFiles(), Dispatchers: crewDispatchers(), Health: crewHealth(),
+				StrictRequests: me.StrictRequests}
 			if v.Peers, err = me.Peers(); err != nil {
 				return err
 			}
@@ -446,6 +449,10 @@ func (a *app) nodeLs() *cobra.Command {
 				}
 
 				crews = append(crews, word)
+			}
+
+			if v.StrictRequests {
+				owner += " · strict requests"
 			}
 
 			fmt.Fprintf(a.out, "node %s%s · crews: %s\n", v.Name, owner, strings.Join(crews, ", "))
@@ -494,6 +501,12 @@ func peerLine(p mesh.Peer, now time.Time) string {
 
 	if !p.OK.IsZero() {
 		parts = append(parts, "last ok "+now.Sub(p.OK).Round(time.Second).String()+" ago")
+
+		if p.TerminalV2 {
+			parts = append(parts, "terminal_v2")
+		} else {
+			parts = append(parts, "no terminal_v2")
+		}
 	}
 
 	if p.Err != "" {
@@ -613,6 +626,7 @@ func (a *app) nodeServe() *cobra.Command {
 
 			// stdout is the session: nothing else may write there.
 			quiet := &app{out: io.Discard, err: a.err}
+			me.Notice = nodeEvent
 
 			return me.ServeTerminals(cmd.Context(), stdioRW{cmd.InOrStdin(), cmd.OutOrStdout()},
 				quiet.deliverFrom(), time.Now, quiet.terminalServices(), mesh.Exec{})
