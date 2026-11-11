@@ -287,7 +287,7 @@ gets, and asks the process (`ps`) of a role an earlier zmina started.
 
 A start also records the zmina version that made it. After an install the roles keep the hook command lines the
 earlier zmina wrote and run them with the new executable: the hidden commands and flags those lines name
-(`pending --brief`, `_turn-end`, `_read-guard`, the `_codex` bridge's flags) stay valid across versions, a renamed one
+(`pending --brief`, `_turn-end`, `_read-guard`, `_limits-tap`, the `_codex` bridge's flags) stay valid across versions, a renamed one
 keeps its old name. A Codex role's bridge and a running `zmina ui` keep the earlier zmina's code until they are started
 again. `zmina doctor` says which (`versions`): a cockpit or a Codex bridge of another version warns, Claude roles
 started by another version are listed without a warning; `zmina restart <role> --continue` starts one with this
@@ -1468,6 +1468,14 @@ policy   claude: pinned work only from 80%, nothing from 99% · codex: pinned wo
   command it wraps with the same bytes on stdin and prints that command's output and exit code as they are. With
   no command it prints nothing. One word after `--` is a shell command line, more words are a program and its
   arguments. It never breaks a status line: any error of its own is dropped and the wrapped command runs anyway.
+- **Where the tap is installed**: in the `statusLine` of the `--settings` zmina passes a Claude role that takes its lines
+  on its own channel (Delivery), next to its hooks. It wraps the status line Claude Code would have drawn for that role —
+  the `statusLine` command of its dir's `.claude/settings.local.json`, then `.claude/settings.json`, then the
+  namespace's `settings.json` — so the pane looks as before; with none configured the tap draws nothing of its own. The
+  owner's settings files are only read, never edited, and the sessions the owner starts keep their own status line. A
+  role typed to (`delivery: tmux`), a Codex role, one whose `args` pass their own `--settings` and one an earlier zmina
+  started (until its next start) have no tap, so their status lines record nothing. The line is a command line a
+  session keeps for its life, like the hooks: `_limits-tap` keeps its name and form across versions.
 
 ## Log
 

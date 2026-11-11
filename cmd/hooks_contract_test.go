@@ -22,6 +22,12 @@ import (
 func TestHookCommandsResolve(t *testing.T) {
 	crewFile := testCrew(t, "  dev:\n    boot: hi\n    read_guard: true\n  rev:\n    runtime: codex\n    boot: hi\n")
 
+	// The owner's own status line, which the tap wraps: the shape the frozen lines must keep resolving.
+	ns := filepath.Join(filepath.Dir(crewFile), "ns")
+	require.NoError(t, os.MkdirAll(ns, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(ns, "settings.json"),
+		[]byte(`{"statusLine":{"type":"command","command":"/opt/line/status.sh --short"}}`), 0o600))
+
 	a := &app{out: io.Discard, err: io.Discard, crew: crewFile}
 	s, err := a.newShift()
 	require.NoError(t, err)
@@ -41,6 +47,9 @@ func TestHookCommandsResolve(t *testing.T) {
 	require.NotEmpty(t, settings, "dev starts with zmina's settings")
 
 	var parsed struct {
+		StatusLine struct {
+			Command string `json:"command"`
+		} `json:"statusLine"`
 		Hooks map[string][]struct {
 			Hooks []struct {
 				Command string `json:"command"`
@@ -63,6 +72,14 @@ func TestHookCommandsResolve(t *testing.T) {
 		}
 	}
 	assert.Equal(t, map[string]bool{"SessionStart": true, "Stop": true, "PreToolUse": true}, events)
+
+	// The status line is not a hook but is kept the same way: a role's session runs the line it started with.
+	rest, ok := strings.CutPrefix(parsed.StatusLine.Command, base)
+	require.True(t, ok, "the status line runs zmina with its crew: %s", parsed.StatusLine.Command)
+
+	tapLine := shellSplit(t, rest)
+	require.Equal(t, []string{"_limits-tap", "--", "/opt/line/status.sh --short"}, tapLine, "it wraps the owner's own line as one word")
+	lines = append(lines, tapLine)
 
 	bridge := s.Command(s.Crew.Roles["rev"], "thread-1")
 	require.Equal(t, "_codex", bridge[1])

@@ -37,7 +37,7 @@ House rules:
   readable.
 - **Hook command lines are an API.** A running role keeps the command lines
   zmina wrote into its start (`pending --brief`, `_turn-end`, `_read-guard`,
-  the `_codex` flags) and runs them with every zmina installed after it. A
+  `_limits-tap`, the `_codex` flags) and runs them with every zmina installed after it. A
   rename keeps the old name as an alias for at least two minor releases.
   Every line a release wrote is frozen in `cmd/testdata/hook-lines.txt`
   (append only); `TestHookCommandsResolve` fails when a name or flag one of
