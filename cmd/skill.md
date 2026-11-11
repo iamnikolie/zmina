@@ -314,7 +314,10 @@ earlier zmina wrote and run them with the new executable: the hidden commands an
 keeps its old name. A Codex role's bridge and a running `zmina ui` keep the earlier zmina's code until they are started
 again. `zmina doctor` says which (`versions`): a cockpit or a Codex bridge of another version warns, Claude roles
 started by another version are listed without a warning; `zmina restart <role> --continue` starts one with this
-zmina. A `zmina ui` that finds the cockpit running says so when that one is of another version.
+zmina. A `zmina ui` that finds the cockpit running says so when that one is of another version. The ticker tells
+the dispatcher what runs another zmina's code (`version: ...` health note, `version-skew` event): the cockpit and
+each Codex bridge, once a day for each while it lasts (`versions.json` next to the crew file keeps when); Claude
+roles are not told, their hooks keep working.
 
 Typed into the input line as before: a slash command (a posted one is plain text), the owner's own message from Chat
 (below: his own turn, never another session's message), a role whose `args`

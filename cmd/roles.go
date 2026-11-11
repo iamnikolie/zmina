@@ -1131,6 +1131,7 @@ func (a *app) tickCommand() *cobra.Command {
 			a.lessonsBeat(time.Now())
 			a.worktreeBeat(time.Now())
 			a.retentionBeat(time.Now())
+			a.versionBeat(time.Now())
 
 			return err
 		},
