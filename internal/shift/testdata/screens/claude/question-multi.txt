@@ -1,0 +1,14 @@
+⏺ Two things to settle before I start.
+
+←  ☒ Tabs  ☐ Order  ✔ Submit  →
+
+Which tabs?
+
+❯ 1. [ ] Talk
+         the chat
+  2. [✔] Later
+  3. [ ] Type something
+     Submit
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

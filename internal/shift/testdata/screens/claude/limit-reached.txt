@@ -1,0 +1,10 @@
+⏺ Bash(go test ./...)
+  ⎿  ok  example.test/parse  0.412s
+
+  ⎿  You've hit your limit · resets 9pm
+
+────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  ~/work/example (main) [Opus 5.5] ctx:41%
+  ⏵⏵ bypass permissions on (shift+tab to cycle)

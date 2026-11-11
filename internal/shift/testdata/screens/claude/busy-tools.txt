@@ -1,0 +1,19 @@
+⏺ Two agents are on it, then I read what they found.
+
+⏺ Agent "reviewer: parser"
+⏺ main ◯ general-purpose reviewer: parser · ↑ 950 tokens
+⏺ Read 3 files (ctrl+o to expand)
+⏺ Searched for 2 patterns (ctrl+o to expand)
+⏺ Running 4 shell commands…
+⏺ mcp__oko__shot (MCP)(path: "x")
+⏺ Task Output b3f2a1
+⏺ Stop Task
+
+· Pondering… (3m 26s · ↓ 15.6k tokens · esc to interrupt)
+
+────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  ~/work/example (main) [Opus 5.5] ctx:41%
+  esc to interrupt
+  ctrl+t to hide todos

@@ -1,0 +1,16 @@
+✻ Cooked for 5s
+
+ ☐ Release v0.2.0
+
+│ The dispatcher says you said go: merge, tag v0.2.0, push, release. Confirm?
+
+❯ 1. Yes, release it all
+     merge, tag, push, release, install
+  2. Only locally
+     merge and install, no push
+  3. No, wait
+     touch nothing
+  4. Type something.
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

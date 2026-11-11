@@ -1,0 +1,10 @@
+⏺ The importer now reads records through splitRecords.
+
+✻ Compacting conversation… (47s · ↑ 3.1k tokens · esc to interrupt)
+  ⎿  Tip: Use /clear to start fresh when switching topics and free up context
+
+────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  ~/work/example (main) [Opus 5.5] ctx:41%
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · esc to interrupt

@@ -1,0 +1,12 @@
+⏺ The empty-file case is fixed in `parse.go` and the tests pass.
+
+  - skip blank records before the length check
+  - added a regression test for the empty file
+
+✻ Baked for 1m 12s
+
+────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  ~/work/example (main) [Opus 5.5] ctx:41%
+  ⏵⏵ bypass permissions on (shift+tab to cycle)

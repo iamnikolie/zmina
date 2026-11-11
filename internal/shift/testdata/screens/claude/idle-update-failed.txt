@@ -1,0 +1,8 @@
+⏺ Done with the exporter.
+
+✻ Baked for 9s
+
+────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  Auto-update failed · Try claude doctor or npm i -g @anthropic-ai/claude-code

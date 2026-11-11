@@ -1,0 +1,14 @@
+❯ Ask me which day suits the release. It is a real question: the reviewer is out of quota until Tuesday,
+  10 November, 13:15, and the review goes to the second seat meanwhile.
+────────────────────────────────────────────────────────────────────────────────
+ ☐ Release
+│ It is a real question: the reviewer is out of quota until Tuesday, 10 November, 13:15, and the review goes to
+│ the second seat meanwhile. Wait for Tuesday or buy more credits?
+❯ 1. Wait for Tuesday (Recommended)
+     The second seat reviews until Tuesday, no extra spend
+  2. Buy credits
+     You buy them on the provider's usage page, then the reviewer comes back
+  3. Type something.
+────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+Enter to select · ↑/↓ to navigate · Esc to cancel

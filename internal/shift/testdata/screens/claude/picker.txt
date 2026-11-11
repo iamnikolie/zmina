@@ -1,0 +1,10 @@
+⏺ Settings are in `settings.json`.
+
+ Select model
+ Switch between Claude models for this session.
+
+ ❯ 1. Default (recommended) ✔  Opus 5.5 with 1M context
+   2. Sonnet                   Sonnet 5.5, quicker for everyday tasks
+   3. Haiku                    Haiku 4.5, fastest for simple tasks
+
+ Enter to select · ↑/↓ to navigate

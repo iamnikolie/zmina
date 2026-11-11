@@ -1,0 +1,9 @@
+⏺ Plan: split the parser, then the importer.
+
+✻ Baked for 9s
+
+────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  ~/work/example (main) [Opus 5.5] ctx:41%
+  ⏸ plan mode on (shift+tab to cycle)

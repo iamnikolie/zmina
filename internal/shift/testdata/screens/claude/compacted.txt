@@ -1,0 +1,11 @@
+✻ Conversation compacted (ctrl+o for history)
+
+  ⎿  Read internal/parse/records.go (212 lines)
+  ⎿  Read internal/parse/records_test.go (96 lines)
+  ⎿  Todo list read (3 items)
+
+────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  ~/work/example (main) [Opus 5.5] ctx:41%
+  ⏵⏵ bypass permissions on (shift+tab to cycle)

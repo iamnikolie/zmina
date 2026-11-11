@@ -1,0 +1,7 @@
+⏺ The retry wrapper stops when the usage limit reached message shows up in the output.
+
+────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────
+  ~/work/example (main) [Opus 5.5] ctx:41%
+  ⏵⏵ bypass permissions on (shift+tab to cycle)
