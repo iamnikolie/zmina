@@ -50,7 +50,7 @@ func ParseTarget(arg, dir string) Target {
 
 		rest := arg[i+1:]
 		if m := rangeRe.FindStringSubmatch(rest); m != nil {
-			a, _ := strconv.Atoi(m[1])
+			a := lineNumber(m[1])
 
 			switch {
 			case !strings.Contains(rest, "-"):
@@ -58,8 +58,7 @@ func ParseTarget(arg, dir string) Target {
 			case m[2] == "":
 				t.From = a
 			default:
-				b, _ := strconv.Atoi(m[2])
-				t.From, t.To = a, b
+				t.From, t.To = a, lineNumber(m[2])
 			}
 
 			return t
@@ -80,6 +79,20 @@ func ParseTarget(arg, dir string) Target {
 	}
 
 	return Target{Path: arg}
+}
+
+// maxLine is the biggest line number a target takes: no file has that many lines, and room is left for the arithmetic on
+// it (a:40 reads the lines around 40) to stay inside an int.
+const maxLine = 1 << 30
+
+// lineNumber is a line number of a target; digits too long for an int count as maxLine.
+func lineNumber(digits string) int {
+	n, err := strconv.Atoi(digits)
+	if err != nil {
+		return maxLine
+	}
+
+	return min(n, maxLine)
 }
 
 func abs(p, dir string) string {
