@@ -167,7 +167,7 @@ func addLessons(s *shift.Shift, items []lesson.Lesson, role, taskID string) ([]l
 	for i, l := range items {
 		text := l.Rule + "\n" + l.Why + "\n" + l.InFile
 		if f := lesson.Scan(text, deny); len(f) > 0 {
-			refused = append(refused, fmt.Sprintf("lesson %d refused: it carries %s (line %d)", i+1, f[0].Rule, f[0].Line))
+			refused = append(refused, fmt.Sprintf("item %d of the input refused: it carries %s (line %d)", i+1, f[0].Rule, f[0].Line))
 			s.Log(role, "lesson-reject", taskID, f[0].Rule)
 
 			continue

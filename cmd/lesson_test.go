@@ -41,6 +41,8 @@ func TestLessonAddRefusesSecretsAndStoresTheRest(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "aws key")
 	assert.NotContains(t, err.Error(), key, "the scan never echoes the secret")
+	assert.Contains(t, err.Error(), "item 1 of the input refused", "a place in the input, not an id: LS-1 exists")
+	assert.NotContains(t, err.Error(), "lesson 1", "a bare number beside the word lesson reads as LS-1")
 
 	md := filepath.Join(t.TempDir(), "l.md")
 	require.NoError(t, os.WriteFile(md, []byte("### Say the file a result is in\nWhy: the owner looked twice\n"+
@@ -57,6 +59,11 @@ func TestLessonAddRefusesSecretsAndStoresTheRest(t *testing.T) {
 	out, _, err = zm(t, file, "lesson", "show", "ls-1")
 	require.NoError(t, err)
 	assert.Contains(t, out, "from dev T-1")
+	assert.True(t, strings.HasPrefix(out, "LS-1 · "), "shown as LS-1 whatever way it was asked for: %q", out)
+
+	out, _, err = zm(t, file, "lesson", "show", "1")
+	require.NoError(t, err)
+	assert.True(t, strings.HasPrefix(out, "LS-1 · "), "a bare number is read, and shown, as LS-1: %q", out)
 
 	_, _, err = zm(t, file, "lesson", "triage")
 	require.Error(t, err, "off by default: a run by hand says so")
