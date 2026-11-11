@@ -130,6 +130,13 @@ func newTag() string { return strings.ToLower(rand.Text()[:12]) }
 // that is over (the role restarted) goes back to the head of its queue; one an idle session never showed within
 // postedWait is kept as failed (zmina queue). It reports whether a posted line is still unseen.
 func (s *Shift) followPosted(name string, now time.Time) bool {
+	return s.followPostedAs(name, now, false)
+}
+
+// followPostedAs is followPosted for a role whose session is known to be gone (gone: the role is not up, so no
+// conversation will ever show its posted lines): a line that is not shown is settled as one whose conversation ended
+// (settleEnded).
+func (s *Shift) followPostedAs(name string, now time.Time, gone bool) bool {
 	rs := s.State.Role(name)
 	ch, ns := s.peerFor(name)
 
@@ -143,18 +150,33 @@ func (s *Shift) followPosted(name string, now time.Time) bool {
 
 	for _, p := range rs.Posted {
 		seen, err := ch.Delivered(ns, p.Session, p.MsgID)
+		ended := gone || sess != nil && sess.SessionID != p.Session
 
 		switch {
 		case err == nil && seen:
-			s.log(name, "seen", "", p.Line)
+			s.postShown(name, p)
+		case ended && stillQueued(ch, ns, p):
+			// Its file waits in a bridge's inbox: the next bridge takes it, and this record closes then. Unless it meant
+			// the session that is gone alone: its file is taken out, so that no bridge runs it in the next one (a bridge
+			// that lives and changed its thread takes it in that thread). When the file could not be taken out (a bridge
+			// took it meanwhile) the record stays, and closes on Delivered.
+			if gone && s.postedBound(name, p) && withdraw(ch, ns, p) {
+				s.log(name, "dropped", "", "withdrawn from its bridge's inbox, meant for the conversation that ended: "+p.Line)
 
-			if name == s.Crew.Dispatcher {
-				s.stageIDs(p.IDs, "submitted")
-				s.closeInfo(name, p.Parts, "seen")
+				break
 			}
-		case sess != nil && sess.SessionID != p.Session:
+
+			keep = append(keep, p)
+		case ended:
+			// A live bridge may have taken the file between the look above and the one at the file: look once more
+			// before the line goes back, or it would run twice.
+			if again, err := ch.Delivered(ns, p.Session, p.MsgID); err == nil && again {
+				s.postShown(name, p)
+
+				break
+			}
+
 			back = append(back, p)
-			s.log(name, "requeued", "", "its conversation ended before it showed: "+p.Line)
 		case sess != nil && now.Sub(p.At) >= postedWait && s.quiet(name, sess):
 			rs.Failed = append(rs.Failed, Failed{Line: p.Line, Error: postedNever, At: now, IDs: p.IDs, Parts: p.Parts})
 			s.log(name, "type-failed", "", postedNever+": "+p.Line)
@@ -169,13 +191,23 @@ func (s *Shift) followPosted(name string, now time.Time) bool {
 	if len(back) > 0 {
 		lines := make([]string, 0, len(back)+len(rs.Inbox))
 		for _, p := range back {
-			lines = append(lines, s.giveBack(name, p.Line, p.IDs, p.Parts)...)
+			lines = append(lines, s.requeuePosted(name, p, gone)...)
 		}
 
 		rs.Inbox = append(lines, rs.Inbox...)
 	}
 
 	return len(keep) > 0
+}
+
+// postShown closes a posted line its conversation showed.
+func (s *Shift) postShown(name string, p Posted) {
+	s.log(name, "seen", "", p.Line)
+
+	if name == s.Crew.Dispatcher {
+		s.stageIDs(p.IDs, "submitted")
+		s.closeInfo(name, p.Parts, "seen")
+	}
 }
 
 // postable reports whether a queued line can go to the inbox socket: a slash command is typed, since a posted one

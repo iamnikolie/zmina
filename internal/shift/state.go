@@ -246,6 +246,10 @@ type Sent struct {
 	IDs []string `json:"ids,omitempty"`
 	// Parts are what a line to the dispatcher was made of, given back each on its own when it never lands.
 	Parts []Part `json:"parts,omitempty"`
+	// AckedIDs are the ids of the line that were acked while it had not landed, each recorded by the ack that named it
+	// (clearInFlight), never inferred from an id missing among the acks: landed closes the line without a failed mark
+	// only when every id it carries is here.
+	AckedIDs []string `json:"acked_ids,omitempty"`
 }
 
 // Posted is a line posted to a role's inbox socket: the message's id, and the session it went to.
@@ -258,6 +262,9 @@ type Posted struct {
 	IDs []string `json:"ids,omitempty"`
 	// Parts are what a post to the dispatcher was made of, given back each on its own when it never shows.
 	Parts []Part `json:"parts,omitempty"`
+	// Boot is that the line is the boot a clear queued for the role (QueuedBoot, which the dispatcher's deliver clears
+	// once the boot has left the queue): the conversation that ends before it shows it takes it with it.
+	Boot bool `json:"boot,omitempty"`
 }
 
 // Part is one item of a line or post to the dispatcher, kept so that what never reached it goes back where it

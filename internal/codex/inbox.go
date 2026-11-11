@@ -82,6 +82,45 @@ func (Inbox) Delivered(dir, _, id string) (bool, error) {
 	return err == nil, err
 }
 
+// untaken are the files of the line with this id that wait in the inbox; none for an id that is no plain file name.
+func untaken(dir, id string) []string {
+	if dir == "" || id == "" || filepath.Base(id) != id || strings.ContainsAny(id, "*?[\\") {
+		return nil
+	}
+
+	files, _ := filepath.Glob(filepath.Join(dir, "*-"+id+".line"))
+
+	return files
+}
+
+// Waiting reports whether the line with this id still waits in the inbox as a file no bridge has taken: the directory
+// is keyed by the role's session name and outlives the bridge, so the next bridge of that session runs it.
+func (Inbox) Waiting(dir, id string) bool { return len(untaken(dir, id)) > 0 }
+
+// Withdraw takes the line with this id back out of the inbox, for a line that must not run in a session that is not the
+// one it was posted to. It reports whether it removed the file: false for a line that is not there, and for one the bridge
+// already started a turn with (its taken mark is there), which it leaves alone.
+func (Inbox) Withdraw(dir, id string) bool {
+	files := untaken(dir, id)
+	if len(files) == 0 {
+		return false
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "taken", id)); err == nil {
+		return false
+	}
+
+	removed := false
+
+	for _, f := range files {
+		if os.Remove(f) == nil {
+			removed = true
+		}
+	}
+
+	return removed
+}
+
 // openInbox makes the bridge's inbox and drops taken marks older than a day.
 func openInbox(dir string) error {
 	if err := fsx.MkdirAll(filepath.Join(dir, "taken"), 0o700); err != nil {

@@ -101,6 +101,8 @@ func (a *app) queueCommand() *cobra.Command {
 					fmt.Fprintln(a.out, "  "+kind+queueLine(text, full)+rest)
 				}
 
+				now := s.Now()
+
 				for _, q := range qs {
 					fmt.Fprintln(a.out, q.Role+":")
 
@@ -117,12 +119,13 @@ func (a *app) queueCommand() *cobra.Command {
 					}
 
 					for _, p := range q.Posted {
-						line("posted   ", p.Line, fmt.Sprintf(" (to its inbox socket %s, not yet seen)",
-							p.At.Local().Format("01-02 15:04")))
+						line("posted   ", p.Line, fmt.Sprintf(" (to its inbox socket %s, %s ago, not yet seen)",
+							p.At.Local().Format("01-02 15:04"), age(now.Sub(p.At))))
 					}
 
 					for _, f := range q.Failed {
-						line("failed   ", f.Line, fmt.Sprintf(" (%s, %s)", f.Error, f.At.Local().Format("01-02 15:04")))
+						line("failed   ", f.Line, fmt.Sprintf(" (%s, %s, %s ago)", f.Error,
+							f.At.Local().Format("01-02 15:04"), age(now.Sub(f.At))))
 					}
 				}
 

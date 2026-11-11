@@ -80,6 +80,9 @@ func (s *Shift) Tick() []string {
 	did, notes := s.ring(now, stopped)
 	did = append(did, s.reportUnreadable(now)...)
 
+	// The roles this beat probed up, for the age sweep: a role skipped below (tmux did not answer) is not among them.
+	probedUp := map[string]bool{}
+
 	for _, name := range s.Names() {
 		s.mark("roles", name)
 		r, err := s.Role(name)
@@ -111,6 +114,8 @@ func (s *Shift) Tick() []string {
 
 		up := p.State == tmux.Up
 		if up {
+			probedUp[name] = true
+
 			s.remember(name, p)
 			s.observeRecovery(name)
 			// A role started by an older zmina would vanish without a screen.
@@ -128,6 +133,15 @@ func (s *Shift) Tick() []string {
 		} else if p.State == tmux.Dead {
 			// Ended while zmina was not looking (state lost or a down that did not finish): nothing to report.
 			_ = s.Tmux.Kill(name)
+		}
+
+		// A role with no session leaves nothing posted or typed behind: settled once, here, whether it ended, was put
+		// down or released, or its state was kept from before. Only when it is really gone: a probe that fails to see
+		// a live session (tmux answered "no server") must not settle what is posted to it. So the beat before saw it
+		// not up either (rs.Up is still what that beat left; a down by command leaves it false), and no session of its
+		// name lives in the registry, the evidence start asks for.
+		if !up && !rs.Up && s.registryFor(name).LiveByName(r.Session) == nil {
+			s.settleEnded(name, now)
 		}
 
 		if !up && !stopped && r.Keep == crew.KeepAlways && !rs.Held && !rs.Broken && s.flushErr == nil &&
@@ -203,6 +217,12 @@ func (s *Shift) Tick() []string {
 	}
 
 	s.mark("notes", "")
+	// Delivery records past their age limit go, told once (one more note).
+	// The beat after a gap judges no record by age (beatGapMax): nobody could have looked at it or retried it meanwhile.
+	if !s.lastBeat.IsZero() && now.Sub(s.lastBeat) <= beatGapMax {
+		notes = append(notes, s.sweepDelivery(now, probedUp)...)
+	}
+
 	s.addNotes(notes)
 	did = append(did, notes...)
 
@@ -1378,6 +1398,7 @@ func (s *Shift) postInbox(name string, sess *registry.Session, now time.Time) st
 
 	ids := s.takeIDs(name, head)
 	rs.Posted[len(rs.Posted)-1].IDs = ids
+	rs.Posted[len(rs.Posted)-1].Boot = rs.QueuedBoot != "" && head == rs.QueuedBoot
 
 	rs.Inbox, rs.Attempts = rs.Inbox[1:], 0
 	s.submittedTask(name, head)
