@@ -32,6 +32,11 @@ type notifyRules struct {
 }
 
 func (c *Crew) parseNotify() error {
+	// notify: off is no command at all: the owner has said none is wanted.
+	if c.Notify.Argv == nil && strings.TrimSpace(c.Notify.Shell) == "off" {
+		c.Notify, c.notifyOff = Command{}, true
+	}
+
 	r := notifyRules{on: []string{NotifyReminder, NotifyBlocking}, again: defaultNotifyAgain}
 
 	if len(c.NotifyOn) > 0 {
@@ -80,6 +85,9 @@ func (c *Crew) parseNotify() error {
 
 	return nil
 }
+
+// NotifyOff reports whether the crew file says notify: off: no channel to the owner's phone, on purpose.
+func (c *Crew) NotifyOff() bool { return c.notifyOff }
 
 // NotifiesOn reports whether the notify command runs for an event (NotifyReminder, NotifyBlocking, NotifyAsk): a
 // command is set and notify_on names the event.

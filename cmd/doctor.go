@@ -192,10 +192,7 @@ func (a *app) diagnose() []check {
 			add("alarms", "warn", "%s", p)
 		}
 
-		if c.Notify.Empty() {
-			add("alarms", "warn", "no notify command: a reminder for you and an ask that holds a role up only land on "+
-				"the todo; nothing reaches your phone (notify: in the crew file)")
-		}
+		checkNotify(c, add)
 	}
 
 	checkHygiene(c, st, time.Now(), add)

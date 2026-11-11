@@ -311,3 +311,29 @@ func TestCheckReleaseCodex(t *testing.T) {
 	require.Len(t, lines, 1)
 	assert.Equal(t, "ok codex Codex 0.150.2 (this zmina was tried with up to 0.167.0)", lines[0])
 }
+
+// A crew that never said anything of notify gets the warning; one that says notify: off gets a plain line; one with a
+// command gets neither.
+func TestDoctorNotifyWording(t *testing.T) {
+	crewFile := testCrew(t, "")
+	fakeAuth(t, filepath.Dir(crewFile), `{"loggedIn": true}`)
+
+	out, _, err := zm(t, crewFile, "doctor")
+	require.NoError(t, err)
+	assert.Contains(t, out, "warn  alarms    no notify command:")
+	assert.Contains(t, out, "notify: off if you want none")
+
+	body := string(mustRead(t, crewFile))
+	require.NoError(t, os.WriteFile(crewFile, []byte(strings.Replace(body, "roles:\n", "notify: off\nroles:\n", 1)), 0o600))
+
+	out, _, err = zm(t, crewFile, "doctor")
+	require.NoError(t, err)
+	assert.Contains(t, out, "ok    alarms    no notify channel set: nothing is pushed to the phone\n")
+	assert.NotContains(t, out, "warn  alarms")
+
+	require.NoError(t, os.WriteFile(crewFile, []byte(strings.Replace(body, "roles:\n", "notify: [push, --title, zmina]\nroles:\n", 1)), 0o600))
+
+	out, _, err = zm(t, crewFile, "doctor")
+	require.NoError(t, err)
+	assert.NotContains(t, out, "notify")
+}

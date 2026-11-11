@@ -35,6 +35,24 @@ func TestNotifyRules(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 6*time.Hour, c.NotifyAgainD())
 
+	for _, body := range []string{"notify: off\n", "notify: \"off\"\n", "notify: ' off '\n"} {
+		c, err = load(body)
+		require.NoError(t, err, body)
+		assert.True(t, c.NotifyOff(), body)
+		assert.True(t, c.Notify.Empty(), "off is no command: %s", body)
+		assert.False(t, c.NotifiesOn(NotifyReminder), body)
+		assert.False(t, c.NotifiesOn(NotifyBlocking), body)
+	}
+
+	c, err = load("")
+	require.NoError(t, err)
+	assert.False(t, c.NotifyOff(), "nothing said is not off")
+
+	c, err = load("notify: [off]\n")
+	require.NoError(t, err)
+	assert.False(t, c.NotifyOff(), "a list is a command, whatever it is called")
+	assert.True(t, c.NotifiesOn(NotifyReminder))
+
 	for body, want := range map[string]string{
 		"notify_on: [stuck]\n":       `notify_on "stuck": one of reminder, blocking, ask`,
 		"quiet_hours: \"23:00\"\n":   `quiet_hours "23:00": two times of day such as 23:00-08:00, or off`,

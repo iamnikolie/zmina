@@ -74,7 +74,7 @@ context_action: compact                  # every role's, unless it sets its own 
 restart_at: 250k                         # a role holding a task this full restarts fresh from its note (default 250k; off)
 restart_idle: 1h                         # ... and one idle this long over 100k (default 1h, 20m at least; off)
 restart_done: 150k                       # a role whose task is done, holding none, this full restarts fresh (default 150k; off)
-notify: [push-cli, send, --title, zmina] # a push to you goes through this (text last; a string: sh -c, $1)
+notify: [push-cli, send, --title, zmina] # a push to you goes through this (text last; a string: sh -c, $1); off: none wanted, doctor stops warning
 notify_on: [reminder, blocking]          # what is pushed: reminder, blocking (an item that holds a role up), ask (every new ask); default reminder, blocking
 quiet_hours: 23:00-08:00                 # in timezone:; blocking and ask pushes wait until it is over (default none)
 notify_again: 24h                        # an item that still blocks is pushed again this often (default 24h, 1h at least; off)
@@ -1061,7 +1061,7 @@ is the one set. The command gets `$ZMINA_EVENT` (`blocking` when any item in the
 it on as data and never evaluates it (no `eval "$1"`). The log has `pushed`, a failure `notify-failed`: a send that
 fails leaves its items due and is tried again 15 minutes later. The state keeps when each item went (`pushed`) until
 it leaves the todo. Without `notify` doctor warns: nothing that waits
-on the owner reaches his phone.
+on the owner reaches his phone; `notify: off` says that is meant, and doctor then says it plainly (`ok`) instead.
 
 Every role hears at boot, from zmina itself (`shift.AsksRule`): a question only the owner can answer goes on his list
 with `zmina todo add` (and is named by its A-n when asked in chat); when he answers in chat, the role records it at once

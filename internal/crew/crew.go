@@ -319,7 +319,7 @@ type Crew struct {
 	DropTools []string `yaml:"drop_tools"`
 	// Notify is the command a reminder for the owner also goes through when it rings (a push, a bot), with its
 	// text as the last argument and in $ZMINA_REMIND; a list is argv, a string runs with /bin/sh -c. Empty: the
-	// reminder only lands on the todo.
+	// reminder only lands on the todo. The word off says no channel is wanted: doctor does not warn of it.
 	Notify Command `yaml:"notify"`
 	// NotifyOn are the events that go through notify (reminder, blocking, ask); default reminder and blocking.
 	// QuietHours (HH:MM-HH:MM in the crew's time zone) holds blocking and ask pushes until it is over;
@@ -350,6 +350,7 @@ type Crew struct {
 	renotify  time.Duration
 	morning   time.Duration // past midnight; -1 off
 	notify    notifyRules
+	notifyOff bool
 	loc       *time.Location
 	routes    route.Table
 	// Roles are keyed by role name.

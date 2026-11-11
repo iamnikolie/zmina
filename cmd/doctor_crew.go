@@ -187,3 +187,17 @@ func runVersion(bin string) (string, error) {
 
 	return first, err
 }
+
+// checkNotify says whether anything can reach the owner's phone. A crew with no notify key at all gets a warning:
+// reminders and asks that hold a role up then only land on the todo, and nobody may have meant that. notify: off is the
+// owner saying he does, and gets a plain line.
+func checkNotify(c *crew.Crew, add func(name, level, format string, args ...any)) {
+	switch {
+	case !c.Notify.Empty():
+	case c.NotifyOff():
+		add("alarms", "ok", "no notify channel set: nothing is pushed to the phone")
+	default:
+		add("alarms", "warn", "no notify command: a reminder for you and an ask that holds a role up only land on "+
+			"the todo; nothing reaches your phone (notify: in the crew file; notify: off if you want none)")
+	}
+}
