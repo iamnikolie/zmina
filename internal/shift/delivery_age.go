@@ -93,16 +93,29 @@ func (s *Shift) sweepDelivery(now time.Time, up map[string]bool) []string {
 
 			rs.Posted = slices.DeleteFunc(rs.Posted, func(p Posted) bool {
 				// A line waiting in a bridge's inbox waits for the next bridge, as an inbox line waits for its role.
-				return !stillQueued(ch, dir, p) && note(name, "posted", p.At, p.IDs, inFlightMaxAge)
+				if stillQueued(ch, dir, p) || !note(name, "posted", p.At, p.IDs, inFlightMaxAge) {
+					return false
+				}
+
+				s.cardsClosed(name, p.Line, p.Parts, ClosedDropped, "aged out: posted and never settled in "+span(inFlightMaxAge))
+
+				return true
 			})
 
 			if rs.Sent != nil && !inInput && note(name, "sent", rs.Sent.At, rs.Sent.IDs, inFlightMaxAge) {
+				s.cardsClosed(name, rs.Sent.Line, rs.Sent.Parts, ClosedDropped, "aged out: typed and never settled in "+span(inFlightMaxAge))
 				rs.Sent = nil
 			}
 		}
 
 		rs.Failed = slices.DeleteFunc(rs.Failed, func(f Failed) bool {
-			return note(name, "failed", f.At, f.IDs, failedMaxAge)
+			if !note(name, "failed", f.At, f.IDs, failedMaxAge) {
+				return false
+			}
+
+			s.cardsClosed(name, f.Line, f.Parts, ClosedDropped, "aged out: failed and never retried in "+span(failedMaxAge))
+
+			return true
 		})
 	}
 

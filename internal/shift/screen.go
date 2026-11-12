@@ -294,11 +294,12 @@ func (s *Shift) landed(name string, now time.Time) bool {
 		if ackedExplicitly(sent) {
 			rs.Sent = nil
 			s.log(name, "acked-cleared", "", "typed: "+sent.Line)
+			s.cardsClosed(name, sent.Line, sent.Parts, ClosedAcked, "its reader acked it")
 
 			return true
 		}
 
-		rs.Failed = append(rs.Failed, Failed{Line: sent.Line, Error: reason, At: now, IDs: sent.IDs, Parts: sent.Parts})
+		s.addFailed(name, Failed{Line: sent.Line, Error: reason, At: now, IDs: sent.IDs, Parts: sent.Parts})
 		rs.Sent = nil
 		s.log(name, "type-failed", "", reason+": "+sent.Line)
 		s.deliveryFailure(name, sent.Line, reason)
@@ -359,21 +360,24 @@ func (s *Shift) typedTaken(name string, sent *Sent) bool {
 
 // closeTyped closes the record of a typed line that landed. A typed line shows no seen: the info lines it carried are
 // closed when it lands.
-func (s *Shift) closeTyped(name string) {
+func (s *Shift) closeTyped(name string) { s.closeTypedAs(name, ClosedLanded) }
+
+// closeTypedAs is closeTyped for a line that landed and ended another way too: acked by its reader.
+func (s *Shift) closeTypedAs(name, how string) {
 	rs := s.State.Role(name)
 
 	if name == s.Crew.Dispatcher {
 		s.closeInfo(name, rs.Sent.Parts, "typed")
 	}
 
+	s.cardsClosed(name, rs.Sent.Line, rs.Sent.Parts, how, "")
 	rs.Sent = nil
 }
 
 // failUnclear keeps a line that may have reached its role as a failed one that needs attention (Failed.Unclear), says so
 // in the log, and tells the dispatcher once (deliveryFailure). It is never queued again by itself.
 func (s *Shift) failUnclear(name string, f Failed) {
-	rs := s.State.Role(name)
-	rs.Failed = append(rs.Failed, f)
+	s.addFailed(name, f)
 	s.log(name, "type-failed", "", "unclear, kept for a look: "+f.Error+": "+f.Line)
 	s.deliveryFailure(name, f.Line, f.Error)
 }

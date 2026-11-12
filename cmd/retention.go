@@ -24,6 +24,7 @@ import (
 	"github.com/iamnikolie/zmina/internal/lean"
 	"github.com/iamnikolie/zmina/internal/message"
 	"github.com/iamnikolie/zmina/internal/record"
+	"github.com/iamnikolie/zmina/internal/shift"
 	"github.com/iamnikolie/zmina/internal/task"
 )
 
@@ -205,6 +206,7 @@ func (p *retentionPass) run() {
 		func() { p.requests(handoff.ReleasesDir) },
 		func() { p.requests(handoff.RestartsDir) },
 		p.messages,
+		p.deliveryCards,
 		p.reads,
 		func() { p.cutLog("tick.log", p.c.Layout().TickLog()) },
 		func() { p.cutLog("courier.log", p.c.Layout().CourierLog()) },
@@ -601,6 +603,46 @@ func (p *retentionPass) reads() {
 
 	if moved > 0 {
 		p.moved["reads.jsonl"] = moved
+	}
+}
+
+// deliveryCards drops the delivery cards past their keep and over the cap from the files of roles that no delivery has
+// written to lately (a write prunes too), the card files moved aside as corrupt once they are over a week old, and the
+// file of a role that is no longer in the crew once every card in it is past its keep. The delivery writes those files
+// under the state lock, so the pass takes it, without waiting: a lock another zmina holds leaves them to tomorrow's
+// pass. Nothing of the state is read or written.
+func (p *retentionPass) deliveryCards() {
+	if !p.dry {
+		l, err := shift.TryLockAs(p.dir, shift.LockOpts{Verb: "retention"})
+		if errors.Is(err, shift.ErrLockHeld) {
+			return
+		}
+
+		if err != nil {
+			p.problems = append(p.problems, "retention: delivery cards: "+err.Error())
+
+			return
+		}
+
+		defer l.Release()
+	}
+
+	// A copy of a role (dev#2) is in the crew while its role is.
+	inCrew := func(role string) bool {
+		base, _, _ := shift.SplitInstance(role)
+		_, ok := p.c.Roles[base]
+
+		return ok
+	}
+
+	n, err := shift.PruneCards(p.c.Layout(), p.now, inCrew, p.dry)
+	if err != nil {
+		p.problems = append(p.problems, "retention: delivery cards: "+err.Error())
+	}
+
+	if n > 0 {
+		p.say("delivery cards (%d cards or set-aside files past their keep or over the cap)", n)
+		p.moved["delivery cards"] = n
 	}
 }
 

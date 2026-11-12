@@ -325,6 +325,12 @@ func (a *app) withState(fn func(s *shift.Shift) error) error {
 		return ferr
 	}
 
+	// The delivery cards follow the state. They are written with each flush the command made inside (Shift.flush), and
+	// here, with the final save, under the lock it still holds; a command that failed leaves what it did after its last
+	// flush unwritten in both. The delivery passes (deliver, deliverInbox, Tick, TurnEnd) also write what they did when
+	// they end, a line typed or posted having happened whether the state could be saved or not.
+	s.FlushCards()
+
 	if err := l.Save(); err != nil {
 		return errors.Join(ferr, fmt.Errorf("not saved: %w", err))
 	}

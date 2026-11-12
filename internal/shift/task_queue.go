@@ -2,7 +2,6 @@ package shift
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 )
 
@@ -31,11 +30,12 @@ func (s *Shift) pruneTaskInbox(name string) {
 	if len(rs.Inbox) > 0 {
 		head = rs.Inbox[0]
 	}
-	rs.Inbox = slices.DeleteFunc(rs.Inbox, func(line string) bool { return s.staleTaskPacket(name, line) })
+	const why = "the task no longer needs this packet"
+	s.trimInbox(name, func(line string) bool { return s.staleTaskPacket(name, line) }, ClosedDropped, why)
 	if len(rs.Inbox) == 0 || rs.Inbox[0] != head {
 		rs.Attempts = 0
 	}
-	rs.Failed = slices.DeleteFunc(rs.Failed, func(f Failed) bool { return s.staleTaskPacket(name, f.Line) })
+	s.trimFailed(name, func(f Failed) bool { return s.staleTaskPacket(name, f.Line) }, ClosedDropped, why)
 	removed := before - len(rs.Inbox) - len(rs.Failed)
 	if rs.Sent != nil && s.staleTaskPacket(name, rs.Sent.Line) {
 		// Prompt exposes only a visible line, not the complete editable input. Even an exact match may
@@ -47,6 +47,7 @@ func (s *Shift) pruneTaskInbox(name string) {
 			meta.Kind, meta.Role = "task-input", name
 			s.State.NoticeMeta[text] = meta
 		}
+		s.cardsClosed(name, rs.Sent.Line, rs.Sent.Parts, ClosedDropped, why)
 		rs.Sent = nil
 		removed++
 	}

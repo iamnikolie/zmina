@@ -205,9 +205,11 @@ func (s *Shift) renotify(now time.Time) {
 		if a.Role == s.Crew.Dispatcher {
 			s.State.Signals = append(s.State.Signals, a.ID+" (still pending since "+s.clock(a.First)+") "+a.Text)
 		} else {
-			rs := s.State.Role(a.Role)
 			line := a.Text + s.lineSuffix(a)
-			rs.Inbox = append(rs.Inbox, line)
+			// A line whose typing broke unclearly has no record but its card: said again, it is a new card's, and the old
+			// one is finished first, so that the new delivery is never noted on it.
+			s.cardsAckedBy(a.Role, a.ID, ClosedDropped, "said again by its ack", now)
+			s.enqueue(a.Role, line, Facts{From: "zmina"})
 			s.carryIDs(a.Role, line, []string{a.ID})
 		}
 
@@ -243,10 +245,15 @@ func (s *Shift) dropSlashAcks() {
 				continue
 			}
 
+			const why = "a slash command is never acked"
+
 			if typed {
 				s.log(a.Role, "dropped-queued", "", line)
+				s.cardClose(a.Role, line, ClosedDropped, why, s.cardNow())
 			} else {
 				inbox = append(inbox, a.Text)
+				s.cardClose(a.Role, line, ClosedDropped, why+": queued as the command alone", s.cardNow())
+				s.cardNew(a.Role, a.Text, Facts{From: "zmina"})
 			}
 		}
 
@@ -257,7 +264,7 @@ func (s *Shift) dropSlashAcks() {
 		}
 
 		rs.Inbox = inbox
-		rs.Failed = slices.DeleteFunc(rs.Failed, func(f Failed) bool { return typed && slices.Contains(f.IDs, a.ID) })
+		s.trimFailed(a.Role, func(f Failed) bool { return typed && slices.Contains(f.IDs, a.ID) }, ClosedDropped, "a slash command is never acked")
 
 		for i := range rs.Failed {
 			if f := &rs.Failed[i]; slices.Contains(f.IDs, a.ID) {
@@ -331,6 +338,7 @@ func (s *Shift) AckLines(ids []string, all bool, role, caller string) ([]string,
 		delete(s.State.Acks, id)
 		s.log(a.Role, "acked", "", id+" "+a.Text)
 		s.dropQueued(a)
+		s.cardsAckedBy(a.Role, id, ClosedAcked, "its reader acked it", s.cardNow())
 
 		// A plain tell is read once its line is acked; a report only when the dispatcher says it consumed the
 		// report itself (zmina message read), never by acking the notice that points to it.
@@ -375,7 +383,7 @@ func (s *Shift) dropQueued(a *Ack) {
 		delete(rs.QueuedIDs, line)
 
 		if slices.Contains(rs.Inbox, line) {
-			rs.Inbox = slices.DeleteFunc(rs.Inbox, func(v string) bool { return v == line })
+			s.trimInbox(a.Role, func(v string) bool { return v == line }, ClosedAcked, "its reader acked it before it went")
 			s.log(a.Role, "acked-queued", "", line)
 		}
 	}
@@ -404,6 +412,7 @@ func (s *Shift) clearInFlight(rs *RoleState, a *Ack) {
 		}
 
 		s.log(a.Role, "acked-cleared", "", "failed: "+f.Line)
+		s.cardsClosed(a.Role, f.Line, f.Parts, ClosedAcked, "its reader acked it")
 
 		return true
 	})
@@ -414,6 +423,7 @@ func (s *Shift) clearInFlight(rs *RoleState, a *Ack) {
 		}
 
 		s.log(a.Role, "acked-cleared", "", "posted: "+p.Line)
+		s.cardsClosed(a.Role, p.Line, p.Parts, ClosedAcked, "its reader acked it")
 
 		// A line still waiting in a bridge's inbox as a file goes with its record: the next bridge would run a line its
 		// reader has already. One the bridge took is left alone (Withdraw).
@@ -436,7 +446,7 @@ func (s *Shift) clearInFlight(rs *RoleState, a *Ack) {
 
 		if landed, _ := s.typedLanded(a.Role, sent); landed && mine(sent.IDs, sent.Parts) {
 			s.log(a.Role, "acked-cleared", "", "typed: "+sent.Line)
-			s.closeTyped(a.Role)
+			s.closeTypedAs(a.Role, ClosedAcked)
 		}
 	}
 }
@@ -469,9 +479,12 @@ func (s *Shift) acked(ids []string) bool {
 // notes), any other line whole. An item whose every id its reader acked meanwhile stays out: the reader has it. It
 // returns the lines for the head of the role's queue.
 func (s *Shift) giveBack(name, line string, ids []string, parts []Part) []string {
+	now := s.cardNow()
+
 	if len(parts) == 0 {
 		if s.acked(ids) {
 			s.log(name, "acked-queued", "", line)
+			s.cardClose(name, line, ClosedAcked, "its reader acked it before it went back", now)
 
 			return nil
 		}
@@ -481,12 +494,22 @@ func (s *Shift) giveBack(name, line string, ids []string, parts []Part) []string
 		return []string{line}
 	}
 
+	// The composed line (signals and notes) does not go back as itself: its parts go back, each where it waited.
+	if composedOf(parts) {
+		s.cardClose(name, line, ClosedGivenBack, "its parts went back where they waited", now)
+	}
+
 	var lines, sigs, notes []string
 
 	for _, p := range parts {
 		switch {
 		case s.acked(p.IDs):
 			s.log(name, "acked-queued", "", p.Line+p.Signal)
+
+			if p.Line != "" {
+				s.cardClose(name, p.Line, ClosedAcked, "its reader acked it before it went back", now)
+			}
+
 		case p.Line != "":
 			lines = append(lines, p.Line)
 			s.carryIDs(name, p.Line, p.IDs)

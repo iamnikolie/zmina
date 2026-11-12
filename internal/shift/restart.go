@@ -149,7 +149,7 @@ func (s *Shift) restart(name string, r *crew.Role, now time.Time, tasks []string
 		return name + ": restart: note request: " + err.Error()
 	}
 
-	rs.Inbox = append(rs.Inbox, request)
+	s.enqueue(name, request, Facts{From: "zmina"})
 	rs.RestartAsked, rs.RestartSession, rs.RestartTasks, rs.RestartWhy = now, sess.SessionID, tasks, why
 	s.log(name, "restart-asked", strings.Join(tasks, ","), why)
 
@@ -230,7 +230,7 @@ func (s *Shift) restartAtTurnEnd(name string, sess *registry.Session, now time.T
 	}
 
 	why := fmt.Sprintf("context %s near restart_at %s", Tokens(turn.Context), Tokens(at))
-	rs.Inbox = append(rs.Inbox, request)
+	s.enqueue(name, request, Facts{From: "zmina"})
 	rs.RestartNoted = sess.SessionID
 	s.log(name, "restart-note", strings.Join(tasks, ","), why)
 
@@ -677,7 +677,7 @@ func (s *Shift) FinishRestart(job Restart) string {
 			job.Why, job.Done)
 	}
 
-	if err := s.Queue(job.Name, line); err != nil {
+	if err := s.QueueFrom(job.Name, line, Facts{From: "zmina"}); err != nil {
 		return s.restartFailed(job, err)
 	}
 

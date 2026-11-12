@@ -7,7 +7,6 @@ import (
 	"github.com/iamnikolie/zmina/internal/record"
 	"github.com/iamnikolie/zmina/internal/recovery"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strings"
 )
@@ -193,7 +192,8 @@ func (s *Shift) recoveryBoot(text string) string {
 }
 
 func (s *Shift) queueRecovery(path string) {
-	rs := s.State.Role(s.Crew.Dispatcher)
-	rs.Inbox = slices.DeleteFunc(rs.Inbox, func(line string) bool { return strings.HasPrefix(line, "[zmina recovery]") })
-	rs.Inbox = append([]string{recoveryLine(path)}, rs.Inbox...)
+	d := s.Crew.Dispatcher
+	s.trimInbox(d, func(line string) bool { return strings.HasPrefix(line, "[zmina recovery]") }, ClosedDropped,
+		"a newer recovery pointer replaces it")
+	s.enqueueHead(d, Facts{From: "zmina"}, recoveryLine(path))
 }

@@ -101,6 +101,14 @@ func (a *app) queueCommand() *cobra.Command {
 					fmt.Fprintln(a.out, "  "+kind+queueLine(text, full)+rest)
 				}
 
+				// What zmina saw of a line (its card, the one that is its own: QueueView.resolveCards), in one indented
+				// line under it; nothing when it has none.
+				facts := func(c *shift.Card) {
+					if words := queueFacts(c); words != "" {
+						fmt.Fprintln(a.out, queueFactsIndent+words)
+					}
+				}
+
 				now := s.Now()
 
 				for _, q := range qs {
@@ -114,18 +122,21 @@ func (a *app) queueCommand() *cobra.Command {
 						line("note     ", l, "")
 					}
 
-					for _, l := range q.Inbox {
+					for i, l := range q.Inbox {
 						line("inbox    ", l, "")
+						facts(q.InboxFacts(i))
 					}
 
 					if q.Sent != nil {
 						line("typed    ", q.Sent.Line, fmt.Sprintf(" (typed into its prompt %s, %s ago, not landed yet: it may have it)",
 							q.Sent.At.Local().Format("01-02 15:04"), age(now.Sub(q.Sent.At))))
+						facts(q.SentFacts())
 					}
 
-					for _, p := range q.Posted {
+					for i, p := range q.Posted {
 						line("posted   ", p.Line, fmt.Sprintf(" (to its inbox socket %s, %s ago, not yet seen)",
 							p.At.Local().Format("01-02 15:04"), age(now.Sub(p.At))))
+						facts(q.PostedFacts(i))
 					}
 
 					// Two groups in words: what may have reached the role is looked at before it is sent again; what
@@ -133,7 +144,7 @@ func (a *app) queueCommand() *cobra.Command {
 					failed := func(unclear bool, heading string) {
 						first := true
 
-						for _, f := range q.Failed {
+						for i, f := range q.Failed {
 							if f.Unclear != unclear {
 								continue
 							}
@@ -146,6 +157,7 @@ func (a *app) queueCommand() *cobra.Command {
 
 							line("  ", f.Line, fmt.Sprintf(" (%s, %s, %s ago)", f.Error,
 								f.At.Local().Format("01-02 15:04"), age(now.Sub(f.At))))
+							facts(q.FailedFacts(i))
 						}
 					}
 

@@ -264,7 +264,7 @@ func (a *app) localChatSendFiles(key, role, id, text string, files []string) (ch
 			line = fmt.Sprintf("%s — the owner's own words, whole with their formatting: zmina inbox show %s", string(head), entry)
 		}
 		line = chat.Prefix(id) + line
-		if err = s.Queue(role, line); err != nil {
+		if err = s.QueueFrom(role, line, shift.Facts{From: "owner"}); err != nil {
 			return err
 		}
 		rs.ChatReceipts = append(rs.ChatReceipts, chat.Receipt{ID: id, Hash: payloadHash, Attachments: attachments, Text: text, Line: line, At: s.Now(), Session: snapshot.Session})
@@ -654,7 +654,7 @@ func dismissChat(s *shift.Shift, role, id string, snapshot chat.Snapshot) error 
 			rs.ChatReceipts[i].Dismissed = s.Now()
 			// The owner has looked: the line kept for a look (queue ls, attention required) is no longer one.
 			line := rs.ChatReceipts[i].Line
-			rs.Failed = slices.DeleteFunc(rs.Failed, func(f shift.Failed) bool { return f.Line == line && f.Unclear() })
+			s.DismissUnclear(role, line)
 		}
 	}
 	return nil
