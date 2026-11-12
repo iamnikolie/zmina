@@ -1915,7 +1915,9 @@ there stops the beat's further typing and starting, and says so.
    input line, so a line still there a moment after its Enter gets Enter again (twice), and one that stays is
    cleared (C-e C-u, never C-c) and waits for the next beat. A typed line has to land: the role's status changes
    when it takes a line, but a line still in the input line has not landed whatever the status says (a message
-   through Remote Control moves it too). Until it lands, nothing more is typed into that role; after 90 s a line
+   through Remote Control moves it too). Until it lands, nothing more is typed into that role, and once it has, a role that
+   a background shell keeps off idle gets the next line only when its conversation shows a turn after the first, or 10 s
+   after it was typed (its status says busy before its conversation does); after 90 s a line
    still sitting in the input line gets Enter again — even while a background shell keeps the role off idle —
    one gone from it without status confirmation is kept as failed
    (`typed, acceptance unconfirmed; inspect before retry`) rather than replayed. Inspect the role before

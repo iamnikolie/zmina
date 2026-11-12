@@ -52,6 +52,11 @@ const (
 	// command leaves no Sent record to wait for, and a /clear or a /compact has not shown in the status yet. It is
 	// the time a role is given to end its conversation after /exit (ExitWait), far under the beat's minute.
 	slashSettle = ExitWait
+	// typedSettle is how long after a line was typed into a role another is not typed into it while its status says
+	// busy and its transcript still ends in the turn before the line: Claude Code writes the line to the transcript a
+	// moment after Enter, and until it has, the turn that ended before it reads as the role being between turns.
+	// A few seconds of disk and poll, far under the beat's minute.
+	typedSettle = 10 * time.Second
 )
 
 // ErrNotUp is returned for a role whose tmux session is not there.

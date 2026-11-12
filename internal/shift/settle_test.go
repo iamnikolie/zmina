@@ -210,14 +210,16 @@ func TestSettleStampsAreOptionalInState(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(raw), "tried_at")
 	assert.NotContains(t, string(raw), "slash_at")
+	assert.NotContains(t, string(raw), "typed_at")
 
 	back, _, err := decode(raw)
 	require.NoError(t, err)
 	assert.True(t, back.Roles["dev"].TriedAt.IsZero())
 	assert.True(t, back.Roles["dev"].SlashAt.IsZero())
+	assert.True(t, back.Roles["dev"].TypedAt.IsZero())
 
 	at := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
-	st.Role("dev").Attempts, st.Role("dev").TriedAt, st.Role("dev").SlashAt = 1, at, at
+	st.Role("dev").Attempts, st.Role("dev").TriedAt, st.Role("dev").SlashAt, st.Role("dev").TypedAt = 1, at, at, at
 
 	raw, err = json.Marshal(st)
 	require.NoError(t, err)
@@ -226,6 +228,7 @@ func TestSettleStampsAreOptionalInState(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, at, back.Roles["dev"].TriedAt)
 	assert.Equal(t, at, back.Roles["dev"].SlashAt)
+	assert.Equal(t, at, back.Roles["dev"].TypedAt)
 }
 
 // The hook that runs once a compaction is over says the command is done: what waits goes at once, even when the

@@ -794,7 +794,14 @@ func (s *Shift) atPrompt(name string, now time.Time) bool {
 		return false
 	}
 
-	if turn, err := s.registryFor(name).Last(sess.SessionID); err != nil || !turn.Ended {
+	turn, err := s.registryFor(name).Last(sess.SessionID)
+	if err != nil || !turn.Ended {
+		return false
+	}
+
+	// The line typed last has taken: the role is busy with it, though the transcript, which does not show it yet,
+	// still ends in the turn before it. That turn is not this role's last (typedSettle).
+	if rs := s.State.Role(name); within(now, rs.TypedAt, typedSettle) && !turn.At.After(rs.TypedAt) {
 		return false
 	}
 
@@ -1225,7 +1232,7 @@ func (s *Shift) typeDispatcher(d string, local, remote, notes []string, now time
 		return ""
 	}
 
-	s.State.Role(d).Sent = &Sent{Line: line, At: now, IDs: ids, Parts: kept}
+	s.State.Role(d).Sent, s.State.Role(d).TypedAt = &Sent{Line: line, At: now, IDs: ids, Parts: kept}, now
 	s.delivered(ids, now)
 	s.stageIDs(ids, "submitted")
 
@@ -1396,7 +1403,7 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 	if strings.HasPrefix(head, "/") {
 		rs.SlashAt = now
 	} else {
-		rs.Sent = &Sent{Line: head, At: now, IDs: ids}
+		rs.Sent, rs.TypedAt = &Sent{Line: head, At: now, IDs: ids}, now
 	}
 
 	return "typed into " + name + ": " + head
