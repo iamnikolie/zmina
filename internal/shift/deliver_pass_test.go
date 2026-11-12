@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/iamnikolie/zmina/internal/peer"
 	"github.com/iamnikolie/zmina/internal/registry"
 	"github.com/iamnikolie/zmina/internal/tmux"
 )
@@ -482,4 +483,157 @@ func TestDeliverPassFlushesWhatWentAtOnce(t *testing.T) {
 	_, err := f.s.DeliverPass()
 	require.NoError(t, err)
 	assert.Equal(t, 1, saves)
+}
+
+// count is how many times a tally saw a call.
+func (t *tally) count(call string) int {
+	n := 0
+
+	for _, c := range t.calls {
+		if c == call {
+			n++
+		}
+	}
+
+	return n
+}
+
+// A post to the dispatcher that fails is tried again only after retryGap, not by the next pass: the pass names no role
+// for it, asks nothing, logs nothing and says nothing changed. Nothing is counted against the line: the dispatcher's
+// signals stay queued however long it takes, and the beat, a minute later, tries again.
+func TestDeliverPassHonoursTheRetryGapOfAFailedPostToTheDispatcher(t *testing.T) {
+	f, p := nativeFixture(t, crewYAML)
+	upNative(t, f, "dispatcher")
+
+	_, err := f.s.Note("dev", "T-1 needs a decision", false)
+	require.NoError(t, err)
+
+	p.err = errors.New("connection refused")
+	calls := counted(f, p)
+	rs := f.s.State.Role("dispatcher")
+	first := *f.now
+
+	changed, err := f.s.DeliverPass()
+	require.NoError(t, err)
+	assert.True(t, changed, "a try that failed is a change: the next pass must wait for it")
+	assert.Equal(t, 1, calls.count("peer Post"))
+	assert.Equal(t, first, rs.TriedAt)
+
+	// Pass after pass for a second and more: no post, no event, no change, nothing asked.
+	calls.calls = nil
+	before := stateJSON(t, f.s)
+
+	for range 5 {
+		*f.now = f.now.Add(200 * time.Millisecond)
+		assert.Empty(t, f.s.Waiting())
+
+		changed, err = f.s.DeliverPass()
+		require.NoError(t, err)
+		assert.False(t, changed)
+	}
+
+	assert.Empty(t, calls.calls)
+	assert.Equal(t, 1, f.eventCount("post-failed"))
+	assert.Equal(t, before, stateJSON(t, f.s))
+
+	// Past the gap it is tried again.
+	*f.now = first.Add(retryGap)
+	assert.Equal(t, []string{"dispatcher"}, f.s.Waiting())
+
+	_, err = f.s.DeliverPass()
+	require.NoError(t, err)
+	assert.Equal(t, 1, calls.count("peer Post"))
+	assert.Equal(t, 2, f.eventCount("post-failed"))
+
+	// Nothing is counted: it is no line's failed try, and no line moves to the failed list however often it fails.
+	assert.Zero(t, rs.Attempts)
+	assert.Empty(t, rs.Failed)
+	assert.Len(t, f.s.State.Signals, 1)
+
+	// The beat comes a minute after the try before it: that never waits.
+	*f.now = f.now.Add(time.Minute)
+	calls.calls = nil
+	f.s.Deliver()
+	assert.Equal(t, 1, calls.count("peer Post"))
+
+	// The dispatcher takes it again: it goes, and the stamp goes with it.
+	*f.now = f.now.Add(time.Minute)
+	p.err = nil
+
+	changed, err = f.s.DeliverPass()
+	require.NoError(t, err)
+	assert.True(t, changed)
+	assert.Len(t, p.posted["sid-dispatcher"], 1)
+	assert.Empty(t, f.s.State.Signals)
+	assert.True(t, rs.TriedAt.IsZero())
+}
+
+// A line typed into the dispatcher that tmux refuses is held back the same way.
+func TestDeliverPassHonoursTheRetryGapOfAFailedTypeToTheDispatcher(t *testing.T) {
+	f := typedFixture(t, crewYAML, "dispatcher")
+
+	_, err := f.s.Note("dev", "T-1 needs a decision", false)
+	require.NoError(t, err)
+
+	f.tm.typeErr = errors.New("tmux: no server")
+	calls := counted(f, nil)
+	first := *f.now
+
+	changed, err := f.s.DeliverPass()
+	require.NoError(t, err)
+	assert.True(t, changed)
+	assert.Equal(t, 1, calls.count("tmux Type"))
+
+	calls.calls = nil
+	before := stateJSON(t, f.s)
+
+	for range 5 {
+		*f.now = f.now.Add(200 * time.Millisecond)
+
+		changed, err = f.s.DeliverPass()
+		require.NoError(t, err)
+		assert.False(t, changed)
+	}
+
+	assert.Empty(t, calls.calls)
+	assert.Equal(t, before, stateJSON(t, f.s))
+
+	*f.now = first.Add(retryGap)
+	f.tm.typeErr = nil
+
+	changed, err = f.s.DeliverPass()
+	require.NoError(t, err)
+	assert.True(t, changed)
+	require.Len(t, f.tm.typed["dispatcher"], 1)
+	assert.Zero(t, f.s.State.Role("dispatcher").Attempts)
+	assert.Empty(t, f.s.State.Role("dispatcher").Failed)
+}
+
+// The dispatcher's own queued line keeps its count as it had: one try a beat, the third failed one moves it to the
+// failed list, whatever the dispatcher's post before it did to the stamp.
+func TestFailedPostsToTheDispatcherStillCountItsOwnQueuedLine(t *testing.T) {
+	f, p := nativeFixture(t, crewYAML)
+	upNative(t, f, "dispatcher")
+
+	_, err := f.s.Note("dev", "T-1 needs a decision", false)
+	require.NoError(t, err)
+	require.NoError(t, f.s.Queue("dispatcher", "[dev] its own line"))
+
+	p.err = peer.ErrUnavailable
+	rs := f.s.State.Role("dispatcher")
+
+	for beat := 1; beat <= typeTries; beat++ {
+		f.s.DeliverTo("dispatcher")
+
+		if beat < typeTries {
+			assert.Equal(t, beat, rs.Attempts, "beat %d", beat)
+			assert.Empty(t, rs.Failed)
+		}
+
+		*f.now = f.now.Add(time.Minute)
+	}
+
+	require.Len(t, rs.Failed, 1, "the third try failed it")
+	assert.Equal(t, "[dev] its own line", rs.Failed[0].Line)
+	assert.Empty(t, rs.Inbox)
 }

@@ -809,8 +809,10 @@ func (s *Shift) atPrompt(name string, now time.Time) bool {
 func (s *Shift) deliverOnce(now time.Time) string {
 	d := s.Crew.Dispatcher
 
-	// A slash command was just typed into it (a trim's): its queue waits as any role's does (slashSettle).
-	if s.State.Role(d).settling(now) {
+	// A slash command was just typed into it (a trim's): its queue waits as any role's does (slashSettle). So does
+	// a post or a typed line that failed a moment ago (retryGap): a caller that comes every few seconds must not try
+	// again, and log again, each time.
+	if rs := s.State.Role(d); rs.settling(now) || rs.dispatchTriedLately(now) {
 		return ""
 	}
 
@@ -1026,6 +1028,7 @@ func (s *Shift) postDispatcher(d string, sess *registry.Session, local, remote, 
 	text := strings.Join(lines, "\n")
 
 	if err := s.post(d, sess, text, now); err != nil {
+		rs.dispatchTried(now)
 		s.log(d, "post-failed", "", err.Error())
 
 		for _, id := range fresh {
@@ -1215,6 +1218,8 @@ func (s *Shift) typeDispatcher(d string, local, remote, notes []string, now time
 	line := "[zmina] " + strings.Join(parts, " · ") + ackTail(ids)
 
 	if err := s.typeLine(d, line); err != nil {
+		s.State.Role(d).dispatchTried(now)
+
 		for _, id := range fresh {
 			delete(s.State.Acks, id)
 		}
@@ -1443,6 +1448,21 @@ func (s *Shift) postInbox(name string, sess *registry.Session, now time.Time) st
 // triedLately reports whether the role's first queued line failed a try less than retryGap ago.
 func (rs *RoleState) triedLately(now time.Time) bool {
 	return rs.Attempts > 0 && within(now, rs.TriedAt, retryGap)
+}
+
+// dispatchTried notes that a post or a typed line to the dispatcher failed now, so the next try waits retryGap
+// (dispatchTriedLately). It counts nothing: the dispatcher's signals and notes stay queued however often it fails, and
+// no line moves to the failed list for it. A queued line of its own that already counts tries keeps its stamp: the
+// stamp is that count's (triedLately), and it must not move for a failure the count did not see.
+func (rs *RoleState) dispatchTried(now time.Time) {
+	if rs.Attempts == 0 {
+		rs.TriedAt = now
+	}
+}
+
+// dispatchTriedLately reports whether a delivery to the dispatcher failed less than retryGap ago.
+func (rs *RoleState) dispatchTriedLately(now time.Time) bool {
+	return within(now, rs.TriedAt, retryGap)
 }
 
 // settling reports whether a slash command was typed into the role less than slashSettle ago.
