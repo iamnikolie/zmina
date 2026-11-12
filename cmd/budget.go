@@ -29,6 +29,7 @@ func (a *app) budgetTick(now time.Time) {
 		tasks    []task.Task
 		due      bool
 		crewFile string
+		local    = now
 	)
 
 	_ = a.readState(func(s *shift.Shift) error {
@@ -43,6 +44,7 @@ func (a *app) budgetTick(now time.Time) {
 
 		due = now.Sub(s.State.BudgetAt) >= budgetEvery
 		crewFile = s.Crew.Path
+		local = s.CrewClock(now)
 
 		return nil
 	})
@@ -56,7 +58,8 @@ func (a *app) budgetTick(now time.Time) {
 		return
 	}
 
-	day := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	// The day is the crew's, on its timezone when its file sets one: the cells' days are counted on the same clock.
+	day := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, local.Location())
 
 	since := day
 	for _, t := range tasks {
@@ -65,7 +68,7 @@ func (a *app) budgetTick(now time.Time) {
 		}
 	}
 
-	cells, _ := usageCells([]uiCrew{{Key: a.crewKey(), Path: crewFile}}, "", since, prices)
+	cells, _, _, _ := usageRead([]uiCrew{{Key: a.crewKey(), Path: crewFile}}, "", since, prices, nil, local.Location())
 	found := crossed(cells, roles, tasks, day.Format(time.DateOnly))
 
 	_ = a.withState(func(s *shift.Shift) error {

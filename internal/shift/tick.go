@@ -545,6 +545,16 @@ func (s *Shift) saveScreen(name string, now time.Time) string {
 	return rel
 }
 
+// CrewClock is t on the crew file's timezone when it sets one, and as it is, the host's, when it does not. What is read
+// as a time of day (a role's schedule, the budget's day) is read on it.
+func (s *Shift) CrewClock(t time.Time) time.Time {
+	if s.Crew.Timezone == "" {
+		return t
+	}
+
+	return t.In(s.Crew.Location())
+}
+
 // schedule runs a role's schedule: at each time it records a task, queues the prompt and starts the role if it is
 // down. A run is skipped while the role holds an active task (the dispatcher hears of it once per set of tasks), and
 // while the shift is stopped. It returns a line for the log, a health note, and whether it started the role.
@@ -559,9 +569,12 @@ func (s *Shift) schedule(name string, r *crew.Role, now time.Time, tasks []strin
 		return "", "", false
 	}
 
+	// The schedule's hours are the crew's clock, as a reminder's are (CrewClock).
+	at := s.CrewClock(now)
+
 	if rs.NextRun.IsZero() || rs.NextSpec != r.Schedule {
 		// First sight, or the schedule changed: count from now.
-		rs.NextRun, rs.NextSpec = sched.Next(now), r.Schedule
+		rs.NextRun, rs.NextSpec = sched.Next(at), r.Schedule
 
 		return "", "", false
 	}
@@ -570,7 +583,7 @@ func (s *Shift) schedule(name string, r *crew.Role, now time.Time, tasks []strin
 		return "", "", false
 	}
 
-	rs.NextRun = sched.Next(now)
+	rs.NextRun = sched.Next(at)
 
 	if stopped {
 		s.log(name, "schedule-skipped", "", "the shift is stopped")

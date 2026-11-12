@@ -329,7 +329,8 @@ type Crew struct {
 	NotifyAgain string   `yaml:"notify_again"`
 	// DayStart is when a day named without a time rings (morning, tomorrow, thu, a date): HH:MM, default 09:00.
 	DayStart string `yaml:"day_start"`
-	// Timezone is the clock the times of reminders are read on (Europe/Warsaw); default this machine's.
+	// Timezone is the clock the times of reminders, role schedules and the budget's day are read on (Europe/Warsaw);
+	// default this machine's.
 	Timezone string `yaml:"timezone"`
 	// Lessons is the daily triage of the roles' lessons into one draft MR on the crew's agentic-os; off unless
 	// the crew file says lessons: on (or gives a block).
