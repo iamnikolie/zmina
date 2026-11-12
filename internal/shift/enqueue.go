@@ -25,6 +25,69 @@ func (s *Shift) enqueueHead(name string, f Facts, lines ...string) {
 	}
 }
 
+// headLine is a line for enqueueHeadLines, with what its caller knows of it.
+type headLine struct {
+	line string
+	f    Facts
+}
+
+// enqueueHeadLines is enqueueHead for lines that each carry facts of their own (the restart's line from zmina, a task's
+// packet about its task): they go at the head in the order given, each with its card and its "queued" line in the log,
+// as a line queued by QueueFrom has them. A line that goes before everything that waits is another's first now, so
+// the failed tries counted are forgotten. No bound: the caller has made its room (inboxMax is the bound of what a
+// sender may add; the lines of zmina's own that a role cannot start without are never refused).
+func (s *Shift) enqueueHeadLines(name string, lines ...headLine) {
+	if len(lines) == 0 {
+		return
+	}
+
+	rs := s.State.Role(name)
+	rs.Inbox = slices.Concat(headLinesText(lines), rs.Inbox)
+	rs.clearTries()
+
+	for _, l := range lines {
+		s.cardNew(name, l.line, l.f)
+		s.log(name, "queued", "", l.line)
+	}
+}
+
+func headLinesText(lines []headLine) []string {
+	text := make([]string, len(lines))
+	for i, l := range lines {
+		text[i] = l.line
+	}
+
+	return text
+}
+
+// takeOutLines takes each of the lines out of a role's queue once (a line queued twice loses one copy per mention); each
+// one's card is closed how, with why.
+func (s *Shift) takeOutLines(name string, lines []string, how, why string) {
+	left := slices.Clone(lines)
+	rs := s.State.Role(name)
+
+	head := ""
+	if len(rs.Inbox) > 0 {
+		head = rs.Inbox[0]
+	}
+
+	s.trimInbox(name, func(line string) bool {
+		i := slices.Index(left, line)
+		if i < 0 {
+			return false
+		}
+
+		left = slices.Delete(left, i, i+1)
+
+		return true
+	}, how, why)
+
+	// The failed tries counted were the old first line's: the line that is first now starts with none.
+	if head != "" && (len(rs.Inbox) == 0 || rs.Inbox[0] != head) {
+		rs.clearTries()
+	}
+}
+
 // giveBackHead puts lines that went out and did not reach the role (giveBack) back at the head of its queue. Each keeps
 // the card it had and says it was given back, why; a line that never had a card gets one.
 func (s *Shift) giveBackHead(name, why string, lines []string) {

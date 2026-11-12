@@ -1,7 +1,9 @@
 package shift
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -625,6 +627,19 @@ func (s *Shift) beginRestart(name string, tasks []task.Task, why, done string) s
 		logTask = done
 	}
 
+	// The restart hands out a line and a packet per task at the head of the queue, and a line that waits is never
+	// dropped to make room: with no room it is not begun, before the old session is put down. (plainIdle lets only an
+	// empty queue through, so this holds a role whose tasks alone fill the queue; lines that come while it is down are
+	// put behind the hand-out whatever their number, FinishRestart.)
+	if need := 1 + len(ids); len(rs.Inbox)+need > inboxMax {
+		why := fmt.Sprintf("%d lines already wait for it and its restart needs room for %d more (a line, a packet "+
+			"per task); let it read them first", len(rs.Inbox), need)
+		rs.RestartOff = s.Now()
+		s.log(name, "restart-failed", logTask, why)
+
+		return name + ": restart: " + why
+	}
+
 	if _, err := s.BeginDown(name, DownOptions{}); err != nil {
 		rs.RestartOff = s.Now()
 		s.log(name, "restart-failed", logTask, err.Error())
@@ -644,9 +659,12 @@ func (s *Shift) beginRestart(name string, tasks []task.Task, why, done string) s
 	return fmt.Sprintf("%s: %s; restarting fresh with its note (%s)", name, why, strings.Join(notes, ", "))
 }
 
-// FinishRestart ends the down beginRestart began and starts the role fresh: first a line its Talk shows (why its
-// conversation was reset), then each task's packet, its note in it. Nothing when another command took the role
-// over meanwhile.
+// FinishRestart ends the down beginRestart began and starts the role fresh, with first a line its Talk shows (why its
+// conversation was reset), then each task's packet, its note in it, at the head of its queue, ahead of whatever waited
+// while it was down. They are queued before the start, so that the start's own save of the state (it has the session
+// running, Started and no Pending) holds them too: a process that dies after the start finds the role up with its
+// context in its queue, never up with only its boot. A start that fails takes them out again and goes back to the
+// conversation the role was on (restartRollback). Nothing when another command took the role over meanwhile.
 func (s *Shift) FinishRestart(job Restart) string {
 	rs := s.State.Role(job.Name)
 	if !rs.Downing.Equal(job.Claim) {
@@ -666,30 +684,26 @@ func (s *Shift) FinishRestart(job Restart) string {
 		return s.restartFailed(job, err)
 	}
 
-	if err := s.UpWith(job.Name, job.Opts); err != nil {
-		return s.restartFailed(job, err)
+	// The conversation it was on, to go back to if the fresh start fails: what a start changes comes after it.
+	back := oldRun{session: rs.LastSession, dir: rs.Dir}
+
+	// What the session that is gone left posted or typed is settled before the hand-out goes in: a line it never
+	// showed goes back to the head of the queue (start would do it, after the hand-out, and put it ahead of it).
+	s.settleEnded(job.Name, s.Now())
+
+	out, err := s.handOut(job)
+	if err == nil {
+		err = s.UpWith(job.Name, job.Opts)
 	}
 
-	line := fmt.Sprintf("[zmina] restarted fresh: %s. Your note: %s, in each task's packet that follows.", job.Why,
-		job.Notes)
-	if job.Done != "" {
-		line = fmt.Sprintf("[zmina] restarted fresh: %s. You hold no task; what it ended with: zmina task show %s.",
-			job.Why, job.Done)
+	if err != nil {
+		return s.restartRollback(job, back, out, err)
 	}
 
-	if err := s.QueueFrom(job.Name, line, Facts{From: "zmina"}); err != nil {
-		return s.restartFailed(job, err)
-	}
-
-	for _, id := range job.Tasks {
-		t, err := s.Tasks.Get(id)
-		if err != nil {
-			return s.restartFailed(job, err)
-		}
-
-		if _, err := s.HandTask(job.Name, t); err != nil {
-			return s.restartFailed(job, err)
-		}
+	// The older packets of these tasks that waited in a queue are out now that the role runs on the new ones: before the
+	// start they stay, for a start that fails goes back to the conversation they were for.
+	for _, p := range out.packets {
+		s.replacePackets(p.task, p.head.line)
 	}
 
 	if job.Done != "" {
@@ -701,6 +715,213 @@ func (s *Shift) FinishRestart(job Restart) string {
 	s.log(job.Name, "restarted", strings.Join(job.Tasks, ","), job.Why+"; note "+job.Notes)
 
 	return fmt.Sprintf("%s: restarted fresh (%s); note %s", job.Name, job.Why, job.Notes)
+}
+
+// oldRun is the conversation a role was on, and the directory it ran in, when its restart began.
+type oldRun struct{ session, dir string }
+
+// handout is what a restart queued for the fresh session: its line (empty until it is queued) and, for each task, the
+// packet's line and the task's delivery as it was before.
+type handout struct {
+	line    string
+	packets []handedPacket
+}
+
+// handedPacket is one task's packet in a handout. queued: its line went into the queue with the restart's, as opposed to
+// one that waited there already.
+type handedPacket struct {
+	task   string
+	head   headLine
+	queued bool
+	before *task.Delivery
+}
+
+// lines are the lines the restart queued, in queue order.
+func (h handout) lines() []string {
+	if h.line == "" {
+		return nil
+	}
+
+	lines := []string{h.line}
+	for _, p := range h.packets {
+		if p.queued {
+			lines = append(lines, p.head.line)
+		}
+	}
+
+	return lines
+}
+
+// handOut queues a restart's lines at the head of the role's queue, in order: the line its Talk shows, then each task's
+// packet (HandTask's, in the order the restart holds the tasks). A packet whose line waits in the queue already is left
+// where it is, not queued twice. It returns what it did also when it fails: the deliveries of the tasks before the one
+// that failed are renewed, and nothing is queued (the lines go in last).
+func (s *Shift) handOut(job Restart) (handout, error) {
+	var out handout
+
+	line := fmt.Sprintf("[zmina] restarted fresh: %s. Your note: %s, in each task's packet that follows.", job.Why,
+		job.Notes)
+	if job.Done != "" {
+		line = fmt.Sprintf("[zmina] restarted fresh: %s. You hold no task; what it ended with: zmina task show %s.",
+			job.Why, job.Done)
+	}
+
+	heads := []headLine{{line: line, f: Facts{From: "zmina"}}}
+
+	for _, id := range job.Tasks {
+		t, err := s.Tasks.Get(id)
+		if err != nil {
+			return out, err
+		}
+
+		h, err := s.prepareHand(job.Name, t, true)
+		if err != nil {
+			return out, err
+		}
+
+		p := handedPacket{task: id, head: headLine{line: h.line, f: Facts{From: senderOf(s.By), Task: id}},
+			queued: h.queue, before: h.before}
+		out.packets = append(out.packets, p)
+
+		if h.queue {
+			heads = append(heads, p.head)
+		}
+	}
+
+	s.enqueueHeadLines(job.Name, heads...)
+	out.line = line
+
+	return out, nil
+}
+
+// restartRollback answers a fresh start that failed (or a hand-out that could not be made): what was queued for the
+// fresh session is taken out again (each line's card closed as dropped), and the role is started once more on the
+// conversation it was on.
+//
+// That works: the restart is given up for that conversation as a called-off ask is (RestartGaveUp, RestartOff: it is not
+// rotated again in it, and context_max handles it as before), and the dispatcher hears it once.
+//
+// That fails too (also when the directory it ran in is gone: no pane is started in another place): the role stays down
+// and is not held, so that a role with keep: always is opened again by the ticker as after a crash, the restart is given
+// up for the conversation as above, and the dispatcher hears it once. The packets stay queued (see below), the restart's own line does
+// not: "restarted fresh" is true only of a fresh session, and the next start may be a resume. A packet is a pointer to
+// a task that the role still holds, and is retired by the beat (pruneTaskInbox) once the ledger says it is not its
+// task any more; a session that starts without it has no context at all, which is the failure the hand-out is for.
+func (s *Shift) restartRollback(job Restart, back oldRun, out handout, cause error) string {
+	name := job.Name
+	rs := s.State.Role(name)
+	s.log(name, "restart-failed", job.logTask(), cause.Error())
+
+	// The conversation it goes back to has what the hand-out would give: it is not queued behind it.
+	s.takeOutLines(name, out.lines(), ClosedDropped, "the fresh start of the restart failed")
+
+	var err error
+
+	switch {
+	case back.session == "":
+		err = errors.New("no conversation of its own is known to go back to")
+	case !dirExists(back.dir):
+		// A task's worktree may be gone by now: the conversation is found by the directory it ran in, and a pane started
+		// in another place is not it.
+		err = fmt.Errorf("the directory it ran in is gone: %s", back.dir)
+	default:
+		err = s.UpWith(name, UpOptions{Resume: back.session, Dir: back.dir})
+	}
+
+	what := "restart for its context failed"
+	if job.Done != "" {
+		what = "restart after " + job.Done + " was done failed"
+	}
+
+	if err == nil {
+		s.restoreDeliveries(name, out)
+		rs.RestartGaveUp = back.session
+		s.restartOff(name, "its fresh start failed; it is back on its conversation")
+		s.addNotes([]string{fmt.Sprintf("%s: %s: %v; it is back on its conversation and is not restarted again in it "+
+			"(context_max trims it)", name, what, cause)})
+
+		return name + ": restart: " + cause.Error() + "; back on its conversation"
+	}
+
+	rs.Held = false
+
+	// Given up for the conversation it was on as a successful way back is: a role opened again on it (resume: always,
+	// or by hand) is not asked for its note and put down again, a note for the dispatcher at each round, until someone
+	// acts. A fresh conversation is another one.
+	rs.RestartGaveUp, rs.RestartOff = back.session, s.Now()
+
+	// The note below already says which tasks it holds and how to start it: the ticker's hint for a down role holding
+	// a task it has not taken (unstarted) would be the same news again, the hand-out having left the delivery unaccepted.
+	for _, id := range job.Tasks {
+		if !slices.Contains(rs.Unstarted, id) {
+			rs.Unstarted = append(rs.Unstarted, id)
+		}
+	}
+
+	// A copy of a role is not a seat: nothing keeps it down or its queue (forget, below).
+	if out.line != "" && !isInstance(name) {
+		var kept []headLine
+
+		for _, p := range out.packets {
+			if p.queued {
+				kept = append(kept, p.head)
+			}
+		}
+
+		s.enqueueHeadLines(name, kept...)
+	}
+
+	s.restoreDeliveries(name, out)
+	s.log(name, "restart-failed", job.logTask(), "back on its conversation failed too: "+err.Error())
+
+	next := fmt.Sprintf("zmina --crew %s up %s --fresh", shellWord(s.Crew.Path), shellWord(name))
+	if len(job.Tasks) > 0 {
+		next = fmt.Sprintf("zmina --crew %s up %s --task %s --fresh", shellWord(s.Crew.Path), shellWord(name), job.Tasks[0])
+	}
+
+	s.addNotes([]string{fmt.Sprintf("%s: %s: %v; starting it on its conversation failed too: %v; it is down and not "+
+		"held (the ticker opens a keep: always role again); by hand: %s", name, what, cause, err, next)})
+
+	s.forget(name)
+
+	return name + ": restart: " + cause.Error() + "; back on its conversation: " + err.Error()
+}
+
+// dirExists reports whether a directory a role ran in is still there; no directory (the role's own, which a start
+// checks itself) is.
+func dirExists(dir string) bool {
+	if dir == "" {
+		return true
+	}
+
+	info, err := os.Stat(dir)
+
+	return err == nil && info.IsDir()
+}
+
+// restoreDeliveries puts the deliveries a restart renewed back as the hand-out found them, for each packet whose line is
+// not in the role's queue: a restart that ended with the role on its old conversation did not hand the task over, and
+// that conversation's own delivery (accepted, perhaps) is the one that is still true. A restart that a later beat
+// finished, its first run having died after the hand-out, finds the renewed deliveries and keeps those. A packet whose
+// line waits is left with the delivery it has: the line is the one that delivery is about.
+func (s *Shift) restoreDeliveries(name string, out handout) {
+	rs := s.State.Role(name)
+
+	for _, p := range out.packets {
+		if slices.Contains(rs.Inbox, p.head.line) {
+			continue
+		}
+
+		t, err := s.Tasks.Get(p.task)
+		if err != nil || t.Delivery == nil || t.Delivery.Line != p.head.line {
+			continue
+		}
+
+		t.Delivery = p.before
+		if err := s.Tasks.Put(t); err != nil && s.Warn != nil {
+			s.Warn(err)
+		}
+	}
 }
 
 // logTask is the task the log names for the restart: the tasks it holds, else the one whose end it follows.
