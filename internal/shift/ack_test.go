@@ -444,7 +444,7 @@ func TestRulesSize(t *testing.T) {
 	withBoot := strings.Replace(crewYAML, "  designer:\n", "  designer:\n    boot: read the brief\n", 1)
 	plain := fixtureWith(t, withBoot)
 	r := plain.s.Crew.Roles["designer"]
-	assert.Equal(t, len(RoleRules)+2, plain.s.RulesSize(r), "a typed-to Claude role: the owner and wait rules")
+	assert.Equal(t, len(RoleRules)+2+len(BellRule)+2, plain.s.RulesSize(r), "a typed-to Claude role: the owner, wait and doorbell rules")
 
 	body := strings.Replace(withBoot, "roles:\n", "read_guard: true\nroles:\n", 1)
 	f, _ := nativeFixture(t, body)

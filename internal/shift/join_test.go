@@ -243,10 +243,11 @@ func TestJoinStopsAtAnotherLineOfTheSameWords(t *testing.T) {
 }
 
 // The message as a whole is within the size bound a post to the dispatcher has; the run ends before the line that would
-// pass it. A line over the bound by itself goes alone, whole, as it always went.
+// pass it. A line over the bound by itself goes alone, whole, as it always went. (The doorbell is off here: it would send
+// what is this big as a bell, which bell_test.go looks at.)
 func TestJoinEndsAtTheSizeBound(t *testing.T) {
 	t.Run("the next line would pass it", func(t *testing.T) {
-		f, p := nativeFixture(t, crewYAML)
+		f, p := nativeFixture(t, "doorbell: off\n"+crewYAML)
 		upNative(t, f, "designer")
 
 		a, b, c := strings.Repeat("a", 5000), strings.Repeat("b", 5000), strings.Repeat("c", 5000)
@@ -262,7 +263,7 @@ func TestJoinEndsAtTheSizeBound(t *testing.T) {
 	})
 
 	t.Run("exactly the bound fits", func(t *testing.T) {
-		f, p := nativeFixture(t, crewYAML)
+		f, p := nativeFixture(t, "doorbell: off\n"+crewYAML)
 		upNative(t, f, "designer")
 
 		first := strings.Repeat("a", postMax-len("1. ")-len("\n2. ")-len("b"))
@@ -277,7 +278,7 @@ func TestJoinEndsAtTheSizeBound(t *testing.T) {
 	})
 
 	t.Run("a line over the bound goes alone", func(t *testing.T) {
-		f, p := nativeFixture(t, crewYAML)
+		f, p := nativeFixture(t, "doorbell: off\n"+crewYAML)
 		upNative(t, f, "designer")
 
 		big := strings.Repeat("x", postMax+10)

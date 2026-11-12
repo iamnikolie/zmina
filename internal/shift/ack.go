@@ -679,7 +679,8 @@ const briefMax = 20
 // PendingBrief is what a role is told when its session starts, resumes, or has its context compacted or cleared: with
 // tagRule the rule of its start's tag (after a trim, which may have lost the boot line — never at a start, whose own
 // boot line names the tag of that start, while the state may still hold the one before), the lines it has not acked
-// — the newest briefMax — and for the dispatcher the watch keys that wait. Empty when nothing is to be told.
+// — the newest briefMax — for the dispatcher the watch keys that wait, and the doorbells it was rung whose lines it has
+// not fetched. Empty when nothing is to be told.
 func (s *Shift) PendingBrief(role string, tagRule bool) string {
 	var parts []string
 
@@ -716,6 +717,11 @@ func (s *Shift) PendingBrief(role string, tagRule bool) string {
 		}
 
 		out = append(out, list)
+	}
+
+	// The doorbells it was rung and has not read are listed with their commands (bell.go): never rung again by themselves.
+	if bells := s.bellBrief(role); bells != "" {
+		out = append(out, bells)
 	}
 
 	return strings.Join(out, "\n\n")

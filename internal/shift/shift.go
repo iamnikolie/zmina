@@ -557,6 +557,11 @@ func (s *Shift) bootText(r *crew.Role, tagged bool) string {
 
 		text = strings.TrimSpace(text + "\n\n" + InboxRule(tag) + " " + s.ackRuleFor(r))
 	}
+	// A role that reads this is rung a doorbell when what waits for it is big (bell.go): the start that carries the
+	// sentence leaves a mark (markBell), and only a role with that mark is rung one.
+	if rule := s.bellRule(r); rule != "" && text != "" {
+		text = strings.TrimSpace(text + "\n\n" + rule)
+	}
 	if r.Name != "" && r.Name == s.Crew.Dispatcher {
 		text = s.recoveryBoot(text)
 	}
@@ -570,6 +575,10 @@ func (s *Shift) RulesSize(r *crew.Role) int {
 	text := s.rulesText(r, r.Boot)
 	if s.inbound(r) {
 		text = strings.TrimSpace(text + "\n\n" + InboxRule(strings.Repeat("x", 12)) + " " + s.ackRuleFor(r))
+	}
+
+	if rule := s.bellRule(r); rule != "" && text != "" {
+		text = strings.TrimSpace(text + "\n\n" + rule)
 	}
 
 	return max(len(text)-len(strings.TrimSpace(r.Boot)), 0)
@@ -907,6 +916,7 @@ func (s *Shift) start(name string, o UpOptions) error {
 	s.settleEnded(name, s.Now())
 
 	rs.Started, rs.Up, rs.Downing, rs.Pending, rs.Dir = s.Now(), true, time.Time{}, nil, o.Dir
+	s.markBell(name, r, rs.Started)
 	rs.Releasing, rs.ReleaseTasks, rs.ReleaseIdle = time.Time{}, nil, 0
 	rs.Partial, rs.NoPrompt, rs.BlockedNoted, rs.Trusted, rs.Booted = "", time.Time{}, false, false, time.Time{}
 	rs.Instance = isInstance(name)
@@ -1524,6 +1534,7 @@ type rowCards struct {
 	sent        *Card
 	posted      []*Card
 	failed      []*Card
+	sentParts   []*Card
 	postedParts [][]*Card
 	failedParts [][]*Card
 }
@@ -1544,6 +1555,13 @@ func (q QueueView) FailedFacts(i int) *Card { return rowCard(q.rows.failed, i) }
 // (postJoined), each to be shown as the line it is, with its own facts. A record of the dispatcher's, or one made of
 // no parts, is one line.
 func (q QueueView) Joined(parts []Part) bool { return q.joined && len(parts) > 0 }
+
+// Bell reports a record of this view that is a doorbell (bell.go): a joined record whose text is a bell's, its parts the lines
+// the bell is for, each shown as the line it is.
+func (q QueueView) Bell(line string, parts []Part) bool { return q.Joined(parts) && IsBell(line) }
+
+// SentPartFacts is the card of the j-th part of the line typed and not yet landed, nil when it has none of its own.
+func (q QueueView) SentPartFacts(j int) *Card { return rowCard(q.rows.sentParts, j) }
 
 // PostedPartFacts is the card of the j-th part of the i-th posted record, nil when it has none of its own.
 func (q QueueView) PostedPartFacts(i, j int) *Card {
@@ -1598,7 +1616,8 @@ func (q *QueueView) resolveCards(cards []Card) {
 		return nil
 	}
 
-	accepted := func(c *Card) bool { return !c.done() && c.Accepted != nil }
+	// A card whose bell was shown has its delivery behind it (rung): it is not the card of a row in flight.
+	accepted := func(c *Card) bool { return !c.done() && !c.rung() && c.Accepted != nil }
 	waiting := func(c *Card) bool { return !c.done() && c.Accepted == nil && c.Attention == nil }
 
 	var sentExtra, postedExtra, failedExtra []*Card
@@ -1606,6 +1625,15 @@ func (q *QueueView) resolveCards(cards []Card) {
 	// What a record in flight stands for: its row, and the own lines it was made of, which are also had in the order of the
 	// record's parts.
 	record := func(line string, parts []Part, fits func(*Card) bool, extra *[]*Card) (*Card, []*Card) {
+		// A doorbell's lines are fetched by the role that was rung, wherever its record is: a card of this very bell that was
+		// seen by its fetch is the line's, though the record was not closed by it.
+		if id := bellID(line); id != "" && q.joined {
+			base := fits
+			fits = func(c *Card) bool {
+				return base(c) || c.Bell != nil && c.Bell.Body == id && c.Seen != nil && c.Seen.By == SeenFetch
+			}
+		}
+
 		row := take(line, fits)
 		byLine := map[string]*Card{}
 
@@ -1636,14 +1664,14 @@ func (q *QueueView) resolveCards(cards []Card) {
 		postedParts: make([][]*Card, len(q.Posted)), failedParts: make([][]*Card, len(q.Failed))}
 
 	for i, f := range q.Failed {
-		needsLook := func(c *Card) bool { return !c.done() && c.Attention != nil }
+		needsLook := func(c *Card) bool { return !c.done() && !c.rung() && c.Attention != nil }
 		closedThen := func(c *Card) bool { return c.Closed != nil && c.Closed.How == ClosedFailed && c.Closed.At.Equal(f.At) }
 
 		q.rows.failed[i], q.rows.failedParts[i] = record(f.Line, f.Parts, func(c *Card) bool { return needsLook(c) || closedThen(c) }, &failedExtra)
 	}
 
 	if q.Sent != nil {
-		q.rows.sent, _ = record(q.Sent.Line, q.Sent.Parts, accepted, &sentExtra)
+		q.rows.sent, q.rows.sentParts = record(q.Sent.Line, q.Sent.Parts, accepted, &sentExtra)
 	}
 
 	for i, p := range q.Posted {

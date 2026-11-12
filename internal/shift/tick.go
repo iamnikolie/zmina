@@ -226,6 +226,10 @@ func (s *Shift) Tick() []string {
 		notes = append(notes, s.sweepDelivery(now, probedUp)...)
 	}
 
+	// The doorbells rung and not read: what the roles fetched is put on the cards, and a bell shown and left alone for long
+	// is told to the dispatcher once.
+	notes = append(notes, s.bellWatch(now)...)
+
 	s.addNotes(notes)
 	did = append(did, notes...)
 
@@ -1133,10 +1137,7 @@ func (s *Shift) boundLine(name, line string, limit int) (string, error) {
 		body, tail = strings.TrimRight(line[:loc[0]], " "), " "+line[loc[0]:]
 	}
 
-	store := s.Inbox
-	if store == nil {
-		store = &inbox.Store{Dir: s.Crew.Layout().Inbox(), Now: s.Now}
-	}
+	store := s.inboxStore()
 
 	// The entry is known by the role and the text, so a post that fails and is tried again stores it over itself: one
 	// entry for the line, not one for each try.
@@ -1366,6 +1367,10 @@ func (s *Shift) Deliver() string { return s.deliver(s.Now()) }
 // just typed into (slashSettle). It returns a line for the log.
 func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 	rs := s.State.Role(name)
+
+	// What the role fetched since the last pass is seen on its lines' cards (bell.go).
+	s.syncBells(name)
+
 	if rs.settling(now) {
 		return ""
 	}
@@ -1417,6 +1422,13 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 	}
 
 	head := rs.Inbox[0]
+
+	// More than one line that may be read together, or a long one, is typed as a doorbell, one line, and what it is for is
+	// read with its command (bell.go).
+	run := s.joinRun(name)
+	if b := s.bellFor(name, run, true, now); b != nil {
+		return s.typeBell(name, run, b, now)
+	}
 
 	// The line's time is the moment its typing starts, not the beat's: a turn that ended earlier in this beat is not a
 	// sign that the role took it (typedTaken).
@@ -1501,9 +1513,15 @@ func (s *Shift) postInbox(name string, sess *registry.Session, now time.Time) st
 		return ""
 	}
 
-	// Several lines that may be read together go as one numbered message (join.go); one goes as it is.
-	if run := s.joinRun(name); len(run) > 1 {
-		return s.postJoined(name, sess, run, now)
+	// Several lines that may be read together go as one numbered message (join.go); one goes as it is. What is big goes
+	// as a doorbell, one line or several (bell.go).
+	run := s.joinRun(name)
+	if b := s.bellFor(name, run, false, now); b != nil {
+		return s.postJoined(name, sess, run, b, now)
+	}
+
+	if len(run) > 1 {
+		return s.postJoined(name, sess, run, nil, now)
 	}
 
 	if err := s.post(name, sess, head, now); err != nil {

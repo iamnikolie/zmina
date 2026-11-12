@@ -95,11 +95,11 @@ func TestTrimClearsAndBootsAgainUnlessATaskIsHeld(t *testing.T) {
 	did := f.s.Tick()
 	assert.Equal(t, []string{"/compact", "/clear"}, f.tm.typed["dev"])
 	assert.Contains(t, did, "dev: /clear, context 120k over 100k")
-	assert.Equal(t, []string{"read dev and boot\n\n" + RoleRules}, f.s.State.Role("dev").Inbox, "booted again on the next beat")
+	assert.Equal(t, []string{"read dev and boot\n\n" + RoleRules + "\n\n" + BellRule}, f.s.State.Role("dev").Inbox, "booted again on the next beat")
 
 	*f.now = f.now.Add(time.Minute)
 	f.s.Tick()
-	assert.Equal(t, []string{"/compact", "/clear", "read dev and boot\n\n" + RoleRules}, f.tm.typed["dev"])
+	assert.Equal(t, []string{"/compact", "/clear", "read dev and boot\n\n" + RoleRules + "\n\n" + BellRule}, f.tm.typed["dev"])
 }
 
 func TestTrimNeverFeedsItself(t *testing.T) {
@@ -112,7 +112,7 @@ func TestTrimNeverFeedsItself(t *testing.T) {
 	f.s.Tick()
 	*f.now = f.now.Add(time.Minute)
 	f.s.Tick()
-	require.Equal(t, []string{"/clear", "read dev and boot\n\n" + RoleRules}, f.tm.typed["dev"])
+	require.Equal(t, []string{"/clear", "read dev and boot\n\n" + RoleRules + "\n\n" + BellRule}, f.tm.typed["dev"])
 
 	// The clear started another conversation, and its boot alone fills more than context_max.
 	sess := f.rg.byPID[f.tm.up["dev"]]

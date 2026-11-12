@@ -41,7 +41,8 @@ const (
 )
 
 // How a line was accepted, seen and closed. A typed line shows no seen: its end is landed, the role's status moved
-// after it.
+// after it. A line that went in a doorbell is seen only by its fetch (bell.go): the transcript and the Codex bridge show
+// the bell, never the line.
 const (
 	AcceptedTyped      = "typed"
 	AcceptedSocket     = "socket"
@@ -49,6 +50,7 @@ const (
 
 	SeenTranscript = "transcript"
 	SeenTaken      = "taken"
+	SeenFetch      = "fetch"
 
 	ClosedLanded    = "landed"
 	ClosedAcked     = "acked"
@@ -80,8 +82,19 @@ type Card struct {
 	Back *CardBack `json:"back,omitempty"`
 	// Acks are the ack ids (S-<n>) of a tracked line whose typing broke where its outcome is unclear: it leaves the queue
 	// with no record, and its ack is what closes its card (cardsAckedBy), or says it again (cardsSaidAgain).
-	Acks   []string    `json:"acks,omitempty"`
+	Acks []string `json:"acks,omitempty"`
+	// Bell is set when the line went in a doorbell (bell.go): which body, and when the bell was shown. Its Acks are then
+	// the line's own, which close the card as they close any line's.
+	Bell   *CardBell   `json:"bell,omitempty"`
 	Closed *CardClosed `json:"closed,omitempty"`
+}
+
+// CardBell is the doorbell a line went in: Body is the id of the text stored in the crew's inbox (zmina inbox show), Shown
+// when the bell was shown to its role (its conversation shows it, the Codex bridge took it, or the typed bell landed);
+// zero while it was not. That the bell was shown says nothing of the line: the line is seen when its body is fetched.
+type CardBell struct {
+	Body  string    `json:"body"`
+	Shown time.Time `json:"shown,omitzero"`
 }
 
 // CardAccepted is when and how the role's input or inbox took the line: How is typed, socket or codex-inbox.
@@ -416,7 +429,9 @@ const asideInfix = ".json.broken-"
 // PruneCards drops, in every card file of the crew, the cards past their keep and over the cap, and writes the files that
 // changed; it removes the files moved aside as corrupt (<role>.json.broken-<time>) once they are older than the keep,
 // and the file of a role known no longer to be in the crew (known says) once every card in it is past its keep — a card
-// still in play counts from its last fact. It returns how many cards and aside files went. With dry it only counts. A
+// still in play counts from its last fact. A role's fetches (delivery/<role>.fetched.jsonl) are cut to the lines within
+// the keep, and the mark of a start of a role gone from the crew is removed (bell.go). It returns how many cards, fetch
+// lines, marks and aside files went. With dry it only counts. A
 // nil known takes every role as in the crew. Call it under the state lock (the retention pass takes it), since the
 // delivery writes the same files.
 func PruneCards(l crew.Layout, now time.Time, known func(role string) bool, dry bool) (int, error) {
@@ -436,6 +451,34 @@ func PruneCards(l crew.Layout, now time.Time, known func(role string) bool, dry 
 
 	for _, e := range entries {
 		if e.IsDir() {
+			continue
+		}
+
+		// A role's fetches (<role>.fetched.jsonl) are not a card file: they are cut to the lines still within the keep, and
+		// the file goes with its last line.
+		if role, ok := strings.CutSuffix(e.Name(), ".fetched.jsonl"); ok && hookRole(role) {
+			n, err := pruneFetches(filepath.Join(l.Delivery(), e.Name()), now, cardKeep, dry)
+			if err != nil {
+				errs = append(errs, err)
+			}
+
+			total += n
+
+			continue
+		}
+
+		// The mark of a role's start (<role>.bell) goes with a role no longer in the crew.
+		if role, ok := strings.CutSuffix(e.Name(), ".bell"); ok && hookRole(role) {
+			if known != nil && !known(role) {
+				total++
+
+				if !dry {
+					if err := os.Remove(filepath.Join(l.Delivery(), e.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
+						errs = append(errs, err)
+					}
+				}
+			}
+
 			continue
 		}
 
@@ -518,7 +561,7 @@ func (rc *roleCards) pick(id string, accepting bool) *Card {
 
 	for i := range rc.cards {
 		c := &rc.cards[i]
-		if c.ID != id || c.done() {
+		if c.ID != id || c.done() || c.rung() {
 			continue
 		}
 
@@ -678,6 +721,12 @@ func (s *Shift) cardBack(name, line, why string, at time.Time) {
 	}
 
 	c.Back, c.Accepted, c.Seen, c.Attention, c.Closed = &CardBack{At: at, Why: why, N: n}, nil, nil, nil, nil
+
+	// The bell it went in did not reach its role with it: the new delivery has its own.
+	if c.Bell != nil {
+		c.Bell, c.Acks = nil, nil
+	}
+
 	rc.dirty = true
 }
 
