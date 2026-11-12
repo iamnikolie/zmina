@@ -765,6 +765,16 @@ func (h handout) lines() []string {
 	return lines
 }
 
+// restartLineFor is the line a restart queues first for the fresh session: why it was restarted, and where its note is (in each
+// task's packet), or after a task was done which task's result it ended with.
+func restartLineFor(why, notes, done string) string {
+	if done != "" {
+		return restartLineHead + fmt.Sprintf("%s. You hold no task; what it ended with: zmina task show %s.", why, done)
+	}
+
+	return restartLineHead + fmt.Sprintf("%s. Your note: %s, in each task's packet that follows.", why, notes)
+}
+
 // handOut queues a restart's lines at the head of the role's queue, in order: the line its Talk shows, then each task's
 // packet (HandTask's, in the order the restart holds the tasks). A packet whose line waits in the queue already is left
 // where it is, not queued twice. It returns what it did also when it fails: the deliveries of the tasks before the one
@@ -772,11 +782,7 @@ func (h handout) lines() []string {
 func (s *Shift) handOut(job Restart) (handout, error) {
 	var out handout
 
-	line := restartLineHead + fmt.Sprintf("%s. Your note: %s, in each task's packet that follows.", job.Why, job.Notes)
-	if job.Done != "" {
-		line = restartLineHead + fmt.Sprintf("%s. You hold no task; what it ended with: zmina task show %s.", job.Why, job.Done)
-	}
-
+	line := restartLineFor(job.Why, job.Notes, job.Done)
 	heads := []headLine{{line: line, f: Facts{From: "zmina"}}}
 
 	for _, id := range job.Tasks {

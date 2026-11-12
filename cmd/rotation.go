@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -17,7 +18,7 @@ const rotationWhy = 90
 func (a *app) rotationCommand() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "rotation",
-		Short: "Restarts of a role into a fresh conversation (restart_at, restart_idle, restart_done) and how each ended",
+		Short: "Changes of a role's conversation (restarts, zmina up, a reopen, /compact, /clear) and how each ended; abort and retry mend a lost one",
 	}
 
 	var (
@@ -100,9 +101,98 @@ func (a *app) rotationCommand() *cobra.Command {
 	}
 	show.Flags().BoolVar(&asJSON, "json", false, "JSON output")
 
-	c.AddCommand(ls, show)
+	var clear bool
+
+	abort := &cobra.Command{
+		Use: "abort <role>",
+		Short: "Put a role back on the conversation its newest rotation took it from (an open or a lost rotation only): the role is put down " +
+			"and started on it, and the rotation closes resumed",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return a.rotationAbort(args[0], clear)
+		},
+	}
+	abort.Flags().BoolVar(&clear, "clear", false, "drop a draft (C-c) or close a dialog (Escape) first instead of refusing")
+
+	retry := &cobra.Command{
+		Use: "retry <role>",
+		Short: "Hand a rotation's context to the role's current session again: the packet of each task it handed and its restart line, " +
+			"each only when it is not on record already",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return a.rotationRetry(args[0])
+		},
+	}
+
+	c.AddCommand(ls, show, abort, retry)
 
 	return c
+}
+
+// rotationAbort puts a role back on its old conversation in three steps like zmina down: begin under the lock (the checks, the
+// down), wait for /exit outside it, finish under it (the start, the record). Run from inside the role's own session it refuses:
+// putting the role down would end this very command; another session, or the owner's shell, runs it.
+func (a *app) rotationAbort(name string, clear bool) error {
+	var (
+		plan shift.RotationAbort
+		wait bool
+	)
+
+	err := a.withState(func(s *shift.Shift) error {
+		if _, inside := s.Inside(name, os.Getpid(), callerSession()); inside {
+			return fmt.Errorf("%s: this command runs in its own session, which putting it down would end; run it from another session "+
+				"or a shell", name)
+		}
+
+		var err error
+
+		plan, wait, err = s.BeginAbort(name, shift.DownOptions{Force: true, Clear: clear})
+
+		return err
+	})
+	if err != nil {
+		return err
+	}
+
+	if wait {
+		s, err := a.newShift()
+		if err != nil {
+			return err
+		}
+
+		shift.WaitGone(s.Tmux, []string{name}, shift.ExitWait)
+	}
+
+	return a.withState(func(s *shift.Shift) error {
+		if err := s.FinishAbort(name, plan); err != nil {
+			return err
+		}
+
+		fmt.Fprintf(a.out, "%s is back on its conversation %s (rotation %s aborted)\n", name, plan.Session, plan.ID)
+
+		return nil
+	})
+}
+
+// rotationRetry hands a rotation's context to the session the role runs now, under the lock: nothing waits.
+func (a *app) rotationRetry(name string) error {
+	return a.withState(func(s *shift.Shift) error {
+		report, err := s.RetryRotation(name)
+
+		for _, line := range report {
+			fmt.Fprintln(a.out, name+":", line)
+		}
+
+		if err != nil {
+			return err
+		}
+
+		if len(report) == 0 {
+			fmt.Fprintf(a.out, "%s: nothing to hand again\n", name)
+		}
+
+		return nil
+	})
 }
 
 // readRotations is the crew's rotations, or one role's, oldest first.
@@ -163,6 +253,10 @@ func rotationState(r shift.Rotation, now time.Time) string {
 
 	if r.LateRebuilt() {
 		return "lost → rebuilt (late)"
+	}
+
+	if r.Closed.Outcome == shift.OutcomeLost && r.Aborted() != nil {
+		return "lost → back on its old conversation (aborted)"
 	}
 
 	return r.Closed.Outcome

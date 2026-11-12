@@ -1293,7 +1293,8 @@ func TestRestartBothStartsFailLeaveTheRoleOpenable(t *testing.T) {
 	assert.Contains(t, strings.Join(f.s.State.Notes, "|"), "starting it on its conversation failed too")
 	assert.Contains(t, strings.Join(f.s.State.Notes, "|"), "up 'designer' --task T-1 --fresh")
 
-	// The ticker opens it again as after a crash, and the packet that waited is its context.
+	// The ticker opens it again as after a crash, and the packet that waited is its context: the fresh start of a role that holds
+	// a task hands it, with the line that says why in front, and the packet that waited is not queued a second time.
 	*f.now = f.now.Add(reopenPause)
 	did := f.s.Tick()
 	assert.Contains(t, did, "started designer")
@@ -1302,10 +1303,11 @@ func TestRestartBothStartsFailLeaveTheRoleOpenable(t *testing.T) {
 	assert.Len(t, sf.asked, 3)
 
 	f.newSession("designer", "sid-new")
-	typed := f.typedAfter("designer", "sid-new", 2)
-	require.Len(t, typed, 2, "%v", typed)
-	assert.True(t, strings.HasPrefix(typed[0], "[zmina T-1] Read handoff packet "), typed[0])
-	assert.Equal(t, "[dev] waited", typed[1])
+	typed := f.typedAfter("designer", "sid-new", 3)
+	require.Len(t, typed, 3, "%v", typed)
+	assert.True(t, strings.HasPrefix(typed[0], restartLineHead+whyCrash), typed[0])
+	assert.True(t, strings.HasPrefix(typed[1], "[zmina T-1] Read handoff packet "), typed[1])
+	assert.Equal(t, "[dev] waited", typed[2])
 }
 
 // A role with no conversation of its own known has nothing to go back to: the one start failed, the role is left down

@@ -150,12 +150,18 @@ func (s *Shift) Tick() []string {
 
 		if !up && !stopped && r.Keep == crew.KeepAlways && !rs.Held && !rs.Broken && s.flushErr == nil &&
 			s.registryFor(name).LiveByName(r.Session) == nil && now.Sub(rs.Started) >= reopenPause {
+			// The conversation it was on, read before the start: the record of the reopen names it, and a fresh start hands the
+			// tasks the role holds.
+			from, tasks := s.rotationFrom(name), s.heldTasks(name)
+
 			if err := s.start(name, UpOptions{}); err != nil {
 				// Wait the usual pause before the next try, so a role that cannot start does not fill the log.
 				rs.Started = now
 				did = append(did, "start "+name+": "+err.Error())
 			} else {
 				up = true
+
+				s.rotationReopened(name, from, tasks)
 
 				did = append(did, "started "+name)
 				if name != s.Crew.Dispatcher {
@@ -322,7 +328,8 @@ func (s *Shift) trim(name string, r *crew.Role, now time.Time, tasks []string) s
 
 		// The size the conversation shows counts only once the trim took: a compaction written after it, or the
 		// conversation a /clear started. Until then the last turn is the one before the trim, over the limit.
-		if (rs.TrimFrom != "" && sess.SessionID != rs.TrimFrom) || (!turn.Compacted.IsZero() && !turn.Compacted.Before(rs.Trimmed)) {
+		compacted := !turn.Compacted.IsZero() && !turn.Compacted.Before(rs.Trimmed)
+		if (rs.TrimFrom != "" && sess.SessionID != rs.TrimFrom) || compacted {
 			rs.TrimTook = true
 		}
 
@@ -330,10 +337,13 @@ func (s *Shift) trim(name string, r *crew.Role, now time.Time, tasks []string) s
 			if now.Sub(rs.Trimmed) >= trimPause {
 				rs.TrimPending = false
 				s.log(name, "trim-unseen", "", "no compaction or new conversation seen "+trimPause.String()+" after the trim")
+				s.rotationTrimUnseen(name)
 			}
 
 			return ""
 		}
+
+		s.rotationTrimTook(name, sess.SessionID, compacted)
 
 		used := turn.Context
 		if used == 0 {
@@ -417,7 +427,18 @@ func (s *Shift) trim(name string, r *crew.Role, now time.Time, tasks []string) s
 	rs.Trimmed, rs.TrimPending, rs.TrimTook, rs.TrimFrom = now, true, false, sess.SessionID
 	detail := fmt.Sprintf("context %s over %s", Tokens(used), Tokens(limit))
 
+	// The record is opened with the conversation the role is on, before the command changes it; it closes where the trim sees
+	// what the command did (TrimTook) or gives up (trim-unseen).
+	kind := KindCompact
+	if do == crew.ContextClear {
+		kind = KindClear
+	}
+
+	rid := s.rotationTrimOpen(name, kind, detail)
+
 	if err := s.Tmux.Type(name, "/"+do); err != nil {
+		s.rotationEnd(name, rid, OutcomeResumed, "not typed: "+err.Error(), nil, false)
+
 		return fmt.Sprintf("%s: /%s (%s): %s", name, do, detail, err)
 	}
 

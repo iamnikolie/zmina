@@ -26,11 +26,24 @@ func (s *Shift) rotationPrepare(name string, tasks []task.Task, why, done string
 		return ""
 	}
 
-	id := newRotationID()
-	from := s.rotationFrom(name)
+	return s.rotationPrepareFrom(name, rotationKind(why, done), why, s.rotationFrom(name), tasks, done, asked)
+}
 
-	if !s.rotationAppend(name, rotationLine{ID: id, At: s.Now().UTC(), Phase: PhasePrepared, Role: name,
-		Kind: rotationKind(why, done), Why: why, From: &from, Artifacts: s.rotationArtifacts(tasks, done), AskedAt: asked.UTC()}) {
+// rotationPrepareFrom opens a record of a kind for a conversation the role was on (from, read before anything changed it).
+func (s *Shift) rotationPrepareFrom(name, kind, why string, from RotationFrom, tasks []task.Task, done string, asked time.Time) string {
+	if !s.rotationsOn(name) {
+		return ""
+	}
+
+	id := newRotationID()
+
+	line := rotationLine{ID: id, At: s.Now().UTC(), Phase: PhasePrepared, Role: name, Kind: kind, Why: why, From: &from,
+		Artifacts: s.rotationArtifacts(tasks, done)}
+	if !asked.IsZero() {
+		line.AskedAt = asked.UTC()
+	}
+
+	if !s.rotationAppend(name, line) {
 		return ""
 	}
 
@@ -121,7 +134,14 @@ func (s *Shift) rotationSwitching(name, id string, claim time.Time) {
 func (s *Shift) rotationSuperseded(name string, r Rotation, by string) {
 	detail := "superseded by rotation " + by
 
-	if r.has(EvidenceBoot, "") && r.has(EvidenceShown, "") {
+	// A compact or a clear has no fresh conversation to lose: what it did is over, what it was not seen to do did not happen.
+	if r.Trim() {
+		s.rotationClose(name, r, OutcomeResumed, detail, nil, false, false)
+
+		return
+	}
+
+	if r.has(EvidenceBoot, "") && (r.has(EvidenceShown, "") || !r.hasLine()) {
 		s.rotationClose(name, r, OutcomeRebuilt, detail+", before it accepted its tasks", s.rotationConfirms(r, nil), false, false)
 
 		return
@@ -163,6 +183,15 @@ func (s *Shift) rotationOf(name string, claim time.Time) string {
 func (s *Shift) rotationStarted(name, id string, lines []string) {
 	if id != "" {
 		s.rotationAppend(name, rotationLine{ID: id, At: s.Now().UTC(), Phase: PhaseStarted, Lines: clipLines(lines)})
+	}
+}
+
+// rotationStartedWith is rotationStarted for a start that handed tasks over: the tasks it handed are the rotation's artifacts
+// when its prepared line planned none (a resume that fell back to a fresh start).
+func (s *Shift) rotationStartedWith(name, id string, lines []string, tasks []task.Task) {
+	if id != "" {
+		s.rotationAppend(name, rotationLine{ID: id, At: s.Now().UTC(), Phase: PhaseStarted, Lines: clipLines(lines),
+			Artifacts: s.rotationArtifacts(tasks, "")})
 	}
 }
 
@@ -289,6 +318,9 @@ func (s *Shift) reconcileRotations(now time.Time) []string {
 				}
 			case next >= 0:
 				s.rotationSuperseded(name, r, rots[i+1+next].ID)
+			case r.Trim():
+				// The ticker's trim settles a compact or a clear from what it sees of the conversation.
+				line = s.reconcileTrim(name, r, now)
 			case r.Phase == PhaseStarted:
 				line = s.reconcileStarted(name, r, now)
 			default:
@@ -550,7 +582,7 @@ func (s *Shift) rotationConfirmed(r Rotation, held []string) bool {
 	}
 
 	if len(held) == 0 {
-		return r.has(EvidenceShown, "")
+		return r.has(EvidenceShown, "") || !r.hasLine()
 	}
 
 	for _, id := range held {
@@ -599,7 +631,7 @@ func (s *Shift) rotationMissing(r Rotation, held []string) string {
 		}
 	}
 
-	if len(held) == 0 && !r.has(EvidenceShown, "") {
+	if len(held) == 0 && r.hasLine() && !r.has(EvidenceShown, "") {
 		missing = append(missing, "its restart line was not shown")
 	}
 
@@ -703,7 +735,7 @@ func (s *Shift) rotationTimedOut(name string, r Rotation, held []string, sess *r
 		return ""
 	}
 
-	if shown == nil {
+	if shown == nil && r.hasLine() {
 		// Not known when the cards cannot be read: the line may have been shown, and nothing says.
 		card, ok := s.restartLineCard(name, r)
 		switch {

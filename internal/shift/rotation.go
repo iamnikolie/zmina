@@ -59,10 +59,18 @@ const (
 	OutcomeRebuilt = "rebuilt"
 	OutcomeLost    = "lost"
 
-	// Kinds of a rotation: the key of the restart that began it.
+	// Kinds of a rotation: the key of the restart that began it, or the way a conversation was changed under zmina's hand:
+	// zmina restart (manual), a role's restart of itself (own_restart), the ticker's reopen of a keep: always role whose session
+	// ended (crash), zmina up of a role that holds tasks (up), and the /compact or /clear context_max types into a role.
 	KindRestartAt   = "restart_at"
 	KindRestartIdle = "restart_idle"
 	KindRestartDone = "restart_done"
+	KindManual      = "manual"
+	KindOwn         = "own_restart"
+	KindCrash       = "crash"
+	KindUp          = "up"
+	KindCompact     = "compact"
+	KindClear       = "clear"
 
 	// What the new conversation did, as evidence names it.
 	EvidenceHookStart   = "hook-start"
@@ -75,6 +83,11 @@ const (
 	// open too long makes.
 	evidenceSession = "session"
 	evidenceSlow    = "slow"
+
+	// What a command did to a rotation, kept as evidence lines of their own: a retry handed its lines again, an abort put the
+	// role back on its old conversation (the closing line of a rotation that was open; for one lost, which closed already, this).
+	EvidenceRetried = "retried"
+	EvidenceAborted = "aborted"
 
 	// rotationReadMax is how much of a role's record a look reads (the newest lines); rotationBeatRead how much the beat
 	// reads to follow an open rotation, which is a few lines at its end.
@@ -251,6 +264,27 @@ func (r Rotation) LateRebuilt() bool {
 	}
 
 	return true
+}
+
+// Trim reports a rotation of context_max's /compact or /clear: it has no down and no hand-out, and the ticker's trim closes it
+// (not the beat's reconcile) from what it sees of the conversation.
+func (r Rotation) Trim() bool { return r.Kind == KindCompact || r.Kind == KindClear }
+
+// hasLine reports whether the rotation queued the restart line for its fresh session: every restart of the ticker does, and a
+// start by a command or the reopen after a crash does when it hands tasks over. Without one nothing is shown to wait for.
+func (r Rotation) hasLine() bool {
+	return r.Kind == KindRestartAt || r.Kind == KindRestartIdle || r.Kind == KindRestartDone || len(r.Artifacts) > 0
+}
+
+// Aborted is the evidence that a command put the role back on its old conversation, nil when none did.
+func (r Rotation) Aborted() *RotationEvidence {
+	for _, list := range [][]RotationEvidence{r.Evidence, r.Late} {
+		if i := slices.IndexFunc(list, func(e RotationEvidence) bool { return e.What == EvidenceAborted }); i >= 0 {
+			return &list[i]
+		}
+	}
+
+	return nil
 }
 
 // newRotationID is the eight random characters that name a rotation.
@@ -645,7 +679,8 @@ func RecordRotationEvidence(l crew.Layout, role, what, task, by, session string,
 
 	path := l.Rotations(role)
 
-	rots := foldRotationsOf(role, readRotationTail(path))
+	// A compact or clear typed since is another conversation's business: the evidence is for the rotation that put the role down.
+	rots := slices.DeleteFunc(foldRotationsOf(role, readRotationTail(path)), Rotation.Trim)
 	if len(rots) == 0 {
 		return nil
 	}

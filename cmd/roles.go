@@ -434,10 +434,22 @@ func (a *app) upCommand() *cobra.Command {
 							continue
 						}
 					}
-					if err := s.UpWith(n, opts); err != nil {
-						errs = append(errs, upAgainHint(s, n, fresh, resume, err))
+					// A fresh start of a role that holds tasks hands them, as the one that names a task does: the packet and the
+					// line that says why, with a record of the start; a start that resumes, or of a role that holds none, is a plain up.
+					up := s.UpWith
+					if t.ID == "" {
+						up = s.UpHanding
+					}
 
-						continue
+					if err := up(n, opts); err != nil {
+						if !errors.Is(err, shift.ErrPartial) {
+							errs = append(errs, upAgainHint(s, n, fresh, resume, err))
+
+							continue
+						}
+
+						// Up, but its tasks were not handed: said, and the role is reported as started.
+						errs = append(errs, err)
 					}
 
 					r, _ := s.Role(n)
@@ -690,27 +702,68 @@ func callerSession() string {
 	return os.Getenv("CODEX_THREAD_ID")
 }
 
-// restart ends a role and starts it again with opts.
+// restart ends a role and starts it again with opts, in three steps like downRoles so that the wait for /exit happens
+// outside the lock: begin the down (with the record of the rotation it is), wait, then finish it and start the role in one hold
+// of the lock. A role that is not up is only started. A fresh start of a role that holds tasks hands them to it.
 func (a *app) restart(name string, opts shift.UpOptions, clear bool) error {
-	err := a.downRoles(func(s *shift.Shift) ([]string, error) {
+	var (
+		begun, wait bool
+		claim       time.Time
+	)
+
+	err := a.withState(func(s *shift.Shift) error {
 		if _, err := s.Role(name); err != nil {
-			return nil, err
+			return err
 		}
 
-		return []string{name}, nil
-	}, shift.DownOptions{Force: true, Clear: clear}, true)
+		var err error
+
+		wait, claim, err = s.BeginRotationDown(name, shift.KindManual, shift.DownOptions{Force: true, Clear: clear})
+
+		switch {
+		case errors.Is(err, shift.ErrNotUp):
+			return nil
+		case err != nil:
+			return err
+		}
+
+		begun = true
+
+		return nil
+	})
 	if err != nil {
 		return err
 	}
 
-	return a.withState(func(s *shift.Shift) error {
-		if err := s.UpWith(name, opts); err != nil {
+	if wait {
+		s, err := a.newShift()
+		if err != nil {
 			return err
 		}
 
-		fmt.Fprintln(a.out, name, "restarted")
+		shift.WaitGone(s.Tmux, []string{name}, shift.ExitWait)
+	}
 
-		return nil
+	return a.withState(func(s *shift.Shift) error {
+		id := ""
+
+		if begun {
+			var err error
+
+			if id, err = s.FinishRotationDown(name, claim); err != nil {
+				return err
+			}
+
+			fmt.Fprintln(a.out, name, "down")
+		}
+
+		err := s.StartRotation(name, id, opts, shift.KindManual)
+		if err == nil || errors.Is(err, shift.ErrPartial) {
+			// Up: a hand-out that failed is the error, and what was done is kept.
+			fmt.Fprintln(a.out, name, "restarted")
+		}
+
+		return err
 	})
 }
 

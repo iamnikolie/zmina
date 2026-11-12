@@ -61,6 +61,25 @@ func (s *Shift) HandTask(name string, t task.Task) (string, error) {
 	return h.path, nil
 }
 
+// packetFile writes a task's packet (a file named by its content: the same task state is the same file) and returns its path,
+// its id and the line that locates it, which is what the role is handed.
+func (s *Shift) packetFile(name string, t task.Task) (path, id, line string, err error) {
+	p, err := s.TaskPacket(name, t)
+	if err != nil {
+		return "", "", "", err
+	}
+
+	path, err = handoff.Write(s.Crew.StateDir(), p)
+	if err != nil {
+		return "", "", "", err
+	}
+
+	id = strings.TrimSuffix(filepath.Base(path), ".json")
+	line = fmt.Sprintf("[zmina %s] Read handoff packet %q; before work run: zmina --crew %s task accept %s --handoff %s --role %s", t.ID, path, shellWord(s.Crew.Path), t.ID, id, shellWord(name))
+
+	return path, id, line, nil
+}
+
 // packetHand is a task's hand-out as far as it can be made before its line is queued: the packet's file, the line that
 // locates it, whether that line is yet to be queued (not when it waits already, or the role has it), and the task's
 // delivery as it was before.
@@ -76,16 +95,10 @@ type packetHand struct {
 // of the session that is going, says. The line is the caller's to queue; HandTask puts it at the end of the queue, a
 // restart at the head.
 func (s *Shift) prepareHand(name string, t task.Task, fresh bool) (packetHand, error) {
-	p, err := s.TaskPacket(name, t)
+	path, id, line, err := s.packetFile(name, t)
 	if err != nil {
 		return packetHand{}, err
 	}
-	path, err := handoff.Write(s.Crew.StateDir(), p)
-	if err != nil {
-		return packetHand{}, err
-	}
-	id := strings.TrimSuffix(filepath.Base(path), ".json")
-	line := fmt.Sprintf("[zmina %s] Read handoff packet %q; before work run: zmina --crew %s task accept %s --handoff %s --role %s", t.ID, path, shellWord(s.Crew.Path), t.ID, id, shellWord(name))
 	current, err := s.Tasks.Get(t.ID)
 	if err != nil {
 		return packetHand{}, err
