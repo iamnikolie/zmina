@@ -833,3 +833,24 @@ func TestDoorbellSwitch(t *testing.T) {
 	_, err := Load(write(t, "doorbell: sometimes\n"+roles))
 	assert.Error(t, err)
 }
+
+// crossing is on unless the crew file turns it off, and is no unknown key.
+func TestCrossingSwitch(t *testing.T) {
+	const roles = "namespace: /ns\nroles:\n  dispatcher:\n"
+
+	for body, want := range map[string]bool{
+		"":                  true,
+		"crossing: true\n":  true,
+		"crossing: on\n":    true,
+		"crossing: false\n": false,
+		"crossing: off\n":   false,
+	} {
+		c, err := Load(write(t, body+roles))
+		require.NoError(t, err, body)
+		assert.Equal(t, want, c.CrossingOn(), body)
+		assert.Empty(t, c.Warnings, body)
+	}
+
+	_, err := Load(write(t, "crossing: sometimes\n"+roles))
+	assert.Error(t, err)
+}
