@@ -38,6 +38,9 @@ const (
 	Rang State = "rang"
 	// Off alarms were taken off before their time, or found nothing left to ring for.
 	Off State = "off"
+	// Failed alarms went off, but their part outside the lock (the notify command, the tell) did not go out in the
+	// tries it was given: Tries and TryErr say how often and why. They stay until taken off.
+	Failed State = "failed"
 )
 
 // Alarm is one thing to ring at a time.
@@ -58,18 +61,28 @@ type Alarm struct {
 	Later string `json:"later,omitempty"`
 	// State is set until it rings or is taken off; an unknown state is taken as set, so nothing is lost.
 	State State `json:"state"`
-	// Rang is when it went off; Ask the todo item it became; Err why it could not do its part.
+	// Rang is when it went off — when its part outside the lock went out, for an alarm that has one; Ask the todo
+	// item it became; Err why it could not do its part.
 	Rang time.Time `json:"rang,omitzero"`
 	Ask  string    `json:"ask,omitempty"`
 	Err  string    `json:"err,omitempty"`
 	By   string    `json:"by,omitempty"`
+	// Owed is what the part outside the lock still has to carry: the line for the crew's notify command, or for a tell
+	// (To) the line told. An alarm that owes it is not rung: its state stays set and a later beat tries again.
+	// Tries counts the tries, written before each one starts so that a beat that dies during one still counts it;
+	// Tried is when the last began, TryErr why the last one failed. Files from before these existed have none of
+	// them, and one that says rang stays rung.
+	Owed   string    `json:"owed,omitempty"`
+	Tries  int       `json:"tries,omitempty"`
+	Tried  time.Time `json:"tried,omitzero"`
+	TryErr string    `json:"try_err,omitempty"`
 
 	Created time.Time `json:"created"`
 	Updated time.Time `json:"updated"`
 }
 
-// Pending reports whether the alarm still waits to ring.
-func (a Alarm) Pending() bool { return a.State != Rang && a.State != Off }
+// Pending reports whether the alarm still waits to ring, an alarm that owes its part outside the lock included.
+func (a Alarm) Pending() bool { return a.State != Rang && a.State != Off && a.State != Failed }
 
 // For is whom the alarm is for, in words: the owner, a role, or another crew.
 func (a Alarm) For() string {
@@ -234,6 +247,21 @@ func (s *Store) Pending() []Alarm {
 	return out
 }
 
+// Failed is every alarm that went off and could not be delivered, in id order.
+func (s *Store) Failed() []Alarm {
+	all, _, _ := s.Scan()
+
+	var out []Alarm
+
+	for _, a := range all {
+		if a.State == Failed {
+			out = append(out, a)
+		}
+	}
+
+	return out
+}
+
 // Due is every pending alarm whose time has come, soonest first.
 func (s *Store) Due(now time.Time) []Alarm {
 	var out []Alarm
@@ -263,14 +291,14 @@ func (s *Store) Move(id string, at time.Time, when string, now time.Time) (Alarm
 	return a, s.Put(a)
 }
 
-// TakeOff takes a pending alarm off.
+// TakeOff takes a pending alarm off, or clears one that failed.
 func (s *Store) TakeOff(id string, now time.Time) (Alarm, error) {
 	a, err := s.Get(id)
 	if err != nil {
 		return a, err
 	}
 
-	if !a.Pending() {
+	if !a.Pending() && a.State != Failed {
 		return a, fmt.Errorf("%s already %s", a.ID, a.State)
 	}
 
