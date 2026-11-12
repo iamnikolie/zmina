@@ -98,7 +98,10 @@ type Task struct {
 	Worktree string `json:"worktree,omitempty"`
 	Branch   string `json:"branch,omitempty"`
 	Base     string `json:"base,omitempty"`
-	Note     string `json:"note,omitempty"`
+	// Fork is the commit the worktree was made at, kept so that a branch merged into its base can be told from one
+	// nothing was committed on; empty for a task made before it was kept.
+	Fork string `json:"fork,omitempty"`
+	Note string `json:"note,omitempty"`
 	// On is who a waiting task waits on when it is not the owner: a role of the crew or a person; it is off the
 	// owner's todo then.
 	On string `json:"on,omitempty"`

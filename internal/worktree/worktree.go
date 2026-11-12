@@ -161,6 +161,39 @@ func (t *Tree) Ahead() (int, error) {
 	return n, nil
 }
 
+// Since is how many commits the worktree has since the commit from (git rev-list --count <from>..HEAD).
+func (t *Tree) Since(from string) (int, error) {
+	out, err := gitCtx(t.ctx(), t.Path, "rev-list", "--count", from+"..HEAD")
+	if err != nil {
+		return 0, err
+	}
+
+	n, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil {
+		return 0, fmt.Errorf("git rev-list: %q is not a count", strings.TrimSpace(out))
+	}
+
+	return n, nil
+}
+
+// Created is the commit the branch was made at: the first entry of its reflog, when that is the entry that made it.
+// It is empty when git kept no such entry (the reflog is off or has expired), and the caller then does not know.
+func (t *Tree) Created() (string, error) {
+	out, err := gitCtx(t.ctx(), t.Path, "reflog", "show", "--format=%H %gs", "refs/heads/"+t.Branch)
+	if err != nil {
+		return "", err
+	}
+
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+
+	hash, subject, _ := strings.Cut(strings.TrimSpace(lines[len(lines)-1]), " ")
+	if !strings.HasPrefix(subject, "branch: Created") || hash == "" {
+		return "", nil
+	}
+
+	return hash, nil
+}
+
 // Merged reports whether every commit of the branch is in its base. A branch that no longer exists has nothing to
 // lose and counts as merged.
 func (t *Tree) Merged() (bool, error) {

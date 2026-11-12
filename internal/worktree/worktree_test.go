@@ -149,3 +149,53 @@ func TestHeadAndAhead(t *testing.T) {
 	_, err = tree.Head()
 	assert.Error(t, err)
 }
+
+// A branch that was merged into its base is told from one nothing was committed on by the commit it was made at.
+func TestCreatedAndSince(t *testing.T) {
+	repo := t.TempDir()
+	run(t, repo, "init", "-q", "-b", "main")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "a.txt"), []byte("a"), 0o600))
+	run(t, repo, "add", ".")
+	run(t, repo, "commit", "-q", "-m", "a")
+
+	tree, err := Add(repo, filepath.Join(t.TempDir(), "wt", "repo-T-1"), "zmina/t-1", "")
+	require.NoError(t, err)
+
+	made, err := tree.Head()
+	require.NoError(t, err)
+
+	created, err := tree.Created()
+	require.NoError(t, err)
+	assert.Equal(t, made, created, "the commit the worktree was made at")
+
+	n, err := tree.Since(created)
+	require.NoError(t, err)
+	assert.Zero(t, n)
+
+	require.NoError(t, os.WriteFile(filepath.Join(tree.Path, "b.txt"), []byte("b"), 0o600))
+	run(t, tree.Path, "add", ".")
+	run(t, tree.Path, "commit", "-q", "-m", "b")
+	run(t, repo, "merge", "-q", "--ff-only", "zmina/t-1")
+
+	ahead, err := tree.Ahead()
+	require.NoError(t, err)
+	assert.Zero(t, ahead, "its base has the work")
+
+	created, err = tree.Created()
+	require.NoError(t, err)
+	assert.Equal(t, made, created, "later commits do not move where it was made")
+
+	n, err = tree.Since(created)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n, "but the branch has a commit of its own since")
+
+	_, err = tree.Since("0123456789012345678901234567890123456789")
+	assert.Error(t, err, "a commit the repository does not have")
+
+	// A branch with no reflog entry that made it says it does not know.
+	run(t, repo, "reflog", "expire", "--expire=now", "--all")
+
+	created, err = tree.Created()
+	require.NoError(t, err)
+	assert.Empty(t, created)
+}

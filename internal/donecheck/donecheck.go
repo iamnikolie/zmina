@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
@@ -33,6 +34,16 @@ type Spec struct {
 	Timeout string `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 	// Commit asks for a commit beyond the task's base as well: a branch nothing was committed on does not pass.
 	Commit bool `yaml:"commit,omitempty" json:"commit,omitempty"`
+}
+
+// Off reports a spec that says there is no check: the crew file's done_check given as off or none, or as nothing.
+func (s Spec) Off() bool {
+	switch strings.ToLower(strings.TrimSpace(s.Run)) {
+	case "", "off", "none":
+		return s.Timeout == "" && !s.Commit
+	}
+
+	return false
 }
 
 // UnmarshalYAML reads a string (the command) or a mapping of the three keys. A key it does not know is an error, not
@@ -62,15 +73,19 @@ func (s *Spec) UnmarshalYAML(n *yaml.Node) error {
 	return nil
 }
 
-// Validate says what is wrong with the spec, nil when it can be run.
+// Validate says what is wrong with the spec, nil when it can be run. A command is one line of plain text: a control
+// character in it (a line break, an escape sequence, a bidirectional override) could not be told from what it shows.
 func (s Spec) Validate() error {
+	run := strings.TrimSpace(s.Run)
+
 	switch {
-	case strings.TrimSpace(s.Run) == "":
+	case run == "":
 		return errors.New("a check needs a command to run")
 	case len(s.Run) > runMax:
 		return fmt.Errorf("a check's command is at most %d bytes", runMax)
-	case !utf8.ValidString(s.Run) || strings.ContainsRune(s.Run, 0):
-		return errors.New("a check's command is text")
+	case !utf8.ValidString(run) || strings.IndexFunc(run, unprintable) >= 0:
+		return errors.New("a check's command is one line of plain text, with no control characters (a script goes in a " +
+			"file the command runs)")
 	}
 
 	if s.Timeout == "" {
@@ -83,10 +98,16 @@ func (s Spec) Validate() error {
 	case err != nil || d <= 0:
 		return fmt.Errorf("check timeout %q: a span such as 90s or 10m", s.Timeout)
 	case d > MaxTimeout:
-		return fmt.Errorf("check timeout %s: at most %s", s.Timeout, MaxTimeout)
+		return fmt.Errorf("check timeout %s: at most %s", s.Timeout, Span(MaxTimeout))
 	}
 
 	return nil
+}
+
+// unprintable is a rune that is no part of plain text: a control character (C0, DEL, C1), a format character (zero
+// width, bidirectional marks and overrides, the byte order mark) or a line or paragraph separator.
+func unprintable(r rune) bool {
+	return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == '\u2028' || r == '\u2029'
 }
 
 // Limit is how long the check may run.
@@ -100,7 +121,7 @@ func (s Spec) Limit() time.Duration {
 
 // String is the spec in one line: the command, its limit, and the commit it asks for.
 func (s Spec) String() string {
-	out := s.Run + " (" + Span(s.Limit())
+	out := Line(s.Run) + " (" + Span(s.Limit())
 
 	if s.Commit {
 		out += ", a commit beyond the base"
@@ -145,17 +166,18 @@ type Result struct {
 	DurationMS int64     `json:"duration_ms"`
 	// Exit is the command's exit status: 0 passes. -1 when it did not exit by itself (timed out, killed, did not start).
 	Exit int `json:"exit"`
-	// TimedOut says the timeout ended it; Err says why else it has no status of its own (could not start, a signal,
-	// stopped by the caller).
-	TimedOut bool   `json:"timed_out,omitempty"`
-	Err      string `json:"error,omitempty"`
+	// TimedOut says the timeout ended it, Interrupted that the caller stopped it (a signal to zmina); Err says why else it
+	// has no status of its own (could not start, killed by a signal).
+	TimedOut    bool   `json:"timed_out,omitempty"`
+	Interrupted bool   `json:"interrupted,omitempty"`
+	Err         string `json:"error,omitempty"`
 	// Output is the tail of what it printed, bounded (see Tail); Truncated says there was more before it.
 	Output    string `json:"output,omitempty"`
 	Truncated bool   `json:"truncated,omitempty"`
 }
 
 // Passed reports whether the command ran and exited 0.
-func (r Result) Passed() bool { return r.Exit == 0 && !r.TimedOut && r.Err == "" }
+func (r Result) Passed() bool { return r.Exit == 0 && !r.TimedOut && !r.Interrupted && r.Err == "" }
 
 // Duration is how long the command ran.
 func (r Result) Duration() time.Duration { return time.Duration(r.DurationMS) * time.Millisecond }
@@ -167,6 +189,8 @@ func (r Result) Failure(limit time.Duration) string {
 		return ""
 	case r.TimedOut:
 		return "timed out after " + Span(limit)
+	case r.Interrupted:
+		return "interrupted"
 	case r.Err != "":
 		return r.Err
 	default:

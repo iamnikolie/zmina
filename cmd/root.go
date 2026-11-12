@@ -18,6 +18,7 @@ import (
 
 	"github.com/iamnikolie/zmina/internal/codex"
 	"github.com/iamnikolie/zmina/internal/crew"
+	"github.com/iamnikolie/zmina/internal/donecheck"
 	"github.com/iamnikolie/zmina/internal/events"
 	"github.com/iamnikolie/zmina/internal/inbox"
 	"github.com/iamnikolie/zmina/internal/ledger"
@@ -348,10 +349,11 @@ func (a *app) ledger(s *shift.Shift) *ledger.Ledger {
 		Crew:      s.Crew.Name,
 		Now:       s.Now,
 		Log:       s.Log,
-		// A check runs as a role's tools would: not as a child of the session or terminal this runs in.
+		// A check does not run as a child of the session or terminal this runs in, and a zmina it starts acts for no one.
 		DoneCheck:  s.Crew.DoneCheck,
 		Dispatcher: s.Crew.Dispatcher,
 		Env:        tmux.CleanEnv(os.Environ(), s.Crew.DropEnv),
+		InCheck:    os.Getenv(donecheck.InCheckEnv) != "",
 	}
 }
 

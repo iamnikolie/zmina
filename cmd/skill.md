@@ -83,7 +83,7 @@ notify_again: 24h                        # an item that still blocks is pushed a
 timezone: Europe/Warsaw                  # the clock reminder times, role schedules and the budget's day are read on (default: this machine's)
 lessons: on                              # daily triage of the roles' lessons into one draft MR on the crew's agentic-os (default off; see Lessons)
 worktree_gc: daily                       # the ticker runs `task gc` once a day: closed tasks' merged, clean worktrees go (default off)
-done_check: make test                    # closing a task with a worktree as done runs this there and needs exit 0 (or {run, timeout: 10m, commit: true}; default none; see What checked means)
+done_check: make test                    # closing a task with a worktree as done runs this there and needs exit 0 (or {run, timeout: 10m, commit: true}; off or none: no check, the default; see What checked means)
 courier: off                             # no courier service beside the ticker: a line for a role waits for the beat, up to a minute (on or off; default on; see The ticker)
 retention: 45d                           # how long finished work stays where it is before the ticker's daily pass moves it to archive/ (30d at least, or off; default 30d; see Retention)
 limits:                                  # how the crew spends its plans, in % of the 7-day (Claude) and weekly (Codex) window; see Limits
@@ -1287,28 +1287,50 @@ current one.
 
 **What checked means.** A task with a worktree can have a check: a shell line zmina runs itself when the task is
 closed as done, in the task's worktree. It is the crew file's `done_check` (a command line, or `{run, timeout,
-commit}`), or the task's own, which replaces it: `task new … --worktree --check "make test"` or `task set <id> --check
-"make test"` with `--check-timeout` (10m by default, 30m at most) and `--check-commit` (the branch also has a commit
-beyond its base); `--check -` on `set` clears the task's, `--check true` is a task with nothing to check. A task with
-no worktree has no check, and a crew's `done_check` does not reach it. Only the owner and the dispatcher set a task's
-check or close a task past one: a role cannot make its own `task done` run a command it chose (the role is
-`$ZMINA_ROLE`, as everywhere in zmina: a process that does not say who it is passes as the owner, and anyone who can
-write the task's file can write a check into it, so this keeps a worker from doing it by mistake, it is not a wall).
+commit}`; `off`, `none` or nothing is no check; a key it does not know is an error), or the task's own, which replaces
+it: `task new … --worktree --check "make test"` or `task set <id> --check "make test"` with `--check-timeout` (10m by
+default, 30m at most) and `--check-commit` (the branch also has a commit of the task's own); `--check -` on `set` clears
+the task's, `--check true` is a task with nothing to check. A command is one line of plain text: a line break, tab,
+escape sequence or other control character (a bidirectional override, a zero-width character) in it is refused, and a
+stored command is shown as plain text everywhere. A task with no worktree has no check, and a crew's `done_check` does
+not reach it. Only the owner and the dispatcher set a task's check or close a task past one: a role cannot make its own
+`task done` run a command it chose, and so a worker cannot `--force` a task that has a worktree once the crew has a
+`done_check` (it asks the dispatcher). The role is `$ZMINA_ROLE`, as everywhere in zmina: a process that does not say
+who it is passes as the owner, and anyone who can write the task's file can write a check into it, so this keeps a
+worker from doing it by mistake, it is not a wall. A zmina that a check itself starts has no owner's hand at all: the
+check's environment has `ZMINA_IN_CHECK=1`, and a zmina that finds it set sets no check and forces past none, whatever
+role it says it is.
 
-`task done <id>` (and `task set <id> done`) does it in three steps: read the task and its worktree (a worktree with
-uncommitted changes is refused first, and so is `--check-commit` with no commit, so a check is of a commit and is not run
-for nothing); run `/bin/sh -c <command>` in the worktree with no lock held (the state lock is taken only for the read and
-for the close; stdin is closed, and the command runs in a process group that is killed when it ends or the timeout
-passes); then close, but only if the task and its commit are still the ones it ran on: if either moved meanwhile the close
-is refused and the command is to be run again. The command gets the
-environment a role's tools do, less the variables whose names look like secrets (`TOKEN`, `SECRET`, `PASSWORD`,
-`CREDENTIAL`, `COOKIE`, `PRIVATE`, `API_KEY`, `ACCESS_KEY`, `…_KEY`, `…DSN`), and the values of those are blanked from
-its output. The command line itself is stored and shown as given: put no secret in it. A check that exits 0 closes the
-task and is kept in `closed.check` (`run`, its `source`, `commit`, `at`, `exit`, `duration_ms`, and `output`: the last 40
-lines at most 300 characters each, 8 KiB in all, plain text); a failing or timed-out one closes nothing, exits 4, prints
-the same tail, and tells the dispatcher nothing: the worker sees it in its own turn. `--force`, for the owner and the
-dispatcher only, closes anyway without running it and records `closed.unchecked` (`by`, `run`); `task ls --all` and
-`task show` mark such a task. A task with no check closes as it always did.
+`task done <id>` (and `task set <id> done`) does it in three steps. First it reads the task and its worktree and refuses
+what the close would refuse anyway, before anything runs: an argument that is no good (a `--check` with the close, a bad
+`--budget`), a worktree with uncommitted changes, a task with criteria and no result, and `--check-commit` for a branch
+with no commit of its own; a task that is done already is closed again with nothing run. A check wants a commit of the
+task's own when the branch has one beyond its base, or, for a branch its base already has (merged), one since the commit
+the worktree was made at, which the task keeps as `fork` (a task made before that is read from the branch's reflog; where
+neither says, a merged branch is taken to have had commits, so there the rule asks for nothing). Second it runs
+`/bin/sh -c <command>` in the worktree with no lock held (the state lock is taken only to read and to close): stdin is
+closed, the command is the leader of a session and process group of its own, with no controlling terminal, which is killed
+when it ends or the timeout passes, and also when zmina gets an interrupt, terminate, hangup or quit signal (the task then
+stays open and the check is reported as interrupted, not as failed: nothing is known of it). Third it closes, but only if
+the task, its worktree's commit and the check in force (the task's, or the crew's) are still the ones it ran with: if any
+moved meanwhile the close is refused and the command is to be run again. A check that exits 0 and leaves files behind in
+the clean worktree has failed: it names up to five of them (remove them, or have git ignore them), as the task could not
+close over them.
+
+The command gets the environment of the zmina that runs it, less what zmina keeps from roles' sessions (`$ZMINA_ROLE`,
+`CLAUDE_CONFIG_DIR`, tmux's and the terminal's variables) and less the variables whose names look like secrets: a name
+with one of these as a part (between underscores) or ending in `TOKEN` or `_KEY` — `TOKEN`, `SECRET`, `PASSWORD`,
+`PASSWD`, `PASSPHRASE`, `PASS`, `PWD` (not `PWD` alone), `PAT`, `AUTH`, `AUTHORIZATION`, `CREDENTIAL`, `COOKIE`,
+`API_KEY`, `ACCESS_KEY`, `PRIVATE_KEY`, `DSN` — except a few that are not secrets (`SSH_AUTH_SOCK`, `PASSWORD_STORE_DIR`,
+`GOPRIVATE`, `GONOSUMDB`, `GONOPROXY`, `PWD`). The values of the variables taken out are blanked from the output, longest
+first, and so is the password of any `scheme://user:password@host` address wherever it is written: a `DATABASE_URL`
+stays in the environment, only its password is not recorded. The command line itself is stored and shown as given: put
+no secret in it. A check that exits 0 closes the task and is kept in `closed.check` (`run`, its `source`, `commit`, `at`,
+`exit`, `duration_ms`, and `output`: the last 40 lines at most 300 characters each, 8 KiB in all, plain text without
+control or format characters); a failing or timed-out one closes nothing, exits 4, prints the same tail, and tells the
+dispatcher nothing: the worker sees it in its own turn. `--force`, for the owner and the dispatcher only, closes anyway
+without running it and records `closed.unchecked` (`by`, `run`); `task ls --all` and `task show` mark such a task. A task
+with no check closes as it always did.
 
 What it says is this and no more: zmina ran that command at that commit in that worktree and it exited 0. It does not
 say the work is right or complete: the command and the files it runs are the worker's own repository's (a worker can

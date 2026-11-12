@@ -34,6 +34,13 @@ type fakeTrees struct {
 	// with no entry stands at fakeHead.
 	heads map[string]string
 	ahead map[string]int
+	// since is the commits each branch has since the commit it was made at (by branch), created what the reflog says it
+	// was made at; sinceErr, when set, is what Since answers.
+	since    map[string]int
+	created  map[string]string
+	sinceErr error
+	// dirtyFn, when set, answers Dirty from the worktree's directory (a check that leaves files there is seen).
+	dirtyFn func(path string) string
 }
 
 // fakeHead is the commit a fake worktree stands at until a test moves it.
@@ -48,6 +55,12 @@ func (f *fakeTrees) Head(t worktree.Tree) (string, error) {
 }
 
 func (f *fakeTrees) Ahead(t worktree.Tree) (int, error) { return f.ahead[t.Branch], nil }
+
+func (f *fakeTrees) Since(t worktree.Tree, _ string) (int, error) {
+	return f.since[t.Branch], f.sinceErr
+}
+
+func (f *fakeTrees) Created(t worktree.Tree) (string, error) { return f.created[t.Branch], nil }
 
 func (f *fakeTrees) TopLevel(dir string) (string, error) {
 	if f.topErr != nil {
@@ -81,7 +94,13 @@ func (f *fakeTrees) Add(_, path, branch, _ string) error {
 	return os.MkdirAll(path, 0o700)
 }
 
-func (f *fakeTrees) Dirty(t worktree.Tree) (string, error) { return f.dirty[t.Path], nil }
+func (f *fakeTrees) Dirty(t worktree.Tree) (string, error) {
+	if f.dirtyFn != nil {
+		return f.dirtyFn(t.Path), nil
+	}
+
+	return f.dirty[t.Path], nil
+}
 func (f *fakeTrees) Merged(t worktree.Tree) (bool, error) {
 	if f.mergedErr != nil {
 		return false, f.mergedErr
@@ -108,7 +127,7 @@ func fixture(t *testing.T, crew string) (*Ledger, *fakeTrees) {
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "api"), 0o700))
 
 	trees := &fakeTrees{dirty: map[string]string{}, merged: map[string]bool{}, branches: map[string]bool{},
-		heads: map[string]string{}, ahead: map[string]int{}}
+		heads: map[string]string{}, ahead: map[string]int{}, since: map[string]int{}, created: map[string]string{}}
 	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
 
 	return &Ledger{Store: &task.Store{Dir: filepath.Join(dir, "tasks")}, Trees: trees, Dir: dir,

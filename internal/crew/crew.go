@@ -350,7 +350,7 @@ type Crew struct {
 	// day, so the worktrees of closed tasks whose branch is merged do not pile up.
 	WorktreeGC string `yaml:"worktree_gc"`
 	// DoneCheck is the command closing a task as done runs in the task's worktree, unless the task sets its own: a
-	// command line, or run, timeout and commit (see donecheck.Spec). Empty: no check, as before.
+	// command line, or run, timeout and commit (see donecheck.Spec). Empty, off or none: no check, as before.
 	DoneCheck *donecheck.Spec `yaml:"done_check"`
 	// Courier is on (the default) or off: with the ticker installed, on also installs a resident service that runs
 	// `zmina _courier` for this crew, so a line waits for a role at most a moment instead of up to a beat; off keeps
@@ -674,6 +674,11 @@ func (c *Crew) Names() []string {
 
 func (c *Crew) complete() {
 	home := filepath.Dir(c.Path)
+
+	// done_check: off, none or nothing is no check, as the other keys that take off.
+	if c.DoneCheck != nil && c.DoneCheck.Off() {
+		c.DoneCheck = nil
+	}
 
 	// The namespace has one default for every caller — a terminal, the ticker, a session — so one crew file never
 	// resolves to two namespaces. 'zmina init' writes the caller's own explicitly.

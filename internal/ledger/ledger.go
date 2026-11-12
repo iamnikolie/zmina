@@ -29,6 +29,10 @@ type Trees interface {
 	// Head is the commit the worktree stands at; Ahead how many commits it has beyond its base.
 	Head(t worktree.Tree) (string, error)
 	Ahead(t worktree.Tree) (int, error)
+	// Since is how many commits the worktree has since the commit from; Created the commit its branch was made at, ""
+	// when git does not say.
+	Since(t worktree.Tree, from string) (int, error)
+	Created(t worktree.Tree) (string, error)
 	Merged(t worktree.Tree) (bool, error)
 	Remove(t worktree.Tree, force bool) error
 	// Repair re-points the linked worktrees of repo, which has moved, at it (git worktree repair); it says what git
@@ -60,6 +64,12 @@ func (Git) Head(t worktree.Tree) (string, error) { return t.Head() }
 
 // Ahead is Tree.Ahead.
 func (Git) Ahead(t worktree.Tree) (int, error) { return t.Ahead() }
+
+// Since is Tree.Since.
+func (Git) Since(t worktree.Tree, from string) (int, error) { return t.Since(from) }
+
+// Created is Tree.Created.
+func (Git) Created(t worktree.Tree) (string, error) { return t.Created() }
 
 // Merged is Tree.Merged.
 func (Git) Merged(t worktree.Tree) (bool, error) { return t.Merged() }
@@ -94,6 +104,9 @@ type Ledger struct {
 	Dispatcher string
 	// Env is the environment a check runs with (secret-looking names are dropped from it); nil: this process's.
 	Env []string
+	// InCheck says this process was started by a check: it acts for no one, so it sets no task's check and forces past
+	// none (donecheck.InCheckEnv).
+	InCheck bool
 }
 
 // NewTask is what a new task is made of.
@@ -180,6 +193,16 @@ func (l *Ledger) New(n NewTask) (task.Task, error) {
 
 			return t, fmt.Errorf("%s recorded as dropped, its worktree could not be made: %w", t.ID, err)
 		}
+
+		// Where the worktree started: a check that wants a commit of the task's own tells a branch merged into its base
+		// from one nothing was committed on by it. Not knowing it is no failure.
+		if head, err := l.Trees.Head(tree(t)); err == nil && head != "" {
+			t.Fork = head
+
+			if err := l.Store.Put(t); err != nil {
+				return t, err
+			}
+		}
 	}
 
 	l.log(t.Role, "task", t.ID, "new: "+t.Asked)
@@ -238,35 +261,61 @@ var ErrDirty = errors.New("uncommitted changes")
 var ErrNoResult = errors.New("has criteria and no saved result")
 
 // Set changes a task. Closing one (done, dropped) whose worktree has uncommitted changes is refused without Force;
-// the worktree stays either way until GC. So is closing as done a task that has criteria and no saved result.
+// the worktree stays either way until GC. So is closing as done a task that has criteria and no saved result, and one
+// that has a check and no passed run of it (see PlanCheck).
 func (l *Ledger) Set(id string, c Change) (task.Task, error) {
 	t, err := l.Store.Get(id)
 	if err != nil {
 		return t, err
 	}
 
+	t, changes, err := l.apply(t, c, false)
+	if err != nil {
+		return t, err
+	}
+
+	if err := l.Store.Put(t); err != nil {
+		return t, err
+	}
+
+	l.log(t.Role, "task", t.ID, strings.Join(changes, ", "))
+
+	return t, nil
+}
+
+// apply is what Set does to t before it writes it: t as it becomes, and what changed. A preflight does all of it but
+// ask for the run of the check a close needs (PlanCheck uses one to refuse, before a check runs, what Set would refuse
+// after it); it writes nothing either way.
+func (l *Ledger) apply(t task.Task, c Change, preflight bool) (task.Task, []string, error) {
 	var (
+		err       error
 		changes   []string
 		checked   *donecheck.Result
 		unchecked *task.Unchecked
 	)
 
+	alreadyDone := t.State == task.Done && c.State == task.Done
+
 	if c.State != "" {
 		if !c.State.Active() && t.Worktree != "" && !c.Force {
 			if err := l.refuseDirty(t); err != nil {
-				return t, err
+				return t, nil, err
 			}
 		}
 
 		if c.State == task.Done && !c.Force {
 			if err := refuseNoResult(t); err != nil {
-				return t, err
+				return t, nil, err
 			}
 		}
 
-		if c.State == task.Done {
-			if checked, unchecked, err = l.closeCheck(t, c); err != nil {
-				return t, err
+		switch {
+		case alreadyDone && t.Closed != nil:
+			// It closed once, on the check it had then: closing it again, to say more, runs nothing and keeps that.
+			checked, unchecked = t.Closed.Check, t.Closed.Unchecked
+		case c.State == task.Done && !alreadyDone:
+			if checked, unchecked, err = l.closeCheck(t, c, preflight); err != nil {
+				return t, nil, err
 			}
 		}
 
@@ -284,7 +333,7 @@ func (l *Ledger) Set(id string, c Change) (task.Task, error) {
 			t.On = ""
 		}
 	case t.State != task.Waiting:
-		return t, fmt.Errorf("%s: --on goes with waiting (it is %s)", t.ID, t.State)
+		return t, nil, fmt.Errorf("%s: --on goes with waiting (it is %s)", t.ID, t.State)
 	case c.On == "-":
 		t.On = ""
 		changes = append(changes, "on the owner")
@@ -326,7 +375,7 @@ func (l *Ledger) Set(id string, c Change) (task.Task, error) {
 	default:
 		v, err := strconv.ParseFloat(strings.TrimPrefix(c.Budget, "$"), 64)
 		if err != nil || v < 0 {
-			return t, fmt.Errorf("budget %q: a number of dollars, or - to clear it", c.Budget)
+			return t, nil, fmt.Errorf("budget %q: a number of dollars, or - to clear it", c.Budget)
 		}
 
 		t.Budget = v
@@ -336,7 +385,7 @@ func (l *Ledger) Set(id string, c Change) (task.Task, error) {
 	if c.Criteria != nil {
 		criteria, err := task.CleanCriteria(*c.Criteria)
 		if err != nil {
-			return t, err
+			return t, nil, err
 		}
 
 		t.Criteria = criteria
@@ -350,7 +399,7 @@ func (l *Ledger) Set(id string, c Change) (task.Task, error) {
 
 	said, err := l.setCheck(&t, c)
 	if err != nil {
-		return t, err
+		return t, nil, err
 	}
 
 	if said != "" {
@@ -358,7 +407,7 @@ func (l *Ledger) Set(id string, c Change) (task.Task, error) {
 	}
 
 	if len(changes) == 0 {
-		return t, errors.New("nothing to change: give a state, --note, --role, --title, --project, --url, --budget, " +
+		return t, nil, errors.New("nothing to change: give a state, --note, --role, --title, --project, --url, --budget, " +
 			"--criteria or --check")
 	}
 
@@ -372,13 +421,7 @@ func (l *Ledger) Set(id string, c Change) (task.Task, error) {
 		t.Closed = &task.Closure{By: c.By, At: t.Updated, State: c.State, Note: c.Note, Check: checked, Unchecked: unchecked}
 	}
 
-	if err := l.Store.Put(t); err != nil {
-		return t, err
-	}
-
-	l.log(t.Role, "task", t.ID, strings.Join(changes, ", "))
-
-	return t, nil
+	return t, changes, nil
 }
 
 // refuseNoResult is the error that says t has criteria and no saved result, nil when it is fine to close as done.

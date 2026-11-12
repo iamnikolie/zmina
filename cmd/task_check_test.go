@@ -4,7 +4,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -94,7 +96,7 @@ func TestTaskDoneRunsTheCrewCheckAndRecordsIt(t *testing.T) {
 
 	// No commit on the branch: refused before anything runs.
 	_, _, err = zm(t, c.file, "task", "done", "1")
-	require.ErrorContains(t, err, "beyond main, and there is none")
+	require.ErrorContains(t, err, "nothing beyond main, and nothing since the worktree was made")
 	assert.Equal(t, exitCheckFailed, exitCodeOf(t, err))
 
 	head := commit(t, wt, "b")
@@ -446,13 +448,15 @@ func TestTaskDoneHoldsNoLockWhileItsCheckRuns(t *testing.T) {
 	assert.Equal(t, "done", readTaskFile(t, c.file, "T-1")["state"])
 }
 
-// A check does not see what looks like a secret in the environment it was started from.
+// A check does not see what looks like a secret in the environment it was started from, and is told it is a check.
 func TestTaskCheckRunsWithoutTheSecretsOfItsEnvironment(t *testing.T) {
-	c := newCheckCrew(t, "done_check: \"env | sort; echo tok-0123456789\"\n")
+	c := newCheckCrew(t, "done_check: \"env | sort; echo value-for-test-one\"\n")
 	c.task(t)
 
-	t.Setenv("DEPLOY_TOKEN", "tok-0123456789")
+	t.Setenv("DEPLOY_TOKEN", "value-for-test-one")
 	t.Setenv("ZMINA_CHECK_VISIBLE", "visible")
+	t.Setenv("GOPRIVATE", "example.com/internal")
+	t.Setenv("DATABASE_URL", "postgres://app:fixture-pass-nine@db.example/app")
 
 	_, _, err := zm(t, c.file, "task", "done", "1")
 	require.NoError(t, err)
@@ -460,29 +464,220 @@ func TestTaskCheckRunsWithoutTheSecretsOfItsEnvironment(t *testing.T) {
 	chk, _ := closedOf(t, c.file, "T-1")["check"].(map[string]any)
 	out, _ := chk["output"].(string)
 	assert.Contains(t, out, "ZMINA_CHECK_VISIBLE=visible")
+	assert.Contains(t, out, "GOPRIVATE=example.com/internal", "a name that only looks like a secret's stays")
+	assert.Contains(t, out, "DATABASE_URL=postgres://app:[redacted]@db.example/app", "it has the variable, and its password is not recorded")
+	assert.NotContains(t, out, "fixture-pass-nine")
 	assert.NotContains(t, out, "DEPLOY_TOKEN")
-	assert.NotContains(t, out, "tok-0123456789")
+	assert.NotContains(t, out, "value-for-test-one")
 	assert.Contains(t, out, "[redacted]")
-	assert.NotContains(t, out, "ZMINA_ROLE", "it runs as a role's tools do, not as a child of a role's session")
+	assert.NotContains(t, out, "ZMINA_ROLE", "it is not run as a child of a role's session")
+	assert.Contains(t, out, "ZMINA_IN_CHECK=1", "and it is told it is a check")
 }
 
-// A result saved with the close comes first, then the check; a task with criteria and no result is refused before it.
-func TestTaskDoneWithResultAndCheck(t *testing.T) {
-	c := newCheckCrew(t, "done_check: \"echo ran-after-result\"\n")
-	c.task(t, "--criteria", "tests pass")
+// A zmina that a check started has no owner's hand: it sets no check and forces past none, however it says who it is.
+func TestZminaRunInsideACheckActsForNoOne(t *testing.T) {
+	c := newCheckCrew(t, "done_check: \"exit 1\"\n")
+	c.task(t)
+
+	t.Setenv("ZMINA_IN_CHECK", "1")
+
+	for _, who := range []string{"", "dispatcher"} {
+		t.Setenv("ZMINA_ROLE", who)
+
+		_, _, err := zm(t, c.file, "task", "set", "1", "--check", "touch pwned")
+		require.ErrorContains(t, err, "acts for no one", who)
+
+		_, _, err = zm(t, c.file, "task", "set", "1", "--check", "-")
+		require.ErrorContains(t, err, "acts for no one", who)
+
+		_, _, err = zm(t, c.file, "task", "new", "dev", "--repo", "api", "--worktree", "--check", "true", "x")
+		require.ErrorContains(t, err, "acts for no one", who)
+
+		_, _, err = zm(t, c.file, "task", "done", "1", "--force")
+		require.ErrorContains(t, err, "acts for no one", who)
+	}
+
+	assert.Equal(t, "open", readTaskFile(t, c.file, "T-1")["state"])
+	assert.NotContains(t, readTaskFile(t, c.file, "T-1"), "check")
+
+	// The rest of zmina is what it was.
+	_, _, err := zm(t, c.file, "task", "set", "1", "--note", "from inside a check")
+	require.NoError(t, err)
+
+	t.Setenv("ZMINA_IN_CHECK", "")
+	t.Setenv("ZMINA_ROLE", "")
+
+	_, _, err = zm(t, c.file, "task", "done", "1", "--force")
+	require.NoError(t, err)
+}
+
+// A signal that ends zmina ends the check with it, hangup and quit as well as interrupt and terminate: the check has a
+// session and process group of its own, which a signal to zmina does not reach.
+func TestTaskDoneSignalEndsTheCheckAndIsNotAFailure(t *testing.T) {
+	for _, sig := range []syscall.Signal{syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT} {
+		t.Run(sig.String(), func(t *testing.T) {
+			marks := t.TempDir()
+			started, pidFile := filepath.Join(marks, "started"), filepath.Join(marks, "pid")
+
+			c := newCheckCrew(t, "done_check: {run: \"echo $$ > "+pidFile+"; touch "+started+"; sleep 60 & wait\", timeout: 5m}\n")
+			c.task(t)
+
+			done := make(chan error, 1)
+
+			go func() {
+				_, _, err := zm(t, c.file, "task", "done", "1")
+				done <- err
+			}()
+
+			require.Eventually(t, func() bool { _, err := os.Stat(started); return err == nil }, 20*time.Second,
+				20*time.Millisecond, "the check began")
+
+			raw, err := os.ReadFile(pidFile)
+			require.NoError(t, err)
+
+			pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+			require.NoError(t, err)
+			require.NoError(t, syscall.Kill(pid, 0), "it is running")
+
+			// zmina gets the signal (this process stands for it: the handler is the one the command installed).
+			require.NoError(t, syscall.Kill(syscall.Getpid(), sig))
+
+			select {
+			case err := <-done:
+				require.ErrorContains(t, err, "check interrupted")
+				assert.NotContains(t, err.Error(), "check failed")
+				assert.NotEqual(t, exitCheckFailed, exitCodeOf(t, err), "it did not fail")
+			case <-time.After(30 * time.Second):
+				t.Fatal("task done did not end")
+			}
+
+			assert.Eventually(t, func() bool { return syscall.Kill(-pid, 0) != nil }, 5*time.Second, 20*time.Millisecond,
+				"the check's whole group is gone, not left running")
+
+			assert.Equal(t, "open", readTaskFile(t, c.file, "T-1")["state"])
+
+			log, _, err := zm(t, c.file, "log", "--task", "1")
+			require.NoError(t, err)
+			assert.Contains(t, log, "interrupted:")
+			assert.NotContains(t, log, "failed:")
+		})
+	}
+}
+
+// A check that leaves files in the worktree has failed, and says which: the task is not left unclosable by uncommitted
+// changes it cannot explain.
+func TestTaskDoneCheckThatLeavesFilesBehind(t *testing.T) {
+	c := newCheckCrew(t, "done_check: \"touch build.o a.tmp b.tmp c.tmp d.tmp e.tmp\"\n")
+	wt := c.task(t)
 
 	_, _, err := zm(t, c.file, "task", "done", "1")
-	require.ErrorContains(t, err, "has criteria and no saved result")
-	assert.NotEqual(t, exitCheckFailed, exitCodeOf(t, err), "it is not the check that refused")
+	require.Error(t, err)
+	assert.Equal(t, exitCheckFailed, exitCodeOf(t, err))
+	assert.ErrorContains(t, err, "check failed")
+	assert.ErrorContains(t, err, "left 6 file(s) in the clean worktree")
+	assert.ErrorContains(t, err, "?? a.tmp, ?? b.tmp, ?? build.o, ?? c.tmp, ?? d.tmp and 1 more")
+	assert.NotContains(t, err.Error(), "uncommitted changes")
+	assert.Equal(t, "open", readTaskFile(t, c.file, "T-1")["state"])
 
-	body := filepath.Join(t.TempDir(), "result.json")
-	require.NoError(t, os.WriteFile(body, []byte(criteriaResult), 0o600))
+	// Fixed: the check cleans up after itself.
+	require.NoError(t, os.RemoveAll(wt))
+	c.task(t, "--check", "touch scratch && rm scratch")
 
-	out, errOut, err := zm(t, c.file, "task", "done", "1", "--result", body)
+	_, _, err = zm(t, c.file, "task", "done", "2")
 	require.NoError(t, err)
-	assert.True(t, strings.HasSuffix(out, "T-1 · dev · done\n"), out)
-	assert.Contains(t, errOut, "running its check")
+}
 
-	chk, _ := closedOf(t, c.file, "T-1")["check"].(map[string]any)
-	assert.Equal(t, "ran-after-result", chk["output"])
+// The arguments are checked before the command runs, and a task that is done is not checked again.
+func TestTaskDoneChecksArgumentsBeforeRunningAndNeverTwice(t *testing.T) {
+	marks := t.TempDir()
+	log := filepath.Join(marks, "runs")
+
+	c := newCheckCrew(t, "done_check: \"echo run >> "+log+"\"\n")
+	c.task(t)
+
+	runs := func() int {
+		raw, _ := os.ReadFile(log)
+
+		return strings.Count(string(raw), "run\n")
+	}
+
+	for name, args := range map[string][]string{
+		"a check with the close":   {"task", "set", "1", "done", "--check", "true"},
+		"a budget that is none":    {"task", "set", "1", "done", "--budget", "plenty"},
+		"a criterion that is none": {"task", "set", "1", "done", "--criteria", "a\nb"},
+		"a role that is none":      {"task", "set", "1", "done", "--role", "nobody"},
+		"--on without waiting":     {"task", "set", "1", "done", "--on", "alex"},
+	} {
+		_, _, err := zm(t, c.file, args...)
+		require.Error(t, err, name)
+		assert.Zero(t, runs(), "%s: nothing ran", name)
+		assert.Equal(t, "open", readTaskFile(t, c.file, "T-1")["state"], name)
+	}
+
+	_, _, err := zm(t, c.file, "task", "done", "1")
+	require.NoError(t, err)
+	assert.Equal(t, 1, runs())
+
+	// Closed already: closing again says more and runs nothing, and keeps what the first close recorded.
+	out, errOut, err := zm(t, c.file, "task", "done", "1", "--note", "one more word")
+	require.NoError(t, err)
+	assert.Equal(t, "T-1 · dev · done\n", out)
+	assert.NotContains(t, errOut, "running its check")
+	assert.Equal(t, 1, runs(), "a task that is done is not checked again")
+
+	closed := closedOf(t, c.file, "T-1")
+	assert.Equal(t, "one more word", closed["note"])
+	assert.NotNil(t, closed["check"])
+}
+
+// A command is one line of plain text, and is said as one wherever zmina says it, even from a file edited by hand.
+func TestTaskCheckCommandIsPlainText(t *testing.T) {
+	c := newCheckCrew(t, "")
+	c.task(t)
+
+	for _, bad := range []string{"make test\nrm -rf x", "make\ttest", "make test \x1b[2K", "echo \u202etset"} {
+		_, _, err := zm(t, c.file, "task", "set", "1", "--check", bad)
+		require.ErrorContains(t, err, "one line of plain text", "%q", bad)
+	}
+
+	assert.NotContains(t, readTaskFile(t, c.file, "T-1"), "check")
+
+	// A task file edited by hand, with a command that is not text.
+	path := filepath.Join(filepath.Dir(c.file), "tasks", "T-1.json")
+	raw := mustRead(t, path)
+	edited := strings.Replace(string(raw), `"state": "open"`, `"state": "open", "check": {"run": "make test\u202e\n\u001b[2Krm -rf x"}`, 1)
+	require.NotEqual(t, string(raw), edited)
+	require.NoError(t, os.WriteFile(path, []byte(edited), 0o600))
+
+	shown, _, err := zm(t, c.file, "task", "show", "1")
+	require.NoError(t, err)
+	assert.Contains(t, shown, "check: make test rm -rf x (10m) · task's")
+	assert.NotContains(t, shown, "\u202e")
+	assert.NotContains(t, shown, "\x1b")
+
+	// It is not run: it is refused as the command it is.
+	_, _, err = zm(t, c.file, "task", "done", "1")
+	require.ErrorContains(t, err, "plain text")
+}
+
+// A branch merged into its base still has commits of its own: a task closed after its merge passes a check that wants a
+// commit, and one nothing was committed on does not.
+func TestTaskDoneCommitCheckAfterTheBranchWasMerged(t *testing.T) {
+	c := newCheckCrew(t, "done_check: {run: \"true\", commit: true}\n")
+	wt := c.task(t)
+	c.task(t)
+
+	commit(t, wt, "b")
+	gitIn(t, c.repo, "merge", "-q", "--ff-only", gitIn(t, wt, "rev-parse", "--abbrev-ref", "HEAD"))
+
+	assert.NotContains(t, readTaskFile(t, c.file, "T-1"), "check", "the crew's check, not the task's")
+	assert.NotEmpty(t, readTaskFile(t, c.file, "T-1")["fork"], "the commit the worktree was made at is in the task file")
+
+	_, _, err := zm(t, c.file, "task", "done", "1")
+	require.NoError(t, err, "its work is in main; it had commits")
+
+	_, _, err = zm(t, c.file, "task", "done", "2")
+	require.ErrorContains(t, err, "a commit of the task's own, and")
+	assert.ErrorContains(t, err, "has none: nothing beyond main, and nothing since the worktree was made")
+	assert.Equal(t, exitCheckFailed, exitCodeOf(t, err))
 }

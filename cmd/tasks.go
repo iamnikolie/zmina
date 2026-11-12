@@ -438,17 +438,18 @@ func (a *app) printCheck(s *shift.Shift, t task.Task, full bool) {
 		return
 	}
 
+	// What a file says of a command or an output is shown as plain text: a file edited by hand may hold more.
 	if c := t.Closed.Check; c != nil {
-		fmt.Fprintf(a.out, "checked: %s · exit %d in %s at %s · %s · %s's check\n", c.Run, c.Exit,
-			c.Duration().Round(time.Millisecond), c.Commit, c.At.Local().Format(time.DateTime), c.Source)
+		fmt.Fprintf(a.out, "checked: %s · exit %d in %s at %s · %s · %s's check\n", donecheck.Line(c.Run), c.Exit,
+			c.Duration().Round(time.Millisecond), donecheck.Line(c.Commit), c.At.Local().Format(time.DateTime), donecheck.Line(c.Source))
 
 		if full && c.Output != "" {
-			fmt.Fprintln(a.out, "  "+strings.ReplaceAll(c.Tail(), "\n", "\n  "))
+			fmt.Fprintln(a.out, "  "+strings.ReplaceAll(donecheck.Clean(c.Tail()), "\n", "\n  "))
 		}
 	}
 
 	if u := t.Closed.Unchecked; u != nil {
-		fmt.Fprintf(a.out, "unchecked: closed by %s past its check (%s), which was not run\n", u.By, u.Run)
+		fmt.Fprintf(a.out, "unchecked: closed by %s past its check (%s), which was not run\n", donecheck.Line(u.By), donecheck.Line(u.Run))
 	}
 }
 
@@ -625,10 +626,16 @@ func (a *app) taskParkCommand() *cobra.Command {
 // commit it asks for is not there.
 const exitCheckFailed = 4
 
+// checkSignals are the signals that end a check along with the command that runs it. A check has a session and process
+// group of its own, which none of these reaches by itself: a terminal's interrupt, a pane that is killed (hangup), a
+// service stopped or a quit.
+var checkSignals = []os.Signal{os.Interrupt, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT}
+
 // doneCheck runs the check that closing task id as done needs, before the close takes the state lock, and holds no lock
-// while it runs: it can take minutes, and the ticker and every other command wait for that lock. It reads the task and
-// its worktree, runs the command, and hands the result to the close, which writes it only if the task and its commit
-// are still the ones the check ran against. nil: nothing to run (not a close as done, no check, or --force).
+// while it runs: it can take minutes, and the ticker and every other command wait for that lock. It first refuses what
+// the close would refuse anyway (a change that is no good, a task already done aside), reads the task and its worktree,
+// runs the command, and hands the result to the close, which writes it only if the task, its commit and its check are
+// still the ones it ran against. nil: nothing to run (not a close as done, no check, a task that is done, or --force).
 func (a *app) doneCheck(id string, st task.State, o taskChange) (*ledger.Checked, error) {
 	if st != task.Done || o.force {
 		return nil, nil //nolint:nilnil // no check to run is not an error
@@ -643,17 +650,22 @@ func (a *app) doneCheck(id string, st task.State, o taskChange) (*ledger.Checked
 		return nil, err
 	}
 
+	if o.role != "" {
+		if _, err := s.Role(o.role); err != nil {
+			return nil, err
+		}
+	}
+
 	l := a.ledger(s)
 
-	plan, err := l.PlanCheck(id)
+	plan, err := l.PlanCheck(id, a.changeOf(st, o))
 	if err != nil || plan == nil {
 		return nil, checkExit(err)
 	}
 
 	fmt.Fprintf(a.err, "zmina: %s: running its check: %s\n", plan.Task.ID, plan.Spec)
 
-	// A check has a process group of its own: an interrupt of this command ends it too.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), checkSignals...)
 	defer stop()
 
 	checked, err := l.RunCheck(ctx, plan)
@@ -668,6 +680,13 @@ func checkExit(err error) error {
 	}
 
 	return err
+}
+
+// changeOf is the ledger's change that a close or set of a task with these flags is.
+func (a *app) changeOf(st task.State, o taskChange) ledger.Change {
+	return ledger.Change{State: st, On: o.on, Note: o.note, Role: o.role, Force: o.force, Title: o.title,
+		Project: o.project, URL: o.url, Budget: o.budget, Criteria: o.setCriteria, By: by(), Check: o.check,
+		ClearCheck: o.clearCheck}
 }
 
 func (a *app) setTask(id string, st task.State, o taskChange) error {
@@ -685,9 +704,10 @@ func (a *app) setTask(id string, st task.State, o taskChange) error {
 			}
 		}
 
-		t, err := a.ledger(s).Set(id, ledger.Change{State: st, On: o.on, Note: o.note, Role: o.role, Force: o.force,
-			Title: o.title, Project: o.project, URL: o.url, Budget: o.budget, Criteria: o.setCriteria, By: by(),
-			Check: o.check, ClearCheck: o.clearCheck, Checked: checked})
+		change := a.changeOf(st, o)
+		change.Checked = checked
+
+		t, err := a.ledger(s).Set(id, change)
 		if err != nil {
 			return err
 		}

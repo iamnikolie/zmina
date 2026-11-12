@@ -2,6 +2,7 @@ package ledger
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,11 +34,14 @@ func checkFixture(t *testing.T, check *donecheck.Spec) (*Ledger, *fakeTrees, tas
 	return l, trees, tk, &events
 }
 
+// closing is the change that closes a task as done, by who.
+func closing(by string) Change { return Change{State: task.Done, By: by} }
+
 // closeOn plans and runs the check of task id, and closes it as done on the result.
 func closeOn(t *testing.T, l *Ledger, id, by string) (task.Task, error) {
 	t.Helper()
 
-	plan, err := l.PlanCheck(id)
+	plan, err := l.PlanCheck(id, closing(by))
 	require.NoError(t, err)
 	require.NotNil(t, plan)
 
@@ -78,7 +82,7 @@ func TestPassedCheckIsRecordedOnTheClosedTask(t *testing.T) {
 func TestFailedCheckRefusesTheCloseAndLeavesTheTaskOpen(t *testing.T) {
 	l, _, tk, events := checkFixture(t, &donecheck.Spec{Run: "echo one; echo boom >&2; exit 3"})
 
-	plan, err := l.PlanCheck(tk.ID)
+	plan, err := l.PlanCheck(tk.ID, closing("dev"))
 	require.NoError(t, err)
 
 	checked, err := l.RunCheck(context.Background(), plan)
@@ -106,7 +110,7 @@ func TestFailedCheckRefusesTheCloseAndLeavesTheTaskOpen(t *testing.T) {
 func TestTimedOutCheckRefusesTheClose(t *testing.T) {
 	l, _, tk, _ := checkFixture(t, &donecheck.Spec{Run: "echo started; sleep 60", Timeout: "1s"})
 
-	plan, err := l.PlanCheck(tk.ID)
+	plan, err := l.PlanCheck(tk.ID, closing("dev"))
 	require.NoError(t, err)
 
 	began := time.Now()
@@ -125,7 +129,7 @@ func TestTimedOutCheckRefusesTheClose(t *testing.T) {
 func TestNoCheckConfiguredClosesAsBefore(t *testing.T) {
 	l, _, tk, events := checkFixture(t, nil)
 
-	plan, err := l.PlanCheck(tk.ID)
+	plan, err := l.PlanCheck(tk.ID, closing("dev"))
 	require.NoError(t, err)
 	assert.Nil(t, plan)
 
@@ -262,7 +266,7 @@ func TestACheckIsValidatedWhereItIsSet(t *testing.T) {
 	l, _, tk, _ := checkFixture(t, nil)
 
 	_, err := l.Set(tk.ID, Change{Check: &donecheck.Spec{Run: "x", Timeout: "2h"}, By: "hand"})
-	require.ErrorContains(t, err, "at most 30m")
+	require.EqualError(t, err, "T-1: check timeout 2h: at most 30m")
 
 	_, err = l.Set(tk.ID, Change{Check: &donecheck.Spec{Run: " "}, By: "hand"})
 	require.ErrorContains(t, err, "needs a command")
@@ -281,7 +285,7 @@ func TestACheckIsValidatedWhereItIsSet(t *testing.T) {
 func TestCheckResultClosesOnlyWhatItRanAgainst(t *testing.T) {
 	l, trees, tk, _ := checkFixture(t, &donecheck.Spec{Run: "true"})
 
-	plan, err := l.PlanCheck(tk.ID)
+	plan, err := l.PlanCheck(tk.ID, closing("dev"))
 	require.NoError(t, err)
 
 	checked, err := l.RunCheck(context.Background(), plan)
@@ -297,7 +301,7 @@ func TestCheckResultClosesOnlyWhatItRanAgainst(t *testing.T) {
 	require.ErrorIs(t, err, ErrCheckMoved)
 
 	// A second run on the changed task, then the worktree moves on before the close.
-	plan, err = l.PlanCheck(tk.ID)
+	plan, err = l.PlanCheck(tk.ID, closing("dev"))
 	require.NoError(t, err)
 
 	checked, err = l.RunCheck(context.Background(), plan)
@@ -324,9 +328,9 @@ func TestCheckResultClosesOnlyWhatItRanAgainst(t *testing.T) {
 func TestCommitCheckWantsACommitBeyondTheBase(t *testing.T) {
 	l, trees, tk, _ := checkFixture(t, &donecheck.Spec{Run: "touch ran-marker", Commit: true})
 
-	_, err := l.PlanCheck(tk.ID)
+	_, err := l.PlanCheck(tk.ID, closing("dev"))
 	require.ErrorIs(t, err, ErrCheckFailed)
-	assert.Contains(t, err.Error(), "a commit on zmina/t-1 beyond main, and there is none")
+	assert.Contains(t, err.Error(), "a commit of the task's own, and zmina/t-1 has none: nothing beyond main, and nothing since the worktree was made")
 
 	_, statErr := os.Stat(filepath.Join(tk.Worktree, "ran-marker"))
 	assert.True(t, os.IsNotExist(statErr), "nothing is run for a branch it would refuse anyway")
@@ -351,7 +355,7 @@ func TestDirtyWorktreeIsRefusedBeforeTheCheckRuns(t *testing.T) {
 	l, trees, tk, _ := checkFixture(t, &donecheck.Spec{Run: "touch ran-marker"})
 	trees.dirty[tk.Worktree] = "?? b"
 
-	_, err := l.PlanCheck(tk.ID)
+	_, err := l.PlanCheck(tk.ID, closing("dev"))
 	require.ErrorIs(t, err, ErrDirty)
 
 	_, statErr := os.Stat(filepath.Join(tk.Worktree, "ran-marker"))
@@ -362,7 +366,7 @@ func TestCheckThatCannotRunIsRefused(t *testing.T) {
 	l, _, tk, _ := checkFixture(t, &donecheck.Spec{Run: "true"})
 	require.NoError(t, os.RemoveAll(tk.Worktree))
 
-	_, err := l.PlanCheck(tk.ID)
+	_, err := l.PlanCheck(tk.ID, closing("dev"))
 	require.ErrorIs(t, err, ErrCheckFailed)
 	assert.Contains(t, err.Error(), "cannot be read")
 
@@ -370,7 +374,7 @@ func TestCheckThatCannotRunIsRefused(t *testing.T) {
 	bare, err := l.Store.Add(task.Task{Role: "dev", Asked: "x", Check: &donecheck.Spec{Run: "true"}}, time.Now())
 	require.NoError(t, err)
 
-	_, err = l.PlanCheck(bare.ID)
+	_, err = l.PlanCheck(bare.ID, closing("dev"))
 	require.ErrorIs(t, err, ErrCheckFailed)
 	assert.Contains(t, err.Error(), "no worktree")
 }
@@ -394,8 +398,8 @@ func TestCheckOutputInTheRecordIsBounded(t *testing.T) {
 
 // The check runs as a role's tools would, less anything that looks like a secret.
 func TestCheckRunsWithoutSecretsInItsEnvironment(t *testing.T) {
-	l, _, tk, _ := checkFixture(t, &donecheck.Spec{Run: "env | sort; echo token tok-0123456789"})
-	l.Env = []string{"PATH=" + os.Getenv("PATH"), "DEPLOY_TOKEN=tok-0123456789", "LANG=C"}
+	l, _, tk, _ := checkFixture(t, &donecheck.Spec{Run: "env | sort; echo token value-for-test-one"})
+	l.Env = []string{"PATH=" + os.Getenv("PATH"), "DEPLOY_TOKEN=value-for-test-one", "LANG=C"}
 
 	got, err := closeOn(t, l, tk.ID, "dev")
 	require.NoError(t, err)
@@ -403,7 +407,7 @@ func TestCheckRunsWithoutSecretsInItsEnvironment(t *testing.T) {
 	out := got.Closed.Check.Output
 	assert.Contains(t, out, "LANG=C")
 	assert.NotContains(t, out, "DEPLOY_TOKEN")
-	assert.NotContains(t, out, "tok-0123456789")
+	assert.NotContains(t, out, "value-for-test-one")
 	assert.Contains(t, out, "token [redacted]")
 }
 
@@ -414,9 +418,293 @@ func TestMissingResultIsRefusedBeforeTheCheckRuns(t *testing.T) {
 	_, err := l.Set(tk.ID, Change{Criteria: &[]string{"tests pass"}, By: "hand"})
 	require.NoError(t, err)
 
-	_, err = l.PlanCheck(tk.ID)
+	_, err = l.PlanCheck(tk.ID, closing("dev"))
 	require.ErrorIs(t, err, ErrNoResult)
 
 	_, statErr := os.Stat(filepath.Join(tk.Worktree, "ran-marker"))
 	assert.True(t, os.IsNotExist(statErr))
+}
+
+// A branch whose work its base already has still counts as having commits of its own, when something was committed on it
+// since the worktree was made; one nothing was committed on does not, merged or not.
+func TestCommitCheckKnowsAMergedBranchFromAnEmptyOne(t *testing.T) {
+	l, trees, tk, _ := checkFixture(t, &donecheck.Spec{Run: "true", Commit: true})
+
+	got, err := l.Store.Get(tk.ID)
+	require.NoError(t, err)
+	assert.Equal(t, fakeHead, got.Fork, "the commit the worktree was made at is kept in the task")
+
+	// Nothing beyond the base, nothing since the worktree was made: empty.
+	_, err = l.PlanCheck(tk.ID, closing("dev"))
+	require.ErrorIs(t, err, ErrCheckFailed)
+
+	// Its base has the branch's work (nothing beyond it), but the branch has commits since it was made: merged.
+	trees.since[tk.Branch] = 3
+
+	plan, err := l.PlanCheck(tk.ID, closing("dev"))
+	require.NoError(t, err)
+	assert.NotNil(t, plan)
+
+	// A fork the repository no longer has is as if it were not known: the merged branch passes.
+	trees.since[tk.Branch] = 0
+	trees.sinceErr = errors.New("git rev-list: bad revision")
+
+	_, err = l.PlanCheck(tk.ID, closing("dev"))
+	require.NoError(t, err)
+}
+
+// A task made before the fork was kept has it from the branch's reflog; with neither, a branch its base has is taken as
+// having had commits (nothing more can be said of it).
+func TestCommitCheckWithoutARecordedFork(t *testing.T) {
+	l, trees, tk, _ := checkFixture(t, &donecheck.Spec{Run: "true", Commit: true})
+
+	old, err := l.Store.Get(tk.ID)
+	require.NoError(t, err)
+
+	old.Fork = ""
+	require.NoError(t, l.Store.Put(old))
+
+	// The reflog says where the branch was made, and nothing was committed since.
+	trees.created[tk.Branch] = fakeHead
+
+	_, err = l.PlanCheck(tk.ID, closing("dev"))
+	require.ErrorIs(t, err, ErrCheckFailed)
+
+	trees.since[tk.Branch] = 1
+
+	_, err = l.PlanCheck(tk.ID, closing("dev"))
+	require.NoError(t, err)
+
+	// No fork anywhere.
+	trees.since[tk.Branch] = 0
+	trees.created[tk.Branch] = ""
+
+	_, err = l.PlanCheck(tk.ID, closing("dev"))
+	require.NoError(t, err, "a branch its base has: the commits it had are taken as there")
+}
+
+// A check that leaves files behind in a worktree that was clean fails, naming them, rather than leaving a task that cannot
+// close over uncommitted changes.
+func TestCheckThatLeavesFilesBehindFails(t *testing.T) {
+	l, trees, tk, events := checkFixture(t, &donecheck.Spec{Run: "touch build.o cache.db notes.tmp a.out b.out c.out"})
+
+	trees.dirtyFn = func(path string) string {
+		entries, _ := os.ReadDir(path)
+
+		var lines []string
+
+		for _, e := range entries {
+			lines = append(lines, "?? "+e.Name())
+		}
+
+		return strings.Join(lines, "\n")
+	}
+
+	plan, err := l.PlanCheck(tk.ID, closing("dev"))
+	require.NoError(t, err, "the worktree is clean when the check begins")
+
+	checked, err := l.RunCheck(context.Background(), plan)
+	require.ErrorIs(t, err, ErrCheckFailed, "exit code 4, as every refusal by the check")
+	assert.Nil(t, checked)
+	assert.NotErrorIs(t, err, ErrDirty, "it is not the generic uncommitted changes")
+	assert.Contains(t, err.Error(), "left 6 file(s) in the clean worktree")
+	assert.Contains(t, err.Error(), "?? a.out, ?? b.out, ?? build.o, ?? c.out, ?? cache.db and 1 more", "the first five are named")
+	assert.NotContains(t, err.Error(), "notes.tmp")
+	assert.Contains(t, err.Error(), "remove them, or git ignore them")
+	assert.Contains(t, strings.Join(*events, "\n"), "check T-1 left files: touch build.o")
+
+	got, _ := l.Store.Get(tk.ID)
+	assert.Equal(t, task.Open, got.State)
+}
+
+// What would be refused anyway is refused before the command runs, and a task that is done is not checked again.
+func TestPlanRefusesBeforeRunningWhatSetWouldRefuse(t *testing.T) {
+	l, _, tk, _ := checkFixture(t, &donecheck.Spec{Run: "touch ran-marker"})
+	ran := filepath.Join(tk.Worktree, "ran-marker")
+
+	for name, c := range map[string]Change{
+		"a check with the close":  {State: task.Done, By: "hand", Check: &donecheck.Spec{Run: "echo other"}},
+		"a check cleared at once": {State: task.Done, By: "hand", ClearCheck: true},
+		"a budget that is none":   {State: task.Done, By: "dev", Budget: "plenty"},
+		"criteria that are none":  {State: task.Done, By: "dev", Criteria: &[]string{"two\nlines"}},
+		"--on without waiting":    {State: task.Done, By: "dev", On: "alex"},
+	} {
+		plan, err := l.PlanCheck(tk.ID, c)
+		require.Error(t, err, name)
+		assert.Nil(t, plan, name)
+	}
+
+	_, err := l.PlanCheck(tk.ID, Change{State: task.Done, By: "hand", Check: &donecheck.Spec{Run: "x"}})
+	require.ErrorContains(t, err, "set the check before closing the task")
+
+	_, err = l.PlanCheck(tk.ID, Change{State: task.Done, By: "dev", Budget: "plenty"})
+	require.ErrorContains(t, err, `budget "plenty"`)
+
+	_, statErr := os.Stat(ran)
+	assert.True(t, os.IsNotExist(statErr), "none of them ran the command")
+
+	// A task that is done already is closed again with nothing run, and keeps what its first close recorded.
+	got, err := closeOn(t, l, tk.ID, "dev")
+	require.NoError(t, err)
+	require.NotNil(t, got.Closed.Check)
+	require.NoError(t, os.Remove(ran))
+
+	plan, err := l.PlanCheck(tk.ID, Change{State: task.Done, By: "dev", Note: "more to say"})
+	require.NoError(t, err)
+	assert.Nil(t, plan, "a task that is done is not checked again")
+
+	again, err := l.Set(tk.ID, Change{State: task.Done, By: "boss", Note: "more to say"})
+	require.NoError(t, err)
+	require.NotNil(t, again.Closed.Check)
+	assert.Equal(t, got.Closed.Check.Run, again.Closed.Check.Run, "it was checked when it closed")
+	assert.Equal(t, got.Closed.Check.Commit, again.Closed.Check.Commit)
+	assert.True(t, got.Closed.Check.At.Equal(again.Closed.Check.At))
+	assert.Equal(t, "boss", again.Closed.By)
+	assert.Equal(t, "more to say", again.Closed.Note)
+
+	_, statErr = os.Stat(ran)
+	assert.True(t, os.IsNotExist(statErr))
+}
+
+// The close is of the check that ran: one that changed while it ran, in the task or in the crew file, closes nothing.
+func TestCloseRefusesACheckThatChangedWhileItRan(t *testing.T) {
+	l, _, tk, _ := checkFixture(t, nil)
+	l.DoneCheck = &donecheck.Spec{Run: "echo one"}
+
+	run := func() *Checked {
+		plan, err := l.PlanCheck(tk.ID, closing("dev"))
+		require.NoError(t, err)
+
+		checked, err := l.RunCheck(context.Background(), plan)
+		require.NoError(t, err)
+
+		return checked
+	}
+
+	// The crew file's command changed.
+	checked := run()
+	l.DoneCheck = &donecheck.Spec{Run: "echo two"}
+
+	_, err := l.Set(tk.ID, Change{State: task.Done, By: "dev", Checked: checked})
+	require.ErrorIs(t, err, ErrCheckMoved)
+	assert.Contains(t, err.Error(), "it ran echo one, crew's; it is now echo two, crew's")
+
+	// Its timeout, or its commit, is part of it.
+	checked = run()
+	l.DoneCheck = &donecheck.Spec{Run: "echo two", Timeout: "5m"}
+
+	_, err = l.Set(tk.ID, Change{State: task.Done, By: "dev", Checked: checked})
+	require.ErrorIs(t, err, ErrCheckMoved)
+
+	checked = run()
+	l.DoneCheck = &donecheck.Spec{Run: "echo two", Timeout: "5m", Commit: true}
+
+	_, err = l.Set(tk.ID, Change{State: task.Done, By: "dev", Checked: checked})
+	require.ErrorIs(t, err, ErrCheckMoved)
+
+	// The crew file's check is gone: a task that has none is closed by none, so it is run again (and then closes).
+	l.DoneCheck = &donecheck.Spec{Run: "echo two"}
+	checked = run()
+	l.DoneCheck = nil
+
+	_, err = l.Set(tk.ID, Change{State: task.Done, By: "dev", Checked: checked})
+	require.ErrorIs(t, err, ErrCheckMoved)
+	assert.Contains(t, err.Error(), "it has no check now")
+
+	// The check did not change: it closes.
+	l.DoneCheck = &donecheck.Spec{Run: "echo one"}
+	checked = run()
+
+	got, err := l.Set(tk.ID, Change{State: task.Done, By: "dev", Checked: checked})
+	require.NoError(t, err)
+	assert.Equal(t, "echo one", got.Closed.Check.Run)
+}
+
+// A zmina a check started acts for no one.
+func TestNothingSetsACheckOrForcesPastOneFromInsideACheck(t *testing.T) {
+	l, _, tk, _ := checkFixture(t, &donecheck.Spec{Run: "exit 1"})
+	l.InCheck = true
+
+	assert.False(t, l.MayCheck("hand"))
+	assert.False(t, l.MayCheck("boss"))
+
+	for _, by := range []string{"hand", "boss"} {
+		_, err := l.Set(tk.ID, Change{Check: &donecheck.Spec{Run: "true"}, By: by})
+		require.ErrorIs(t, err, ErrInCheck, by)
+
+		_, err = l.Set(tk.ID, Change{ClearCheck: true, By: by})
+		require.ErrorIs(t, err, ErrInCheck, by)
+
+		_, err = l.Set(tk.ID, Change{State: task.Done, Force: true, By: by})
+		require.ErrorIs(t, err, ErrInCheck, by)
+
+		_, err = l.New(NewTask{Role: "dev", Asked: "x", Repo: "api", Worktree: true, By: by, Check: &donecheck.Spec{Run: "true"}})
+		require.ErrorIs(t, err, ErrInCheck, by)
+	}
+
+	got, _ := l.Store.Get(tk.ID)
+	assert.Equal(t, task.Open, got.State)
+	assert.Equal(t, "exit 1", got.Check.Run)
+
+	// What it may still do, it does: it has no say about checks, not about the rest.
+	_, err := l.Set(tk.ID, Change{Note: "from a check", By: "hand"})
+	require.NoError(t, err)
+
+	l.InCheck = false
+
+	_, err = l.Set(tk.ID, Change{State: task.Done, Force: true, By: "hand"})
+	require.NoError(t, err)
+}
+
+// A check that is stopped did not fail: it is its own error, its own event, and not the exit code of a failure.
+func TestInterruptedCheckIsNotAFailedOne(t *testing.T) {
+	l, _, tk, events := checkFixture(t, &donecheck.Spec{Run: "sleep 60"})
+
+	plan, err := l.PlanCheck(tk.ID, closing("dev"))
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(200*time.Millisecond, cancel)
+
+	checked, err := l.RunCheck(ctx, plan)
+	require.ErrorIs(t, err, ErrCheckInterrupted)
+	assert.NotErrorIs(t, err, ErrCheckFailed)
+	assert.Nil(t, checked)
+	assert.Contains(t, err.Error(), "was stopped after")
+	assert.Contains(t, err.Error(), "run it again")
+
+	joined := strings.Join(*events, "\n")
+	assert.Contains(t, joined, "check T-1 interrupted: sleep 60")
+	assert.NotContains(t, joined, "failed")
+
+	got, _ := l.Store.Get(tk.ID)
+	assert.Equal(t, task.Open, got.State)
+}
+
+// A stored command is shown as one line of plain text wherever zmina says it.
+func TestACommandIsSaidAsAPlainLine(t *testing.T) {
+	l, _, tk, events := checkFixture(t, nil)
+
+	// A file edited by hand: zmina does not write a command like this, but it must not show one raw.
+	raw, err := l.Store.Get(tk.ID)
+	require.NoError(t, err)
+
+	raw.Check = &donecheck.Spec{Run: "echo ok\u202e\n\x1b[2Krm -rf x"}
+	require.NoError(t, l.Store.Put(raw))
+
+	_, err = l.PlanCheck(tk.ID, closing("dev"))
+	require.ErrorContains(t, err, "plain text", "it is not run either")
+
+	_, err = l.Set(tk.ID, Change{Check: &donecheck.Spec{Run: "make test  &&  make lint"}, By: "hand"})
+	require.NoError(t, err)
+
+	_, err = l.Set(tk.ID, Change{Check: &donecheck.Spec{Run: "git clone https://alex:fixture-pass-ten@git.example/x.git"}, By: "hand"})
+	require.NoError(t, err)
+
+	joined := strings.Join(*events, "\n")
+	assert.Contains(t, joined, "check: make test && make lint")
+	assert.Contains(t, joined, "check: git clone https://alex:[redacted]@git.example/x.git", "no password in an event")
+	assert.NotContains(t, joined, "fixture-pass-ten")
+	assert.NotContains(t, joined, "\u202e")
+	assert.NotContains(t, joined, "\x1b")
 }
