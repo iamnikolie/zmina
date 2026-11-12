@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/iamnikolie/zmina/internal/donecheck"
 )
 
 func TestStore(t *testing.T) {
@@ -206,4 +208,39 @@ func TestCleanCriteria(t *testing.T) {
 
 	_, err = CleanCriteria([]string{"first line\nsecond line"})
 	assert.ErrorContains(t, err, "one line")
+}
+
+// A task file written before checks existed reads as it did, and writes back without a check; one with a check and a
+// closure that records it reads back whole.
+func TestCheckFieldsAreOptionalInTheFile(t *testing.T) {
+	s := &Store{Dir: t.TempDir()}
+	require.NoError(t, os.MkdirAll(s.Dir, 0o700))
+
+	old := `{"id": "T-1", "role": "dev", "asked": "x", "state": "done", "created": "2026-10-26T12:00:00Z",
+  "updated": "2026-10-26T12:00:00Z", "closed": {"by": "dev", "at": "2026-10-26T12:00:00Z", "state": "done"}}`
+	require.NoError(t, os.WriteFile(filepath.Join(s.Dir, "T-1.json"), []byte(old), 0o600))
+
+	got, err := s.Get("T-1")
+	require.NoError(t, err)
+	assert.Nil(t, got.Check)
+	assert.Nil(t, got.Closed.Check)
+	assert.Nil(t, got.Closed.Unchecked)
+
+	require.NoError(t, s.Put(got))
+
+	raw, err := os.ReadFile(filepath.Join(s.Dir, "T-1.json"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), `"check"`)
+	assert.NotContains(t, string(raw), `"unchecked"`)
+
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	got.Check = &donecheck.Spec{Run: "make test", Timeout: "5m", Commit: true}
+	got.Closed.Check = &donecheck.Result{Run: "make test", Source: donecheck.FromTask, Commit: "abc123", At: now,
+		DurationMS: 1500, Output: "ok"}
+	got.Closed.Unchecked = &Unchecked{By: "hand", Run: "make test"}
+	require.NoError(t, s.Put(got))
+
+	again, err := s.Get("T-1")
+	require.NoError(t, err)
+	assert.Equal(t, got, again)
 }

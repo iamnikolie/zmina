@@ -83,6 +83,7 @@ notify_again: 24h                        # an item that still blocks is pushed a
 timezone: Europe/Warsaw                  # the clock reminder times, role schedules and the budget's day are read on (default: this machine's)
 lessons: on                              # daily triage of the roles' lessons into one draft MR on the crew's agentic-os (default off; see Lessons)
 worktree_gc: daily                       # the ticker runs `task gc` once a day: closed tasks' merged, clean worktrees go (default off)
+done_check: make test                    # closing a task with a worktree as done runs this there and needs exit 0 (or {run, timeout: 10m, commit: true}; off or none: no check, the default; see What checked means)
 courier: off                             # no courier service beside the ticker: a line for a role waits for the beat, up to a minute (on or off; default on; see The ticker)
 retention: 45d                           # how long finished work stays where it is before the ticker's daily pass moves it to archive/ (30d at least, or off; default 30d; see Retention)
 limits:                                  # how the crew spends its plans, in % of the 7-day (Claude) and weekly (Codex) window; see Limits
@@ -1230,14 +1231,14 @@ which edit files in a repository checkout.
 
 | Command | Does |
 |---|---|
-| `zmina task new <role> <asked...>` | record a task; prints `T-14 · dev`. If the role is already running, also queues its current handoff packet for explicit acceptance, and delivers it at once when the role can take it (else with the beat); does not restart the role or change its working directory. A role that is down is not started: stderr names the `zmina --crew <file> up <role> --task T-14` that starts it on the task, and if the task still sits there unaccepted after 5 min the ticker tells the dispatcher once (`<role>: down, has not taken T-14; zmina --crew … up …`, one notice per task, dropped before delivery once the role is up or the task taken; not while the role sleeps or the shift is stopped). `--repo <name or path>` (a name is a directory under the crew's dir), `--note`, `--title "<short plain sentence>"`, `--project <name>`, `--url <live thing>`, `--budget <dollars>` (what it may cost, see Usage), `--criteria "<one line>"` (once for each criterion, see What done means), `--json`. With `routes:` in the crew file the routes can pick the role (`--route`) and every task made records where it went against them (see Routes). |
+| `zmina task new <role> <asked...>` | record a task; prints `T-14 · dev`. If the role is already running, also queues its current handoff packet for explicit acceptance, and delivers it at once when the role can take it (else with the beat); does not restart the role or change its working directory. A role that is down is not started: stderr names the `zmina --crew <file> up <role> --task T-14` that starts it on the task, and if the task still sits there unaccepted after 5 min the ticker tells the dispatcher once (`<role>: down, has not taken T-14; zmina --crew … up …`, one notice per task, dropped before delivery once the role is up or the task taken; not while the role sleeps or the shift is stopped). `--repo <name or path>` (a name is a directory under the crew's dir), `--note`, `--title "<short plain sentence>"`, `--project <name>`, `--url <live thing>`, `--budget <dollars>` (what it may cost, see Usage), `--criteria "<one line>"` (once for each criterion, see What done means), `--check "<command>"` with `--check-timeout 10m` and `--check-commit` (the command closing it as done runs, see What checked means; the owner and the dispatcher only, and the task needs `--worktree`), `--json`. With `routes:` in the crew file the routes can pick the role (`--route`) and every task made records where it went against them (see Routes). |
 | `zmina task new --route [--kind k] [--repo r] [--project p] [--after T-n] [--of T-n [--rereview]] <asked...>` | the role is left out and the crew file's routes pick it (`zmina route` takes the same flags, see Routes): prints `T-15 · dev2 (rule 6: claude 7d 41% < codex week 50%)`. Nothing is made when no rule matched or the answer is another crew's (`tell`): the error says so, and the task is made by hand with `zmina task new <role> …`. A role down is not started, as above (a copy `dev#2`: `up dev --as 2 --task T-15`). |
 | `zmina task new <role> [--because "<why>"] <asked...>` | a role picked by hand, with the routes' answer kept beside it (see Routes). `--because` says why it is not the routes' pick; optional unless the crew file has `route_override: required`. Without `routes:` it does nothing. |
 | `zmina task new <role> --repo r --worktree <asked...>` | also gives it its own git worktree `~/.zmina/worktrees/<repo>-T-14` on a new branch `zmina/t-14` (`zmina/<crew>-t-14` for a named crew) from the repo's current branch (`--base` another). The role works there, never in the repo's checkout. The task is written before the worktree is made: if git fails, it stays as `dropped` with the error in its note. |
 | `zmina task ls [<node>/<crew>] [--all] [--role r] [--json]` | active tasks (`--all`: closed too); with an address, that crew's (see `zmina ls <node>/<crew>`). |
-| `zmina task show [<node>/<crew>] <id> [--full]` | one task: what was asked and its latest note (each clipped to 300 characters), its criteria when it has some (a `criteria:` block, numbered, whole), its handoff, result and checkpoint in one line each (revision, time, the summary's start), its cost line (see Usage) and its last 8 events, one line each. `--full`: the asked text, note, result and checkpoint whole and the last 20 events. Ids: `T-14`, `t-14` or `14`. |
-| `zmina task set <id> [state] [--on <who>] [--note …] [--role r] [--title …] [--project …] [--url …] [--budget …] [--criteria …]` | change state, note, title, project, url or budget (`-` clears one), or hand it to another role. `--criteria "<one line>"`, repeated, replaces the task's criteria; an empty `--criteria ""` alone clears them. `waiting --on <who>`: it waits on someone other than the owner — a role of the crew or a person (`--on -`: the owner again); it stays off the owner's todo. Any other state clears it. |
-| `zmina task done <id>` / `task drop <id>` | close it, and print its cost line when turns are found for it; closed by a role, the dispatcher gets a signal with the note (see results). Refuses while its worktree has uncommitted changes (`--force` closes anyway; the worktree stays). `done` also refuses a task that has criteria and no saved result (`task result`, or `done --result <file>`); `--force` closes it anyway. |
+| `zmina task show [<node>/<crew>] <id> [--full]` | one task: what was asked and its latest note (each clipped to 300 characters), its criteria when it has some (a `criteria:` block, numbered, whole), the check closing it as done will run (`check:`), or for a closed task the check that ran (`checked:`, with its output under `--full`) or that it was closed past it (`unchecked:`), its handoff, result and checkpoint in one line each (revision, time, the summary's start), its cost line (see Usage) and its last 8 events, one line each. `--full`: the asked text, note, result and checkpoint whole and the last 20 events. Ids: `T-14`, `t-14` or `14`. |
+| `zmina task set <id> [state] [--on <who>] [--note …] [--role r] [--title …] [--project …] [--url …] [--budget …] [--criteria …] [--check …]` | change state, note, title, project, url or budget (`-` clears one), or hand it to another role. `--criteria "<one line>"`, repeated, replaces the task's criteria; an empty `--criteria ""` alone clears them. `waiting --on <who>`: it waits on someone other than the owner — a role of the crew or a person (`--on -`: the owner again); it stays off the owner's todo. Any other state clears it. `--check "<command>" [--check-timeout 10m] [--check-commit]` gives the task its own check, `--check -` clears it (the owner and the dispatcher only; set it before closing, not with it; see What checked means). |
+| `zmina task done <id>` / `task drop <id>` | close it, and print its cost line when turns are found for it; closed by a role, the dispatcher gets a signal with the note (see results). Refuses while its worktree has uncommitted changes (`--force` closes anyway; the worktree stays). `done` also refuses a task that has criteria and no saved result (`task result`, or `done --result <file>`); `--force` closes it anyway. `done` (and `task set <id> done`) on a task with a check runs it first and refuses the close when it fails or times out: exit code 4, the end of its output in the message, the task stays open (see What checked means). |
 | `zmina task park <id> [--note "<what remains>"]` | move an active task to the later list: a new `L-n` with what remains (default: the task's title), note `from T-48 (designer)`, and the role and its conversation (the running one, else its last) for `later take --resume`. The task closes as `parked L-n`; its worktree stays as it is. `task set <id> parked` is refused: parking goes through here. Prints `T-48 · designer · parked L-15`, then its cost line. |
 | `zmina task gc [--dry-run]` | remove worktrees and branches of closed tasks once clean and merged into their base. `--force` also removes dropped tasks' unmerged branches. Tasks whose repository is no longer at the path they record (moved, deleted) are one plain line for each repository, `repository moved or gone: <path>, N closed tasks`, not a git error for each: git cannot say whether their work is merged, so a worktree directory that exists stays (point the records at the new place with `task relocate`). `--drop-gone` also drops the worktree record (worktree, branch and base) of a done or dropped task whose repository and worktree directory are both gone: nothing is left to lose, and the record stops being listed. A last line counts what was removed, dropped and kept. |
 | `zmina task relocate <old-repo-path> <new-repo-path> [--dry-run]` | a repository moved: every task record (closed and open) whose repo is `<old-repo-path>` gets `<new-repo-path>`, which must be the top level of a git repository (refused otherwise). Only the repo field is rewritten, each record through the task store; an event `relocate` carries the count. Then `git worktree repair` runs in the new repository (one minute at most) and what it said is printed, so worktrees that stayed in `~/.zmina/worktrees` find their repository again. Nothing is deleted. `--dry-run` prints each task that would change and what would run. `task gc` then judges the tasks in their repository's new place. |
@@ -1283,6 +1284,58 @@ its result for each one whether it holds and how it checked, and whoever reads t
 enforce is that there is one: `task done` on a task with criteria and no saved result is refused (`--force` closes it
 anyway). A packet already handed is not refreshed by `task set --criteria`; `task handoff <id> --queue` hands the
 current one.
+
+**What checked means.** A task with a worktree can have a check: a shell line zmina runs itself when the task is
+closed as done, in the task's worktree. It is the crew file's `done_check` (a command line, or `{run, timeout,
+commit}`; `off`, `none` or nothing is no check; a key it does not know is an error), or the task's own, which replaces
+it: `task new … --worktree --check "make test"` or `task set <id> --check "make test"` with `--check-timeout` (10m by
+default, 30m at most) and `--check-commit` (the branch also has a commit of the task's own); `--check -` on `set` clears
+the task's, `--check true` is a task with nothing to check. A command is one line of plain text: a line break, tab,
+escape sequence or other control character (a bidirectional override, a zero-width character) in it is refused, and a
+stored command is shown as plain text everywhere. A task with no worktree has no check, and a crew's `done_check` does
+not reach it. Only the owner and the dispatcher set a task's check or close a task past one: a role cannot make its own
+`task done` run a command it chose, and so a worker cannot `--force` a task that has a worktree once the crew has a
+`done_check` (it asks the dispatcher). The role is `$ZMINA_ROLE`, as everywhere in zmina: a process that does not say
+who it is passes as the owner, and anyone who can write the task's file can write a check into it, so this keeps a
+worker from doing it by mistake, it is not a wall. A zmina that a check itself starts has no owner's hand at all: the
+check's environment has `ZMINA_IN_CHECK=1`, and a zmina that finds it set sets no check and forces past none, whatever
+role it says it is.
+
+`task done <id>` (and `task set <id> done`) does it in three steps. First it reads the task and its worktree and refuses
+what the close would refuse anyway, before anything runs: an argument that is no good (a `--check` with the close, a bad
+`--budget`), a worktree with uncommitted changes, a task with criteria and no result, and `--check-commit` for a branch
+with no commit of its own; a task that is done already is closed again with nothing run. A check wants a commit of the
+task's own when the branch has one beyond its base, or, for a branch its base already has (merged), one since the commit
+the worktree was made at, which the task keeps as `fork` (a task made before that is read from the branch's reflog; where
+neither says, a merged branch is taken to have had commits, so there the rule asks for nothing). Second it runs
+`/bin/sh -c <command>` in the worktree with no lock held (the state lock is taken only to read and to close): stdin is
+closed, the command is the leader of a session and process group of its own, with no controlling terminal, which is killed
+when it ends or the timeout passes, and also when zmina gets an interrupt, terminate, hangup or quit signal (the task then
+stays open and the check is reported as interrupted, not as failed: nothing is known of it). Third it closes, but only if
+the task, its worktree's commit and the check in force (the task's, or the crew's) are still the ones it ran with: if any
+moved meanwhile the close is refused and the command is to be run again. A check that exits 0 and leaves files behind in
+the clean worktree has failed: it names up to five of them (remove them, or have git ignore them), as the task could not
+close over them.
+
+The command gets the environment of the zmina that runs it, less what zmina keeps from roles' sessions (`$ZMINA_ROLE`,
+`CLAUDE_CONFIG_DIR`, tmux's and the terminal's variables) and less the variables whose names look like secrets: a name
+with one of these as a part (between underscores) or ending in `TOKEN` or `_KEY` — `TOKEN`, `SECRET`, `PASSWORD`,
+`PASSWD`, `PASSPHRASE`, `PASS`, `PWD` (not `PWD` alone), `PAT`, `AUTH`, `AUTHORIZATION`, `CREDENTIAL`, `COOKIE`,
+`API_KEY`, `ACCESS_KEY`, `PRIVATE_KEY`, `DSN` — except a few that are not secrets (`SSH_AUTH_SOCK`, `PASSWORD_STORE_DIR`,
+`GOPRIVATE`, `GONOSUMDB`, `GONOPROXY`, `PWD`). The values of the variables taken out are blanked from the output, longest
+first, and so is the password of any `scheme://user:password@host` address wherever it is written: a `DATABASE_URL`
+stays in the environment, only its password is not recorded. The command line itself is stored and shown as given: put
+no secret in it. A check that exits 0 closes the task and is kept in `closed.check` (`run`, its `source`, `commit`, `at`,
+`exit`, `duration_ms`, and `output`: the last 40 lines at most 300 characters each, 8 KiB in all, plain text without
+control or format characters); a failing or timed-out one closes nothing, exits 4, prints the same tail, and tells the
+dispatcher nothing: the worker sees it in its own turn. `--force`, for the owner and the dispatcher only, closes anyway
+without running it and records `closed.unchecked` (`by`, `run`); `task ls --all` and `task show` mark such a task. A task
+with no check closes as it always did.
+
+What it says is this and no more: zmina ran that command at that commit in that worktree and it exited 0. It does not
+say the work is right or complete: the command and the files it runs are the worker's own repository's (a worker can
+change a Makefile), and a check that is too weak passes. It is the answer to "did the tests the owner named run, here,
+on this commit", not to "is it correct". A task closed before checks existed, or with none, says nothing of it.
 
 A role reads its own name from `$ZMINA_ROLE`; when it runs `zmina task …` the event log records
 it as the actor.
@@ -2491,6 +2544,10 @@ any time. It is not a field of `state.json`.
   (`task set <id> --criteria …` replaces them). The role's packet carries them and its result says for each one
   whether it holds; `task done` refuses until a result is saved (`--force` overrides). Leave them off when the
   worker's own judgment is the whole check.
+- For code work with a worktree, name the command that must pass: `zmina task new <role> --repo r --worktree --check
+  "make test"` (or `done_check:` in the crew file for every such task). `task done` then runs it itself and refuses the
+  close when it fails; only you and the owner set a check or force past it (`--force`, recorded as unchecked). It says
+  the command passed at that commit, not that the work is right (see What checked means).
 - Route by `about`; record the task (`zmina task new <role> …`, `--repo r --worktree` for code),
   start a role that is down (`zmina up <role>`, wait until `ls` shows it `idle`), then
   `SendMessage` with the task id and, for code, the worktree path.
