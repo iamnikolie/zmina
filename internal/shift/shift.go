@@ -258,6 +258,9 @@ type View struct {
 	Asleep time.Time `json:"asleep,omitzero"`
 	// Problem says why the role cannot start (its dir is gone) or cannot be seen, empty when all is well.
 	Problem string `json:"problem,omitempty"`
+	// StatusError is why an up role's Status is "unknown": its Claude Code session file does not read (empty, cut short,
+	// or the file's own error), with the file and what to do (registry.BadFileError).
+	StatusError string `json:"status_error,omitempty"`
 	// Prompt is true while an up role's screen shows a dialog or a question instead of its input line.
 	Prompt bool `json:"prompt,omitempty"`
 	// Dialog is the question on its screen and its numbered choices, when Prompt and the screen reads as one.
@@ -389,7 +392,7 @@ func (s *Shift) Views() []View {
 			v.State, v.PID = PresenceUp, p.PID
 
 			if sess, err = s.registryFor(name).ByPID(p.PID); err != nil {
-				v.Status = "unknown"
+				v.Status, v.StatusError = "unknown", err.Error()
 			}
 		case p.State == tmux.Dead:
 			v.State = PresenceDead
