@@ -1204,10 +1204,11 @@ func (s *Shift) typeDispatcher(d string, local, remote, notes []string, now time
 	local = append(act, info...)
 
 	// Never into a draft: the owner's half-typed words would go out joined with the line. What zmina itself left of
-	// a line that broke is not one.
+	// a line that broke is not one. An input line that cannot be read is no empty one either, as for any role's queue
+	// (deliverInboxOnce).
 	s.clearLeftover(d)
 
-	if draft, ok, err := s.Tmux.Prompt(d); err == nil && ok && draft != "" {
+	if draft, ok, err := s.Tmux.Prompt(d); err != nil || !ok || draft != "" {
 		return ""
 	}
 

@@ -1240,6 +1240,12 @@ func (s *Shift) Send(name, text string) error {
 		}
 	}
 
+	// Typed, the line goes where the queue's typed delivery would put it (typingBlock): never into a dialog, over a draft
+	// or a line that has not landed.
+	if why := s.typingBlock(name, s.Now()); why != "" {
+		return fmt.Errorf("%s: not typed, %s; zmina send --when-idle queues the line for when the role can take it", name, why)
+	}
+
 	if err := s.Tmux.Type(name, text); err != nil {
 		return err
 	}
@@ -1247,6 +1253,38 @@ func (s *Shift) Send(name, text string) error {
 	s.log(name, "sent", "", text)
 
 	return nil
+}
+
+// typingBlock says why a line may not be typed into a role's input line now, "" when it may: the guards the queue's
+// typed delivery applies. The role is booted and at its prompt (atPrompt: idle, or between turns with an input line
+// that shows and is empty; never a dialog), no line typed into it is still unlanded, and its input line reads and is
+// empty; what zmina itself left of a broken line is not a draft (clearLeftover). An input line that cannot be read is as
+// much a block as a draft: nothing says what the line would be typed into.
+func (s *Shift) typingBlock(name string, now time.Time) string {
+	if s.State.Role(name).Sent != nil {
+		return "a line typed into it has not landed yet"
+	}
+
+	if !s.atPrompt(name, now) {
+		if sess := s.session(name); sess != nil && sess.Status == "waiting" {
+			return "it waits on a dialog"
+		}
+
+		return "it is not at its prompt (busy, or its start is not over)"
+	}
+
+	s.clearLeftover(name)
+
+	draft, ok, err := s.Tmux.Prompt(name)
+
+	switch {
+	case err != nil || !ok:
+		return "its input line cannot be read"
+	case draft != "":
+		return "its input line holds a draft"
+	}
+
+	return ""
 }
 
 // Queue keeps a line for a role; the ticker types it the first time the role is up, booted and idle.

@@ -425,6 +425,12 @@ func TestNativeDirectSend(t *testing.T) {
 	assert.Equal(t, []string{"look at T-1"}, p.posted["sid-designer"], "posted even while busy")
 	assert.Empty(t, f.tm.typed["designer"])
 
+	// A slash command is typed, and typed only where the queue would type it: not while the role is busy.
+	err := f.s.Send("designer", "/compact")
+	require.Error(t, err)
+	assert.Empty(t, f.tm.typed["designer"])
+
+	f.status("designer", "idle", *f.now)
 	require.NoError(t, f.s.Send("designer", "/compact"))
 	assert.Equal(t, []string{"/compact"}, f.tm.typed["designer"], "a slash command is typed")
 }
