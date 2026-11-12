@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -62,8 +63,28 @@ func launchdLoad(label string, plist []byte) error {
 
 	_ = launchctl("bootout", domain()+"/"+label)
 
-	return launchctl("bootstrap", domain(), plistPath(label))
+	// launchd takes a moment to let go of an agent it was just told to drop, and a bootstrap that comes too soon fails
+	// (error 5) with the agent left out: it is tried again for a few seconds before the install gives up.
+	var err error
+
+	for try := 0; try < bootstrapTries; try++ {
+		if try > 0 {
+			time.Sleep(bootstrapGap)
+		}
+
+		if err = launchctl("bootstrap", domain(), plistPath(label)); err == nil {
+			return nil
+		}
+	}
+
+	return err
 }
+
+const (
+	// bootstrapTries is how many times an agent's bootstrap is tried, bootstrapGap the wait between two tries.
+	bootstrapTries = 6
+	bootstrapGap   = 500 * time.Millisecond
+)
 
 // launchdUnload stops an agent and removes its plist; removed says whether there was one.
 func launchdUnload(label string) (removed bool, err error) {
