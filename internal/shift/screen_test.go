@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/iamnikolie/zmina/internal/registry"
 )
 
 func TestBlockedScreenIsToldOnce(t *testing.T) {
@@ -363,4 +365,50 @@ func TestQueuedFailureImmediatelyNamesTaskToDispatcher(t *testing.T) {
 	assert.Empty(t, f.s.State.Role("designer").Failed, "alert before retries are exhausted")
 	f.s.deliverInbox("designer", *f.now)
 	assert.Len(t, f.s.State.Notes, 1, "same failure coalesces while queued")
+}
+
+// The dispatcher is told which of the two a blocked role waits on when the session file says; a file that does not
+// say leaves the note as it was.
+func TestBlockedNoteSaysWhatTheRoleWaitsOn(t *testing.T) {
+	for name, tc := range map[string]struct {
+		waitingFor string
+		want       string
+	}{
+		"a question":          {"input needed", "no input line on its screen for 4 min, waiting on a question: "},
+		"a permission prompt": {"permission prompt", "no input line on its screen for 4 min, waiting on a permission prompt: "},
+		"the file is silent":  {"", "no input line on its screen for 4 min, waiting on: "},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := fixtureWith(t, crewYAML)
+			require.NoError(t, f.s.Up("designer"))
+			f.rg.byPID[f.tm.up["designer"]] = &registry.Session{Status: "waiting", WaitingFor: tc.waitingFor,
+				StatusUpdatedAt: f.now.UnixMilli(), SessionID: "sid-designer"}
+
+			*f.now = f.now.Add(3 * time.Minute)
+			f.tm.drafts["designer"] = "-"
+			f.tm.screen = "Which screen first?\n❯ 1. Home\n  2. Talk"
+
+			f.s.Tick()
+			*f.now = f.now.Add(4 * time.Minute)
+			f.s.Tick()
+
+			require.Len(t, notesOf(f, "designer"), 1)
+			assert.Contains(t, notesOf(f, "designer")[0], "designer: "+tc.want+"Which screen first?")
+		})
+	}
+}
+
+// A dialog that holds a boot is named by what the session file says it is, too.
+func TestBootNoteSaysWhatHoldsTheBoot(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	require.NoError(t, f.s.Up("designer"))
+	f.rg.byPID[f.tm.up["designer"]] = &registry.Session{Status: "waiting", WaitingFor: "permission prompt",
+		StatusUpdatedAt: f.now.UnixMilli(), SessionID: "sid-designer"}
+	f.tm.drafts["designer"] = "-"
+	f.tm.screen = "Allow this?\n❯ 1. Yes\n  2. No"
+
+	*f.now = f.now.Add(time.Minute)
+	notes := f.s.watchScreen("designer", *f.now)
+	require.Len(t, notes, 1)
+	assert.Contains(t, notes[0], "designer: up 60 s and still no input line, a permission prompt holds its boot")
 }

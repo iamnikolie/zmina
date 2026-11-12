@@ -222,7 +222,15 @@ func seatFromView(v shift.View, budget int, now time.Time) route.Seat {
 		case len(v.Tasks) > 0 || v.Status == "busy" || v.Status == "shell" || v.Status == "working":
 			s.State, s.Note = route.StateBusy, busyOn()
 		case v.Prompt:
-			s.State, s.Note = route.StateBusy, "busy: a dialog waits on its screen"
+			noun := "a dialog"
+			switch v.WaitingFor {
+			case shift.WaitQuestion:
+				noun = "a question"
+			case shift.WaitPermission:
+				noun = "a permission prompt"
+			}
+
+			s.State, s.Note = route.StateBusy, "busy: "+noun+" waits on its screen"
 		}
 	case len(v.Tasks) > 0:
 		// Down, but it holds work: a second task would queue behind it.

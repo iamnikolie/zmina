@@ -967,7 +967,7 @@ func (a *app) peekCommand() *cobra.Command {
 
 // peekHead is peek's first line: the role's state and status, for how long, its context and tasks.
 func peekHead(v shift.View) string {
-	parts := []string{v.Role, strings.TrimSpace(stateCell(v)+" "+v.Status) + " " + shortSince(v)}
+	parts := []string{v.Role, strings.TrimSpace(stateCell(v)+" "+waitingCell(v)) + " " + shortSince(v)}
 	if v.Prompt {
 		parts = append(parts, "dialog on screen")
 	}
@@ -1225,6 +1225,15 @@ func stateCell(v shift.View) string {
 func statusCell(v shift.View) string {
 	if v.StatusError != "" {
 		return v.Status + " (session file unreadable; zmina doctor)"
+	}
+
+	return waitingCell(v)
+}
+
+// waitingCell is the role's status and, for one that waits, what on: `waiting (question)` or `waiting (permission)`.
+func waitingCell(v shift.View) string {
+	if v.WaitingFor != "" {
+		return v.Status + " (" + v.WaitingFor + ")"
 	}
 
 	return v.Status

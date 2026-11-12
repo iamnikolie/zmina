@@ -58,9 +58,9 @@ func (s *Shift) watchScreen(name string, now time.Time) []string {
 		// reads nothing queued for it: the dispatcher hears of it now, not boot_grace and blockedAfter later.
 		if err == nil && !ok && !rs.BlockedNoted && now.Sub(rs.Started) >= bootBlockedAfter {
 			rs.BlockedNoted, rs.NoPrompt = true, rs.Started
-			note := fmt.Sprintf("%s: up %d s and still no input line, a dialog holds its boot and its queued lines "+
-				"wait: %s (zmina peek %s; zmina keys %s ...)", name, int(now.Sub(rs.Started).Seconds()), s.excerpt(name),
-				name, name)
+			note := fmt.Sprintf("%s: up %d s and still no input line, %s holds its boot and its queued lines "+
+				"wait: %s (zmina peek %s; zmina keys %s ...)", name, int(now.Sub(rs.Started).Seconds()),
+				waitNoun(waitKind(s.session(name))), s.excerpt(name), name, name)
 			s.log(name, "blocked", "", note)
 
 			return []string{note}
@@ -79,8 +79,14 @@ func (s *Shift) watchScreen(name string, now time.Time) []string {
 		rs.NoPrompt = now
 	case !rs.BlockedNoted && now.Sub(rs.NoPrompt) >= blockedAfter:
 		rs.BlockedNoted = true
-		note := fmt.Sprintf("%s: no input line on its screen for %d min, waiting on: %s (zmina peek %s; "+
-			"zmina keys %s ...)", name, int(now.Sub(rs.NoPrompt).Minutes()), s.excerpt(name), name, name)
+		// Which of the two it waits on is the session file's word when it has one; otherwise only the screen says.
+		on := "waiting on"
+		if kind := waitKind(s.session(name)); kind != "" {
+			on += " " + waitNoun(kind)
+		}
+
+		note := fmt.Sprintf("%s: no input line on its screen for %d min, %s: %s (zmina peek %s; "+
+			"zmina keys %s ...)", name, int(now.Sub(rs.NoPrompt).Minutes()), on, s.excerpt(name), name, name)
 		s.log(name, "blocked", "", note)
 		notes = append(notes, note)
 	}

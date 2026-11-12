@@ -244,6 +244,10 @@ type View struct {
 	Status    string    `json:"status,omitempty"`
 	SessionID string    `json:"session_id,omitempty"`
 	Since     time.Time `json:"since,omitzero"`
+	// WaitingFor is what a role whose Status is waiting waits on, from Claude Code's session file and not the screen:
+	// WaitPermission (a permission prompt), WaitQuestion (a question put to the owner), empty when it is not waiting
+	// or the file does not say. Computed on every look; it is not kept in the state.
+	WaitingFor string `json:"waiting_for,omitempty"`
 	// Context is how many tokens the conversation fills (0: not known); ContextMax the role's context_max.
 	Context    int `json:"context,omitempty"`
 	ContextMax int `json:"context_max,omitempty"`
@@ -409,6 +413,7 @@ func (s *Shift) Views() []View {
 
 		if sess != nil {
 			v.Status, v.SessionID, v.Since = sess.Status, sess.SessionID, sess.StatusSince()
+			v.WaitingFor = waitKind(sess)
 			turn, _ := s.registryFor(name).Last(sess.SessionID)
 			v.Context = turn.Context
 		}

@@ -522,3 +522,31 @@ func TestLastAfterACompactionAtThePrompt(t *testing.T) {
 	assert.Equal(t, 43_600, got.Context, "the first turn after the boundary")
 	assert.Equal(t, at, got.Compacted.UTC())
 }
+
+// A session file carries what a waiting session waits on only while it waits; an older Claude Code writes none.
+func TestSessionWaitingFor(t *testing.T) {
+	ns := t.TempDir()
+	dir := filepath.Join(ns, "sessions")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+
+	me := os.Getpid()
+	r := &Registry{Namespace: ns}
+
+	write := func(body string) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, strconv.Itoa(me)+".json"), []byte(body), 0o600))
+	}
+
+	write(`{"pid": ` + strconv.Itoa(me) + `, "sessionId": "s1", "status": "waiting", "waitingFor": "input needed", "statusUpdatedAt": 1}`)
+
+	got, err := r.ByPID(me)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "waiting", got.Status)
+	assert.Equal(t, "input needed", got.WaitingFor)
+
+	write(`{"pid": ` + strconv.Itoa(me) + `, "sessionId": "s1", "status": "idle", "statusUpdatedAt": 2}`)
+
+	got, err = r.ByPID(me)
+	require.NoError(t, err)
+	assert.Empty(t, got.WaitingFor, "a file without the field reads as before")
+}
