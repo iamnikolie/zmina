@@ -471,21 +471,38 @@ func (c *Client) TypeLines(name, text string) error {
 // typeLines types lines with Ctrl-J between them, then Enter. Typed as a person types: a burst of more than about 800
 // characters Claude Code reads as a paste, which it keeps as a placeholder, wraps as pasted content and, cut into,
 // loses the start of. So each line goes in pieces with a pause between them.
+//
+// An error says whether any key of the line may have reached the pane: one from before the first send-keys (the pane
+// could not be found or asked for) or from a first send-keys that tmux itself refused is an ErrNotTyped. The first
+// send-keys that got no answer is not: it may still have run.
 func (c *Client) typeLines(name string, lines []string) error {
 	id, err := c.target(name)
 	if err != nil {
+		return notTyped(err)
+	}
+
+	first := true
+
+	send := func(keys ...string) error {
+		_, err := c.run(append([]string{"send-keys", "-t", id}, keys...)...)
+		if err != nil && first && !noAnswer(err) {
+			err = notTyped(err)
+		}
+
+		first = false
+
 		return err
 	}
 
 	for i, line := range lines {
 		if i > 0 {
-			if _, err := c.run("send-keys", "-t", id, "C-j"); err != nil {
+			if err := send("C-j"); err != nil {
 				return err
 			}
 		}
 
 		for _, piece := range pieces(line, typePiece) {
-			if _, err := c.run("send-keys", "-t", id, "-l", "--", escape(piece)); err != nil {
+			if err := send("-l", "--", escape(piece)); err != nil {
 				return err
 			}
 
@@ -493,9 +510,31 @@ func (c *Client) typeLines(name string, lines []string) error {
 		}
 	}
 
-	_, err = c.run("send-keys", "-t", id, "Enter")
+	return send("Enter")
+}
 
-	return err
+// ErrNotTyped is what a failed Type or TypeLines wraps when none of the line reached the pane: tmux was not asked to
+// send a key, or refused the first. A caller may try the line again without saying it twice.
+var ErrNotTyped = errors.New("nothing was typed")
+
+// notTypedError carries the failure's own words and is an ErrNotTyped.
+type notTypedError struct{ err error }
+
+func (e *notTypedError) Error() string        { return e.err.Error() }
+func (e *notTypedError) Unwrap() error        { return e.err }
+func (e *notTypedError) Is(target error) bool { return target == ErrNotTyped }
+
+func notTyped(err error) error { return &notTypedError{err: err} }
+
+// noAnswerError is a call that got no answer within Timeout: tmux may still have run it.
+type noAnswerError struct{ msg string }
+
+func (e *noAnswerError) Error() string { return e.msg }
+
+func noAnswer(err error) bool {
+	var n *noAnswerError
+
+	return errors.As(err, &n)
 }
 
 // typePiece is the most characters typed in one go, typePause the wait after each: well under what Claude Code takes
@@ -562,7 +601,7 @@ func (c *Client) run(args ...string) (string, error) {
 
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {
-		return "", fmt.Errorf("tmux %s: no answer in %s", args[0], Timeout)
+		return "", &noAnswerError{msg: fmt.Sprintf("tmux %s: no answer in %s", args[0], Timeout)}
 	}
 
 	if err != nil {

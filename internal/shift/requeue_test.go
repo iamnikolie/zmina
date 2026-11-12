@@ -98,7 +98,7 @@ func TestRetryOfFailedPostLeavesAckedParts(t *testing.T) {
 	assert.Len(t, rs.Failed[0].Parts, 2)
 
 	f.s.AckLines([]string{remote}, false, "dispatcher", "dispatcher")
-	_, err = f.s.Retry("dispatcher")
+	_, _, err = f.s.Retry("dispatcher", true)
 	require.NoError(t, err)
 	assert.Empty(t, rs.Failed)
 	require.Len(t, f.s.State.Signals, 1)
@@ -111,7 +111,7 @@ func TestRetryOfFailedPostLeavesAckedParts(t *testing.T) {
 	f.s.followPosted("dispatcher", *f.now)
 	require.Len(t, rs.Failed, 1)
 	f.s.AckLines([]string{local}, false, "dispatcher", "dispatcher")
-	_, err = f.s.Retry("dispatcher")
+	_, _, err = f.s.Retry("dispatcher", true)
 	require.NoError(t, err)
 	assert.Empty(t, f.s.State.Signals)
 	assert.Empty(t, rs.Inbox)
@@ -146,7 +146,7 @@ func TestRetryOfFailedTypedLineLeavesAckedParts(t *testing.T) {
 
 	require.Len(t, rs.Failed, 1)
 	f.s.AckLines([]string{first}, false, "dispatcher", "dispatcher")
-	_, err = f.s.Retry("dispatcher")
+	_, _, err = f.s.Retry("dispatcher", true)
 	require.NoError(t, err)
 
 	assert.Empty(t, rs.Inbox, "a typed line goes back by its parts, not as one line")
@@ -206,7 +206,7 @@ func TestLegacyLinesKeepNoIDs(t *testing.T) {
 	assert.Len(t, d.Inbox, 2, "no ack takes a line without ids out of the queue")
 	assert.NotNil(t, d.Sent)
 
-	_, err = f.s.Retry("designer")
+	_, _, err = f.s.Retry("designer", true)
 	require.NoError(t, err)
 	assert.Contains(t, d.Inbox, "[owner] the log mentions S-2", "retried whole")
 

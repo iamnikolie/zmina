@@ -117,6 +117,7 @@ func (s *Shift) Tick() []string {
 			probedUp[name] = true
 
 			s.remember(name, p)
+			s.closeTakenTyped(name)
 			s.observeRecovery(name)
 			// A role started by an older zmina would vanish without a screen.
 			_ = s.Tmux.KeepScreens(name)
@@ -1204,10 +1205,11 @@ func (s *Shift) typeDispatcher(d string, local, remote, notes []string, now time
 	local = append(act, info...)
 
 	// Never into a draft: the owner's half-typed words would go out joined with the line. What zmina itself left of
-	// a line that broke is not one.
+	// a line that broke is not one. An input line that cannot be read is no empty one either, as for any role's queue
+	// (deliverInboxOnce).
 	s.clearLeftover(d)
 
-	if draft, ok, err := s.Tmux.Prompt(d); err == nil && ok && draft != "" {
+	if draft, ok, err := s.Tmux.Prompt(d); err != nil || !ok || draft != "" {
 		return ""
 	}
 
@@ -1249,6 +1251,13 @@ func (s *Shift) typeDispatcher(d string, local, remote, notes []string, now time
 
 	line := "[zmina] " + strings.Join(parts, " · ") + ackTail(ids)
 
+	// Unlike a role's queued line, a line the dispatcher's typing broke on is never kept as failed, whatever the pane
+	// shows of it: its signals and notes stay queued and the next try waits retryGap, however often it fails. A crew
+	// that runs unattended is worse off with a dispatcher that hears nothing than with a signal told twice, and what the
+	// line carries has ids (and the dispatcher's ack), which make a repeat recognisable. What it left in the input line
+	// is cleared by typeLine all the same, and looked for again by the next try (clearLeftover).
+	typedAt := s.Now()
+
 	if err := s.typeLine(d, line); err != nil {
 		s.State.Role(d).dispatchTried(now)
 
@@ -1259,7 +1268,7 @@ func (s *Shift) typeDispatcher(d string, local, remote, notes []string, now time
 		return ""
 	}
 
-	s.State.Role(d).Sent, s.State.Role(d).TypedAt = &Sent{Line: line, At: now, IDs: ids, Parts: kept}, now
+	s.State.Role(d).Sent, s.State.Role(d).TypedAt = &Sent{Line: line, At: typedAt, IDs: ids, Parts: kept}, now
 	s.delivered(ids, now)
 	s.stageIDs(ids, "submitted")
 
@@ -1280,6 +1289,7 @@ func (s *Shift) typeDispatcher(d string, local, remote, notes []string, now time
 		s.State.Signals, s.State.Notes = remote, nil
 		s.State.NoticeMeta = nil
 	}
+
 	s.Told = true
 	s.log(d, "told", "", line)
 
@@ -1404,7 +1414,32 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 
 	head := rs.Inbox[0]
 
+	// The line's time is the moment its typing starts, not the beat's: a turn that ended earlier in this beat is not a
+	// sign that the role took it (typedTaken).
+	typedAt := s.Now()
+
 	if err := s.typeLine(name, head); err != nil {
+		// It may have reached the pane: it is not typed again by itself, on this try or any other.
+		if typedMayHaveReached(err) {
+			ids := s.takeIDs(name, head)
+			rs.Inbox = rs.Inbox[1:]
+			rs.clearTries()
+
+			// A tracked line counts as delivered and has one way of being said again, its ack (renotify), as a typed
+			// line whose session ended has (settleEnded): no failed record stands beside it, which a retry or a drop
+			// would act on apart from the ack.
+			if s.tracked(ids) {
+				s.delivered(ids, now)
+				s.log(name, "type-unclear", "", "may have reached the pane; its ack says it again: "+head)
+
+				return ""
+			}
+
+			s.failUnclear(name, Failed{Line: head, Error: err.Error(), At: now, IDs: ids})
+
+			return name + ": a queued line may have reached its pane, kept in zmina queue as needing attention: " + head
+		}
+
 		rs.Attempts++
 		rs.TriedAt = now
 		s.deliveryFailure(name, head, err.Error())
@@ -1439,7 +1474,7 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 	if strings.HasPrefix(head, "/") {
 		rs.SlashAt = now
 	} else {
-		rs.Sent, rs.TypedAt = &Sent{Line: head, At: now, IDs: ids}, now
+		rs.Sent, rs.TypedAt = &Sent{Line: head, At: typedAt, IDs: ids}, now
 	}
 
 	return "typed into " + name + ": " + head

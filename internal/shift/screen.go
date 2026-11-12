@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/iamnikolie/zmina/internal/tmux"
 )
 
 const (
@@ -279,7 +281,7 @@ func (s *Shift) landed(name string, now time.Time) bool {
 
 	reason := "typed, never taken"
 	if !unsent {
-		reason = "typed, acceptance unconfirmed; inspect before retry"
+		reason = UnclearUnconfirmed
 	}
 	if !unsent || sent.Tries >= typeTries {
 		if unsent {
@@ -325,6 +327,36 @@ func (s *Shift) typedLanded(name string, sent *Sent) (landed, unsent bool) {
 	return sess != nil && sess.StatusUpdatedAt > sent.At.UnixMilli(), false
 }
 
+// closeTakenTyped closes the record of the line typed into a role last when the role is seen to have taken it (typedLanded):
+// nothing else closes it while no other line waits, and a record left open lists a line long processed as one in flight
+// (queue ls), blocks zmina send and, when the session ends, would be judged as a line that never landed.
+func (s *Shift) closeTakenTyped(name string) {
+	if sent := s.State.Role(name).Sent; sent != nil {
+		if landed, _ := s.typedLanded(name, sent); landed {
+			s.closeTyped(name)
+		}
+	}
+}
+
+// typedTaken reports a sign that a role took the line typed into it last, where the role may be gone and no status can be
+// read: its status changed after the line (typedLanded), or its conversation shows a turn that ended after it. A line
+// still in the input line was not taken.
+func (s *Shift) typedTaken(name string, sent *Sent) bool {
+	landed, unsent := s.typedLanded(name, sent)
+	if landed || unsent {
+		return landed
+	}
+
+	id := s.State.Role(name).LastSession
+	if id == "" {
+		return false
+	}
+
+	turn, err := s.registryFor(name).Last(id)
+
+	return err == nil && turn.Ended && turn.At.After(sent.At)
+}
+
 // closeTyped closes the record of a typed line that landed. A typed line shows no seen: the info lines it carried are
 // closed when it lands.
 func (s *Shift) closeTyped(name string) {
@@ -335,6 +367,15 @@ func (s *Shift) closeTyped(name string) {
 	}
 
 	rs.Sent = nil
+}
+
+// failUnclear keeps a line that may have reached its role as a failed one that needs attention (Failed.Unclear), says so
+// in the log, and tells the dispatcher once (deliveryFailure). It is never queued again by itself.
+func (s *Shift) failUnclear(name string, f Failed) {
+	rs := s.State.Role(name)
+	rs.Failed = append(rs.Failed, f)
+	s.log(name, "type-failed", "", "unclear, kept for a look: "+f.Error+": "+f.Line)
+	s.deliveryFailure(name, f.Line, f.Error)
 }
 
 // deliveryFailure makes a stalled handoff visible without waiting for an idle notice.
@@ -377,6 +418,12 @@ func (s *Shift) typeLine(name, line string) error {
 	}
 
 	if err := typ(name, line); err != nil {
+		// None of it was typed (tmux was not asked to send a key, or refused the first): nothing is in the input line,
+		// nothing reached the role, and no start is left to look for.
+		if errors.Is(err, tmux.ErrNotTyped) {
+			return err
+		}
+
 		return s.clearPartial(name, line, err)
 	}
 
@@ -402,15 +449,23 @@ func (s *Shift) typeLine(name, line string) error {
 	}
 }
 
-// clearPartial is what is left of a line whose typing failed, cleared from the input line, and returns typeErr. Typing
-// goes in pieces, so a failure half way leaves the typed start in the input line, where it would pass for the owner's
-// draft and hold the queue for good. Both callers type only into an input line they read empty, so what sits there now
-// is zmina's own when it is the start of the line it was typing (holds); anything else is the owner's and stays.
+// clearPartial is what is left of a line whose typing failed, cleared from the input line, and returns typeErr, as it
+// is or marked as unclear. Typing goes in pieces, so a failure half way leaves the typed start in the input line, where
+// it would pass for the owner's draft and hold the queue for good. Both callers type only into an input line they read
+// empty, so what sits there now is zmina's own when it is the start of the line it was typing (holds); anything else is
+// the owner's and stays.
+//
+// Whether any of the line reached the session is known only from the input line. typeErr stays as it is, a failure after
+// which a counted retry is honest, only when the start was seen there, cleared, and the input line read again without
+// it: nothing was sent, and the line is not in the pane (a failure that tmux says came before any key, tmux.ErrNotTyped,
+// never gets here). Every other way out is unclear (unclearTyping): the input line
+// could not be read (before or after the clear); it was read without the line at all, which is the picture of a typing
+// that never started and of one that went whole with its Enter; or the start is there and could not be cleared, where
+// any Enter sends it.
 //
 // The line is kept as the role's Partial until the input line is seen without it: the tmux that failed the typing
 // often cannot be read either, and a send-keys that timed out can still reach the pane later, so the delivery that
-// comes next looks again (clearLeftover). When the start is seen and cannot be cleared, the error says so; the line
-// stays queued and the try counts, as any failed one.
+// comes next looks again (clearLeftover). When the start is seen and cannot be cleared, the error says so.
 func (s *Shift) clearPartial(name, line string, typeErr error) error {
 	s.State.Role(name).Partial = line
 
@@ -419,17 +474,21 @@ func (s *Shift) clearPartial(name, line string, typeErr error) error {
 
 	draft, ok, err := s.Tmux.Prompt(name)
 	if err != nil || !ok || !holds(draft, line) {
-		return typeErr
+		return unclearTyping(typeErr)
 	}
 
 	s.clearInput(name, line)
 	s.pause(submitWait)
 
-	if draft, ok, err = s.Tmux.Prompt(name); err != nil || !ok || !holds(draft, line) {
-		return typeErr
+	if draft, ok, err = s.Tmux.Prompt(name); err != nil || !ok {
+		return unclearTyping(typeErr)
 	}
 
-	return fmt.Errorf("%w; its start could not be cleared from the input line", typeErr)
+	if holds(draft, line) {
+		return unclearTyping(fmt.Errorf("%w; its start could not be cleared from the input line", typeErr))
+	}
+
+	return typeErr
 }
 
 // clearLeftover looks again for the start of a line whose typing failed (Partial), before a delivery reads the input

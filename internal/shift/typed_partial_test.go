@@ -149,9 +149,9 @@ func (o ownerTmux) Type(n, _ string) error {
 
 func (o ownerTmux) TypeLines(n, text string) error { return o.Type(n, text) }
 
-// A start that cannot be cleared leaves the line queued and the failure counted, with the error saying why the input
-// line still holds it.
-func TestPartialClearThatFailsCountsAndSaysSo(t *testing.T) {
+// A start that cannot be cleared is not a failure to try again: the line may be sent by any Enter that reaches the input
+// line, so it is kept as one that needs attention, with the error saying why the input line still holds it.
+func TestPartialClearThatFailsKeepsTheLineForALook(t *testing.T) {
 	f, c := cutFixture(t)
 	c.noClear = true
 	line := "[zmina T-1] read the packet and tell me what is missing before you start"
@@ -160,8 +160,10 @@ func TestPartialClearThatFailsCountsAndSaysSo(t *testing.T) {
 	f.s.deliverInbox("designer", *f.now)
 
 	rs := f.s.State.Role("designer")
-	assert.Equal(t, 1, rs.Attempts, "counted")
-	assert.Equal(t, []string{line}, rs.Inbox, "still queued")
+	assert.Empty(t, rs.Inbox, "not typed again")
+	require.Len(t, rs.Failed, 1)
+	assert.True(t, rs.Failed[0].Unclear())
+	assert.Contains(t, rs.Failed[0].Error, "could not be cleared from the input line")
 	assert.NotEmpty(t, f.tm.drafts["designer"], "the clear did not take")
 	require.NotEmpty(t, f.s.State.Notes)
 	assert.Contains(t, f.s.State.Notes[0], "could not be cleared from the input line")
@@ -188,12 +190,14 @@ func (b blindTmux) Prompt(n string) (string, bool, error) {
 	return b.cutTmux.Prompt(n)
 }
 
-// A start that could not even be looked for is remembered: the delivery that comes once the tmux answers clears it
-// before it reads the input line for a draft, so it does not hold the queue as the owner's.
+// A start that could not even be looked for is remembered, and the line it was is kept for a look, not typed again: the
+// delivery that comes once the tmux answers clears the start before it reads the input line for a draft, so it does not
+// hold the queue as the owner's, and goes on with the line behind it.
 func TestPartialThatCouldNotBeReadIsClearedByTheNextDelivery(t *testing.T) {
 	f, c := cutFixture(t)
 	line := "[zmina T-1] read the packet and tell me what is missing before you start"
 	require.NoError(t, f.s.Queue("designer", line))
+	require.NoError(t, f.s.Queue("designer", "the line behind it"))
 
 	f.s.Tmux = blindTmux{cutTmux: c, blind: new(bool)}
 	f.s.deliverInbox("designer", *f.now)
@@ -202,15 +206,19 @@ func TestPartialThatCouldNotBeReadIsClearedByTheNextDelivery(t *testing.T) {
 	assert.Equal(t, line, rs.Partial, "remembered")
 	assert.Empty(t, f.tm.keys["designer"], "no key into an input line that cannot be read")
 	assert.NotEmpty(t, f.tm.drafts["designer"], "the start is still there")
+	require.Len(t, rs.Failed, 1, "its end is not known: kept for a look, not tried again")
+	assert.Equal(t, line, rs.Failed[0].Line)
+	assert.True(t, rs.Failed[0].Unclear())
 
-	// The tmux answers again: the start goes, and the line is typed whole on its next counted try.
+	// The tmux answers again: the start goes, and the line behind it is typed whole.
 	f.s.Tmux = f.tm
 	*f.now = f.now.Add(countedGap)
 	f.s.deliverInbox("designer", *f.now)
 
 	assert.Equal(t, []string{"C-e", "C-u"}, f.tm.keys["designer"])
 	assert.Empty(t, rs.Partial, "the mark goes with a line typed whole")
-	assert.Equal(t, []string{line}, f.tm.typed["designer"])
+	assert.Equal(t, []string{"the line behind it"}, f.tm.typed["designer"])
+	assert.Len(t, rs.Failed, 1)
 }
 
 // The mark does not outlive the owner's own words: a draft that is not the start of the line stays, and the mark goes.

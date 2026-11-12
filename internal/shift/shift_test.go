@@ -2,6 +2,7 @@ package shift
 
 import (
 	"errors"
+	"fmt"
 	"github.com/iamnikolie/zmina/internal/alarm"
 	"os"
 	"path/filepath"
@@ -33,9 +34,13 @@ type fakeTmux struct {
 	starts []string
 	argv   map[string][]string
 	screen string
-	// typeErr makes Type fail.
-	typeErr  error
-	probeErr map[string]error
+	// typeErr makes Type fail, in one of three ways. An error that wraps tmux.ErrNotTyped (errNotTyped) is a failure
+	// before any key: nothing was typed. Any other error is one in the middle of a line that tmux cannot say more of:
+	// with typeLeaves the start of the line sits in the input line, where a clearing key takes it out; without, nothing
+	// shows there (the line may have gone whole, or never started).
+	typeErr    error
+	typeLeaves bool
+	probeErr   map[string]error
 	// exitSlow keeps a session up after /exit, as a claude that takes a while to end.
 	exitSlow bool
 	attached map[string]bool
@@ -51,6 +56,9 @@ type fakeTmux struct {
 	// a long burst and its Enter as a paste.
 	enterLost map[string]int
 }
+
+// errNotTyped is a failure of tmux before any key of the line was sent: nothing reached the pane.
+func errNotTyped(msg string) error { return fmt.Errorf("%w: %s", tmux.ErrNotTyped, msg) }
 
 func (f *fakeTmux) KeepScreens(string) error { return nil }
 
@@ -180,6 +188,10 @@ func (f *fakeTmux) TypeLines(n, text string) error {
 
 func (f *fakeTmux) Type(n, text string) error {
 	if f.typeErr != nil && text != "/exit" {
+		if f.typeLeaves && !errors.Is(f.typeErr, tmux.ErrNotTyped) {
+			f.drafts[n] = text
+		}
+
 		return f.typeErr
 	}
 
@@ -887,7 +899,7 @@ func TestQueuedLineThatFailsMovesToFailed(t *testing.T) {
 	*f.now = f.now.Add(bootPause)
 	f.status("designer", "idle", *f.now)
 
-	f.tm.typeErr = errors.New("tmux refused")
+	f.tm.typeErr = errNotTyped("tmux refused")
 	for range typeTries - 1 {
 		f.s.Tick()
 		*f.now = f.now.Add(time.Minute)
@@ -903,7 +915,7 @@ func TestQueuedLineThatFailsMovesToFailed(t *testing.T) {
 	f.s.Tick()
 	assert.Equal(t, []string{"good"}, f.tm.typed["designer"], "the failed line does not block the next")
 
-	n, err := f.s.Retry("designer")
+	n, _, err := f.s.Retry("designer", false)
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
 	f.s.Tick()
@@ -915,7 +927,8 @@ func TestQueuedLineThatFailsMovesToFailed(t *testing.T) {
 	assert.Equal(t, 1, n)
 
 	for _, q := range f.s.Queues() {
-		assert.NotEqual(t, "designer", q.Role, "nothing waits for the designer")
+		assert.Empty(t, q.Inbox, "nothing waits for the designer")
+		assert.Empty(t, q.Failed)
 	}
 }
 

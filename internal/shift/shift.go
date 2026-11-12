@@ -256,12 +256,15 @@ type View struct {
 	Context    int `json:"context,omitempty"`
 	ContextMax int `json:"context_max,omitempty"`
 	// Tasks are the active tasks the role holds.
-	Tasks   []string  `json:"tasks,omitempty"`
-	Inbox   int       `json:"inbox,omitempty"`
-	Failed  int       `json:"failed,omitempty"`
-	NextRun time.Time `json:"next_run,omitzero"`
-	Expires time.Time `json:"expires,omitzero"`
-	Broken  bool      `json:"broken,omitempty"`
+	Tasks  []string `json:"tasks,omitempty"`
+	Inbox  int      `json:"inbox,omitempty"`
+	Failed int      `json:"failed,omitempty"`
+	// Attention is how many of the Failed lines may have reached the role (Failed.Unclear): the ones to look at before
+	// a retry.
+	Attention int       `json:"attention,omitempty"`
+	NextRun   time.Time `json:"next_run,omitzero"`
+	Expires   time.Time `json:"expires,omitzero"`
+	Broken    bool      `json:"broken,omitempty"`
 	// Asleep is when a role put to sleep (zmina sleep) wakes.
 	Asleep time.Time `json:"asleep,omitzero"`
 	// Problem says why the role cannot start (its dir is gone) or cannot be seen, empty when all is well.
@@ -381,7 +384,7 @@ func (s *Shift) Views() []View {
 
 		rs := s.State.Role(name)
 		v := View{Runtime: r.Runtime, Profile: r.Profile, Role: name, Session: r.Session, Keep: r.Keep, About: r.About, Dir: r.Dir, State: PresenceDown,
-			Tasks: held[name], Inbox: len(rs.Inbox), Failed: len(rs.Failed), NextRun: rs.NextRun,
+			Tasks: held[name], Inbox: len(rs.Inbox), Failed: len(rs.Failed), Attention: rs.attention(), NextRun: rs.NextRun,
 			Expires: r.ExpiresAt(), Broken: rs.Broken, ContextMax: r.ContextLimit(), Asleep: s.Asleep(name)}
 		if rs.Dir != "" {
 			v.Dir = rs.Dir
@@ -982,6 +985,9 @@ func (s *Shift) BeginDown(name string, o DownOptions) (bool, error) {
 		return false, nil
 	}
 
+	// A line typed into it that it took is closed while its status can still be read.
+	s.closeTakenTyped(name)
+
 	if s.isCodex(name) && o.Clear {
 		s.remember(name, p)
 		rs.Up, rs.Held, rs.Downing = false, name != s.Crew.Dispatcher, s.Now()
@@ -1240,13 +1246,54 @@ func (s *Shift) Send(name, text string) error {
 		}
 	}
 
+	// Typed, the line goes where the queue's typed delivery would put it (typingBlock): never into a dialog, over a draft
+	// or a line that has not landed.
+	if why := s.typingBlock(name, s.Now()); why != "" {
+		return Partial(fmt.Errorf("%s: not typed, %s; zmina send --when-idle queues the line for when the role can take it", name, why))
+	}
+
 	if err := s.Tmux.Type(name, text); err != nil {
-		return err
+		// What the look before it closed or failed (typingBlock) is saved with the error.
+		return Partial(err)
 	}
 
 	s.log(name, "sent", "", text)
 
 	return nil
+}
+
+// typingBlock says why a line may not be typed into a role's input line now, "" when it may: the guards the queue's
+// typed delivery applies. The role is booted and at its prompt (atPrompt: idle, or between turns with an input line
+// that shows and is empty; never a dialog), no line typed into it is still unlanded, and its input line reads and is
+// empty; what zmina itself left of a broken line is not a draft (clearLeftover). An input line that cannot be read is as
+// much a block as a draft: nothing says what the line would be typed into.
+func (s *Shift) typingBlock(name string, now time.Time) string {
+	// A line typed before that the role took is closed first (landed), as the queue's delivery does: it is not one in
+	// the way. One it presses Enter on again or fails changes the state, which Send saves with its error.
+	if !s.landed(name, now) {
+		return "a line typed into it has not landed yet"
+	}
+
+	if !s.atPrompt(name, now) {
+		if sess := s.session(name); sess != nil && sess.Status == "waiting" {
+			return "it waits on a dialog"
+		}
+
+		return "it is not at its prompt (busy, or its start is not over)"
+	}
+
+	s.clearLeftover(name)
+
+	draft, ok, err := s.Tmux.Prompt(name)
+
+	switch {
+	case err != nil || !ok:
+		return "its input line cannot be read"
+	case draft != "":
+		return "its input line holds a draft"
+	}
+
+	return ""
 }
 
 // Queue keeps a line for a role; the ticker types it the first time the role is up, booted and idle.
@@ -1427,14 +1474,36 @@ func clipRunes(s string, n int) string {
 	return s
 }
 
-// QueueView is what waits for one role, or for the dispatcher.
+// QueueView is what waits for one role, or for the dispatcher. Sent is the line typed into the role last while it has
+// not landed: it is in neither list, and the role may have it.
 type QueueView struct {
-	Role    string   `json:"role"`
-	Inbox   []string `json:"inbox,omitempty"`
-	Posted  []Posted `json:"posted,omitempty"`
-	Failed  []Failed `json:"failed,omitempty"`
-	Signals []string `json:"signals,omitempty"`
-	Notes   []string `json:"notes,omitempty"`
+	Role    string       `json:"role"`
+	Inbox   []string     `json:"inbox,omitempty"`
+	Sent    *Sent        `json:"sent,omitempty"`
+	Posted  []Posted     `json:"posted,omitempty"`
+	Failed  []FailedView `json:"failed,omitempty"`
+	Signals []string     `json:"signals,omitempty"`
+	Notes   []string     `json:"notes,omitempty"`
+}
+
+// FailedView is a failed line with its kind: Unclear when it may have reached the role (Failed.Unclear), so that it
+// needs a look before a retry. The kind is read from the record's text; it is not stored.
+type FailedView struct {
+	Failed
+	Unclear bool `json:"unclear,omitempty"`
+}
+
+// attention counts the failed lines of a role that may have reached it.
+func (rs *RoleState) attention() int {
+	n := 0
+
+	for _, f := range rs.Failed {
+		if f.Unclear() {
+			n++
+		}
+	}
+
+	return n
 }
 
 // Queues lists what waits: the dispatcher's signals and notes, and each role's inbox and failed lines.
@@ -1443,13 +1512,17 @@ func (s *Shift) Queues() []QueueView {
 
 	for _, name := range s.Names() {
 		rs := s.State.Role(name)
-		q := QueueView{Role: name, Inbox: rs.Inbox, Posted: rs.Posted, Failed: rs.Failed}
+		q := QueueView{Role: name, Inbox: rs.Inbox, Sent: rs.Sent, Posted: rs.Posted}
+
+		for _, f := range rs.Failed {
+			q.Failed = append(q.Failed, FailedView{Failed: f, Unclear: f.Unclear()})
+		}
 
 		if name == s.Crew.Dispatcher {
 			q.Signals, q.Notes = s.State.Signals, s.State.Notes
 		}
 
-		if len(q.Inbox)+len(q.Posted)+len(q.Failed)+len(q.Signals)+len(q.Notes) > 0 {
+		if len(q.Inbox)+len(q.Posted)+len(q.Failed)+len(q.Signals)+len(q.Notes) > 0 || q.Sent != nil {
 			out = append(out, q)
 		}
 	}
@@ -1457,24 +1530,34 @@ func (s *Shift) Queues() []QueueView {
 	return out
 }
 
-// Retry puts a role's failed lines back at the head of its inbox; it returns how many.
-func (s *Shift) Retry(name string) (int, error) {
+// Retry puts a role's failed lines back at the head of its inbox; it returns how many. A line that may have reached
+// the role (Failed.Unclear) goes back only with unclear: a retry says it again, and the role may already have it. The
+// ones left stay failed, and their count is the second result.
+func (s *Shift) Retry(name string, unclear bool) (int, int, error) {
 	if _, err := s.Role(name); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 
 	rs := s.State.Role(name)
 	lines := make([]string, 0, len(rs.Failed)+len(rs.Inbox))
 
+	var kept []Failed
+
 	for _, f := range rs.Failed {
+		if f.Unclear() && !unclear {
+			kept = append(kept, f)
+
+			continue
+		}
+
 		lines = append(lines, s.giveBack(name, f.Line, f.IDs, f.Parts)...)
 	}
 
-	n := len(rs.Failed)
-	rs.Inbox, rs.Failed, rs.Attempts = append(lines, rs.Inbox...), nil, 0
-	s.log(name, "queue-retry", "", strconv.Itoa(n)+" lines")
+	n := len(rs.Failed) - len(kept)
+	rs.Inbox, rs.Failed, rs.Attempts = append(lines, rs.Inbox...), kept, 0
+	s.log(name, "queue-retry", "", strconv.Itoa(n)+" lines, "+strconv.Itoa(len(kept))+" left for a look")
 
-	return n, nil
+	return n, len(kept), nil
 }
 
 // Drop empties a role's failed lines, or with all its inbox too (and for the dispatcher its signals and notes); it

@@ -115,7 +115,7 @@ func TestDeliverRolesCountsAChangeOutsideTheRolesOwnRecord(t *testing.T) {
 	t.Run("a try that failed", func(t *testing.T) {
 		f := typedFixture(t, crewYAML, "designer")
 		require.NoError(t, f.s.Queue("designer", "hello"))
-		f.tm.typeErr = errors.New("tmux: no server")
+		f.tm.typeErr = errNotTyped("tmux: no server")
 
 		got, err := f.s.DeliverRoles([]string{"designer"})
 		require.NoError(t, err)

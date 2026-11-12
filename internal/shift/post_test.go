@@ -363,7 +363,7 @@ func TestRepostKeepsTheIDs(t *testing.T) {
 	require.Len(t, rs.Failed, 1)
 	assert.Equal(t, []string{id2}, rs.Failed[0].IDs)
 
-	_, err = f.s.Retry("dispatcher")
+	_, _, err = f.s.Retry("dispatcher", true)
 	require.NoError(t, err)
 	assert.Empty(t, rs.Inbox)
 	require.Len(t, f.s.State.Signals, 1)

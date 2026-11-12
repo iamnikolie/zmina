@@ -141,9 +141,19 @@ func (a *app) diagnose() []check {
 				st.Stopped.Format("01-02 15:04"))
 		}
 
-		failed := 0
+		failed, attention := 0, 0
 		for _, r := range st.Roles {
-			failed += len(r.Failed)
+			for _, f := range r.Failed {
+				if f.Unclear() {
+					attention++
+				} else {
+					failed++
+				}
+			}
+		}
+
+		if attention > 0 {
+			add("state", "warn", "%d queued lines need attention, they may have reached their role: zmina queue ls", attention)
 		}
 
 		if failed > 0 {

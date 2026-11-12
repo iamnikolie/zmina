@@ -118,15 +118,39 @@ func (a *app) queueCommand() *cobra.Command {
 						line("inbox    ", l, "")
 					}
 
+					if q.Sent != nil {
+						line("typed    ", q.Sent.Line, fmt.Sprintf(" (typed into its prompt %s, %s ago, not landed yet: it may have it)",
+							q.Sent.At.Local().Format("01-02 15:04"), age(now.Sub(q.Sent.At))))
+					}
+
 					for _, p := range q.Posted {
 						line("posted   ", p.Line, fmt.Sprintf(" (to its inbox socket %s, %s ago, not yet seen)",
 							p.At.Local().Format("01-02 15:04"), age(now.Sub(p.At))))
 					}
 
-					for _, f := range q.Failed {
-						line("failed   ", f.Line, fmt.Sprintf(" (%s, %s, %s ago)", f.Error,
-							f.At.Local().Format("01-02 15:04"), age(now.Sub(f.At))))
+					// Two groups in words: what may have reached the role is looked at before it is sent again; what
+					// did not is safe to send again.
+					failed := func(unclear bool, heading string) {
+						first := true
+
+						for _, f := range q.Failed {
+							if f.Unclear != unclear {
+								continue
+							}
+
+							if first {
+								fmt.Fprintln(a.out, "  "+heading)
+
+								first = false
+							}
+
+							line("  ", f.Line, fmt.Sprintf(" (%s, %s, %s ago)", f.Error,
+								f.At.Local().Format("01-02 15:04"), age(now.Sub(f.At))))
+						}
 					}
+
+					failed(true, "attention required (may have reached "+q.Role+"; look before retrying, zmina queue retry "+q.Role+" --unclear sends it again):")
+					failed(false, "failed (nothing reached "+q.Role+"; zmina queue retry "+q.Role+" is safe):")
 				}
 
 				return nil
@@ -136,21 +160,30 @@ func (a *app) queueCommand() *cobra.Command {
 	ls.Flags().BoolVar(&asJSON, "json", false, "JSON output")
 	ls.Flags().BoolVar(&full, "full", false, "every line whole (default: its words in one line of at most 160 characters, then its ids)")
 
+	var unclear bool
+
 	retry := &cobra.Command{
 		Use:   "retry <role>",
-		Short: "Put a role's failed lines back at the head of its inbox",
+		Short: "Put a role's failed lines back at the head of its inbox (not the ones that may have reached it, unless --unclear)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.withState(func(s *shift.Shift) error {
-				n, err := s.Retry(args[0])
+				n, skipped, err := s.Retry(args[0], unclear)
 				if err == nil {
 					fmt.Fprintf(a.out, "%s: %d lines back in the inbox\n", args[0], n)
+
+					if skipped > 0 {
+						fmt.Fprintf(a.out, "%s: %d lines left failed: they may have reached the role, and a retry would say them twice; "+
+							"look at them (zmina queue ls), then zmina --crew %s queue retry %s --unclear sends them again, or queue drop clears them\n",
+							args[0], skipped, quoteCommandArg(s.Crew.Path), quoteCommandArg(args[0]))
+					}
 				}
 
 				return err
 			})
 		},
 	}
+	retry.Flags().BoolVar(&unclear, "unclear", false, "also the lines that may have reached the role (attention required in queue ls)")
 
 	drop := &cobra.Command{
 		Use:   "drop <role>",

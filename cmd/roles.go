@@ -221,6 +221,30 @@ func countDown(views []shift.View) int {
 	return n
 }
 
+// failedMarks says what a role's failed lines are: those that may have reached it need attention, the rest could not be
+// typed (queue ls tells them apart).
+func failedMarks(v shift.View) []string {
+	var m []string
+
+	if v.Attention > 0 {
+		m = append(m, fmt.Sprintf("%d %s", v.Attention, plural(v.Attention, "line needs attention", "lines need attention")))
+	}
+
+	if n := v.Failed - v.Attention; n > 0 {
+		m = append(m, fmt.Sprintf("%d failed %s", n, plural(n, "line", "lines")))
+	}
+
+	return m
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+
+	return many
+}
+
 // downMarks is what a down role's name carries in the compact view: its tasks, a broken mark, a bad dir, failed
 // lines, its wake-up, its next scheduled run, its expiry. Empty for a plain down role.
 func downMarks(v shift.View) string {
@@ -238,9 +262,7 @@ func downMarks(v shift.View) string {
 		m = append(m, "bad dir")
 	}
 
-	if v.Failed > 0 {
-		m = append(m, fmt.Sprintf("%d failed lines", v.Failed))
-	}
+	m = append(m, failedMarks(v)...)
 
 	if !v.Asleep.IsZero() {
 		m = append(m, "asleep until "+v.Asleep.Local().Format("Mon 15:04"))
@@ -1209,8 +1231,8 @@ func stateCell(v shift.View) string {
 		out += " (bad dir)"
 	}
 
-	if v.Failed > 0 {
-		out += fmt.Sprintf(" (%d failed lines)", v.Failed)
+	for _, mark := range failedMarks(v) {
+		out += " (" + mark + ")"
 	}
 
 	if !v.Asleep.IsZero() {

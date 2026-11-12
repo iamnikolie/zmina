@@ -48,7 +48,12 @@ func TestQueuePreviewDoesNotConsumeOrDuplicateDelivery(t *testing.T) {
 		assert.Empty(t, f.s.deliverInbox("designer", *f.now))
 	}
 	assert.Equal(t, []string{line}, f.tm.typed["designer"])
-	assert.Empty(t, f.s.Queues())
+
+	// Nothing waits any more, but the line typed last has not landed: queue ls lists it, as a line the role may have.
+	require.Len(t, f.s.Queues(), 1)
+	assert.Empty(t, f.s.Queues()[0].Inbox)
+	require.NotNil(t, f.s.Queues()[0].Sent)
+	assert.Equal(t, line, f.s.Queues()[0].Sent.Line)
 }
 
 func TestOwnRemainingDraftRetriesEnterThenClears(t *testing.T) {

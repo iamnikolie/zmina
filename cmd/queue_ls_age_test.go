@@ -32,5 +32,5 @@ func TestQueueLsShowsTheAgeOfPostedAndFailedLines(t *testing.T) {
 	out, _, err := zm(t, file, "queue", "ls")
 	require.NoError(t, err)
 	assert.Regexp(t, `posted +\[dispatcher\] look at T-1 \(to its inbox socket \d\d-\d\d \d\d:\d\d, 2d ago, not yet seen\)`, out)
-	assert.Regexp(t, `failed +\[dispatcher\] and T-2 \(tmux refused, \d\d-\d\d \d\d:\d\d, 3h ago\)`, out)
+	assert.Regexp(t, `failed \(nothing reached dev; .*\):\n +\[dispatcher\] and T-2 \(tmux refused, \d\d-\d\d \d\d:\d\d, 3h ago\)`, out)
 }

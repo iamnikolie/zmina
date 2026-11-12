@@ -60,10 +60,15 @@ func stillQueued(ch Peer, dir string, p Posted) bool {
 //     (followPosted looks first) is done, not given back. A session-bound line (sessionBound: the role's boot line, a
 //     slash command, the release and restart requests) is dropped with an event: it made sense to that conversation
 //     only, and a fresh one has its own boot and is not released.
-//   - A typed line (Sent) is dropped with an event, never given back: it went into the pane, whether the session took
-//     it is not known, and a line that may have been taken is not typed again (landed keeps one as failed for
-//     inspection for that reason). start leaves it to this settle. A tracked line stays in Acks: it is said again
-//     (renotify) and listed in the next session's brief (PendingBrief).
+//   - A typed line (Sent) is never given back: it went into the pane, whether the session took it is not known, and a
+//     line that may have been taken is not typed again (landed keeps one as failed for inspection for that reason).
+//     start leaves it to this settle. One the role took, by a status or a turn of its conversation after it, landed and
+//     is closed (typedTaken). Any other is kept as a failed line that needs attention (UnclearEnded, queue ls; retry
+//     only on a look), told to the dispatcher once, unless it is one of three: session-bound (the same kinds a posted
+//     line is dropped for), it made sense to the conversation that ended only; acked by every id it carries, its readers
+//     have it; or tracked, an id of it still waits for its ack: the ack is its one way of saying it again (renotify)
+//     and listing it in the next session's brief (PendingBrief), and a failed record next to it would be a second
+//     route to the same resend and a second thing for the dispatcher to hear. These are dropped with an event.
 //
 // A post that waits in a Codex bridge's inbox as a file is neither (stillQueued). It does nothing for a role with
 // nothing in flight. The beat calls it for a role that is really gone (see Tick); start for the session it replaces.
@@ -72,10 +77,39 @@ func (s *Shift) settleEnded(name string, now time.Time) {
 
 	s.followPostedAs(name, now, true)
 
-	if sent := rs.Sent; sent != nil {
-		rs.Sent = nil
-		s.log(name, "dropped", "", "typed into a session that ended, never seen to land: "+sent.Line)
+	sent := rs.Sent
+	if sent == nil {
+		return
 	}
+
+	// A line the role took (its status moved after it, or its conversation shows a turn after it) landed long ago, and
+	// nothing closed it while no other line waited: it is closed, not failed.
+	if s.typedTaken(name, sent) {
+		s.closeTyped(name)
+
+		return
+	}
+
+	rs.Sent = nil
+
+	switch {
+	case ackedExplicitly(sent):
+		s.log(name, "acked-cleared", "", "typed: "+sent.Line)
+	case s.sessionBound(name, sent.Line):
+		s.log(name, "dropped", "", "typed into a session that ended, meant for that conversation only: "+sent.Line)
+	case s.stillTracked(sent):
+		s.log(name, "dropped", "", "typed into a session that ended, never seen to land; its ack says it again: "+sent.Line)
+	default:
+		s.failUnclear(name, Failed{Line: sent.Line, Error: UnclearEnded, At: now, IDs: sent.IDs, Parts: sent.Parts})
+	}
+}
+
+// stillTracked reports a typed line any id of which still waits for its ack.
+func (s *Shift) stillTracked(sent *Sent) bool { return s.tracked(sent.IDs) }
+
+// tracked reports ids any of which still waits for its ack.
+func (s *Shift) tracked(ids []string) bool {
+	return slices.ContainsFunc(ids, func(id string) bool { return s.State.Acks[id] != nil })
 }
 
 // requeuePosted gives back a posted line whose conversation ended before it showed (followPosted). When the session is
