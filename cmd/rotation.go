@@ -394,3 +394,43 @@ func (a *app) printRotation(r shift.Rotation, now time.Time) {
 		step("late", e.At, rotationEvidenceWord(e))
 	}
 }
+
+// rotationMark is where a rotation in flight shows in zmina ls: "rotating r7k2m9qd (started 2m)". Empty when the role has none
+// open: a rotation that ended is not news in the table (rotationLast says it).
+func rotationMark(v shift.View, now time.Time) string {
+	r := v.Rotation
+	if r == nil || !r.Open {
+		return ""
+	}
+
+	return fmt.Sprintf("rotating %s (%s %s)", r.ID, r.Phase, age(now.Sub(r.At)))
+}
+
+// rotationLast is a role's last rotation in a word and a time, for zmina ls --wide and ls <role>: "rebuilt 14:02 (restart_at)",
+// "lost → rebuilt (late) 11-02 10:12 (restart_idle)", or the mark of one in flight. Empty when the role was never rotated.
+func rotationLast(v shift.View, now time.Time) string {
+	r := v.Rotation
+	if r == nil {
+		return ""
+	}
+
+	if r.Open {
+		return fmt.Sprintf("%s (%s)", rotationMark(v, now), r.Kind)
+	}
+
+	how := r.Outcome
+
+	switch r.Then {
+	case "rebuilt":
+		how = "lost → rebuilt (late)"
+	case "aborted":
+		how = "lost → back on its old conversation (aborted)"
+	}
+
+	layout := "15:04"
+	if y1, m1, d1 := r.At.Local().Date(); y1 != now.Year() || m1 != now.Month() || d1 != now.Day() {
+		layout = "01-02 15:04"
+	}
+
+	return fmt.Sprintf("%s %s (%s)", how, r.At.Local().Format(layout), r.Kind)
+}

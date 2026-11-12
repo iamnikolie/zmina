@@ -286,6 +286,10 @@ type View struct {
 	// says so (when the ticker first read it; the time of this read when the line is newer than the last beat).
 	Now   string    `json:"now,omitempty"`
 	NowAt time.Time `json:"now_at,omitzero"`
+	// Rotation is the role's newest rotation (rotation.go): the one in flight, else how the last one ended. Read from the
+	// role's record on every look (the beat's cached reader, a few KiB at most, a record that is not there costs a failed
+	// open); it is not kept in the state, and nothing writes the record for it.
+	Rotation *RotationView `json:"rotation,omitempty"`
 }
 
 // SplitInstance parses an instance name: dev#2 is copy 2 of dev. ok is false for a plain role name.
@@ -463,6 +467,8 @@ func (s *Shift) Views() []View {
 				v.Dialog = s.dialogFor(name, sess, screen)
 			}
 		}
+
+		v.Rotation = s.rotationView(name)
 
 		out = append(out, v)
 	}

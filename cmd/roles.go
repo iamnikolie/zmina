@@ -182,6 +182,11 @@ func (a *app) lsCompact(s *shift.Shift, views []shift.View, all bool) error {
 			state += " (dialog)"
 		}
 
+		// A rotation in flight is said where the status is.
+		if mark := rotationMark(v, time.Now()); mark != "" {
+			state += " " + mark
+		}
+
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", role, state, shortSince(v), contextCell(v), dash(strings.Join(v.Tasks, ",")))
 	}
 
@@ -254,6 +259,10 @@ func downMarks(v shift.View) string {
 		m = append(m, strings.Join(v.Tasks, ","))
 	}
 
+	if mark := rotationMark(v, time.Now()); mark != "" {
+		m = append(m, mark)
+	}
+
 	if v.Broken {
 		m = append(m, "broken")
 	}
@@ -324,6 +333,12 @@ func (a *app) lsWide(s *shift.Shift, views []shift.View, now bool) error {
 
 	if err := w.Flush(); err != nil {
 		return err
+	}
+
+	for _, v := range views {
+		if last := rotationLast(v, time.Now()); last != "" {
+			fmt.Fprintf(a.out, "%s last rotation: %s\n", v.Role, last)
+		}
 	}
 
 	if now {
