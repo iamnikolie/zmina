@@ -286,6 +286,13 @@ func (s *Store) Move(id string, at time.Time, when string, now time.Time) (Alarm
 		return a, fmt.Errorf("%s already %s", a.ID, a.State)
 	}
 
+	// It went off already: what is left is its notify or tell, tried again by itself. Another time would bring only
+	// that line back, not the alarm.
+	if a.Owed != "" {
+		return a, fmt.Errorf("%s already went off and is not delivered yet: it is tried again by itself; "+
+			"take it off and set a new one for another time", a.ID)
+	}
+
 	a.At, a.When, a.Updated = at, when, now
 
 	return a, s.Put(a)

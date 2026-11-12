@@ -161,7 +161,7 @@ func (s *Shift) retry(a alarm.Alarm, now time.Time) (line, note string) {
 // the note for the dispatcher, once: a failed alarm is not rung again.
 func (s *Shift) giveUp(a alarm.Alarm, now time.Time) (line, note string) {
 	if a.TryErr == "" {
-		a.TryErr = "no answer, the beat that tried it ended during it"
+		a.TryErr = "how the last try ended is not known: the beat that made it ended during it, or could not record it"
 	}
 
 	a.State, a.Updated = alarm.Failed, now

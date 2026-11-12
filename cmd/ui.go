@@ -805,6 +805,9 @@ type (
 		alarm.Alarm
 		// For is whom it rings for in words: you, a role, another crew.
 		For string `json:"for"`
+		// Undelivered says, in the words of zmina remind ls, that it went off and its notify or tell is not out yet,
+		// or never went out.
+		Undelivered string `json:"undelivered,omitempty"`
 	}
 	uiEvent struct {
 		Crew string `json:"crew"`
@@ -1080,8 +1083,18 @@ func (a *app) readCrew(s *shift.Shift, key string, cv *uiCrewView, snap *uiSnaps
 	// An alarm for a parked item that was dealt with meanwhile rings for nothing: it is not shown.
 	for _, al := range alarmStore(s.Crew).Pending() {
 		if al.Kind != alarm.Later || open[al.Later] {
-			snap.Alarms = append(snap.Alarms, uiAlarm{Crew: key, Alarm: al, For: al.For()})
+			ua := uiAlarm{Crew: key, Alarm: al, For: al.For()}
+			if al.Owed != "" {
+				ua.Undelivered = alarmState(al)
+			}
+
+			snap.Alarms = append(snap.Alarms, ua)
 		}
+	}
+
+	// One that went off and was never delivered stays in sight until it is taken off.
+	for _, al := range alarmStore(s.Crew).Failed() {
+		snap.Alarms = append(snap.Alarms, uiAlarm{Crew: key, Alarm: al, For: al.For(), Undelivered: alarmState(al)})
 	}
 
 	// The newest of what the feed tells; a watch's every run, keys and roles going up and down stay in zmina log.

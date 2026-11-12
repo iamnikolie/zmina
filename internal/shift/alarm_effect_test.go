@@ -256,7 +256,7 @@ func TestAlarmWhoseLastTryLeftNoResultIsGivenUp(t *testing.T) {
 	got, err := al.Get(a.ID)
 	require.NoError(t, err)
 	assert.Equal(t, alarm.Failed, got.State)
-	assert.Contains(t, got.TryErr, "no answer")
+	assert.Contains(t, got.TryErr, "is not known")
 	assert.Len(t, out.runs, 0)
 
 	var notes int
@@ -441,4 +441,38 @@ func ids(as []alarm.Alarm) []string {
 	}
 
 	return out
+}
+
+// What an alarm did inside the lock is done once: the tries that follow hand over its line only, and the todo keeps
+// the one check, however many of them it takes.
+func TestTriesAfterTheFirstDoNotPutTheReminderOnTheTodoAgain(t *testing.T) {
+	f, al, as := alarmed(t)
+	notifying(f)
+	set(t, f, al, alarm.Alarm{Kind: alarm.Remind, At: *f.now, Text: "pay the invoice"})
+
+	out := &outcome{err: errors.New("notify: exit status 1")}
+
+	for range effectTries + 2 {
+		beat(t, f, out.run)
+		*f.now = f.now.Add(effectGap)
+	}
+
+	require.Len(t, out.runs, effectTries)
+	all, _, _ := as.Scan()
+	assert.Len(t, all, 1, "one check on the todo")
+}
+
+// An alarm that went off and still owes its line is not moved: another time would bring the line back, not the alarm.
+func TestAnAlarmThatOwesItsLineIsNotMoved(t *testing.T) {
+	f, al, a, out := owner(t)
+
+	beat(t, f, out.run)
+
+	_, err := al.Move(a.ID, f.now.Add(24*time.Hour), "tomorrow", *f.now)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "already went off")
+
+	got, err := al.Get(a.ID)
+	require.NoError(t, err)
+	assert.False(t, got.At.After(*f.now), "its time stays")
 }
