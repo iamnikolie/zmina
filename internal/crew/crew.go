@@ -337,6 +337,10 @@ type Crew struct {
 	// WorktreeGC is daily or off (the default): daily has the ticker run `zmina task gc` (never --force) once a
 	// day, so the worktrees of closed tasks whose branch is merged do not pile up.
 	WorktreeGC string `yaml:"worktree_gc"`
+	// Courier is on (the default) or off: with the ticker installed, on also installs a resident service that runs
+	// `zmina _courier` for this crew, so a line waits for a role at most a moment instead of up to a beat; off keeps
+	// that service out (and takes an installed one away at the next `ticker install`).
+	Courier string `yaml:"courier"`
 	// Retention is how long finished work (handoff packets of closed tasks, their results, old messages, ...) stays
 	// where it is before the ticker's daily pass moves it to the archive directory: a span of 30 days at least
 	// (45d), or off. Empty: 30d.
@@ -511,6 +515,11 @@ func (c *Crew) Socket() string { return suffixed(socket, "-", c.Name) }
 // LaunchdLabel is the crew's ticker: io.iamnikolie.zmina, or io.iamnikolie.zmina.<name>.
 func (c *Crew) LaunchdLabel() string { return suffixed(launchdLabel, ".", c.Name) }
 
+// CourierLabel is the crew's courier on macOS: io.iamnikolie.zmina-courier, or io.iamnikolie.zmina-courier.<name>. The
+// ticker's labels are io.iamnikolie.zmina and io.iamnikolie.zmina.<name>: the dash after zmina is in no crew name's
+// place, so a crew named courier never takes the courier's label.
+func (c *Crew) CourierLabel() string { return suffixed(launchdLabel+"-courier", ".", c.Name) }
+
 // MorningAt is the time of day, in the crew's time zone (Location), the morning line is due; ok is false when it
 // is off.
 func (c *Crew) MorningAt() (hour, minute int, ok bool) {
@@ -606,6 +615,11 @@ func (c *Crew) InfoLinesOn() bool { return c.InfoLines == nil || *c.InfoLines }
 
 // SystemdUnit is the crew's ticker on Linux: zmina (.service and .timer), or zmina-<name>.
 func (c *Crew) SystemdUnit() string { return suffixed("zmina", "-", c.Name) }
+
+// CourierUnit is the crew's courier on Linux: zmina.courier.service, or zmina-<name>.courier.service, named for the
+// ticker's unit with .courier after it. A crew name is lowercase letters, digits and dashes, never a dot, so no crew's
+// ticker unit (zmina, zmina-<name>) is ever the courier's.
+func (c *Crew) CourierUnit() string { return c.SystemdUnit() + ".courier" }
 
 // Role returns a role by name.
 func (c *Crew) Role(name string) (*Role, error) {
@@ -863,6 +877,10 @@ func (c *Crew) check() error {
 	}
 
 	if err := checkRetention(c.Retention); err != nil {
+		return err
+	}
+
+	if err := checkCourier(c.Courier); err != nil {
 		return err
 	}
 	sessions := map[string]string{}
@@ -1242,6 +1260,23 @@ func (c *Crew) WorktreeGCOn() bool { return c.WorktreeGC == WorktreeGCDaily }
 func checkWorktreeGC(v string) error {
 	if v != "" && v != WorktreeGCDaily && v != WorktreeGCOff {
 		return fmt.Errorf("worktree_gc is %s or %s, not %q", WorktreeGCDaily, WorktreeGCOff, v)
+	}
+
+	return nil
+}
+
+// The values of courier.
+const (
+	CourierWordOn  = "on"
+	CourierWordOff = "off"
+)
+
+// CourierOn reports whether the ticker's install also installs the courier (courier: on, the default).
+func (c *Crew) CourierOn() bool { return c.Courier != CourierWordOff }
+
+func checkCourier(v string) error {
+	if v != "" && v != CourierWordOn && v != CourierWordOff {
+		return fmt.Errorf("courier is %s or %s, not %q", CourierWordOn, CourierWordOff, v)
 	}
 
 	return nil

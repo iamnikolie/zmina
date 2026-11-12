@@ -81,6 +81,7 @@ notify_again: 24h                        # an item that still blocks is pushed a
 timezone: Europe/Warsaw                  # the clock reminder times are read on (default: this machine's)
 lessons: on                              # daily triage of the roles' lessons into one draft MR on the crew's agentic-os (default off; see Lessons)
 worktree_gc: daily                       # the ticker runs `task gc` once a day: closed tasks' merged, clean worktrees go (default off)
+courier: off                             # no courier service beside the ticker: a line for a role waits for the beat, up to a minute (on or off; default on; see The ticker)
 retention: 45d                           # how long finished work stays where it is before the ticker's daily pass moves it to archive/ (30d at least, or off; default 30d; see Retention)
 limits:                                  # how the crew spends its plans, in % of the 7-day (Claude) and weekly (Codex) window; see Limits
   claude: {pinned: 80, stop: 99}         # from pinned only work that needs Claude goes to it, from stop nothing (defaults 80 and 99)
@@ -485,8 +486,8 @@ goes over the crew's field by field; a change applies at the role's next start. 
 | `zmina stop` | the ticker starts nothing any more (no keep: always role, no scheduled run), then every role goes down, the dispatcher too; a role with a draft or a dialog stays up and is named (`--clear` as with `down`). `ls` shows `STOPPED`. |
 | `zmina start` | lifts the stop and starts the dispatcher. A retired crew refuses it, naming the live one. |
 | `zmina retire [--moved-to <node>/<crew>] [--clear]` / `retire --off` | the owner's word that this crew is no longer the live one: `retired:` and `moved_to:` in the crew file (a state file recovered or a stop lifted does not lose them), then as `zmina stop`. `--off` takes the mark off; the shift stays stopped until `zmina start`. Only this mark says one crew went on as another: two crews with one name are never taken for one. |
-| `zmina doctor [--json]` | checks crew file, tmux (3.2 or newer), claude as roles find it (their PATH; a binary in a temp dir fails) and the flags zmina passes, the installed Claude Code (and Codex when a role runs on it) with a warning when its version is outside the range this zmina was tried with (`claude`, `codex`; a version it cannot read, within a 5 s deadline, is a warning too, never a fail), Claude Code's session registry (zmina reads it to tell idle from busy; it is not a public interface — doctor says when its shape changed; a session file that is empty or does not parse is named for that with the role to restart, a fail while its claude runs, a warning for the leftover of one that is gone), the free space of the filesystem under the crew's directory and of the one under the Claude Code config (`disk`: a warning under 5 GiB or 10% free, whichever is smaller, a fail under 1 GiB or 2%; a full disk leaves Claude Code's session files empty or cut short and its roles "up unknown"), ticker beat, state, lock (the holder now with its age and phase, and the holds over 20 s and waits over 5 s of the last 24 h from the log), task files, crews sharing a tmux server, versions (this zmina's; a cockpit, a Codex bridge or Claude roles that another zmina started); on a mesh node `node`: its certificate (warn from 30 days before it expires or while it has no expiry, fail once expired or when its key was revoked), the revocation list it holds, and on the owner's node the peers' certificates near their end; what zmina's own rules add to a fresh role's prefix (`boot`: characters on average and the role with most, by what read_guard, lessons, delivery and Codex seats turn on) and whether `skills:` trims the skill list; whether `context_max`, `restart_at` and `restart_done` are at or below the recommended context sizes (`context`, advice only: The crew file); roles that name no model (`models`, a warning: `model:`, `--model` in `args:` or a Codex `profile:` names one; without it a role runs on its CLI's default, which can change its price unseen); whether the crew's namespace is logged in (`login`, from `claude auth status`: not logged in fails, a login expiring within 7 days warns); what piles up: owner asks open over 7 days, parked items over 14 days, copies of the crew file beside it (`crew.yaml.bak`, `.bak-old`: zmina keeps versions in `zmina crew history` now), closed tasks that keep their worktree (`worktrees`); report records that do not read, or whose work fails, each named by its file (`messages`, a warning for as long as it lasts); the retention pass (`retention`: its span, the last pass and what it moved, a warning when none ran for 3 days). Exit 1 on a fail. |
-| `zmina retention [--dry-run]` | the ticker's daily retention pass, run now (see Retention): finished work older than the crew's retention span moves to `archive/retention/<yyyy-mm>/`, old lines leave `reads.jsonl`, `tick.log` is cut to its tail. `--dry-run` lists each thing that would move and moves nothing. Runs whatever `retention:` says (`off` only stops the ticker); prints what it moved, and logs one `retention` event. |
+| `zmina doctor [--json]` | checks crew file, tmux (3.2 or newer), claude as roles find it (their PATH; a binary in a temp dir fails) and the flags zmina passes, the installed Claude Code (and Codex when a role runs on it) with a warning when its version is outside the range this zmina was tried with (`claude`, `codex`; a version it cannot read, within a 5 s deadline, is a warning too, never a fail), Claude Code's session registry (zmina reads it to tell idle from busy; it is not a public interface — doctor says when its shape changed; a session file that is empty or does not parse is named for that with the role to restart, a fail while its claude runs, a warning for the leftover of one that is gone), the free space of the filesystem under the crew's directory and of the one under the Claude Code config (`disk`: a warning under 5 GiB or 10% free, whichever is smaller, a fail under 1 GiB or 2%; a full disk leaves Claude Code's session files empty or cut short and its roles "up unknown"), ticker beat, the courier (`courier`: off in the crew file; its unit missing beside the ticker, with the command that adds it; its unit installed and a courier running, with its pid and age; its unit installed and nobody running one, with where its output goes; one running by hand), state, lock (the holder now with its age and phase, and the holds over 20 s and waits over 5 s of the last 24 h from the log), task files, crews sharing a tmux server, versions (this zmina's; a cockpit, a Codex bridge or Claude roles that another zmina started); on a mesh node `node`: its certificate (warn from 30 days before it expires or while it has no expiry, fail once expired or when its key was revoked), the revocation list it holds, and on the owner's node the peers' certificates near their end; what zmina's own rules add to a fresh role's prefix (`boot`: characters on average and the role with most, by what read_guard, lessons, delivery and Codex seats turn on) and whether `skills:` trims the skill list; whether `context_max`, `restart_at` and `restart_done` are at or below the recommended context sizes (`context`, advice only: The crew file); roles that name no model (`models`, a warning: `model:`, `--model` in `args:` or a Codex `profile:` names one; without it a role runs on its CLI's default, which can change its price unseen); whether the crew's namespace is logged in (`login`, from `claude auth status`: not logged in fails, a login expiring within 7 days warns); what piles up: owner asks open over 7 days, parked items over 14 days, copies of the crew file beside it (`crew.yaml.bak`, `.bak-old`: zmina keeps versions in `zmina crew history` now), closed tasks that keep their worktree (`worktrees`); report records that do not read, or whose work fails, each named by its file (`messages`, a warning for as long as it lasts); the retention pass (`retention`: its span, the last pass and what it moved, a warning when none ran for 3 days). Exit 1 on a fail. |
+| `zmina retention [--dry-run]` | the ticker's daily retention pass, run now (see Retention): finished work older than the crew's retention span moves to `archive/retention/<yyyy-mm>/`, old lines leave `reads.jsonl`, `tick.log` and `courier.log` are cut to their tails. `--dry-run` lists each thing that would move and moves nothing. Runs whatever `retention:` says (`off` only stops the ticker); prints what it moved, and logs one `retention` event. |
 | `zmina queue ls [--full] [--json]` | what waits to be typed: the dispatcher's signals and health notes, each role's inbox, lines posted to its inbox socket not yet seen in its conversation, and its failed lines (a line tmux refused three tries in a row), the posted and the failed ones with their age; each line its words first (clipped to 160 characters, `--full` whole) and the ids it carries after them (`fix the login · T-12 · S-610`: a head id like `S-12` or `T-12`, and the `(zmina S-610)` ack tail). `--json` has the stored lines as they are. |
 | `zmina queue retry <role>` / `queue drop <role> [--all]` | put failed lines back at the head of the inbox / drop them (`--all`: the inbox too; for the dispatcher its signals and notes). Without `--all`, any retained inbox count and the command needed to drop it are printed. The hint includes the resolved `--crew` path and shell-quotes both path and role, so it still targets this crew when pasted into another shell. |
 | `zmina state show` | the state as zmina reads it (JSON). |
@@ -1074,7 +1075,7 @@ read-only, and a note whose files are gone from the archive is an error naming i
 destination or superseded, all envelopes queued, nothing new for the span) from `messages/` to `messages/archive/`,
 where `message show <id>` still finds them. What an open, waiting, parked or recently closed task points at stays, and
 so does everything while a task file does not read. `reads.jsonl` loses the lines older than the span to
-`archive/retention/<yyyy-mm>/reads.jsonl`; `tick.log` past 5 MB is cut to its last 1 MB. One `retention` event in
+`archive/retention/<yyyy-mm>/reads.jsonl`; `tick.log` and `courier.log` past 5 MB are cut to their last 1 MB. One `retention` event in
 `zmina log` carries the counts. `zmina retention --dry-run` lists what the next pass would move.
 
 **What the work is.** `--title` is the work in one short plain sentence in the owner's language ("Landing page —
@@ -1857,6 +1858,32 @@ at 5 s.
   logout; `ticker install` and `status` say whether it is on.
 - Anything else: run `zmina tick --crew <file>` every minute from your own scheduler.
 
+**The courier unit.** `ticker install` also installs a service that keeps `zmina _courier` running for the crew (see
+below), with the same binary, the same `--crew <file>`, the same PATH, HOME and LANG, and its output in `courier.log`
+next to the crew file (cut by the retention pass like `tick.log`, at 5 MB to 1 MB). `ticker uninstall` removes it too,
+`ticker status` shows its state under the ticker's, and `ticker install` again restarts it, so a new binary path or
+PATH takes hold. The service starts the courier again whenever it ends, whatever its exit status, and waits 10 s
+between two starts, so a courier that ends at once (a crew file not there, a state a newer zmina wrote, another courier
+running) is tried again every 10 s, one line in `courier.log` each time, and one that ended for a new binary or after
+its 6 h is back within 10 s; the beat delivers meanwhile. The service never gives up: launchd `KeepAlive` with
+`ThrottleInterval` 10, systemd `Restart=always`, `RestartSec=10` and `StartLimitIntervalSec=0` (no start-rate limit, so
+a burst of quick ends cannot leave the unit failed for good). The ticker's `AbandonProcessGroup` and `KillMode=process`
+are in it too.
+
+- macOS: launchd agent `io.iamnikolie.zmina-courier` (`.<name>` for a named crew), `~/Library/LaunchAgents`.
+- Linux: systemd user service `zmina.courier.service` (`zmina-<name>.courier.service`), `WantedBy=default.target`.
+  The names carry a dash or a dot no crew name has, so no crew's ticker unit is another crew's courier.
+- `courier: off` in the crew file (`on` is the default; anything else is refused) keeps the unit out: `ticker install`
+  installs none and removes one that is there, saying so. `ticker uninstall` removes it whatever the key says.
+- A crew whose ticker was installed before the courier existed has no courier unit until `zmina ticker install` is run
+  again for it (`zmina --config <name> ticker install`, or with `--crew <file>`); nothing installs a unit by itself, the
+  beat included. `zmina doctor` says so in its `courier` line (warn, with the command). The same line says when the unit
+  is installed and no courier holds `courier.lock` (warn, with the log to read), when a courier runs with no unit (by
+  hand), and when `courier: off` is set (ok; warn if its unit is still installed). It looks at `courier.lock` with one
+  non-blocking shared lock it lets go at once: it never writes or removes the file.
+- A courier started by hand keeps the unit's courier waiting (it ends at once, as any second courier does, and is
+  started again every 10 s) until the first one ends; then the unit's takes over.
+
 `zmina tick` is one beat, under a lock shared with every other zmina command (a command waits up to
 30 s for it, then fails naming the pid that holds it). A role tmux does not answer about is left
 alone for the beat — never taken as ended; a role being put down is left alone too, for 75 s. A restart or
@@ -1868,7 +1895,8 @@ A line typed or posted and a session started are saved at once, under the beat's
 a beat killed after them, or a save that fails at its end, does not type or start them twice. A save that fails
 there stops the beat's further typing and starting, and says so.
 
-`zmina _courier` (hidden; run by hand, nothing starts it yet) repeats the delivery step of the beat (`zmina tick
+`zmina _courier` (hidden; the ticker's install puts a service beside the ticker that keeps it running, see The courier
+unit above, or run it by hand) repeats the delivery step of the beat (`zmina tick
 --deliver`: no start, no trim, no renotify, no sweep, no `LastTick`) while it lives, so a line that waits for a role goes
 when the role can take it, not at the next beat. Every `--poll` (250 ms) it stats `state.json`; it runs a pass when the
 file changed (its own save too), when a role's wait is over, or when the crew file was read again (it is read when its
@@ -1879,8 +1907,8 @@ A role whose try was slow (a tmux that answers slowly) waits at least ten times 
 the pass, the lock let go. A pass that fails (a state that could not be saved) backs the whole courier off: a minute
 doubling to 5 minutes, so a line is never repeated faster than the beat alone would. It ends with exit 0
 when the zmina executable on disk is another file than it started from, after `--max-life` (default 6 h; 0: no limit),
-and on SIGINT, SIGTERM or SIGHUP; with exit 1 on a state a newer zmina wrote. The start and each end are one event,
-`courier-start` and `courier-stop` with its reason. One courier runs per crew (`courier.lock` beside the state, not the state
+and on SIGINT, SIGTERM or SIGHUP; with exit 1 on a state a newer zmina wrote or a crew file that is not there. The start
+and each end are one event, `courier-start` and `courier-stop` with its reason. One courier runs per crew (`courier.lock` beside the state, not the state
 lock): a second prints that one runs and exits 0. The beat stays what it was and stays the safety net: a line held back by
 a time (the gap after a failed try, the settle time after a slash command) is looked for again every 5 s
 until it can go.

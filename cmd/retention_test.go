@@ -125,6 +125,7 @@ func newRetentionCrew(t *testing.T, key string) *retentionCrew {
 	}
 
 	rc.put(t, "tick.log", log.String(), now)
+	rc.put(t, "courier.log", log.String(), now)
 
 	// Messages: one finished long ago, one still waiting.
 	ms := message.Store{Dir: rc.path("messages")}
@@ -158,6 +159,15 @@ func (rc *retentionCrew) tickLogSize(t *testing.T) int64 {
 	return fi.Size()
 }
 
+func (rc *retentionCrew) courierLogSize(t *testing.T) int64 {
+	t.Helper()
+
+	fi, err := os.Stat(rc.path("courier.log"))
+	require.NoError(t, err)
+
+	return fi.Size()
+}
+
 func (rc *retentionCrew) events(t *testing.T, name string) []events.Event {
 	t.Helper()
 
@@ -178,7 +188,7 @@ func (rc *retentionCrew) events(t *testing.T, name string) []events.Event {
 // --dry-run lists what a pass would move and moves nothing, writes no stamp and logs nothing.
 func TestRetentionDryRunListsAndMovesNothing(t *testing.T) {
 	rc := newRetentionCrew(t, "")
-	sizeBefore := rc.tickLogSize(t)
+	sizeBefore, courierBefore := rc.tickLogSize(t), rc.courierLogSize(t)
 
 	out, _, err := zm(t, rc.file, "retention", "--dry-run")
 	require.NoError(t, err)
@@ -187,7 +197,7 @@ func TestRetentionDryRunListsAndMovesNothing(t *testing.T) {
 		"handoffs/T-1 (1 files, task done", "handoffs/T-5 ", "handoffs/T-7 (1 files, no such task",
 		"results/T-1 ", "results/T-5 ", "checkpoints/T-1 ",
 		"releases/" + strings.Repeat("1", 64) + ".json", "restarts/" + strings.Repeat("4", 64) + ".json",
-		"messages/" + rc.messageID("done"), "reads.jsonl (2 of 4 lines", "tick.log (",
+		"messages/" + rc.messageID("done"), "reads.jsonl (2 of 4 lines", "tick.log (", "courier.log (",
 		"retention: would move",
 	} {
 		assert.Contains(t, out, want)
@@ -201,6 +211,7 @@ func TestRetentionDryRunListsAndMovesNothing(t *testing.T) {
 	assert.True(t, rc.exists("handoffs/T-1/"+strings.Repeat("a", 64)+".json"))
 	assert.True(t, rc.exists("messages/"+rc.messageID("done")+".json"))
 	assert.Equal(t, sizeBefore, rc.tickLogSize(t))
+	assert.Equal(t, courierBefore, rc.courierLogSize(t))
 	assert.NoFileExists(t, rc.path("retention.json"), "a dry run stamps nothing")
 	assert.NoDirExists(t, rc.path("archive"))
 	assert.Empty(t, rc.events(t, "retention"))
@@ -275,6 +286,15 @@ func TestRetentionPassMovesFinishedWorkAndKeepsWhatIsPointedAt(t *testing.T) {
 	assert.Contains(t, string(log), " line ")
 	assert.True(t, strings.HasSuffix(string(log), "\n"))
 	assert.NotContains(t, string(log[:200]), " line 000000 ")
+
+	// courier.log, which a service that restarts often fills, is cut the same way.
+	assert.LessOrEqual(t, rc.courierLogSize(t), int64(tickLogKeep+200))
+
+	courier, err := os.ReadFile(rc.path("courier.log"))
+	require.NoError(t, err)
+	assert.True(t, strings.HasPrefix(string(courier), "[zmina retention "), string(courier[:60]))
+	assert.NotContains(t, string(courier[:200]), " line 000000 ")
+	assert.True(t, strings.HasSuffix(string(courier), "\n"))
 
 	// One event with the counts, a stamp with the same, and the doctor line says so.
 	evs := rc.events(t, "retention")

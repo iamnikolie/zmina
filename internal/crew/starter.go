@@ -51,6 +51,7 @@ context_max: %dk                     # a role idle with more than this in its co
 restart_at: %dk                      # a role holding a task this full restarts fresh from its checkpoint note
 restart_done: %dk                     # a role whose task closed, this full, restarts fresh: a session per task
 # worktree_gc: daily                   # once a day, remove the worktrees of closed tasks whose branch is merged
+# courier: off                         # no resident courier beside the ticker: lines wait for the next beat (default on)
 # retention: 30d                       # finished work older than this moves to archive/ once a day (30d at least, or off)
 
 roles:

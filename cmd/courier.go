@@ -323,13 +323,15 @@ func lifeText(d time.Duration) string {
 
 // courierCommand is zmina _courier: a resident loop that repeats the delivery pass (zmina tick --deliver) the moment
 // state.json changes, so a line that waits for a role goes when the role can take it, not at the next minute's beat.
-// It runs in the foreground until it is ended and is started by hand; nothing starts it.
+// It runs in the foreground until it is ended. The ticker's install puts a service beside the ticker that starts it
+// again whenever it ends (unless the crew file says courier: off); started by hand it is the same process, and the
+// one that holds courier.lock is the only one that runs.
 func (a *app) courierCommand() *cobra.Command {
 	var poll, maxLife time.Duration
 
 	c := &cobra.Command{
 		Use:    "_courier",
-		Short:  "Repeat the delivery pass whenever the state changes, until ended (not started by anything yet)",
+		Short:  "Repeat the delivery pass whenever the state changes, until ended (the ticker's service keeps it running)",
 		Hidden: true,
 		Args:   cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -445,6 +447,58 @@ func lockCourier(dir string) (release func(), err error) {
 		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 		_ = f.Close()
 	}, nil
+}
+
+// courierLock is what a look at courier.lock found.
+type courierLock struct {
+	// Held is that a courier holds the lock now.
+	Held bool
+	// PID is the pid the holder wrote into the file, for a message; 0 when there is none to read.
+	PID int
+	// Since is when the holder wrote it (the file's time of change: at its start, and never again while it lives); zero when
+	// nobody holds the lock.
+	Since time.Time
+}
+
+// probeCourierLock says whether a courier holds the lock at path without taking it for longer than the call: one
+// non-blocking shared lock, let go at once. It never makes, writes, truncates or removes the file, so a file that is not
+// there is a lock nobody holds, and the holder's pid is read only to be named. The one cost is that a courier that tries
+// for the lock in the instant the probe holds it finds it taken and ends with "already running"; its supervisor
+// starts it again.
+func probeCourierLock(path string) (courierLock, error) {
+	f, err := os.Open(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return courierLock{}, nil
+	}
+
+	if err != nil {
+		return courierLock{}, err
+	}
+
+	defer func() { _ = f.Close() }()
+
+	err = syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB)
+	if err == nil {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+
+		return courierLock{}, nil
+	}
+
+	if !errors.Is(err, syscall.EWOULDBLOCK) {
+		return courierLock{}, fmt.Errorf("lock: %w", err)
+	}
+
+	held := courierLock{Held: true}
+
+	if raw, err := os.ReadFile(path); err == nil {
+		held.PID, _ = strconv.Atoi(strings.TrimSpace(string(raw)))
+	}
+
+	if st, err := f.Stat(); err == nil {
+		held.Since = st.ModTime()
+	}
+
+	return held, nil
 }
 
 // newCourierLoop is the loop over the real clock, files and shift of the crew file at path. The shift is built when the
