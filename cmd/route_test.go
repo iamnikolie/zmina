@@ -373,6 +373,8 @@ func TestSeatFromViewReadsHowASeatStands(t *testing.T) {
 		{"up, idle, holding a task", shift.View{State: shift.PresenceUp, Status: "idle", Tasks: []string{"T-12"}}, "busy", "busy on T-12"},
 		{"up, holding two", shift.View{State: shift.PresenceUp, Status: "idle", Tasks: []string{"T-12", "T-14"}}, "busy", "busy on T-12, T-14"},
 		{"up at a dialog", shift.View{State: shift.PresenceUp, Status: "waiting", Prompt: true}, "busy", "busy: a dialog waits on its screen"},
+		{"up at a question", shift.View{State: shift.PresenceUp, Status: "waiting", WaitingFor: shift.WaitQuestion, Prompt: true}, "busy", "busy: a question waits on its screen"},
+		{"up at a permission prompt", shift.View{State: shift.PresenceUp, Status: "waiting", WaitingFor: shift.WaitPermission, Prompt: true}, "busy", "busy: a permission prompt waits on its screen"},
 		{"down", shift.View{State: shift.PresenceDown}, "down", ""},
 		{"ended, collected soon", shift.View{State: shift.PresenceDead}, "down", ""},
 		{"down holding a task", shift.View{State: shift.PresenceDown, Tasks: []string{"T-9"}}, "busy", "busy: holds T-9 while down"},

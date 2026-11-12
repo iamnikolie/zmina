@@ -151,14 +151,21 @@ func ParseDialog(screen string) *Dialog {
 		return nil
 	}
 
+	d.ID = dialogID(d.Question, opts)
+
+	return d
+}
+
+// dialogID is the fingerprint of a question and every choice with its description.
+func dialogID(question string, opts []DialogOption) string {
 	sum := sha256.New()
-	sum.Write([]byte(d.Question))
+	sum.Write([]byte(question))
+
 	for _, o := range opts {
 		fmt.Fprintf(sum, "\x00%d\x00%s\x00%s", o.N, o.Label, o.Detail)
 	}
-	d.ID = hex.EncodeToString(sum.Sum(nil))[:16]
 
-	return d
+	return hex.EncodeToString(sum.Sum(nil))[:16]
 }
 
 // ChooseKeys are the keys that move the dialog's cursor to choice n and take it.

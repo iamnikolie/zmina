@@ -22,6 +22,10 @@ type Session struct {
 	Cwd             string `json:"cwd"`
 	Status          string `json:"status"`
 	StatusUpdatedAt int64  `json:"statusUpdatedAt"`
+	// WaitingFor is what a session whose status is waiting waits on: "permission prompt" or "input needed" (a question
+	// put to the owner). Claude Code writes it only while the status is waiting; empty otherwise and in a file from a
+	// Claude Code that does not write it.
+	WaitingFor string `json:"waitingFor,omitempty"`
 	// MessagingSocketPath is the session's inbox socket (cross-session messaging), PeerProtocol its version.
 	MessagingSocketPath string `json:"messagingSocketPath,omitempty"`
 	PeerProtocol        int    `json:"peerProtocol,omitempty"`

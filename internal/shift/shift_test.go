@@ -212,6 +212,8 @@ type fakeReg struct {
 	compacted map[string]time.Time
 	// activity is what a session's conversation says of background work and the owner's last line.
 	activity map[string]registry.Activity
+	// errorAt is when a session's last API error line was written (it carries none when unset).
+	errorAt map[string]time.Time
 }
 
 func (f *fakeReg) Activity(id string) (registry.Activity, error) { return f.activity[id], nil }
@@ -222,7 +224,7 @@ func (f *fakeReg) Last(id string) (registry.Turn, error) {
 		t.Ended, t.At = true, at
 	}
 	if e := f.errors[id]; e != "" {
-		t.Error, t.ErrorID = e, "e-"+e
+		t.Error, t.ErrorID, t.ErrorAt = e, "e-"+e, f.errorAt[id]
 	}
 
 	return t, nil
@@ -379,7 +381,7 @@ func fixtureWith(t *testing.T, body string) fix {
 	f := fix{
 		s:   s,
 		tm:  &fakeTmux{attached: map[string]bool{}, drafts: map[string]string{}, suggestions: map[string]string{}, up: map[string]int{}, dead: map[string]bool{}, typed: map[string][]string{}, keys: map[string][]string{}, argv: map[string][]string{}, probeErr: map[string]error{}},
-		rg:  &fakeReg{byPID: map[int]*registry.Session{}, outside: map[string]*registry.Session{}, context: map[string]int{}, errors: map[string]string{}, endedAt: map[string]time.Time{}, compacted: map[string]time.Time{}},
+		rg:  &fakeReg{byPID: map[int]*registry.Session{}, outside: map[string]*registry.Session{}, context: map[string]int{}, errors: map[string]string{}, endedAt: map[string]time.Time{}, compacted: map[string]time.Time{}, errorAt: map[string]time.Time{}},
 		tk:  &fakeTasks{},
 		lt:  &fakeLater{},
 		ev:  &fakeEvents{},

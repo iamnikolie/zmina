@@ -842,6 +842,11 @@ func (s *Shift) deliverOnce(now time.Time) string {
 		return ""
 	}
 
+	// Its last turn ended on an API error a moment ago: nothing goes until the hold is over (failureHeld).
+	if s.failureHeld(d, now) {
+		return ""
+	}
+
 	s.pruneTaskInbox(d)
 	s.pruneInfo()
 
@@ -1348,6 +1353,12 @@ func (s *Shift) Deliver() string { return s.deliver(s.Now()) }
 func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 	rs := s.State.Role(name)
 	if rs.settling(now) {
+		return ""
+	}
+
+	// Its last turn ended on an API error a moment ago: no line is posted or typed until the hold is over (failureHeld),
+	// whoever asks, the beat, a pass or a turn's end.
+	if s.failureHeld(name, now) && !s.ownerNext(name) {
 		return ""
 	}
 

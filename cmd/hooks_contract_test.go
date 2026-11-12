@@ -71,7 +71,7 @@ func TestHookCommandsResolve(t *testing.T) {
 			}
 		}
 	}
-	assert.Equal(t, map[string]bool{"SessionStart": true, "Stop": true, "PreToolUse": true}, events)
+	assert.Equal(t, map[string]bool{"SessionStart": true, "Stop": true, "PreToolUse": true, "PermissionRequest": true, "StopFailure": true}, events)
 
 	// The status line is not a hook but is kept the same way: a role's session runs the line it started with.
 	rest, ok := strings.CutPrefix(parsed.StatusLine.Command, base)

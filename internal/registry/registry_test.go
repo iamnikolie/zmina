@@ -522,3 +522,55 @@ func TestLastAfterACompactionAtThePrompt(t *testing.T) {
 	assert.Equal(t, 43_600, got.Context, "the first turn after the boundary")
 	assert.Equal(t, at, got.Compacted.UTC())
 }
+
+// A session file carries what a waiting session waits on only while it waits; an older Claude Code writes none.
+func TestSessionWaitingFor(t *testing.T) {
+	ns := t.TempDir()
+	dir := filepath.Join(ns, "sessions")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+
+	me := os.Getpid()
+	r := &Registry{Namespace: ns}
+
+	write := func(body string) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, strconv.Itoa(me)+".json"), []byte(body), 0o600))
+	}
+
+	write(`{"pid": ` + strconv.Itoa(me) + `, "sessionId": "s1", "status": "waiting", "waitingFor": "input needed", "statusUpdatedAt": 1}`)
+
+	got, err := r.ByPID(me)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "waiting", got.Status)
+	assert.Equal(t, "input needed", got.WaitingFor)
+
+	write(`{"pid": ` + strconv.Itoa(me) + `, "sessionId": "s1", "status": "idle", "statusUpdatedAt": 2}`)
+
+	got, err = r.ByPID(me)
+	require.NoError(t, err)
+	assert.Empty(t, got.WaitingFor, "a file without the field reads as before")
+}
+
+// The error of a turn says when its line was written, so an error can be told from another; a line with no time says none.
+func TestLastTurnErrorSaysWhenItWasWritten(t *testing.T) {
+	ns := t.TempDir()
+	dir := filepath.Join(ns, "projects", "-work")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+
+	turn := `{"type":"assistant","uuid":"a1","message":{"id":"m1","usage":{"input_tokens":10,"output_tokens":5}}}`
+	failed := `{"type":"assistant","uuid":"e1","timestamp":"2026-11-09T10:00:00Z","isApiErrorMessage":true,"message":{"model":"<synthetic>",` +
+		`"content":[{"type":"text","text":"API Error: gone"}],"usage":{"input_tokens":0,"output_tokens":0}}}`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "s1.jsonl"), []byte(turn+"\n"+failed+"\n"), 0o600))
+
+	got, err := (&Registry{Namespace: ns}).Last("s1")
+	require.NoError(t, err)
+	assert.Equal(t, "e1", got.ErrorID)
+	assert.Equal(t, time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC), got.ErrorAt.UTC())
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "s1.jsonl"), []byte(failed+"\n"+turn+"\n"), 0o600))
+
+	got, err = (&Registry{Namespace: ns}).Last("s1")
+	require.NoError(t, err)
+	assert.Empty(t, got.Error)
+	assert.True(t, got.ErrorAt.IsZero(), "no error, no time")
+}

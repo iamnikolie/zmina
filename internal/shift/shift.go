@@ -244,6 +244,14 @@ type View struct {
 	Status    string    `json:"status,omitempty"`
 	SessionID string    `json:"session_id,omitempty"`
 	Since     time.Time `json:"since,omitzero"`
+	// WaitingFor is what a role whose Status is waiting waits on, from Claude Code's session file and not the screen:
+	// WaitPermission (a permission prompt), WaitQuestion (a question put to the owner), empty when it is not waiting
+	// or the file does not say. Computed on every look; it is not kept in the state.
+	WaitingFor string `json:"waiting_for,omitempty"`
+	// TurnError says why an idle role's last turn ended, when it ended on an API error its StopFailure hook recorded:
+	// Claude Code's own words for it, empty when the role is not idle since such a turn or has no such hook. Computed on
+	// every look, and gone when the next turn starts; it is not kept in the state.
+	TurnError string `json:"turn_error,omitempty"`
 	// Context is how many tokens the conversation fills (0: not known); ContextMax the role's context_max.
 	Context    int `json:"context,omitempty"`
 	ContextMax int `json:"context_max,omitempty"`
@@ -409,6 +417,7 @@ func (s *Shift) Views() []View {
 
 		if sess != nil {
 			v.Status, v.SessionID, v.Since = sess.Status, sess.SessionID, sess.StatusSince()
+			v.WaitingFor = waitKind(sess)
 			turn, _ := s.registryFor(name).Last(sess.SessionID)
 			v.Context = turn.Context
 		}
@@ -421,9 +430,11 @@ func (s *Shift) Views() []View {
 				v.Prompt = true
 			}
 
+			var screen *Dialog
+
 			if text, err := s.Tmux.Capture(name, nowLines); err == nil {
 				if v.Prompt && !s.isCodex(name) {
-					v.Dialog = ParseDialog(text)
+					screen = ParseDialog(text)
 				}
 				if line := NowLine(text); line != "" {
 					v.Now = line
@@ -432,6 +443,15 @@ func (s *Shift) Views() []View {
 						v.NowAt = s.Now()
 					}
 				}
+			}
+
+			if f := s.failureFor(name, sess); f != nil {
+				v.TurnError = f.Text()
+			}
+
+			// The question its hook recorded, when that is the one on screen; else what the screen reads as.
+			if v.Prompt && !s.isCodex(name) {
+				v.Dialog = s.dialogFor(name, sess, screen)
 			}
 		}
 
@@ -868,6 +888,9 @@ func (s *Shift) start(name string, o UpOptions) error {
 		s.resumed = map[string]string{}
 	}
 	s.resumed[name] = resume
+
+	// What the hooks of the session this one replaces recorded is of that session.
+	s.dropHookRecords(name)
 
 	if err := s.Tmux.Start(name, dir, s.Env(r), s.commandIn(r, resume, dir)); err != nil {
 		return fmt.Errorf("%s: %w", name, err)

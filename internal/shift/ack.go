@@ -714,6 +714,10 @@ func (s *Shift) readGuard(name string) bool {
 // turnEndTimeout is the Stop hook's timeout in seconds; the hook itself returns in milliseconds (TurnEnd).
 const turnEndTimeout = 5
 
+// recordTimeout is the timeout in seconds of the hooks that only record what they are told (_permission-request,
+// _stop-failure).
+const recordTimeout = 5
+
 // roleSettings are the settings a socket role starts with: other sessions' messages let in, a hook that tells it
 // its tag and the lines it has not acked whenever its session starts, resumes, or is compacted or cleared (zmina
 // pending --brief), and a Stop hook that has what waits for it posted once the turn is over instead of at the next
@@ -721,7 +725,8 @@ const turnEndTimeout = 5
 // Its status line is zmina _limits-tap, which records the plan limits Claude Code hands every status line and draws the
 // owner's own line as before (tapStatusLine). The commands and flags these hooks and this line name are an API: a
 // session keeps them for its life and runs them with every later zmina: a new line or flag goes into
-// cmd/testdata/hook-lines.txt (TestHookCommandsResolve).
+// cmd/testdata/hook-lines.txt (TestHookCommandsResolve). A PermissionRequest hook records the question an
+// AskUserQuestion puts on the screen (zmina _permission-request).
 func (s *Shift) roleSettings(name string) string { return s.roleSettingsIn(name, "") }
 
 // roleSettingsIn is roleSettings for a session that starts in dir (a task's worktree); empty is the role's own dir.
@@ -752,6 +757,17 @@ func (s *Shift) roleSettingsIn(name, dir string) string {
 				"command": base + " _read-guard --role " + shellWord(name)}}
 			hooks["PreToolUse"] = []any{map[string]any{"matcher": "Bash|Read", "hooks": guard}}
 		}
+
+		// The question a role puts to the owner (AskUserQuestion) is recorded as it is shown, so zmina need not read it
+		// off the screen (zmina _permission-request). Silent, no decision, exit 0 always.
+		hooks["PermissionRequest"] = []any{map[string]any{"hooks": []any{map[string]any{"type": "command",
+			"timeout": recordTimeout, "command": base + " _permission-request --role " + shellWord(name) + " >/dev/null 2>&1 || true"}}}}
+
+		// A turn that ends on an API error runs no Stop hook; its StopFailure hook records the error for the views and the
+		// dispatcher's note, and has what waits for the role posted as a Stop hook would (zmina _stop-failure). Silent,
+		// exit 0 always.
+		hooks["StopFailure"] = []any{map[string]any{"hooks": []any{map[string]any{"type": "command",
+			"timeout": recordTimeout, "command": base + " _stop-failure --role " + shellWord(name) + " >/dev/null 2>&1 || true"}}}}
 
 		settings["hooks"] = hooks
 		settings["statusLine"] = s.tapStatusLine(name, base, dir)
