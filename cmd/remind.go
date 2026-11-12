@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -149,11 +150,12 @@ func (a *app) remindLsCommand() *cobra.Command {
 
 	c := &cobra.Command{
 		Use:   "ls",
-		Short: "The alarms still to ring, soonest first (reminders, sleeping roles, parked items to bring back)",
+		Short: "The alarms still to ring, soonest first (reminders, sleeping roles, parked items to bring back), and any that could not be delivered",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.readState(func(s *shift.Shift) error {
-				list := alarmStore(s.Crew).Pending()
+				// An alarm that could not be delivered stays on the list, first, until it is taken off: it is not lost.
+				list := slices.Concat(alarmStore(s.Crew).Failed(), alarmStore(s.Crew).Pending())
 
 				if all {
 					var problems []string
@@ -202,7 +204,7 @@ func (a *app) remindLsCommand() *cobra.Command {
 					}
 
 					line := words + "\t" + id + "\t" + at(s, al.At) + "\t" + al.For() + "\t" + string(al.Kind)
-					if all {
+					if all || al.State == alarm.Failed || al.Owed != "" {
 						line += "\t" + alarmState(al)
 					}
 
@@ -221,10 +223,16 @@ func (a *app) remindLsCommand() *cobra.Command {
 	return c
 }
 
-// alarmState is set, off, or rang with what it became.
+// alarmState is set, off, or rang with what it became; failed, or set and trying again, with how often and why.
 func alarmState(al alarm.Alarm) string {
 	out := string(al.State)
-	if al.State == alarm.Rang && al.Ask != "" {
+
+	switch {
+	case al.State == alarm.Failed:
+		out = "failed, not delivered after " + tries(al.Tries) + ifSet(": ", al.TryErr)
+	case al.State == alarm.Set && al.Owed != "":
+		out = "set, not delivered yet (" + tries(al.Tries) + ifSet(", last: ", al.TryErr) + ")"
+	case al.State == alarm.Rang && al.Ask != "":
 		out += " → " + al.Ask
 	}
 
@@ -233,6 +241,15 @@ func alarmState(al alarm.Alarm) string {
 	}
 
 	return out
+}
+
+// tries is a count of tries in words.
+func tries(n int) string {
+	if n == 1 {
+		return "1 try"
+	}
+
+	return fmt.Sprintf("%d tries", n)
 }
 
 func (a *app) remindMoveCommand() *cobra.Command {
@@ -395,41 +412,42 @@ func heldBy(s *shift.Shift, name string) []string {
 	return out
 }
 
-// rang does what the alarms rung by a beat left outside the lock: a reminder for the owner goes through the crew's
-// notify command, a line for another crew is queued for it (the mesh round after the beat takes it). It returns
-// lines for the log; a failure is also in the event log.
-func (a *app) rang(rungs []shift.Rung) []string {
+// rang does what one alarm rung by a beat left outside the lock: a reminder for the owner goes through the crew's
+// notify command, a line for another crew is queued for it (the mesh round after the beat takes it). It returns a
+// line for the log and how it ended: an error leaves the alarm to be tried again (shift.RunTick records it); a
+// failure is also in the event log.
+func (a *app) rang(r shift.Rung) (string, error) {
 	c, err := a.loadCrew()
 	if err != nil {
-		return []string{"alarms: " + err.Error()}
+		return "alarms: " + err.Error(), err
 	}
 
-	var lines []string
-
-	fail := func(id, what string, err error) {
-		line := id + ": " + what + ": " + err.Error()
-		lines = append(lines, line)
+	fail := func(what string, err error) (string, error) {
+		err = fmt.Errorf("%s: %w", what, err)
+		line := r.ID + ": " + err.Error()
 		_ = eventLog(c).Add(events.Event{TS: time.Now(), Event: "alarm-failed", By: "ticker", Detail: line})
+
+		return line, err
 	}
 
-	for _, r := range rungs {
-		switch {
-		case r.Notify != "" && c.NotifiesOn(crew.NotifyReminder):
-			if err := notify(c, crew.NotifyReminder, r.ID, r.Notify); err != nil {
-				fail(r.ID, "notify", err)
-			} else {
-				lines = append(lines, r.ID+": notified")
-			}
-		case r.Tell != "":
-			if line, err := a.tellAlarm(r.Tell, r.Line); err != nil {
-				fail(r.ID, "tell "+r.Tell, err)
-			} else {
-				lines = append(lines, r.ID+": "+line)
-			}
+	switch {
+	case r.Notify != "" && c.NotifiesOn(crew.NotifyReminder):
+		if err := notify(c, crew.NotifyReminder, r.ID, r.Notify); err != nil {
+			return fail("notify", err)
 		}
+
+		return r.ID + ": notified", nil
+	case r.Tell != "":
+		line, err := a.tellAlarm(r.Tell, r.Line)
+		if err != nil {
+			return fail("tell "+r.Tell, err)
+		}
+
+		return r.ID + ": " + line, nil
 	}
 
-	return lines
+	// No notify command any more (the crew file changed since the beat): nothing to run, so nothing is owed.
+	return "", nil
 }
 
 // notify runs the crew's notify command for one event (crew.NotifyReminder, NotifyBlocking, NotifyAsk, in

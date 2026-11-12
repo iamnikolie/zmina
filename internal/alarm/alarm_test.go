@@ -94,6 +94,70 @@ func TestStore(t *testing.T) {
 	assert.Equal(t, "you", got.For())
 }
 
+// Files written before an alarm could owe its part outside the lock have none of those fields: they read, a rung one
+// stays rung, and what a new file says comes back whole.
+func TestAlarmFilesFromBeforeTheEffectFieldsStillRead(t *testing.T) {
+	dir := t.TempDir()
+	s := &Store{Dir: dir}
+	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+
+	for name, body := range map[string]string{
+		"R-1": `{"id": "R-1", "kind": "remind", "at": "2026-11-01T09:00:00Z", "text": "set one", "state": "set",
+  "created": "2026-11-01T08:00:00Z", "updated": "2026-11-01T08:00:00Z"}`,
+		"R-2": `{"id": "R-2", "kind": "remind", "at": "2026-11-01T09:00:00Z", "text": "rung one", "state": "rang",
+  "rang": "2026-11-01T09:00:30Z", "ask": "A-1", "created": "2026-11-01T08:00:00Z", "updated": "2026-11-01T09:00:30Z"}`,
+	} {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name+".json"), []byte(body), 0o600))
+	}
+
+	all, problems, err := s.Scan()
+	require.NoError(t, err)
+	require.Empty(t, problems)
+	require.Len(t, all, 2)
+
+	assert.True(t, all[0].Pending())
+	assert.Empty(t, all[0].Owed)
+	assert.Equal(t, Rang, all[1].State)
+	assert.False(t, all[1].Pending(), "rung by the old build: rung")
+	assert.Equal(t, []string{"R-1"}, ids(s.Pending()))
+
+	owing := all[0]
+	owing.Owed, owing.Tries, owing.Tried, owing.TryErr = "set one", 2, now, "notify: exit status 1"
+	require.NoError(t, s.Put(owing))
+
+	got, err := s.Get("R-1")
+	require.NoError(t, err)
+	assert.Equal(t, owing, got)
+	assert.True(t, got.Pending(), "owing its part: still to ring")
+}
+
+// An alarm that could not be delivered is listed on its own, is not pending, is not moved, and is cleared by off.
+func TestFailedAlarmIsNotPendingAndIsClearedByOff(t *testing.T) {
+	s := &Store{Dir: t.TempDir()}
+	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+
+	a, err := s.Add(Alarm{Kind: Remind, At: now.Add(-time.Hour), Text: "call the bank"}, now)
+	require.NoError(t, err)
+
+	live, err := s.Add(Alarm{Kind: Remind, At: now.Add(time.Hour), Text: "later one"}, now)
+	require.NoError(t, err)
+
+	a.State, a.Tries, a.TryErr = Failed, 6, "notify: exit status 1"
+	require.NoError(t, s.Put(a))
+
+	assert.Equal(t, []string{live.ID}, ids(s.Pending()))
+	assert.Empty(t, s.Due(now), "a failed alarm does not ring again")
+	assert.Equal(t, []string{a.ID}, ids(s.Failed()))
+
+	_, err = s.Move(a.ID, now.Add(time.Hour), "+1h", now)
+	require.ErrorContains(t, err, "R-1 already failed")
+
+	off, err := s.TakeOff(a.ID, now)
+	require.NoError(t, err)
+	assert.Equal(t, Off, off.State)
+	assert.Empty(t, s.Failed())
+}
+
 func ids(as []Alarm) []string {
 	out := []string{}
 	for _, a := range as {

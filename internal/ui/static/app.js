@@ -884,9 +884,11 @@ function alarmWhen(a) {
 }
 
 function alarmText(a) {
-  if (a.kind === "sleep") return W.alWakes(who(a.crew, a.role));
-  if (a.kind === "later") return W.alBack + a.text;
-  return a.text;
+  // undelivered: it went off and its notify or tell is not out yet, or never went out (the words of zmina remind ls).
+  const note = a.undelivered ? " (" + a.undelivered + ")" : "";
+  if (a.kind === "sleep") return W.alWakes(who(a.crew, a.role)) + note;
+  if (a.kind === "later") return W.alBack + a.text + note;
+  return a.text + note;
 }
 
 function alarmHead() {
