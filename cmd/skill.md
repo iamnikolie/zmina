@@ -317,9 +317,26 @@ gone (…): its lines wait for the next beat after each turn …; restart it …
 also works from the dispatcher's own session): zmina records the hooks each start
 gets, and asks the process (`ps`) of a role an earlier zmina started.
 
+The settings also carry a `PermissionRequest` hook, `zmina _permission-request --role <role>` (timeout 5 s, output to
+`/dev/null`, `|| true`), which tells zmina the question an `AskUserQuestion` puts on the role's screen without the screen
+being read. It reads the hook's input and, for that tool only, writes the questions and their options as the tool had
+them, with the session id and the time, to `hooks/<role>.question.json` next to the crew file (a copy has its own file;
+one write replaces the last). It prints nothing, never allows or denies anything, and exits 0 on any error, so it neither
+settles nor breaks the dialog it runs for. Every other tool's request, and anything that is not JSON, records nothing.
+`zmina ls --json` and the cockpit take the `dialog` of such a role from that file when the session file says the role
+waits on a question (`waitingFor: input needed`), the file is of the role's current session, and it was written no
+earlier than that wait began (2 s of slack); otherwise, and whenever the file is gone or does not read, the screen is
+read as before. A file is never deleted: one that is not the current question is ignored, and the next question replaces
+it. With several questions in one call the dialog is the first, its words end `(and N more after this one: …)`; once the
+screen has moved on to another question (its choices are not the file's) the screen's dialog is shown. `choose` still
+answers by the dialog read from the screen: the file's choice order is not proven to be the screen's numbering, so it
+only supplies the words, the descriptions and a question the screen does not read, and a dialog that only the file
+describes (an id no screen has) is never answered blind. A role started by an earlier zmina has no such hook until its
+next start and shows what the screen shows.
+
 A start also records the zmina version that made it. After an install the roles keep the hook command lines the
 earlier zmina wrote and run them with the new executable: the hidden commands and flags those lines name
-(`pending --brief`, `_turn-end`, `_read-guard`, `_limits-tap`, the `_codex` bridge's flags) stay valid across versions, a renamed one
+(`pending --brief`, `_turn-end`, `_permission-request`, `_read-guard`, `_limits-tap`, the `_codex` bridge's flags) stay valid across versions, a renamed one
 keeps its old name. A Codex role's bridge and a running `zmina ui` keep the earlier zmina's code until they are started
 again. `zmina doctor` says which (`versions`): a cockpit or a Codex bridge of another version warns, Claude roles
 started by another version are listed without a warning; `zmina restart <role> --continue` starts one with this
@@ -1188,7 +1205,8 @@ A machine without peers is a mesh of one. It opens the page in the browser.
 - **A question on a session's screen** (a dialog with numbered choices) stands first in your move: the row says the
   question, and opened offers each choice as a button (`chat/action choose`, on the node the session runs on); choices
   that ask for words (Type something, Chat about this) are left to Talk and its Terminal. `zmina ls --json` carries
-  it as `dialog: {question, options (n, label, detail), cursor, id}`.
+  it as `dialog: {question, options (n, label, detail), cursor, id}`. A role started with the `PermissionRequest` hook
+  has the words of its question from the hook, whole (see the hook paragraph under Delivery), the screen's otherwise.
 - **Talk**: every session card, and the holder line of an opened task, has «Talk»: the role's conversation (Chat) opens
   in a panel beside the cockpit, which stays in view and keeps updating behind it; on a phone the panel is the whole
   screen. Any role of any node: a peer's over the mesh as Chat reads it. «Open page» opens it as its own page; Esc

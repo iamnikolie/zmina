@@ -58,6 +58,16 @@ func (l Layout) Limits() string { return filepath.Join(l.Dir, "limits") }
 // Screens holds the last screens of ended roles.
 func (l Layout) Screens() string { return filepath.Join(l.Dir, "screens") }
 
+// Hooks is the directory of what a role's hooks recorded for zmina to read: one small file a role and kind, replaced by
+// the next record (HookQuestion, HookFailure). A file here is only ever read as a hint, with the session it is about
+// and the time it was written; a role started before a hook existed has none.
+func (l Layout) Hooks() string { return filepath.Join(l.Dir, "hooks") }
+
+// HookQuestion is the question a role's PermissionRequest hook saw an AskUserQuestion put on its screen.
+func (l Layout) HookQuestion(role string) string {
+	return filepath.Join(l.Hooks(), role+".question.json")
+}
+
 // Worktrees holds the tasks' git worktrees.
 func (l Layout) Worktrees() string { return filepath.Join(l.Dir, "worktrees") }
 

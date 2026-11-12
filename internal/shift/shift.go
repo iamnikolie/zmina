@@ -426,9 +426,11 @@ func (s *Shift) Views() []View {
 				v.Prompt = true
 			}
 
+			var screen *Dialog
+
 			if text, err := s.Tmux.Capture(name, nowLines); err == nil {
 				if v.Prompt && !s.isCodex(name) {
-					v.Dialog = ParseDialog(text)
+					screen = ParseDialog(text)
 				}
 				if line := NowLine(text); line != "" {
 					v.Now = line
@@ -437,6 +439,11 @@ func (s *Shift) Views() []View {
 						v.NowAt = s.Now()
 					}
 				}
+			}
+
+			// The question its hook recorded, when that is the one on screen; else what the screen reads as.
+			if v.Prompt && !s.isCodex(name) {
+				v.Dialog = s.dialogFor(name, sess, screen)
 			}
 		}
 
