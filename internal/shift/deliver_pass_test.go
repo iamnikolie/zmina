@@ -713,3 +713,91 @@ func TestDeliverPassMarksTheRoleItDeliversTo(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"deliver designer", "deliver harvester"}, marks, "the crew's order")
 }
+
+// A line waiting for its ack past the crew's renotify is the beat's to say again, not a pass's: what a pass gives is
+// what waits, and the dispatcher's signals stay as they are.
+func TestDeliverPassDoesNotRenotify(t *testing.T) {
+	f, p := nativeFixture(t, crewYAML)
+	upNative(t, f, "dispatcher")
+
+	_, err := f.s.Note("dev", "T-5 result ready", false)
+	require.NoError(t, err)
+	require.NotEmpty(t, f.s.deliver(*f.now))
+	p.showAll()
+	f.s.deliverInbox("dispatcher", *f.now) // settles the posted line
+
+	*f.now = f.now.Add(f.s.Crew.RenotifyD() + time.Minute)
+
+	// Something else waits, so the pass has work for the dispatcher.
+	_, err = f.s.Note("dev", "T-6 result ready", false)
+	require.NoError(t, err)
+
+	changed, err := f.s.DeliverPass()
+	require.NoError(t, err)
+	assert.True(t, changed)
+	require.Len(t, p.posted["sid-dispatcher"], 2)
+	assert.NotContains(t, p.posted["sid-dispatcher"][1], "T-5", "the first is not said again")
+	assert.Zero(t, f.s.State.Acks["S-1"].Renotes)
+	assert.Zero(t, f.eventCount("renoted"))
+
+	// The beat does say it again.
+	p.showAll()
+	f.s.deliverInbox("dispatcher", *f.now)
+	f.s.renotify(*f.now)
+	assert.Equal(t, 1, f.s.State.Acks["S-1"].Renotes)
+}
+
+// A line in flight (posted and not yet shown, typed and not yet landed) with nothing else queued is the beat's to
+// follow: a pass names no such role, asks nothing about it and changes nothing, however long the line has been in
+// flight.
+func TestDeliverPassLeavesALineInFlightAlone(t *testing.T) {
+	t.Run("posted", func(t *testing.T) {
+		f, p := nativeFixture(t, crewYAML)
+		upNative(t, f, "designer")
+
+		_, err := f.s.QueueTracked("designer", "[dev] look at T-1")
+		require.NoError(t, err)
+		require.NotEmpty(t, f.s.deliverInbox("designer", *f.now))
+
+		rs := f.s.State.Role("designer")
+		require.Len(t, rs.Posted, 1)
+		require.Empty(t, rs.Inbox)
+
+		*f.now = f.now.Add(postedWait + time.Minute) // the beat would give it up as never shown
+		before := stateJSON(t, f.s)
+		calls := counted(f, p)
+
+		assert.Empty(t, f.s.Waiting())
+
+		changed, err := f.s.DeliverPass()
+		require.NoError(t, err)
+		assert.False(t, changed)
+		assert.Empty(t, calls.calls)
+		assert.Equal(t, before, stateJSON(t, f.s))
+		assert.Empty(t, rs.Failed)
+	})
+
+	t.Run("typed", func(t *testing.T) {
+		f := typedFixture(t, crewYAML, "designer")
+		require.NoError(t, f.s.Queue("designer", "hello"))
+		require.NotEmpty(t, f.s.deliverInbox("designer", *f.now))
+
+		rs := f.s.State.Role("designer")
+		require.NotNil(t, rs.Sent)
+		require.Empty(t, rs.Inbox)
+
+		*f.now = f.now.Add(confirmAfter + time.Minute) // the beat would press Enter again or give it up
+		before := stateJSON(t, f.s)
+		calls := counted(f, nil)
+
+		assert.Empty(t, f.s.Waiting())
+
+		changed, err := f.s.DeliverPass()
+		require.NoError(t, err)
+		assert.False(t, changed)
+		assert.Empty(t, calls.calls)
+		assert.Equal(t, before, stateJSON(t, f.s))
+		assert.Empty(t, rs.Failed)
+		assert.Empty(t, f.tm.keys["designer"], "no Enter pressed again")
+	})
+}
