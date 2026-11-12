@@ -1868,6 +1868,23 @@ A line typed or posted and a session started are saved at once, under the beat's
 a beat killed after them, or a save that fails at its end, does not type or start them twice. A save that fails
 there stops the beat's further typing and starting, and says so.
 
+`zmina _courier` (hidden; run by hand, nothing starts it yet) repeats the delivery step of the beat (`zmina tick
+--deliver`: no start, no trim, no renotify, no sweep, no `LastTick`) while it lives, so a line that waits for a role goes
+when the role can take it, not at the next beat. Every `--poll` (250 ms) it stats `state.json`; it runs a pass when the
+file changed (its own save too), when a role's wait is over, or when the crew file was read again (it is read when its
+stat changed, its warnings said then, not at every pass). Between those it takes no lock and asks tmux nothing. A role
+that is waiting and cannot take its line (busy, a draft, a dialog) is asked again after 1 s, 2 s, 4 s, up to 15 s, whatever
+else changes the file; a role whose line went starts over. A lock another zmina holds is skipped at once, without a word.
+A role whose try was slow (a tmux that answers slowly) waits at least ten times what the try took, and a try over 2 s ends
+the pass, the lock let go. A pass that fails (a state that could not be saved) backs the whole courier off: a minute
+doubling to 5 minutes, so a line is never repeated faster than the beat alone would. It ends with exit 0
+when the zmina executable on disk is another file than it started from, after `--max-life` (default 6 h; 0: no limit),
+and on SIGINT, SIGTERM or SIGHUP; with exit 1 on a state a newer zmina wrote. The start and each end are one event,
+`courier-start` and `courier-stop` with its reason. One courier runs per crew (`courier.lock` beside the state, not the state
+lock): a second prints that one runs and exits 0. The beat stays what it was and stays the safety net: a line held back by
+a time (the gap after a failed try, the settle time after a slash command) is looked for again every 5 s
+until it can go.
+
 0. Alarms whose time has come ring, once each (see Alarms): a reminder for the owner becomes a check on the todo,
    a parked item comes back to it, a role is started if down and gets its line queued, another crew is told.
    A role's alarm waits while the shift is stopped. The notify commands and the tells run after the beat,

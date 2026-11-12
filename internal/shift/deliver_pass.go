@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -100,4 +101,79 @@ func (s *Shift) DeliverPass() (changed bool, err error) {
 	}
 
 	return !bytes.Equal(before, after), s.flushErr
+}
+
+// RoleDelivery is what a pass did for one role it tried (DeliverRoles).
+type RoleDelivery struct {
+	Role string
+	// Changed is whether trying the role altered the state in any way: a line given, a try counted, a record settled.
+	// A role that is waiting but cannot take its line (busy, a draft, a dialog) changes nothing.
+	Changed bool
+	// Took is how long trying the role took, by the wall clock: tmux, the registry, the post or the typing.
+	Took time.Duration
+}
+
+// slowTry is the time a try may take before the pass ends after it, the roles after it left for the next pass: the
+// pass runs under the state lock, and a tmux that answers slowly must not hold it for one role after another.
+const slowTry = 2 * time.Second
+
+// wallNow is the wall clock a try is timed by (not the shift's Now, which a pass holds still); a test moves it.
+var wallNow = time.Now
+
+// DeliverRoles is DeliverPass for some of the waiting roles only: those of only that Waiting names, in Waiting's order.
+// A name in only that Waiting does not name is skipped, so a list gone stale between the look and the call gives a
+// role nothing a pass would not. It reports each role it tried, in order, and whether trying it altered the state.
+// That is found by comparing the state as it would be saved before and after that role alone (the "after" of one role
+// is the "before" of the next, so a pass over n roles serializes the state n+1 times), so a change anywhere in it
+// counts: the role's own record, the signals and notes the dispatcher's delivery takes, a notice a failed line adds.
+// A caller that repeats the pass uses it to leave a role that changed nothing alone for a while: asking a role that
+// cannot take its line yet costs tmux, the registry and a transcript read. Like DeliverPass it starts no role, trims
+// nothing, tells nobody again and sweeps no record; call it under the crew state lock. The error is the one DeliverPass
+// returns, a state that could not be written after a line went: the roles after the one it came on are not tried and
+// not reported. Nor are the roles after one whose try took over slowTry: they are the next pass's.
+func (s *Shift) DeliverRoles(only []string) ([]RoleDelivery, error) {
+	var names []string
+
+	for _, name := range s.Waiting() {
+		if slices.Contains(only, name) {
+			names = append(names, name)
+		}
+	}
+
+	if len(names) == 0 {
+		return nil, nil
+	}
+
+	before, err := json.Marshal(s.State)
+	if err != nil {
+		return nil, fmt.Errorf("state: %w", err)
+	}
+
+	out := make([]RoleDelivery, 0, len(names))
+
+	for _, name := range names {
+		if s.flushErr != nil {
+			break
+		}
+
+		s.mark("deliver", name)
+
+		began := wallNow()
+		s.DeliverTo(name)
+		took := wallNow().Sub(began)
+
+		after, err := json.Marshal(s.State)
+		if err != nil {
+			return append(out, RoleDelivery{Role: name, Changed: true, Took: took}), fmt.Errorf("state: %w", err)
+		}
+
+		out = append(out, RoleDelivery{Role: name, Changed: !bytes.Equal(before, after), Took: took})
+		before = after
+
+		if took > slowTry {
+			break
+		}
+	}
+
+	return out, s.flushErr
 }
