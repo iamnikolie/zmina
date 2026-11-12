@@ -101,6 +101,8 @@ func (a *app) diagnose() []check {
 		add("tmux", "ok", "%s", t.Bin)
 	}
 
+	checkDisk(c, add)
+
 	hasClaude, hasCodex := false, false
 	for _, r := range c.Roles {
 		if r.IsCodex() {
