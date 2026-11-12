@@ -385,7 +385,7 @@ func TestDeliverPassLeavesABusyRoleItsLine(t *testing.T) {
 func TestDeliverPassHonoursTheCountedGap(t *testing.T) {
 	f := typedFixture(t, crewYAML, "designer")
 	require.NoError(t, f.s.Queue("designer", "hello"))
-	f.tm.typeErr = errors.New("tmux: no server")
+	f.tm.typeErr = errNotTyped("tmux: no server")
 	rs := f.s.State.Role("designer")
 
 	changed, err := f.s.DeliverPass()
@@ -577,7 +577,7 @@ func TestDeliverPassHonoursTheRetryGapOfAFailedTypeToTheDispatcher(t *testing.T)
 	_, err := f.s.Note("dev", "T-1 needs a decision", false)
 	require.NoError(t, err)
 
-	f.tm.typeErr = errors.New("tmux: no server")
+	f.tm.typeErr = errNotTyped("tmux: no server")
 	calls := counted(f, nil)
 	first := *f.now
 

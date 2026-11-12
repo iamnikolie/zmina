@@ -206,4 +206,12 @@ func TestChatSnapshotCallsAnUnclearLineUnconfirmedNotFailed(t *testing.T) {
 
 	_, err = a.localChatAction("default", "dev", "dismiss:"+unclear)
 	require.NoError(t, err, "the owner can set a line aside that may have reached the role")
+
+	// Looked at and set aside: it no longer counts as a line that needs attention; the one that only failed stays.
+	require.NoError(t, c.readState(func(s *shift.Shift) error {
+		failed := s.State.Role("dev").Failed
+		require.Len(t, failed, 1)
+		require.Equal(t, "tmux refused", failed[0].Error)
+		return nil
+	}))
 }

@@ -35,6 +35,30 @@ func TestTypeLineSaysWhichFailuresMayHaveReachedThePane(t *testing.T) {
 		assert.Empty(t, f.tm.drafts["designer"])
 	})
 
+	t.Run("a failure before any key was sent", func(t *testing.T) {
+		f := typedFixture(t, crewYAML, "designer")
+		f.tm.typeErr = errNotTyped("tmux list-panes: no answer in 10s")
+
+		err := f.s.typeLine("designer", line)
+
+		require.Error(t, err)
+		assert.False(t, typedMayHaveReached(err))
+		assert.Contains(t, err.Error(), "no answer in 10s", "its own words stay")
+		assert.Empty(t, f.s.State.Role("designer").Partial, "no start to look for")
+		assert.Empty(t, f.tm.keys["designer"], "no key sent")
+	})
+
+	t.Run("a start seen in the input line, cleared, and read gone", func(t *testing.T) {
+		f := typedFixture(t, crewYAML, "designer")
+		f.tm.typeErr, f.tm.typeLeaves = errors.New("tmux: send-keys timed out"), true
+
+		err := f.s.typeLine("designer", line)
+
+		require.Error(t, err)
+		assert.False(t, typedMayHaveReached(err))
+		assert.Empty(t, f.tm.drafts["designer"])
+	})
+
 	t.Run("a start seen and not cleared", func(t *testing.T) {
 		f, c := cutFixture(t)
 		c.noClear = true
@@ -59,7 +83,7 @@ func TestTypeLineSaysWhichFailuresMayHaveReachedThePane(t *testing.T) {
 
 	t.Run("an input line that reads empty: never started, or gone whole", func(t *testing.T) {
 		f := typedFixture(t, crewYAML, "designer")
-		f.tm.typeErr, f.tm.typeBlind = errors.New("tmux: send-keys timed out"), true
+		f.tm.typeErr = errors.New("tmux: send-keys timed out")
 
 		err := f.s.typeLine("designer", line)
 
@@ -99,7 +123,7 @@ func TestQueuedLineWhoseTypingBrokeUnclearlyIsKeptForALookNotTriedAgain(t *testi
 	f := typedFixture(t, crewYAML, "designer")
 	require.NoError(t, f.s.Queue("designer", "[zmina T-1] read the packet"))
 	require.NoError(t, f.s.Queue("designer", "the line behind it"))
-	f.tm.typeErr, f.tm.typeBlind = errors.New("tmux: send-keys timed out"), true
+	f.tm.typeErr = errors.New("tmux: send-keys timed out")
 
 	f.s.deliverInbox("designer", *f.now)
 
@@ -115,7 +139,7 @@ func TestQueuedLineWhoseTypingBrokeUnclearlyIsKeptForALookNotTriedAgain(t *testi
 	assert.Contains(t, notesOf(f, "designer")[0], "delivery failed (T-1)")
 
 	// The tmux types again: the failed line is not among what goes.
-	f.tm.typeErr, f.tm.typeBlind = nil, false
+	f.tm.typeErr = nil
 	*f.now = f.now.Add(countedGap)
 	f.s.deliverInbox("designer", *f.now)
 
@@ -123,44 +147,139 @@ func TestQueuedLineWhoseTypingBrokeUnclearlyIsKeptForALookNotTriedAgain(t *testi
 	assert.Len(t, rs.Failed, 1)
 }
 
-// What the dispatcher's typed line was made of leaves its queue when the typing broke unclearly, as for a line that
-// went, and waits as one failed line; the signals come back only with a retry that is asked to say them again.
-func TestDispatcherLineWhoseTypingBrokeUnclearlyIsKeptForALook(t *testing.T) {
-	f := fixtureWith(t, dispatcherOnly)
-	require.NoError(t, f.s.Up("dispatcher"))
-	f.status("dispatcher", "idle", *f.now)
-	*f.now = f.now.Add(3 * time.Minute)
-	f.tm.typeErr, f.tm.typeBlind = errors.New("tmux: send-keys timed out"), true
+// The dispatcher is not a role: whatever its typing breaks on, its signals and notes stay queued, the next try waits
+// retryGap, and nothing says it failed, not even a note to the dispatcher about its own line. One blip, and then several,
+// leave nothing in the failed list, no note piling up, and every signal still to come.
+func TestDispatcherLineIsNeverKeptAsFailedWhenItsTypingBreaks(t *testing.T) {
+	for name, fail := range map[string]func(f fix){
+		"nothing was typed":            func(f fix) { f.tm.typeErr = errNotTyped("tmux list-panes: no answer in 10s") },
+		"the pane shows nothing of it": func(f fix) { f.tm.typeErr = errors.New("tmux send-keys: no answer in 10s") },
+		"its start is in the input line": func(f fix) {
+			f.tm.typeErr, f.tm.typeLeaves = errors.New("tmux send-keys: no answer in 10s"), true
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := fixtureWith(t, dispatcherOnly)
+			require.NoError(t, f.s.Up("dispatcher"))
+			f.status("dispatcher", "idle", *f.now)
+			*f.now = f.now.Add(3 * time.Minute)
 
-	_, err := f.s.Note("mr-watch", "!35 merged", false)
-	require.NoError(t, err)
+			_, err := f.s.Note("mr-watch", "!35 merged", false)
+			require.NoError(t, err)
+			f.s.addNotes([]string{"designer: looks stuck"})
+			acks := len(f.s.State.Acks)
+			calls := counted(f, nil)
 
-	assert.Empty(t, f.s.deliver(*f.now), "nothing was told")
+			fail(f)
 
-	rs := f.s.State.Role("dispatcher")
+			rs := f.s.State.Role("dispatcher")
+
+			// One try each retryGap, however many passes come between: nothing piles up.
+			for try := 1; try <= 4; try++ {
+				assert.Empty(t, f.s.deliver(*f.now))
+				assert.Equal(t, try, calls.count("tmux Type"), "tried")
+				assert.Empty(t, rs.Failed, "never kept as failed")
+				assert.Equal(t, []string{"mr-watch: !35 merged"}, f.s.State.Signals, "still queued")
+				assert.Equal(t, []string{"designer: looks stuck"}, f.s.State.Notes, "no note about its own line")
+				assert.Equal(t, acks, len(f.s.State.Acks), "no id left behind by a line that did not go")
+				assert.Nil(t, rs.Sent)
+
+				*f.now = f.now.Add(5 * time.Second)
+				assert.Empty(t, f.s.deliver(*f.now), "inside retryGap: not tried again")
+				assert.Equal(t, try, calls.count("tmux Type"))
+
+				*f.now = f.now.Add(retryGap)
+			}
+
+			// The tmux answers: one try after the gap, and the line goes with its signal and its note.
+			f.tm.typeErr, f.tm.typeLeaves = nil, false
+			delete(f.tm.drafts, "dispatcher")
+			*f.now = f.now.Add(retryGap)
+
+			line := f.s.deliver(*f.now)
+
+			assert.Contains(t, line, "!35 merged")
+			require.Len(t, f.tm.typed["dispatcher"], 1)
+			assert.Contains(t, f.tm.typed["dispatcher"][0], "designer: looks stuck")
+			assert.Empty(t, rs.Failed)
+			assert.Empty(t, f.s.State.Signals)
+		})
+	}
+}
+
+// A tmux that did not get as far as a key (the commonest blip: the pane could not be asked for in time) leaves a line
+// where main left it: tried again, counted, and failed as one nothing reached after typeTries tries.
+func TestQueuedLineWhoseTypingNeverStartedIsTriedAgainThenFailedAsNothingReached(t *testing.T) {
+	f := typedFixture(t, crewYAML, "designer")
+	require.NoError(t, f.s.Queue("designer", "[zmina T-1] read the packet"))
+	f.tm.typeErr = errNotTyped("tmux list-panes: no answer in 10s")
+
+	rs := f.s.State.Role("designer")
+
+	for try := 1; try < typeTries; try++ {
+		f.s.deliverInbox("designer", *f.now)
+
+		assert.Equal(t, try, rs.Attempts, "a counted try")
+		assert.Equal(t, []string{"[zmina T-1] read the packet"}, rs.Inbox, "still queued")
+		assert.Empty(t, rs.Failed)
+		assert.Empty(t, rs.Partial, "nothing was typed: no start to look for")
+		assert.Empty(t, f.tm.keys["designer"], "no key into the pane")
+
+		*f.now = f.now.Add(countedGap)
+	}
+
+	f.s.deliverInbox("designer", *f.now)
+
 	require.Len(t, rs.Failed, 1)
-	assert.True(t, rs.Failed[0].Unclear())
-	assert.Contains(t, rs.Failed[0].Line, "!35 merged")
-	assert.Empty(t, f.s.State.Signals, "it is not typed again by itself")
-	assert.Nil(t, rs.Sent)
-	assert.False(t, f.s.Told)
+	assert.False(t, rs.Failed[0].Unclear(), "nothing reached the role: a retry is safe")
+	assert.Contains(t, rs.Failed[0].Error, "no answer in 10s")
+	assert.Empty(t, rs.Inbox)
 
-	// The tmux types again: the dispatcher is told once that the line may have reached it, and the signal is not in it.
-	f.tm.typeErr, f.tm.typeBlind = nil, false
-	*f.now = f.now.Add(retryGap)
-	assert.Contains(t, f.s.deliver(*f.now), "dispatcher: delivery failed")
-	require.Len(t, f.tm.typed["dispatcher"], 1)
-	assert.NotContains(t, f.tm.typed["dispatcher"][0], "!35 merged")
-
-	n, skipped, err := f.s.Retry("dispatcher", false)
-	require.NoError(t, err)
-	assert.Zero(t, n)
-	assert.Equal(t, 1, skipped)
-	assert.Empty(t, f.s.State.Signals)
-
-	n, skipped, err = f.s.Retry("dispatcher", true)
+	n, skipped, err := f.s.Retry("designer", false)
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
 	assert.Zero(t, skipped)
-	assert.Equal(t, []string{"mr-watch: !35 merged"}, f.s.State.Signals, "said again, as asked")
+}
+
+// A tracked role line whose typing broke unclearly counts as delivered: its ack runs from then and says it again after
+// the crew's renotify, and that is the only way it is said again; a plain retry leaves the failed record alone.
+func TestTrackedLineWhoseTypingBrokeUnclearlyIsSaidAgainByItsAck(t *testing.T) {
+	f := typedFixture(t, crewYAML, "designer")
+	rs := f.s.State.Role("designer")
+	rs.Inbound = true
+
+	id, err := f.s.QueueTracked("designer", "[dev] look at T-1")
+	require.NoError(t, err)
+
+	f.tm.typeErr = errors.New("tmux: send-keys timed out")
+	f.s.deliverInbox("designer", *f.now)
+
+	require.Len(t, rs.Failed, 1)
+	require.True(t, rs.Failed[0].Unclear())
+	assert.Equal(t, []string{id}, rs.Failed[0].IDs)
+	assert.Empty(t, rs.Inbox)
+
+	ack := f.s.State.Acks[id]
+	require.NotNil(t, ack)
+	assert.Equal(t, *f.now, ack.Last, "delivered: its ack runs from now")
+	assert.Equal(t, *f.now, ack.First)
+
+	// Past the renotify interval it is said again, once, as a line of its own.
+	f.tm.typeErr = nil
+	*f.now = f.now.Add(f.s.Crew.RenotifyD() + time.Minute)
+	f.status("designer", "idle", *f.now)
+	f.s.renotify(*f.now)
+
+	require.Len(t, rs.Inbox, 1)
+	assert.Contains(t, rs.Inbox[0], "[dev] look at T-1")
+	assert.Contains(t, rs.Inbox[0], "still pending since")
+	assert.Equal(t, 1, f.s.State.Acks[id].Renotes)
+
+	// A plain retry does not type it a second time from the failed list.
+	n, skipped, err := f.s.Retry("designer", false)
+	require.NoError(t, err)
+	assert.Zero(t, n)
+	assert.Equal(t, 1, skipped)
+	assert.Len(t, rs.Inbox, 1)
+	assert.Len(t, rs.Failed, 1)
 }

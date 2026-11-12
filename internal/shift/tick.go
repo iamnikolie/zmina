@@ -117,6 +117,7 @@ func (s *Shift) Tick() []string {
 			probedUp[name] = true
 
 			s.remember(name, p)
+			s.closeTakenTyped(name)
 			s.observeRecovery(name)
 			// A role started by an older zmina would vanish without a screen.
 			_ = s.Tmux.KeepScreens(name)
@@ -1250,8 +1251,12 @@ func (s *Shift) typeDispatcher(d string, local, remote, notes []string, now time
 
 	line := "[zmina] " + strings.Join(parts, " · ") + ackTail(ids)
 
-	typeErr := s.typeLine(d, line)
-	if typeErr != nil && !typedMayHaveReached(typeErr) {
+	// Unlike a role's queued line, a line the dispatcher's typing broke on is never kept as failed, whatever the pane
+	// shows of it: its signals and notes stay queued and the next try waits retryGap, however often it fails. A crew
+	// that runs unattended is worse off with a dispatcher that hears nothing than with a signal told twice, and what the
+	// line carries has ids (and the dispatcher's ack), which make a repeat recognisable. What it left in the input line
+	// is cleared by typeLine all the same, and looked for again by the next try (clearLeftover).
+	if err := s.typeLine(d, line); err != nil {
 		s.State.Role(d).dispatchTried(now)
 
 		for _, id := range fresh {
@@ -1261,16 +1266,9 @@ func (s *Shift) typeDispatcher(d string, local, remote, notes []string, now time
 		return ""
 	}
 
-	// A line that may have reached the dispatcher is never typed again by itself: what it was made of leaves the queue
-	// as for a line that went, and waits as a failed line for a look (queue ls, below). Its ids stay with it, so the
-	// dispatcher's ack still closes it.
-	if typeErr != nil {
-		s.delivered(ids, now)
-	} else {
-		s.State.Role(d).Sent, s.State.Role(d).TypedAt = &Sent{Line: line, At: now, IDs: ids, Parts: kept}, now
-		s.delivered(ids, now)
-		s.stageIDs(ids, "submitted")
-	}
+	s.State.Role(d).Sent, s.State.Role(d).TypedAt = &Sent{Line: line, At: now, IDs: ids, Parts: kept}, now
+	s.delivered(ids, now)
+	s.stageIDs(ids, "submitted")
 
 	if alone {
 		delete(s.State.SignalSent, remote[0])
@@ -1288,12 +1286,6 @@ func (s *Shift) typeDispatcher(d string, local, remote, notes []string, now time
 		}
 		s.State.Signals, s.State.Notes = remote, nil
 		s.State.NoticeMeta = nil
-	}
-
-	if typeErr != nil {
-		s.failUnclear(d, Failed{Line: line, Error: typeErr.Error(), At: now, IDs: ids, Parts: kept})
-
-		return ""
 	}
 
 	s.Told = true
@@ -1423,7 +1415,11 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 	if err := s.typeLine(name, head); err != nil {
 		// It may have reached the pane: it is not typed again by itself, on this try or any other.
 		if typedMayHaveReached(err) {
-			s.failUnclear(name, Failed{Line: head, Error: err.Error(), At: now, IDs: s.takeIDs(name, head)})
+			// It counts as delivered, a tracked line included: its ack, the one way it is said again, runs from now
+			// (renotify), and a retry from the failed list is not what says it again.
+			ids := s.takeIDs(name, head)
+			s.delivered(ids, now)
+			s.failUnclear(name, Failed{Line: head, Error: err.Error(), At: now, IDs: ids})
 			rs.Inbox = rs.Inbox[1:]
 			rs.clearTries()
 

@@ -62,7 +62,8 @@ func stillQueued(ch Peer, dir string, p Posted) bool {
 //     only, and a fresh one has its own boot and is not released.
 //   - A typed line (Sent) is never given back: it went into the pane, whether the session took it is not known, and a
 //     line that may have been taken is not typed again (landed keeps one as failed for inspection for that reason).
-//     start leaves it to this settle. It is kept as a failed line that needs attention (UnclearEnded, queue ls; retry
+//     start leaves it to this settle. One the role took, by a status or a turn of its conversation after it, landed and
+//     is closed (typedTaken). Any other is kept as a failed line that needs attention (UnclearEnded, queue ls; retry
 //     only on a look), told to the dispatcher once, unless it is one of three: session-bound (the same kinds a posted
 //     line is dropped for), it made sense to the conversation that ended only; acked by every id it carries, its readers
 //     have it; or tracked, an id of it still waits for its ack: the ack is its one way of saying it again (renotify)
@@ -78,6 +79,14 @@ func (s *Shift) settleEnded(name string, now time.Time) {
 
 	sent := rs.Sent
 	if sent == nil {
+		return
+	}
+
+	// A line the role took (its status moved after it, or its conversation shows a turn after it) landed long ago, and
+	// nothing closed it while no other line waited: it is closed, not failed.
+	if s.typedTaken(name, sent) {
+		s.closeTyped(name)
+
 		return
 	}
 

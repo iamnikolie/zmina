@@ -985,6 +985,9 @@ func (s *Shift) BeginDown(name string, o DownOptions) (bool, error) {
 		return false, nil
 	}
 
+	// A line typed into it that it took is closed while its status can still be read.
+	s.closeTakenTyped(name)
+
 	if s.isCodex(name) && o.Clear {
 		s.remember(name, p)
 		rs.Up, rs.Held, rs.Downing = false, name != s.Crew.Dispatcher, s.Now()
@@ -1246,7 +1249,7 @@ func (s *Shift) Send(name, text string) error {
 	// Typed, the line goes where the queue's typed delivery would put it (typingBlock): never into a dialog, over a draft
 	// or a line that has not landed.
 	if why := s.typingBlock(name, s.Now()); why != "" {
-		return fmt.Errorf("%s: not typed, %s; zmina send --when-idle queues the line for when the role can take it", name, why)
+		return Partial(fmt.Errorf("%s: not typed, %s; zmina send --when-idle queues the line for when the role can take it", name, why))
 	}
 
 	if err := s.Tmux.Type(name, text); err != nil {
@@ -1264,7 +1267,9 @@ func (s *Shift) Send(name, text string) error {
 // empty; what zmina itself left of a broken line is not a draft (clearLeftover). An input line that cannot be read is as
 // much a block as a draft: nothing says what the line would be typed into.
 func (s *Shift) typingBlock(name string, now time.Time) string {
-	if s.State.Role(name).Sent != nil {
+	// A line typed before that the role took is closed first (landed), as the queue's delivery does: it is not one in
+	// the way. One it presses Enter on again or fails changes the state, which Send saves with its error.
+	if !s.landed(name, now) {
 		return "a line typed into it has not landed yet"
 	}
 

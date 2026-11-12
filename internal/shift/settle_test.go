@@ -2,7 +2,6 @@ package shift
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -21,7 +20,7 @@ func TestTypedTriesCountedAtLeastCountedGapApart(t *testing.T) {
 	require.NoError(t, f.s.Queue("designer", "bad"))
 	*f.now = f.now.Add(bootPause)
 	f.status("designer", "idle", *f.now)
-	f.tm.typeErr = errors.New("tmux refused")
+	f.tm.typeErr = errNotTyped("tmux refused")
 
 	for range typeTries {
 		assert.Empty(t, f.s.deliverInbox("designer", *f.now))
@@ -55,7 +54,7 @@ func TestTypedTryIsForgottenOnceTheLineGoes(t *testing.T) {
 	*f.now = f.now.Add(bootPause)
 	f.status("designer", "idle", *f.now)
 
-	f.tm.typeErr = errors.New("tmux refused")
+	f.tm.typeErr = errNotTyped("tmux refused")
 	assert.Empty(t, f.s.deliverInbox("designer", *f.now))
 	require.Equal(t, 1, f.s.State.Role("designer").Attempts)
 
@@ -274,7 +273,7 @@ func passes(t *testing.T, f fix, end time.Duration, heal func(since time.Duratio
 func TestTypedLineSurvivesAnOutageOfAboutAMinuteUnderPasses(t *testing.T) {
 	f := typedFixture(t, crewYAML, "designer")
 	require.NoError(t, f.s.Queue("designer", "hello"))
-	f.tm.typeErr = errors.New("tmux refused")
+	f.tm.typeErr = errNotTyped("tmux refused")
 
 	passes(t, f, 2*time.Minute, func(since time.Duration) {
 		if since > time.Minute {
@@ -312,7 +311,7 @@ func TestPostedLineSurvivesAnOutageOfAboutAMinuteUnderPasses(t *testing.T) {
 func TestRefusedLineReachesTheFailedListAfterTwoCountedGaps(t *testing.T) {
 	f := typedFixture(t, crewYAML, "designer")
 	require.NoError(t, f.s.Queue("designer", "hello"))
-	f.tm.typeErr = errors.New("tmux refused")
+	f.tm.typeErr = errNotTyped("tmux refused")
 	start := *f.now
 
 	for len(f.s.State.Role("designer").Failed) == 0 && f.now.Sub(start) < 10*time.Minute {
@@ -328,7 +327,7 @@ func TestRefusedLineReachesTheFailedListAfterTwoCountedGaps(t *testing.T) {
 	// Beats a little under a minute apart still count each: the gap is under the beat's cadence.
 	g := typedFixture(t, crewYAML, "designer")
 	require.NoError(t, g.s.Queue("designer", "hello"))
-	g.tm.typeErr = errors.New("tmux refused")
+	g.tm.typeErr = errNotTyped("tmux refused")
 
 	for try := 1; try <= typeTries-1; try++ {
 		g.s.deliverInbox("designer", *g.now)

@@ -1,7 +1,6 @@
 package shift
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,7 +53,7 @@ func TestAckClearsAFailedLine(t *testing.T) {
 	*f.now = f.now.Add(bootPause)
 	f.status("designer", "idle", *f.now)
 
-	f.tm.typeErr = errors.New("tmux refused")
+	f.tm.typeErr = errNotTyped("tmux refused")
 	for range typeTries {
 		f.s.Tick()
 		*f.now = f.now.Add(time.Minute)

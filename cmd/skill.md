@@ -525,19 +525,22 @@ goes over the crew's field by field; a change applies at the role's next start. 
 | `zmina state recover` | an unreadable `state.json` (or one from a newer zmina) is never written over: every writing command refuses until this moves it aside as `state.json.broken-<time>`. |
 | `zmina version` / `--version` | `zmina version <v>` on stdout. `version`, `skill` and `help` need no crew file. |
 
-**Failed lines are of two kinds.** Nothing reached the role: tmux refused the line and what it typed was seen cleared from
-the input line, or the line never left the input line (`typed, never taken`); `queue retry` is safe, and a line tmux refuses
-is tried three times first. Or the line may have reached it: `queue ls`, `ls` and `doctor` say *attention required*, and zmina
+**Failed lines are of two kinds.** Nothing reached the role: tmux could not get as far as a key (the pane could not be asked
+for, or tmux refused the first), or what it typed was seen cleared from the input line, or the line never left the input line
+(`typed, never taken`); `queue retry` is safe, and a line tmux refuses is tried three times first. Or the line may have reached it: `queue ls`, `ls` and `doctor` say *attention required*, and zmina
 never types it again by itself. That is a typing that broke where the pane cannot say whether any of it landed (the input line
 could not be read, read empty, or still holds a start that could not be cleared: `typing broke and may have reached the
 pane; inspect before a retry`), a line that left the input line with no change of status after it (`typed, acceptance
 unconfirmed`), one posted and never shown in the conversation (`posted to its inbox socket, never seen`), and one typed into a
 session that ended before it landed (`typed into a session that ended before it landed`). Such a line is failed at once, not
 after three tries, and the dispatcher is told once (`delivery failed`). Look at the role (`peek`, its conversation), then
-`queue retry <role> --unclear` says it again, or `queue drop` lets it go. A typed line whose session ended is dropped with an
-event instead when it made sense to that conversation only (a slash command, the boot a clear queued, a release or restart
+`queue retry <role> --unclear` says it again, or `queue drop` lets it go. The dispatcher's typed line is never failed: its signals stay queued and are tried again after
+a pause. A typed line whose session ended is closed when its role took it (its status moved, or its conversation shows a
+turn after it), else failed as above, or dropped with an event instead when it made sense to that conversation only (a slash command, the boot a clear queued, a release or restart
 request) or is tracked (an id of it still waits for its ack, which says it again and lists it in the next brief, so no
-failed record stands beside it). The kind is read from the text of the failure; no field of the state keeps it.
+failed record stands beside it). A tracked role line failed unclearly counts as delivered: its ack says it again after the
+renotify interval, and a plain `queue retry` does not type it from the failed list too. The kind is read from the text of
+the failure; no field of the state keeps it.
 
 **A crew that is not the one at work says so.** A retired crew tells it plainly: to every role at boot, as the second
 line of `zmina ls`, on stderr of `task ls`, `task show` and `log` — `This crew is retired since 2026-11-05: its live crew
@@ -831,7 +834,7 @@ working and has no draft/dialog; `choose:<n>:<dialog id>` answers the question o
 with numbered choices: the ❯ on a choice, its footer last) with choice n — only while the session's status is
 `waiting` and the dialog's id, a fingerprint of its question and every choice with its description, is still the one given, else refused —
 by moving the dialog's cursor there and pressing Enter; `dismiss:<message ID>` sets aside an owner message whose delivery stayed unconfirmed
-(its conversation changed before it showed there, or its line is one that needs attention in `queue ls`: it may have reached the role; the page's Dismiss): it is no longer listed as pending, in any
+(its conversation changed before it showed there, or its line is one that needs attention in `queue ls`: it may have reached the role; the page's Dismiss, which takes that line out of `attention required`): it is no longer listed as pending, in any
 browser, and its receipt stays so a retry with that ID is still recognised. A message queued, sent or failed is
 refused. Messages not yet seen in the conversation stand where they were sent, by time; one not from today shows its
 date. Chat does not answer native approval prompts: open **Terminal**.

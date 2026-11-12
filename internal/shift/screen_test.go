@@ -1,7 +1,6 @@
 package shift
 
 import (
-	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -357,7 +356,7 @@ func TestQueuedFailureImmediatelyNamesTaskToDispatcher(t *testing.T) {
 	*f.now = f.now.Add(bootPause)
 	f.status("designer", "idle", *f.now)
 	require.NoError(t, f.s.Queue("designer", "[zmina T-1] read the packet"))
-	f.tm.typeErr = errors.New("typed, Enter did not send it; cleared from the input line")
+	f.tm.enterLost = map[string]int{"designer": submitTries + 1} // its Enter never sends it: errUnsent
 	f.s.deliverInbox("designer", *f.now)
 	require.Len(t, f.s.State.Notes, 1)
 	assert.Contains(t, f.s.State.Notes[0], "designer: delivery failed (T-1)")

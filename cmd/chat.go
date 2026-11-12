@@ -652,6 +652,9 @@ func dismissChat(s *shift.Shift, role, id string, snapshot chat.Snapshot) error 
 	for i := range rs.ChatReceipts {
 		if rs.ChatReceipts[i].ID == id {
 			rs.ChatReceipts[i].Dismissed = s.Now()
+			// The owner has looked: the line kept for a look (queue ls, attention required) is no longer one.
+			line := rs.ChatReceipts[i].Line
+			rs.Failed = slices.DeleteFunc(rs.Failed, func(f shift.Failed) bool { return f.Line == line && f.Unclear() })
 		}
 	}
 	return nil
