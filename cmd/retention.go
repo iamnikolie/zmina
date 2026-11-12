@@ -24,6 +24,7 @@ import (
 	"github.com/iamnikolie/zmina/internal/lean"
 	"github.com/iamnikolie/zmina/internal/message"
 	"github.com/iamnikolie/zmina/internal/record"
+	"github.com/iamnikolie/zmina/internal/shift"
 	"github.com/iamnikolie/zmina/internal/task"
 )
 
@@ -205,6 +206,7 @@ func (p *retentionPass) run() {
 		func() { p.requests(handoff.ReleasesDir) },
 		func() { p.requests(handoff.RestartsDir) },
 		p.messages,
+		p.deliveryCards,
 		p.reads,
 		func() { p.cutLog("tick.log", p.c.Layout().TickLog()) },
 		func() { p.cutLog("courier.log", p.c.Layout().CourierLog()) },
@@ -601,6 +603,39 @@ func (p *retentionPass) reads() {
 
 	if moved > 0 {
 		p.moved["reads.jsonl"] = moved
+	}
+}
+
+// deliveryCards drops the delivery cards past their keep and over the cap from the files of roles that no delivery has
+// written to lately (a write prunes too). The delivery writes those files under the state lock, so the pass takes it,
+// without waiting: a lock another zmina holds leaves the cards to tomorrow's pass. Nothing of the state is read or
+// written.
+func (p *retentionPass) deliveryCards() {
+	layout := p.c.Layout()
+
+	if !p.dry {
+		l, err := shift.TryLockAs(p.dir, shift.LockOpts{Verb: "retention"})
+		if errors.Is(err, shift.ErrLockHeld) {
+			return
+		}
+
+		if err != nil {
+			p.problems = append(p.problems, "retention: delivery cards: "+err.Error())
+
+			return
+		}
+
+		defer l.Release()
+	}
+
+	n, err := shift.PruneCards(layout, p.now, p.dry)
+	if err != nil {
+		p.problems = append(p.problems, "retention: delivery cards: "+err.Error())
+	}
+
+	if n > 0 {
+		p.say("delivery cards (%d past their keep or over the cap)", n)
+		p.moved["delivery cards"] = n
 	}
 }
 

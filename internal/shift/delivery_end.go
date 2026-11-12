@@ -95,10 +95,13 @@ func (s *Shift) settleEnded(name string, now time.Time) {
 	switch {
 	case ackedExplicitly(sent):
 		s.log(name, "acked-cleared", "", "typed: "+sent.Line)
+		s.cardsClosed(name, sent.Line, sent.Parts, ClosedAcked, "its reader acked it")
 	case s.sessionBound(name, sent.Line):
 		s.log(name, "dropped", "", "typed into a session that ended, meant for that conversation only: "+sent.Line)
+		s.cardsClosed(name, sent.Line, sent.Parts, ClosedDropped, "typed into a session that ended, meant for that conversation only")
 	case s.stillTracked(sent):
 		s.log(name, "dropped", "", "typed into a session that ended, never seen to land; its ack says it again: "+sent.Line)
+		s.cardsClosed(name, sent.Line, sent.Parts, ClosedDropped, "typed into a session that ended, never seen to land; its ack says it again")
 	default:
 		s.failUnclear(name, Failed{Line: sent.Line, Error: UnclearEnded, At: now, IDs: sent.IDs, Parts: sent.Parts})
 	}
@@ -125,6 +128,7 @@ func (s *Shift) requeuePosted(name string, p Posted, gone bool) []string {
 	if gone && len(parts) == 0 {
 		if p.Boot || s.sessionBound(name, p.Line) {
 			s.log(name, "dropped", "", "meant for the conversation that ended, never shown in it: "+p.Line)
+			s.cardsClosed(name, p.Line, nil, ClosedDropped, "meant for the conversation that ended, never shown in it")
 
 			return nil
 		}
@@ -133,6 +137,7 @@ func (s *Shift) requeuePosted(name string, p Posted, gone bool) []string {
 			bound := part.Line != "" && s.sessionBound(name, part.Line)
 			if bound {
 				s.log(name, "dropped", "", "meant for the conversation that ended, never shown in it: "+part.Line)
+				s.cardsClosed(name, part.Line, nil, ClosedDropped, "meant for the conversation that ended, never shown in it")
 			}
 
 			return bound

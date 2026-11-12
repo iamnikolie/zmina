@@ -73,6 +73,13 @@ func (l Layout) HookFailure(role string) string {
 	return filepath.Join(l.Hooks(), role+".failure.json")
 }
 
+// Delivery is the directory of the delivery cards: one file a role (DeliveryCards), the facts zmina saw of each line it
+// queued, typed or posted. Cards are read by looks and never decide a delivery.
+func (l Layout) Delivery() string { return filepath.Join(l.Dir, "delivery") }
+
+// DeliveryCards is one role's cards (delivery/<role>.json).
+func (l Layout) DeliveryCards(role string) string { return filepath.Join(l.Delivery(), role+".json") }
+
 // Worktrees holds the tasks' git worktrees.
 func (l Layout) Worktrees() string { return filepath.Join(l.Dir, "worktrees") }
 

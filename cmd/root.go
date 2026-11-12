@@ -325,6 +325,10 @@ func (a *app) withState(fn func(s *shift.Shift) error) error {
 		return ferr
 	}
 
+	// What the command did to the delivery cards is written under the lock it still holds, with the state (never over a
+	// state that was not saved: a failed command released it above).
+	s.FlushCards()
+
 	if err := l.Save(); err != nil {
 		return errors.Join(ferr, fmt.Errorf("not saved: %w", err))
 	}

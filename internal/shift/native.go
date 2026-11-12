@@ -162,6 +162,7 @@ func (s *Shift) followPostedAs(name string, now time.Time, gone bool) bool {
 			// took it meanwhile) the record stays, and closes on Delivered.
 			if gone && s.postedBound(name, p) && withdraw(ch, ns, p) {
 				s.log(name, "dropped", "", "withdrawn from its bridge's inbox, meant for the conversation that ended: "+p.Line)
+				s.cardsClosed(name, p.Line, p.Parts, ClosedDropped, "withdrawn from its bridge's inbox, meant for the conversation that ended")
 
 				break
 			}
@@ -178,7 +179,7 @@ func (s *Shift) followPostedAs(name string, now time.Time, gone bool) bool {
 
 			back = append(back, p)
 		case sess != nil && now.Sub(p.At) >= postedWait && s.quiet(name, sess):
-			rs.Failed = append(rs.Failed, Failed{Line: p.Line, Error: postedNever, At: now, IDs: p.IDs, Parts: p.Parts})
+			s.addFailed(name, Failed{Line: p.Line, Error: postedNever, At: now, IDs: p.IDs, Parts: p.Parts})
 			s.log(name, "type-failed", "", postedNever+": "+p.Line)
 			s.deliveryFailure(name, p.Line, postedNever)
 		default:
@@ -194,7 +195,7 @@ func (s *Shift) followPostedAs(name string, now time.Time, gone bool) bool {
 			lines = append(lines, s.requeuePosted(name, p, gone)...)
 		}
 
-		rs.Inbox = append(lines, rs.Inbox...)
+		s.giveBackHead(name, "its conversation ended before it showed", lines)
 	}
 
 	return len(keep) > 0
@@ -203,6 +204,11 @@ func (s *Shift) followPostedAs(name string, now time.Time, gone bool) bool {
 // postShown closes a posted line its conversation showed.
 func (s *Shift) postShown(name string, p Posted) {
 	s.log(name, "seen", "", p.Line)
+
+	at, by := s.cardNow(), s.seenBy(name)
+	for _, line := range postedLines(p.Line, p.Parts) {
+		s.cardSeen(name, line, by, at)
+	}
 
 	if name == s.Crew.Dispatcher {
 		s.stageIDs(p.IDs, "submitted")
@@ -264,6 +270,8 @@ func (s *Shift) TurnOver(name, sessionID string) bool {
 // for its context (restartAtTurnEnd): the flag the next beat acts on, and the request for its note.
 // It returns the lines for the log.
 func (s *Shift) TurnEnd(name, sessionID string) []string {
+	defer s.FlushCards()
+
 	now := s.Now()
 
 	sess := s.native(name, now)

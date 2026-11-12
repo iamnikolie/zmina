@@ -79,13 +79,14 @@ func (s *Shift) HandTask(name string, t task.Task) (string, error) {
 	}
 
 	prefix := "[zmina " + t.ID + "] Read handoff packet "
-	for _, rs := range s.State.Roles {
+	for holder, rs := range s.State.Roles {
 		head := ""
 		if len(rs.Inbox) > 0 {
 			head = rs.Inbox[0]
 		}
 
-		rs.Inbox = slices.DeleteFunc(rs.Inbox, func(old string) bool { return strings.HasPrefix(old, prefix) && old != line })
+		s.trimInbox(holder, func(old string) bool { return strings.HasPrefix(old, prefix) && old != line }, ClosedDropped,
+			"a newer packet for the task replaces it")
 
 		// The failed tries counted were the old first line's: the line that is first now starts with none.
 		if head != "" && (len(rs.Inbox) == 0 || rs.Inbox[0] != head) {
@@ -97,7 +98,7 @@ func (s *Shift) HandTask(name string, t task.Task) (string, error) {
 	// before the beat would have, and the packet must not reach the same session twice. Only a session that lives
 	// has a line on its way: what a dead one was typed is dropped when it is settled, so it is queued for the next.
 	if rs := s.State.Role(name); !slices.Contains(rs.Inbox, line) && (renew || !s.onItsWay(name, line)) {
-		if err := s.Queue(name, line); err != nil {
+		if err := s.QueueFrom(name, line, Facts{Task: t.ID}); err != nil {
 			return "", err
 		}
 	}

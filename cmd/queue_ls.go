@@ -1,8 +1,12 @@
 package cmd
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
+	"time"
+
+	"github.com/iamnikolie/zmina/internal/shift"
 )
 
 // queueWords is how many characters of a queued line's words queue ls shows, unless --full.
@@ -55,4 +59,55 @@ func queueSplit(text string) (string, []string) {
 	}
 
 	return words, append(head, tail...)
+}
+
+// queueFactsIndent is what the line of facts under a queued line starts with.
+const queueFactsIndent = "      "
+
+// queueFacts is what zmina saw of a line, from its card, in one line: who wrote it and when, when it was accepted and how,
+// when it was seen, when it was given back or needed a look. Empty when there is no card or nothing to say.
+func queueFacts(c *shift.Card) string {
+	if c == nil {
+		return ""
+	}
+
+	at := func(t time.Time) string { return t.Local().Format("01-02 15:04") }
+
+	var parts []string
+
+	switch {
+	case c.From != "" && !c.Written.IsZero():
+		parts = append(parts, "from "+c.From+" "+at(c.Written))
+	case c.From != "":
+		parts = append(parts, "from "+c.From)
+	case !c.Written.IsZero():
+		parts = append(parts, "written "+at(c.Written))
+	}
+
+	if c.Task != "" {
+		parts = append(parts, "on "+c.Task)
+	}
+
+	if c.Back != nil {
+		back := "given back " + at(c.Back.At)
+		if c.Back.N > 1 {
+			back += fmt.Sprintf(" (%d times)", c.Back.N)
+		}
+
+		parts = append(parts, back)
+	}
+
+	if a := c.Accepted; a != nil {
+		parts = append(parts, "accepted "+at(a.At)+" "+a.How)
+	}
+
+	if s := c.Seen; s != nil {
+		parts = append(parts, "seen "+at(s.At)+" "+s.By)
+	}
+
+	if a := c.Attention; a != nil {
+		parts = append(parts, "attention "+at(a.At))
+	}
+
+	return strings.Join(parts, " · ")
 }

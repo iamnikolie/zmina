@@ -201,6 +201,8 @@ type Shift struct {
 	Mark func(phase, detail string)
 	// flushErr is the first flush that failed: the beat then types, posts and starts nothing more.
 	flushErr error
+	// cards are the delivery cards this shift has loaded and not yet written (FlushCards); never read to decide a delivery.
+	cards *cardBook
 
 	warned bool
 	// resumed is the conversation each role of this run was last started on ("" fresh): what up checks it lives.
@@ -920,14 +922,15 @@ func (s *Shift) start(name string, o UpOptions) error {
 	// A conversation's title (State.Titles) changes only when a rename is typed into it (typeNext), so a rename that
 	// never went — dropped, failed, or left by a stop — changes nothing, and nothing is rolled back over a newer title.
 	if rs.QueuedRename != "" {
-		rs.Inbox = slices.DeleteFunc(rs.Inbox, func(l string) bool { return l == rs.QueuedRename })
-		rs.Failed = slices.DeleteFunc(rs.Failed, func(f Failed) bool { return f.Line == rs.QueuedRename })
+		queuedRename := rs.QueuedRename
+		s.trimInbox(name, func(l string) bool { return l == queuedRename }, ClosedDropped, "a rename of an earlier start")
+		s.trimFailed(name, func(f Failed) bool { return f.Line == queuedRename }, ClosedDropped, "a rename of an earlier start")
 		rs.QueuedRename, rs.RenameOf = "", ""
 	}
 	if resume != "" && runtime == "claude" && s.State.Titles[resume] != r.Session {
 		rs.RenameOf = resume
 		rs.QueuedRename = "/rename " + r.Session
-		rs.Inbox = append([]string{rs.QueuedRename}, rs.Inbox...)
+		s.enqueueHead(name, Facts{From: "zmina"}, rs.QueuedRename)
 		s.log(name, "rename", "", strings.TrimSpace(s.State.Titles[resume]+" → "+r.Session))
 	}
 	rs.Title = r.Session
@@ -1241,6 +1244,11 @@ func (s *Shift) Send(name, text string) error {
 	// that never started is typed instead.
 	if sess := s.native(name, s.Now()); sess != nil && postable(text) {
 		err := s.post(name, sess, text, s.Now())
+		if err == nil {
+			s.cardNew(name, text, Facts{From: senderOf(s.By)})
+			s.cardAccept(name, text, s.acceptedBy(name), sess.SessionID, s.Now())
+		}
+
 		if err == nil || !unavailable(err) {
 			return err
 		}
@@ -1296,8 +1304,13 @@ func (s *Shift) typingBlock(name string, now time.Time) string {
 	return ""
 }
 
-// Queue keeps a line for a role; the ticker types it the first time the role is up, booted and idle.
-func (s *Shift) Queue(name, text string) error {
+// Queue keeps a line for a role; the ticker types it the first time the role is up, booted and idle. It is from whoever
+// runs the command (By).
+func (s *Shift) Queue(name, text string) error { return s.QueueFrom(name, text, Facts{}) }
+
+// QueueFrom is Queue for a caller that knows more of the line (Facts): who wrote it, the task it is about. A sender it is
+// not told is whoever runs the command.
+func (s *Shift) QueueFrom(name, text string, f Facts) error {
 	if _, err := s.Role(name); err != nil {
 		return err
 	}
@@ -1307,7 +1320,11 @@ func (s *Shift) Queue(name, text string) error {
 		return fmt.Errorf("%s: %d lines already wait; let it read them first", name, inboxMax)
 	}
 
-	rs.Inbox = append(rs.Inbox, text)
+	if f.From == "" {
+		f.From = senderOf(s.By)
+	}
+
+	s.enqueue(name, text, f)
 	s.log(name, "queued", "", text)
 
 	return nil
@@ -1317,12 +1334,17 @@ func (s *Shift) Queue(name, text string) error {
 // how to ack it, and until acked it is said again and listed (Ack). A slash command is queued as it is: the session
 // runs it, no reader acks it, and an id after it would be the command's argument.
 func (s *Shift) QueueTracked(name, text string) (string, error) {
+	return s.QueueTrackedFrom(name, text, Facts{})
+}
+
+// QueueTrackedFrom is QueueTracked for a caller that knows more of the line (QueueFrom).
+func (s *Shift) QueueTrackedFrom(name, text string, f Facts) (string, error) {
 	if _, err := s.Role(name); err != nil {
 		return "", err
 	}
 
 	if slashCommand(text) {
-		return "", s.Queue(name, text)
+		return "", s.QueueFrom(name, text, f)
 	}
 
 	if len(s.State.Role(name).Inbox) >= inboxMax {
@@ -1331,7 +1353,7 @@ func (s *Shift) QueueTracked(name, text string) (string, error) {
 
 	line, id := s.trackLine(name, text)
 
-	return id, s.Queue(name, line)
+	return id, s.QueueFrom(name, line, f)
 }
 
 // Note queues a task signal for the dispatcher as "<from>: <text>"; the ticker types it with the health notes, as one
@@ -1484,6 +1506,42 @@ type QueueView struct {
 	Failed  []FailedView `json:"failed,omitempty"`
 	Signals []string     `json:"signals,omitempty"`
 	Notes   []string     `json:"notes,omitempty"`
+	// Facts are the delivery cards of the lines shown here (inbox, typed, posted, failed): who wrote each and when, when
+	// it was accepted and how, when it was seen. Read from the card file, apart from the state; a line has none until it
+	// is queued by a zmina that keeps them.
+	Facts []Card `json:"facts,omitempty"`
+}
+
+// cardsOfLines are the cards of the lines this view shows, in the order the lines are shown.
+func (q *QueueView) cardsOfLines(cards []Card) []Card {
+	var lines []string
+
+	lines = append(lines, q.Inbox...)
+
+	if q.Sent != nil {
+		lines = append(lines, postedLines(q.Sent.Line, q.Sent.Parts)...)
+	}
+
+	for _, p := range q.Posted {
+		lines = append(lines, postedLines(p.Line, p.Parts)...)
+	}
+
+	for _, f := range q.Failed {
+		lines = append(lines, postedLines(f.Line, f.Parts)...)
+	}
+
+	var out []Card
+
+	for _, line := range lines {
+		c := CardOf(cards, q.Role, line)
+		if c == nil || slices.ContainsFunc(out, func(o Card) bool { return o.ID == c.ID && o.Written.Equal(c.Written) }) {
+			continue
+		}
+
+		out = append(out, *c)
+	}
+
+	return out
 }
 
 // FailedView is a failed line with its kind: Unclear when it may have reached the role (Failed.Unclear), so that it
@@ -1523,6 +1581,7 @@ func (s *Shift) Queues() []QueueView {
 		}
 
 		if len(q.Inbox)+len(q.Posted)+len(q.Failed)+len(q.Signals)+len(q.Notes) > 0 || q.Sent != nil {
+			q.Facts = q.cardsOfLines(ReadCards(s.Crew.Layout(), name))
 			out = append(out, q)
 		}
 	}
@@ -1554,7 +1613,8 @@ func (s *Shift) Retry(name string, unclear bool) (int, int, error) {
 	}
 
 	n := len(rs.Failed) - len(kept)
-	rs.Inbox, rs.Failed, rs.Attempts = append(lines, rs.Inbox...), kept, 0
+	rs.Failed, rs.Attempts = kept, 0
+	s.giveBackHead(name, "queue retry", lines)
 	s.log(name, "queue-retry", "", strconv.Itoa(n)+" lines, "+strconv.Itoa(len(kept))+" left for a look")
 
 	return n, len(kept), nil
@@ -1569,10 +1629,20 @@ func (s *Shift) Drop(name string, all bool) (int, error) {
 
 	rs := s.State.Role(name)
 	n := len(rs.Failed)
+
+	for _, f := range rs.Failed {
+		s.cardsClosed(name, f.Line, f.Parts, ClosedDropped, "queue drop")
+	}
+
 	rs.Failed = nil
 
 	if all {
 		n += len(rs.Inbox)
+
+		for _, line := range rs.Inbox {
+			s.cardClose(name, line, ClosedDropped, "queue drop --all", s.cardNow())
+		}
+
 		rs.Inbox, rs.Attempts, rs.QueuedIDs = nil, 0, nil
 
 		if name == s.Crew.Dispatcher {

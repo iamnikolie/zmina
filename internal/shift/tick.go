@@ -55,6 +55,8 @@ const (
 // lines into idle roles and the queue into the dispatcher, and trims conversations past their context_max. A role tmux cannot be asked about is left alone for the
 // beat. It returns what it did, for the log.
 func (s *Shift) Tick() []string {
+	defer s.FlushCards()
+
 	now := s.Now()
 	s.mark("reconcile", "")
 	if s.ReconcileMessages != nil {
@@ -415,7 +417,7 @@ func (s *Shift) trim(name string, r *crew.Role, now time.Time, tasks []string) s
 	// The boot again, without the tag: queued, it is a line the log, the queue and the recovery pack show; the
 	// clear's hook gives the tag.
 	if boot := s.bootText(r, false); do == crew.ContextClear && !r.IsCodex() && boot != "" {
-		rs.Inbox = append(rs.Inbox, boot)
+		s.enqueue(name, boot, Facts{From: "zmina"})
 		rs.QueuedBoot = boot
 	}
 
@@ -625,7 +627,7 @@ func (s *Shift) schedule(name string, r *crew.Role, now time.Time, tasks []strin
 		queued = "[zmina " + t.ID + ", scheduled] " + r.Prompt
 	}
 
-	rs.Inbox = append(rs.Inbox, queued)
+	s.enqueue(name, queued, Facts{From: "zmina", Task: t.ID})
 	s.log(name, "scheduled", t.ID, r.Prompt)
 
 	if up || rs.Broken || s.registryFor(name).LiveByName(r.Session) != nil {
@@ -1094,6 +1096,7 @@ func (s *Shift) postDispatcher(d string, sess *registry.Session, local, remote, 
 	rs.Posted[len(rs.Posted)-1].IDs = slices.Clone(ids)
 	rs.Posted[len(rs.Posted)-1].Parts = parts
 	s.delivered(ids, now)
+	s.cardsAccepted(d, text, parts, s.acceptedBy(d), sess.SessionID, now)
 
 	for sig := range took {
 		if sig == "\x00notes" {
@@ -1269,6 +1272,7 @@ func (s *Shift) typeDispatcher(d string, local, remote, notes []string, now time
 	}
 
 	s.State.Role(d).Sent, s.State.Role(d).TypedAt = &Sent{Line: line, At: typedAt, IDs: ids, Parts: kept}, now
+	s.cardsAccepted(d, line, kept, AcceptedTyped, s.cardSession(d), typedAt)
 	s.delivered(ids, now)
 	s.stageIDs(ids, "submitted")
 
@@ -1431,6 +1435,7 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 			if s.tracked(ids) {
 				s.delivered(ids, now)
 				s.log(name, "type-unclear", "", "may have reached the pane; its ack says it again: "+head)
+				s.cardAttention(name, head, err.Error(), now)
 
 				return ""
 			}
@@ -1449,7 +1454,7 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 			return ""
 		}
 
-		rs.Failed = append(rs.Failed, Failed{Line: head, Error: err.Error(), At: now, IDs: s.takeIDs(name, head)})
+		s.addFailed(name, Failed{Line: head, Error: err.Error(), At: now, IDs: s.takeIDs(name, head)})
 		rs.Inbox = rs.Inbox[1:]
 		rs.clearTries()
 
@@ -1459,6 +1464,7 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 	rs.Inbox = rs.Inbox[1:]
 	rs.clearTries()
 	s.log(name, "typed", "", head)
+	s.cardAccept(name, head, AcceptedTyped, s.cardSession(name), typedAt)
 
 	// The rename this start queued is typed: from now on the conversation runs under that name.
 	if head == rs.QueuedRename && rs.RenameOf != "" {
@@ -1473,6 +1479,7 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 	// command is waited for by its time instead (slashSettle).
 	if strings.HasPrefix(head, "/") {
 		rs.SlashAt = now
+		s.cardClose(name, head, ClosedLanded, "a slash command: waited for by its time, not by a status", typedAt)
 	} else {
 		rs.Sent, rs.TypedAt = &Sent{Line: head, At: typedAt, IDs: ids}, now
 	}
@@ -1502,7 +1509,7 @@ func (s *Shift) postInbox(name string, sess *registry.Session, now time.Time) st
 		}
 
 		s.deliveryFailure(name, head, err.Error())
-		rs.Failed = append(rs.Failed, Failed{Line: head, Error: err.Error(), At: now, IDs: s.takeIDs(name, head)})
+		s.addFailed(name, Failed{Line: head, Error: err.Error(), At: now, IDs: s.takeIDs(name, head)})
 		rs.Inbox = rs.Inbox[1:]
 		rs.clearTries()
 
@@ -1517,6 +1524,7 @@ func (s *Shift) postInbox(name string, sess *registry.Session, now time.Time) st
 	rs.clearTries()
 	s.submittedTask(name, head)
 	s.delivered(ids, now)
+	s.cardAccept(name, head, s.acceptedBy(name), sess.SessionID, now)
 
 	return "posted to " + name + ": " + head
 }
@@ -1654,6 +1662,8 @@ func (s *Shift) flush() {
 // deliver types or posts the dispatcher's queue (deliverOnce) and saves at once what it did; after a failed flush
 // nothing more is typed this beat.
 func (s *Shift) deliver(now time.Time) string {
+	defer s.FlushCards()
+
 	if s.flushErr != nil {
 		return ""
 	}
@@ -1668,6 +1678,8 @@ func (s *Shift) deliver(now time.Time) string {
 
 // deliverInbox types or posts a role's first waiting line (deliverInboxOnce) and saves at once what it did.
 func (s *Shift) deliverInbox(name string, now time.Time) string {
+	defer s.FlushCards()
+
 	if s.flushErr != nil {
 		return ""
 	}

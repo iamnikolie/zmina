@@ -94,7 +94,7 @@ func (s *Shift) release(name string, r *crew.Role, now time.Time) (did, note str
 			request = releaseLine(idle, ids)
 			s.addNotes([]string{name + ": checkpoint request unavailable: " + err.Error() + "; checkpoint freshness will be checked at release"})
 		}
-		rs.Inbox = append(rs.Inbox, request)
+		s.enqueue(name, request, Facts{From: "zmina"})
 		s.log(name, "releasing", strings.Join(ids, ","), "idle "+idleFor(idle))
 
 		return fmt.Sprintf("%s: idle %s, released; asked to park %s", name, idleFor(idle), strings.Join(ids, ", ")), ""
