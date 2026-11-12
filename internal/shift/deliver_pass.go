@@ -87,6 +87,7 @@ func (s *Shift) DeliverPass() (changed bool, err error) {
 			break
 		}
 
+		s.mark("deliver", name)
 		s.DeliverTo(name)
 	}
 

@@ -693,3 +693,23 @@ func TestFailedPostsOfAnOversizedLineStoreItOnce(t *testing.T) {
 	assert.Empty(t, f.s.State.Role("dispatcher").Inbox)
 	assert.Equal(t, ids, stored())
 }
+
+// A pass notes each role it delivers to in the lock holder record, as the beat does, and a pass that finds nothing
+// waiting notes nothing.
+func TestDeliverPassMarksTheRoleItDeliversTo(t *testing.T) {
+	f := typedFixture(t, crewYAML, "designer", "harvester")
+
+	var marks []string
+	f.s.Mark = func(phase, detail string) { marks = append(marks, phase+" "+detail) }
+
+	_, err := f.s.DeliverPass()
+	require.NoError(t, err)
+	assert.Empty(t, marks, "nothing waiting")
+
+	require.NoError(t, f.s.Queue("harvester", "one"))
+	require.NoError(t, f.s.Queue("designer", "two"))
+
+	_, err = f.s.DeliverPass()
+	require.NoError(t, err)
+	assert.Equal(t, []string{"deliver designer", "deliver harvester"}, marks, "the crew's order")
+}
