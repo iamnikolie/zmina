@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/iamnikolie/zmina/internal/crew"
+	"github.com/iamnikolie/zmina/internal/events"
 	"github.com/iamnikolie/zmina/internal/shift"
 )
 
@@ -79,10 +80,10 @@ func (a *app) permissionRequestCommand() *cobra.Command {
 }
 
 // stopFailureCommand is the StopFailure hook of a Claude role (roleSettings): Claude Code runs it when a turn ends on an
-// API error, which runs no Stop hook. It records the error for the role (shift.RecordFailure), so the role's view and
-// the dispatcher's note say how the turn ended, and starts the detached copy of _turn-end that posts what waits once
-// the session is idle, as the Stop hook does for any other turn's end. It retries nothing and prints nothing, and
-// exits 0 whatever goes wrong, a record that cannot be written included.
+// API error, which runs no Stop hook. It only records: the error for the role (shift.RecordFailure), so the role's view
+// and the dispatcher's note say how the turn ended and delivery holds the role's queue for a while (shift.FailHold), and
+// one event in the log, the hold's start. It posts nothing, retries nothing, prints nothing, and exits 0 whatever goes
+// wrong, a record that cannot be written included.
 func (a *app) stopFailureCommand() *cobra.Command {
 	var role string
 
@@ -99,21 +100,17 @@ func (a *app) stopFailureCommand() *cobra.Command {
 			input := readHookInput(cmd.InOrStdin())
 
 			l, ok := a.hookLayout()
-			if !ok || len(input) == 0 || role == "" {
+			if !ok || len(input) == 0 {
 				return nil
 			}
 
-			sid, _ := shift.RecordFailure(l, role, input, time.Now())
-			if sid == "" {
+			f, err := shift.RecordFailure(l, role, input, time.Now())
+			if err != nil || f == nil {
 				return nil
 			}
 
-			spawn := a.spawn
-			if spawn == nil {
-				spawn = spawnDetached
-			}
-
-			_ = spawn([]string{"--crew", a.crewPath(), "_turn-end", "--role", role, "--session", sid, "--wait", "--failed"})
+			_ = (&events.Log{Path: l.Events()}).Add(events.Event{Role: role, Event: "failure-hold", By: "hook",
+				Detail: "its turn ended on an API error (" + f.Text() + "): the lines queued for it wait " + shift.FailHold.String()})
 
 			return nil
 		},

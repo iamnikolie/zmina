@@ -550,3 +550,27 @@ func TestSessionWaitingFor(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, got.WaitingFor, "a file without the field reads as before")
 }
+
+// The error of a turn says when its line was written, so an error can be told from another; a line with no time says none.
+func TestLastTurnErrorSaysWhenItWasWritten(t *testing.T) {
+	ns := t.TempDir()
+	dir := filepath.Join(ns, "projects", "-work")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+
+	turn := `{"type":"assistant","uuid":"a1","message":{"id":"m1","usage":{"input_tokens":10,"output_tokens":5}}}`
+	failed := `{"type":"assistant","uuid":"e1","timestamp":"2026-11-09T10:00:00Z","isApiErrorMessage":true,"message":{"model":"<synthetic>",` +
+		`"content":[{"type":"text","text":"API Error: gone"}],"usage":{"input_tokens":0,"output_tokens":0}}}`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "s1.jsonl"), []byte(turn+"\n"+failed+"\n"), 0o600))
+
+	got, err := (&Registry{Namespace: ns}).Last("s1")
+	require.NoError(t, err)
+	assert.Equal(t, "e1", got.ErrorID)
+	assert.Equal(t, time.Date(2026, 11, 9, 10, 0, 0, 0, time.UTC), got.ErrorAt.UTC())
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "s1.jsonl"), []byte(failed+"\n"+turn+"\n"), 0o600))
+
+	got, err = (&Registry{Namespace: ns}).Last("s1")
+	require.NoError(t, err)
+	assert.Empty(t, got.Error)
+	assert.True(t, got.ErrorAt.IsZero(), "no error, no time")
+}

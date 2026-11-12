@@ -27,6 +27,9 @@ type Turn struct {
 	// ErrorID tells one such error from the next.
 	Error   string
 	ErrorID string
+	// ErrorAt is when that error's line was written; zero when the line carries no time. It tells the error of a
+	// turn a hook recorded from an error of another.
+	ErrorAt time.Time `json:",omitzero"`
 	// Ended is true when the conversation's newest line closes a turn (an end_turn reply, or the turn's closing
 	// system line): the session waits for its next prompt, even while its status says otherwise because a
 	// background shell or agent runs.
@@ -202,7 +205,7 @@ func lastTurn(path string) (Turn, error) {
 	}
 
 	if compacted {
-		t.Context, t.Error, t.ErrorID = 0, "", ""
+		t.Context, t.Error, t.ErrorID, t.ErrorAt = 0, "", "", time.Time{}
 	}
 
 	return t, nil
@@ -246,7 +249,7 @@ func readTurn(lines []line) Turn {
 
 		// The newest assistant line decides whether the last turn ended in an error.
 		if !seenTurn && l.APIError {
-			t.Error, t.ErrorID = strings.TrimSpace(l.text()), l.UUID
+			t.Error, t.ErrorID, t.ErrorAt = strings.TrimSpace(l.text()), l.UUID, l.Timestamp
 		}
 
 		seenTurn = true

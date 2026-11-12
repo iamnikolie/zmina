@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -22,10 +23,10 @@ import (
 // its hook existed has no record, and everything reads from the screen and the transcript as it always did.
 
 const (
-	// hookSlack is how much earlier than its session's last status change a record may be and still be the one that
-	// change made: Claude Code writes its session file and runs the hook within milliseconds of each other, in either
-	// order.
-	hookSlack = 2 * time.Second
+	// hookSkew is how far apart in time a hook's record and the status change of its session may be: Claude Code writes its
+	// session file and runs the hook within milliseconds of each other, in either order. A record further off than this,
+	// either way, is of another moment.
+	hookSkew = time.Second
 	// hookRecordMax caps how much of a record is read; a record is a few kilobytes.
 	hookRecordMax = 256 << 10
 	// askTool is the tool whose PermissionRequest carries the question a role puts to the owner.
@@ -101,6 +102,19 @@ func writeRecord(l crew.Layout, path string, record any) error {
 	return fsx.WriteFile(path, append(data, '\n'), 0o600)
 }
 
+// dropHookRecords removes the two records a role's hooks left (the question and the failure): a role that starts a new
+// session has none of that session's, and what the old one recorded must not read as the new one's. Nothing else in the
+// hooks directory is touched.
+func (s *Shift) dropHookRecords(name string) {
+	if !hookRole(name) {
+		return
+	}
+
+	l := s.Crew.Layout()
+	_ = os.Remove(l.HookQuestion(name))
+	_ = os.Remove(l.HookFailure(name))
+}
+
 // readRecord reads a record into v; false when there is none or it does not read.
 func readRecord(path string, v any) bool {
 	f, err := os.Open(path)
@@ -114,19 +128,26 @@ func readRecord(path string, v any) bool {
 	return err == nil && json.Unmarshal(raw, v) == nil
 }
 
+// near reports whether two moments are within hookSkew of each other.
+func near(a, b time.Time) bool {
+	d := a.Sub(b)
+
+	return d >= -hookSkew && d <= hookSkew
+}
+
 // askedFor is the question a role's hook recorded, while it is the question on the role's screen: the session file says
-// the session waits on a question (input needed), the record is of that very session, and it was written no earlier
-// than the wait began (less hookSlack). Anything else — a record of an earlier question, of a session before a
+// the session waits on a question (input needed), the record is of that very session, and it was written within
+// hookSkew of the moment that wait began. Anything else — a record of an earlier question, of a session before a
 // /clear, one left from before the role was answered, a permission prompt, a file that does not read — is nil, and the
 // screen is read as before.
 func (s *Shift) askedFor(name string, sess *registry.Session) *AskedQuestion {
-	if sess == nil || waitKind(sess) != WaitQuestion || sess.StatusUpdatedAt <= 0 {
+	if sess == nil || !hookRole(name) || waitKind(sess) != WaitQuestion || sess.StatusUpdatedAt <= 0 {
 		return nil
 	}
 
 	var q AskedQuestion
 	if !readRecord(s.Crew.Layout().HookQuestion(name), &q) || q.SessionID == "" || q.SessionID != sess.SessionID ||
-		len(q.Questions) == 0 || q.At.Before(sess.StatusSince().Add(-hookSlack)) {
+		len(q.Questions) == 0 || !near(q.At, sess.StatusSince()) {
 		return nil
 	}
 
@@ -144,19 +165,14 @@ func (s *Shift) dialogFor(name string, sess *registry.Session, screen *Dialog) *
 	return askedDialog(q, screen)
 }
 
-// Dialog is the first question of the call as a Dialog, choices numbered from 1 in the order the tool gave them. A
-// call with more questions says so in the question's words, with the rest after it: Claude Code asks them one after
-// another, and a Dialog holds one. Nil when the first question has no choices.
-func (q *AskedQuestion) Dialog() *Dialog {
-	if len(q.Questions) == 0 || len(q.Questions[0].Options) == 0 {
-		return nil
-	}
-
+// words are the first question as it is shown: its text, then what a Dialog has no place for — that several choices can
+// be taken, and that more questions follow, which Claude Code asks one after another.
+func (q *AskedQuestion) words() string {
 	first := q.Questions[0]
-	d := &Dialog{Question: oneLine(first.Question), Cursor: 1}
+	out := oneLine(first.Question)
 
-	for i, o := range first.Options {
-		d.Options = append(d.Options, DialogOption{N: i + 1, Label: oneLine(o.Label), Detail: oneLine(o.Description)})
+	if first.MultiSelect {
+		out += " (several can be chosen)"
 	}
 
 	if rest := q.Questions[1:]; len(rest) > 0 {
@@ -165,7 +181,23 @@ func (q *AskedQuestion) Dialog() *Dialog {
 			more = append(more, oneLine(r.Question))
 		}
 
-		d.Question += fmt.Sprintf(" (and %d more after this one: %s)", len(rest), clip(strings.Join(more, " / ")))
+		out += fmt.Sprintf(" (and %d more after this one: %s)", len(rest), clip(strings.Join(more, " / ")))
+	}
+
+	return out
+}
+
+// Dialog is the first question of the call as a Dialog, choices numbered from 1 in the order the tool gave them. Nil when
+// the first question has no choices.
+func (q *AskedQuestion) Dialog() *Dialog {
+	if len(q.Questions) == 0 || len(q.Questions[0].Options) == 0 {
+		return nil
+	}
+
+	d := &Dialog{Question: q.words(), Cursor: 1}
+
+	for i, o := range q.Questions[0].Options {
+		d.Options = append(d.Options, DialogOption{N: i + 1, Label: oneLine(o.Label), Detail: oneLine(o.Description)})
 	}
 
 	// Never a screen's fingerprint: an answer that names it is not taken by the screen's dialog (askedDialog).
@@ -174,12 +206,14 @@ func (q *AskedQuestion) Dialog() *Dialog {
 	return d
 }
 
-// askedDialog is the recorded question as the role's dialog. When the screen reads as a dialog too it must be the same
-// one — the same choices in the same order — or the screen's is shown: Claude Code asks a call's questions one
-// after another and the hook speaks once, so a screen that moved on to the next question is not this one. Where it
-// is the same one the screen's fingerprint and cursor stay, which is what an answer to the screen names. Where the
-// screen does not read, the recorded question stands alone with a fingerprint no screen has, so nothing can be
-// answered by it.
+// askedDialog is the recorded question as the role's dialog. Where the screen reads as a dialog too, the recorded
+// question is used only when the screen shows it: the screen's question says the recorded first question's words and
+// its choices are the recorded ones, in the same order. Claude Code asks a call's questions one after another and the
+// hook speaks once, so a screen that has moved on to the next question — even one with the same choices (Yes, No) — is
+// not this one, and then the screen's dialog is returned as it is. Where it is this one, the words are the recorded
+// ones and the choices, the cursor and the fingerprint the screen's: what an answer names is the screen's, and the
+// choices stay as the screen draws them (a multiple choice draws a box before each). Where the screen does not read as a
+// dialog, the recorded question stands alone with a fingerprint no screen has, so nothing can be answered by it.
 func askedDialog(q *AskedQuestion, screen *Dialog) *Dialog {
 	d := q.Dialog()
 
@@ -188,13 +222,43 @@ func askedDialog(q *AskedQuestion, screen *Dialog) *Dialog {
 		return screen
 	case screen == nil:
 		return d
-	case !sameChoices(d, screen):
+	case !sameQuestion(q.Questions[0].Question, screen.Question) || !sameChoices(d, screen):
 		return screen
 	}
 
-	d.ID, d.Cursor = screen.ID, screen.Cursor
+	shown := *screen
+	shown.Question = d.Question
+	shown.Options = slices.Clone(screen.Options)
 
-	return d
+	for i := range shown.Options {
+		if shown.Options[i].Detail == "" {
+			shown.Options[i].Detail = d.Options[i].Detail
+		}
+	}
+
+	return &shown
+}
+
+// plain is a text as two readings of one question can be compared: without the frame a screen draws around it, one
+// space between words, in lower case.
+func plain(text string) string {
+	text = strings.Map(func(r rune) rune {
+		if strings.ContainsRune("│|╭╮╰╯─", r) {
+			return ' '
+		}
+
+		return r
+	}, text)
+
+	return strings.ToLower(strings.Join(strings.Fields(text), " "))
+}
+
+// sameQuestion reports whether the screen's question is the recorded one: either says the other's words (the screen puts
+// the dialog's header before the question, and may start its words further down than the call did).
+func sameQuestion(recorded, onScreen string) bool {
+	rec, scr := plain(recorded), plain(onScreen)
+
+	return rec != "" && scr != "" && (strings.Contains(scr, rec) || strings.Contains(rec, scr))
 }
 
 // sameChoices reports whether the screen shows the choices the hook recorded: as many, numbered alike, each label the

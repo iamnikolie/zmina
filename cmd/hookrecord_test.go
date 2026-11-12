@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -142,8 +143,10 @@ func TestChooseStaysOnTheScreenWhenAHookRecordedTheQuestion(t *testing.T) {
 	pid := 4545
 
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "ns", "sessions"), 0o700))
+	// The wait began now; the hook runs within the second, as Claude Code's does.
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "ns", "sessions", strconv.Itoa(pid)+".json"),
-		[]byte(`{"pid": 4545, "sessionId": "s-1", "status": "waiting", "waitingFor": "input needed", "statusUpdatedAt": 1}`), 0o600))
+		[]byte(`{"pid": 4545, "sessionId": "s-1", "status": "waiting", "waitingFor": "input needed", "statusUpdatedAt": `+
+			strconv.FormatInt(time.Now().UnixMilli(), 10)+`}`), 0o600))
 
 	_, _ = runHook(t, crewFile, permissionAsk, "_permission-request", "--role", "dispatcher")
 

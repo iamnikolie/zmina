@@ -322,21 +322,28 @@ The settings also carry a `PermissionRequest` hook, `zmina _permission-request -
 session id and the time, to `hooks/<role>.question.json` next to the crew file (one write replaces the last); any other
 tool or input records nothing. It prints nothing, never allows or denies, and exits 0 on any error, so it neither settles
 nor breaks the dialog. `zmina ls --json` and the cockpit take the role's `dialog` from that file while the session file
-says it waits on a question (`waitingFor: input needed`), the file is of the current session and no older than that wait
-(2 s of slack); otherwise the screen is read as before. A file is never deleted, a stale one is ignored. Of several
-questions in one call the first is shown, its words ending `(and N more after this one: …)`, and the screen's dialog
-wins once its choices are not the file's (the next question). `choose` still answers by the dialog read from the screen,
+says it waits on a question (`waitingFor: input needed`), the file is of the current session and was written within 1 s
+of that wait's start; otherwise the screen is read as before. Where the screen reads as a dialog too, the file is used
+only if the screen's question says the recorded first question's words and the choices are the same: the words are the
+file's, the choices, cursor and id the screen's. Anything else — a call's next question, even with the same choices — is
+the screen's dialog as it is. Of several questions in one call the first is shown, its words ending `(and N more after
+this one: …)`; a multiple choice says `(several can be chosen)`. `choose` still answers by the dialog read from the screen,
 the file's choice order not being proven to be the screen's numbering: a dialog only the file describes (an id no screen
-has) is never answered blind.
+has) is never answered blind. A file is never deleted while its role runs, a stale one is ignored; a role's start removes
+its two records (this one and the failure's).
 
 A turn that ends on an API error runs no `Stop` hook, so the settings carry a `StopFailure` hook too, `zmina
-_stop-failure --role <role>` (same timeout and silence). It records the error's kind and text as Claude Code gave
-them, never sorted into kinds (which errors are a usage limit is not established), with the session id and time, to
-`hooks/<role>.failure.json`, and starts the same detached copy as `_turn-end`, which for such a turn waits only for the
-session to be idle (the transcript need not show a turn closed). It retries nothing. While the role is idle since that
-turn (file of its current session, no older than the idle, 2 s of slack) `zmina ls` shows `idle (last turn ended in an
-API error: <text>)` and `--json` has `turn_error`; the next turn takes it away. The dispatcher hears it once, as for a
-role without the hook (see The ticker).
+_stop-failure --role <role>` (same timeout and silence). It only records: the error's code and the words Claude Code
+showed for it, as given and never sorted into kinds (which errors are a usage limit is not established), with the session
+id and time, to `hooks/<role>.failure.json`, and one `failure-hold` event in the log. It posts and retries nothing. While
+that record is of the role's current session, under 5 minutes old, and the session has been idle since that turn (within
+1 s of the record), no line queued for the role — the dispatcher's signals and notes too — is posted or typed, by the beat,
+the delivery pass or a turn's end, and `Waiting` leaves the role out: a session that keeps failing (a model that is not
+there, a login that lapsed) does not take its whole queue at a line a second. The courier looks again every few seconds
+while the queue is held, and finds the role when the hold ends. After 5 minutes one line goes; its turn failing too is a
+record of its own, and holds the role again. `zmina ls` shows `idle (last turn ended in an API error: <text>)` meanwhile
+and `--json` has `turn_error`; the next turn takes it away. The dispatcher hears it once, as for a role without the hook
+(see The ticker).
 
 A role started by an earlier zmina has neither hook until its next start and shows what the screen and transcript show.
 
@@ -2098,8 +2105,8 @@ until it can go.
    its start is held by a dialog and nothing queued reaches it → `<role>: up 60 s and still no input
    line, a dialog holds its boot and its queued lines wait: <the screen's last lines>` (once; `a question`
    or `a permission prompt` for `a dialog` likewise). A last turn that ended in an API error →
-   `<role>: its last turn ended in an API error: …` (once per error; at once when the role has a `StopFailure`
-   hook). A usage-limit notice at the
+   `<role>: its last turn ended in an API error: …` (once per failed turn, from its `StopFailure` record or
+   its transcript). A usage-limit notice at the
    bottom of the screen → `<role>: stopped by a usage limit: …` (once per notice). Folder trust in
    a role's own task worktree is answered (`trusted` in the log).
 

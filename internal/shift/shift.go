@@ -889,6 +889,9 @@ func (s *Shift) start(name string, o UpOptions) error {
 	}
 	s.resumed[name] = resume
 
+	// What the hooks of the session this one replaces recorded is of that session.
+	s.dropHookRecords(name)
+
 	if err := s.Tmux.Start(name, dir, s.Env(r), s.commandIn(r, resume, dir)); err != nil {
 		return fmt.Errorf("%s: %w", name, err)
 	}

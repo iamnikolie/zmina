@@ -198,8 +198,11 @@ func TestRecordedQuestionsOfSeveralAreShownByTheFirst(t *testing.T) {
 func TestAStaleRecordIsNeverShown(t *testing.T) {
 	const unread = "a screen no parse takes for a question"
 
-	// The same choices as the screen, other words: shown if it were taken, so it shows when it is wrongly taken.
-	other := strings.Replace(askedInput, "Which screen first?", "Recorded text", 1)
+	// The same question and choices as the screen, one thing more (several can be chosen): it shows in the words when the
+	// record is wrongly taken.
+	const recorded = "Which screen first? (several can be chosen)"
+
+	other := strings.Replace(askedInput, `"multiSelect":false`, `"multiSelect":true`, 1)
 
 	record := func(f fix, input string, at time.Time) {
 		require.NoError(t, RecordQuestion(f.s.Crew.Layout(), "designer", []byte(input), at))
@@ -209,7 +212,8 @@ func TestAStaleRecordIsNeverShown(t *testing.T) {
 		"another session": func(f fix) {
 			record(f, strings.Replace(other, "sid-designer", "sid-before-a-clear", 1), *f.now)
 		},
-		"written before the wait began": func(f fix) { record(f, other, f.now.Add(-hookSlack-time.Second)) },
+		"written before the wait began":     func(f fix) { record(f, other, f.now.Add(-hookSkew-time.Second)) },
+		"written long after the wait began": func(f fix) { record(f, other, f.now.Add(hookSkew+time.Second)) },
 		"the role is on a permission prompt": func(f fix) {
 			f.waitingOn("designer", "permission prompt")
 			record(f, other, *f.now)
@@ -257,19 +261,21 @@ func TestAStaleRecordIsNeverShown(t *testing.T) {
 	}
 
 	// The same record, current: shown. The cases above fail for the one thing each changes.
-	for screen, want := range map[string]string{unread: "Recorded text", askedScreen: "Recorded text"} {
-		t.Run("the control: current / "+strings.SplitN(screen, "\n", 2)[0], func(t *testing.T) {
-			f := fixtureWith(t, crewYAML)
-			require.NoError(t, f.s.Up("designer"))
-			f.waitingOn("designer", "input needed")
-			f.tm.screen = screen
+	for _, screen := range []string{unread, askedScreen} {
+		for _, off := range []time.Duration{-hookSkew / 2, 0, hookSkew / 2} {
+			t.Run("the control: current / "+strings.SplitN(screen, "\n", 2)[0]+" / "+off.String(), func(t *testing.T) {
+				f := fixtureWith(t, crewYAML)
+				require.NoError(t, f.s.Up("designer"))
+				f.waitingOn("designer", "input needed")
+				f.tm.screen = screen
 
-			record(f, other, f.now.Add(-time.Second))
+				record(f, other, f.now.Add(off))
 
-			d := dialogOf(t, f, "designer")
-			require.NotNil(t, d)
-			assert.Equal(t, want, d.Question)
-		})
+				d := dialogOf(t, f, "designer")
+				require.NotNil(t, d)
+				assert.Equal(t, recorded, d.Question)
+			})
+		}
 	}
 }
 
@@ -341,4 +347,82 @@ func TestPermissionRequestHookInSettings(t *testing.T) {
 	plain.s.Self = "/opt/zmina"
 	argv := strings.Join(plain.s.Command(plain.s.Crew.Roles["harvester"], ""), " ")
 	assert.NotContains(t, argv, "_permission-request")
+}
+
+// A call whose questions share their choices (Yes, No; Yes, No) is told apart by the question: once the first is answered
+// the screen shows the second under the same choices, and what is shown, and the id an answer names, must be the second's —
+// never the first's words under the second's id.
+func TestRecordedQuestionOfACallWithTheSameChoicesTwiceIsNotTheSecond(t *testing.T) {
+	const call = `{"session_id":"sid-designer","tool_name":"AskUserQuestion","tool_input":{"questions":[` +
+		`{"question":"Run the migration?","header":"Migrate","options":[{"label":"Yes"},{"label":"No"}]},` +
+		`{"question":"Deploy afterwards?","header":"Deploy","options":[{"label":"Yes"},{"label":"No"}]}]}}`
+
+	screen := func(header, question string) string {
+		return " ☐ " + header + "\n│ " + question + "\n❯ 1. Yes\n  2. No\n  3. Type something.\n  4. Chat about this\n" +
+			"Enter to select · ↑/↓ to navigate · Esc to cancel"
+	}
+
+	f := fixtureWith(t, crewYAML)
+	require.NoError(t, f.s.Up("designer"))
+	f.waitingOn("designer", "input needed")
+	require.NoError(t, RecordQuestion(f.s.Crew.Layout(), "designer", []byte(call), *f.now))
+
+	// The first question is on screen: its recorded words, the screen's id.
+	f.tm.screen = screen("Migrate", "Run the migration?")
+	first := dialogOf(t, f, "designer")
+	require.NotNil(t, first)
+	assert.Equal(t, "Run the migration? (and 1 more after this one: Deploy afterwards?)", first.Question)
+	assert.Equal(t, ParseDialog(f.tm.screen).ID, first.ID)
+
+	// The first is answered: the same choices, another question. The screen's dialog as it is, nothing of the recorded
+	// first question in it.
+	f.tm.screen = screen("Deploy", "Deploy afterwards?")
+	second := dialogOf(t, f, "designer")
+	require.NotNil(t, second)
+	assert.Equal(t, ParseDialog(f.tm.screen), second)
+	assert.NotContains(t, second.Question, "migration")
+	assert.NotEqual(t, first.ID, second.ID)
+
+	// Wrapped on a boxed screen, the question is still the recorded one: the frame and the case do not tell it apart.
+	f.tm.screen = " ☐ Migrate\n│ RUN the\n│ migration? │\n❯ 1. Yes\n  2. No\n  3. Type something.\n  4. Chat about this\nEnter to select"
+	wrapped := dialogOf(t, f, "designer")
+	require.NotNil(t, wrapped)
+	assert.Equal(t, first.Question, wrapped.Question)
+	assert.Equal(t, ParseDialog(f.tm.screen).ID, wrapped.ID)
+
+	// A screen that does not read: the recorded first question, for display only, under an id no screen has.
+	f.tm.screen = "a screen no parse reads"
+	alone := dialogOf(t, f, "designer")
+	require.NotNil(t, alone)
+	assert.Equal(t, first.Question, alone.Question)
+	assert.NotEqual(t, first.ID, alone.ID)
+}
+
+// A question that several choices can be taken for says so in its words; the screen's own choices stay as it draws them.
+func TestRecordedQuestionSaysSeveralCanBeChosen(t *testing.T) {
+	const call = `{"session_id":"sid-designer","tool_name":"AskUserQuestion","tool_input":{"questions":[` +
+		`{"question":"Which tabs?","multiSelect":true,"options":[{"label":"Talk","description":"the conversation"},{"label":"Later"}]}]}}`
+
+	f := fixtureWith(t, crewYAML)
+	require.NoError(t, f.s.Up("designer"))
+	f.waitingOn("designer", "input needed")
+	require.NoError(t, RecordQuestion(f.s.Crew.Layout(), "designer", []byte(call), *f.now))
+
+	f.tm.screen = "a screen no parse reads"
+	alone := dialogOf(t, f, "designer")
+	require.NotNil(t, alone)
+	assert.Equal(t, "Which tabs? (several can be chosen)", alone.Question)
+	assert.Equal(t, []string{"Talk", "Later"}, []string{alone.Options[0].Label, alone.Options[1].Label})
+
+	f.tm.screen = " ☐ Tabs\n│ Which tabs?\n❯ 1. [ ] Talk\n     the conversation\n  2. [ ] Later\n  3. Type something.\n  4. Chat about this\n" +
+		"Enter to select · ↑/↓ to navigate · Esc to cancel"
+	onScreen := ParseDialog(f.tm.screen)
+	require.NotNil(t, onScreen)
+
+	d := dialogOf(t, f, "designer")
+	require.NotNil(t, d)
+	assert.Equal(t, "Which tabs? (several can be chosen)", d.Question)
+	assert.Equal(t, onScreen.Options, d.Options, "the choices as the screen draws them, a box before each")
+	assert.Equal(t, onScreen.ID, d.ID)
+	assert.Equal(t, onScreen.Cursor, d.Cursor)
 }
