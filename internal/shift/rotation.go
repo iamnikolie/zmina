@@ -127,6 +127,13 @@ type RotationArtifact struct {
 	Result     string `json:"result,omitempty"`
 }
 
+// RotationBefore is a task's delivery as the hand-out of a rotation found it (nil: the task had none), kept so that an abort can
+// put it back as it was.
+type RotationBefore struct {
+	Task     string         `json:"task"`
+	Delivery *task.Delivery `json:"delivery,omitempty"`
+}
+
 // rotationLine is one line of a role's record. Every field but the first three belongs to one phase.
 type rotationLine struct {
 	ID    string    `json:"id"`
@@ -144,8 +151,10 @@ type rotationLine struct {
 	// switching
 	Claim time.Time `json:"claim,omitzero"`
 
-	// started
-	Lines []string `json:"lines,omitempty"`
+	// started: the lines queued for the fresh session, and what it handed: each task's delivery before (Before); Artifacts too
+	// when it handed tasks the prepared line did not name.
+	Lines  []string         `json:"lines,omitempty"`
+	Before []RotationBefore `json:"before,omitempty"`
 
 	// evidence
 	What    string `json:"what,omitempty"`
@@ -196,8 +205,10 @@ type Rotation struct {
 	// Claim is the down this rotation began, the one the restart's job and the role's pending down carry.
 	Claim   time.Time `json:"claim,omitzero"`
 	Started time.Time `json:"started,omitzero"`
-	// Lines are the lines the restart queued for the fresh session (clipped), in queue order.
-	Lines []string `json:"lines,omitempty"`
+	// Lines are the lines the restart queued for the fresh session (clipped), in queue order; Before the deliveries of the tasks
+	// it handed as it found them.
+	Lines  []string         `json:"lines,omitempty"`
+	Before []RotationBefore `json:"before,omitempty"`
 	// Evidence is what the new conversation did before the rotation closed, Late what it did after: a rotation lost
 	// that the conversation then accepted its tasks of.
 	Evidence []RotationEvidence `json:"evidence,omitempty"`
@@ -352,7 +363,13 @@ func foldRotations(lines []rotationLine) []Rotation {
 			}
 		case PhaseStarted:
 			if r.Started.IsZero() {
-				r.Started, r.Lines = l.At, l.Lines
+				r.Started, r.Lines, r.Before = l.At, l.Lines, l.Before
+
+				// The tasks a start handed are the rotation's: more than its prepared line named when one was assigned
+				// meanwhile, or all of them when it planned none (a resume that fell back to a fresh start).
+				if len(l.Artifacts) > 0 {
+					r.Artifacts = l.Artifacts
+				}
 			}
 		case phaseEvidence:
 			r.foldEvidence(l)
@@ -769,8 +786,17 @@ func (s *Shift) rotationOwns(t task.Task) bool {
 			continue
 		}
 
-		// The newest rotation that handed the task decides: a hand-out made after it started is not its own.
-		if queued := t.Delivery.QueuedAt; queued.Before(r.Prepared) || queued.After(r.Started) {
+		// The newest rotation that handed the task decides: a hand-out made after it started is not its own, unless a retry of
+		// the rotation made it: the retry's own line of evidence is the end of the window.
+		end := r.Started
+
+		for _, e := range slices.Concat(r.Evidence, r.Late) {
+			if e.What == EvidenceRetried && e.At.After(end) {
+				end = e.At
+			}
+		}
+
+		if queued := t.Delivery.QueuedAt; queued.Before(r.Prepared) || queued.After(end) {
 			return false
 		}
 

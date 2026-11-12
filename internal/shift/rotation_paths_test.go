@@ -616,10 +616,13 @@ func freshByHand(t *testing.T) (fix, []string) {
 }
 
 // abort puts the role down and back on its old conversation, like the command: one hold of the lock to begin, one to finish.
-func abort(t *testing.T, f fix) error {
+func abort(t *testing.T, f fix) error { return abortWith(t, f, false) }
+
+// abortWith is abort with --force or not.
+func abortWith(t *testing.T, f fix, force bool) error {
 	t.Helper()
 
-	plan, _, err := f.s.BeginAbort("designer", DownOptions{Force: true})
+	plan, _, err := f.s.BeginAbort("designer", DownOptions{Force: true}, force)
 	if err != nil {
 		return err
 	}

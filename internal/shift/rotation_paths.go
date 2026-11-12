@@ -57,7 +57,7 @@ func (s *Shift) handFresh(name, why string, tasks []task.Task) (handout, error) 
 		notes = append(notes, a.Task+" "+noteOf(a))
 	}
 
-	out, err := s.handOut(Restart{Name: name, Tasks: ids, Why: why, Notes: strings.Join(notes, ", ")})
+	out, err := s.handOutFit(Restart{Name: name, Tasks: ids, Why: why, Notes: strings.Join(notes, ", ")}, true)
 	if err != nil {
 		s.restoreDeliveries(name, out)
 
@@ -89,7 +89,7 @@ func (s *Shift) rotationStartedBy(name, id, why string, told bool) error {
 		err = fmt.Errorf("%s: it started fresh, but handing its tasks to it failed: %w; zmina rotation retry %s hands them again",
 			name, err, name)
 		s.log(name, "restart-failed", taskIDs(tasks), err.Error())
-		s.rotationStartedWith(name, id, nil, tasks)
+		s.rotationStartedWith(name, id, out, tasks)
 		s.rotationEnd(name, id, OutcomeLost, "its tasks were not handed to it: "+err.Error(), nil, false)
 
 		if told {
@@ -99,7 +99,7 @@ func (s *Shift) rotationStartedBy(name, id, why string, told bool) error {
 		return err
 	}
 
-	s.rotationStartedWith(name, id, out.lines(), tasks)
+	s.rotationStartedWith(name, id, out, tasks)
 
 	return nil
 }
@@ -289,7 +289,7 @@ func (s *Shift) reconcileTrim(name string, r Rotation, now time.Time) string {
 }
 
 // RotationAbort is what an abort knows between its two holds of the lock: the rotation it goes back from, the conversation it
-// goes back to, and the down it began (none when the role was down already).
+// goes back to, the one it leaves, and the down it began (none when the role was down already).
 type RotationAbort struct {
 	ID      string
 	Session string
@@ -298,7 +298,14 @@ type RotationAbort struct {
 	Begun   bool
 	// Closed is that the rotation had closed (lost) already: the abort is then a line of evidence, not its closing.
 	Closed bool
+	// Left is the fresh conversation the abort leaves (empty when none is known), Return the command that comes back to it.
+	Left, Return string
+
+	rot Rotation
 }
+
+// abortFreshAge is how long a fresh conversation may have run before an abort of it is a loss of work that needs --force.
+const abortFreshAge = 30 * time.Minute
 
 // newestRotation is the role's newest rotation that is not a compact or a clear, from its whole record.
 func (s *Shift) newestRotation(name string) (Rotation, bool, error) {
@@ -321,10 +328,15 @@ func (s *Shift) newestRotation(name string) (Rotation, bool, error) {
 //   - the old conversation is not known, is of another runtime or home, is not under the namespace any more (zmina up --fresh
 //     starts a new one), or the directory it ran in is gone;
 //   - a down of the role is under way: the command or the restart that began it finishes it, never a second down of one role;
-//   - the role runs the old conversation already.
+//   - the role runs the old conversation already;
+//   - the fresh conversation shows work (it accepted a task of the rotation, the rotation was lost and then accepted late, or it
+//     has run over abortFreshAge) and force is not set: the refusal names the conversation it would leave and the command that
+//     comes back to it. The fresh conversation stays on disk; what the abort discards is its place in the role.
 //
-// The caller waits for the role to end (WaitGone) outside the lock and calls FinishAbort.
-func (s *Shift) BeginAbort(name string, o DownOptions) (RotationAbort, bool, error) {
+// The caller waits for the role to end (WaitGone) outside the lock and calls FinishAbort. The down it begins is saved as a
+// pending abort, so that a command that dies during the wait leaves a role the ticker's stale-down finisher puts right (not
+// held: a keep: always role is opened again).
+func (s *Shift) BeginAbort(name string, o DownOptions, force bool) (RotationAbort, bool, error) {
 	r, err := s.Role(name)
 	if err != nil {
 		return RotationAbort{}, false, err
@@ -354,11 +366,34 @@ func (s *Shift) BeginAbort(name string, o DownOptions) (RotationAbort, bool, err
 			s.State.Role(name).Downing.Local().Format("15:04:05"))
 	}
 
-	if sess := s.session(name); sess != nil && sess.SessionID == rot.From.Session {
+	live := s.session(name)
+	if live != nil && live.SessionID == rot.From.Session {
 		return RotationAbort{}, false, fmt.Errorf("%s: it runs its old conversation %s already", name, rot.From.Session)
 	}
 
-	plan := RotationAbort{ID: rot.ID, Session: rot.From.Session, Dir: rot.From.Dir, Closed: !rot.Open()}
+	plan := RotationAbort{ID: rot.ID, Session: rot.From.Session, Dir: rot.From.Dir, Closed: !rot.Open(), rot: rot}
+
+	// The conversation left: the one the role runs now, else the one the rotation saw it start.
+	switch {
+	case live != nil && live.SessionID != "":
+		plan.Left = live.SessionID
+	default:
+		plan.Left = rot.To.Session
+	}
+
+	if plan.Left != "" {
+		plan.Return = s.resumeCommand(name, plan.Left, true)
+	}
+
+	if why := s.freshWork(rot, live != nil, s.Now()); why != "" && !force {
+		msg := fmt.Sprintf("%s: its fresh conversation%s did work (%s): aborting leaves it, and the role is on its old conversation %s "+
+			"instead; zmina rotation abort %s --force does that", name, namedSession(plan.Left), why, rot.From.Session, name)
+		if plan.Return != "" {
+			msg += "; this comes back to the fresh one afterwards: " + plan.Return
+		}
+
+		return RotationAbort{}, false, errors.New(msg)
+	}
 
 	wait, err := s.BeginDown(name, o)
 
@@ -369,9 +404,53 @@ func (s *Shift) BeginAbort(name string, o DownOptions) (RotationAbort, bool, err
 		return RotationAbort{}, false, err
 	}
 
-	plan.Begun, plan.Claim = true, s.State.Role(name).Downing
+	rs := s.State.Role(name)
+	plan.Begun, plan.Claim = true, rs.Downing
+
+	if !rs.Downing.IsZero() {
+		rs.Pending = &PendingDown{Kind: pendingAbort, Claim: rs.Downing, Why: "rotation " + rot.ID + " abort", Notes: rot.From.Session,
+			Dir: rot.From.Dir}
+	}
 
 	return plan, wait, nil
+}
+
+// namedSession is " <id>" for a conversation that is known, else nothing.
+func namedSession(id string) string {
+	if id == "" {
+		return ""
+	}
+
+	return " " + id
+}
+
+// freshWork says what shows that the fresh conversation of a rotation did work that an abort would leave behind, empty when
+// nothing does: a task of the rotation it accepted (also after the rotation was lost), or a run of more than abortFreshAge
+// while the role is up.
+func (s *Shift) freshWork(rot Rotation, up bool, now time.Time) string {
+	for _, list := range [][]RotationEvidence{rot.Evidence, rot.Late} {
+		if i := slices.IndexFunc(list, func(e RotationEvidence) bool { return e.What == EvidenceAccepted }); i >= 0 {
+			return "it accepted " + list[i].Task
+		}
+	}
+
+	if up && !rot.Started.IsZero() && now.Sub(rot.Started) > abortFreshAge {
+		return "it has run for " + span(now.Sub(rot.Started))
+	}
+
+	return ""
+}
+
+// resumeCommand is the command that puts a role on a conversation: with the role running, down first.
+func (s *Shift) resumeCommand(name, session string, running bool) string {
+	crewArg := shellWord(s.Crew.Path)
+	up := fmt.Sprintf("zmina --crew %s up %s --resume=%s", crewArg, shellWord(name), shellWord(session))
+
+	if running {
+		return fmt.Sprintf("zmina --crew %s down %s --clear && %s", crewArg, shellWord(name), up)
+	}
+
+	return up
 }
 
 // abortable checks what the conversation a rotation took the role from needs to be started again.
@@ -409,7 +488,9 @@ func (s *Shift) abortable(name string, codex bool, rot Rotation) error {
 // FinishAbort ends the down BeginAbort began, starts the role on its old conversation, and closes the rotation: resumed
 // ("aborted by whoever ran it") when it was open, an evidence line "aborted" when it had closed lost. The restart is given up
 // for the conversation (RestartGaveUp), as one whose fresh start failed is, so that it is not rotated again in it and
-// context_max handles it. A start that fails leaves the role down and held, and the rotation as it was.
+// context_max handles it. The hand-out of the rotation is taken back as restartRollback's way back takes it (undoHandOut):
+// the lines that still wait in the queue go, and the deliveries it renewed are put back. A start that fails leaves the role
+// down and held, and the rotation and its hand-out as they were.
 func (s *Shift) FinishAbort(name string, a RotationAbort) error {
 	if a.Begun {
 		if rs := s.State.Role(name); !rs.Downing.Equal(a.Claim) {
@@ -433,14 +514,75 @@ func (s *Shift) FinishAbort(name string, a RotationAbort) error {
 		by = "hand"
 	}
 
-	s.log(name, "rotation-abort", "", "rotation "+a.ID+" aborted by "+by+": back on its old conversation "+a.Session)
+	lines, tasks := s.undoHandOut(name, a.rot, a.Session)
 
-	if a.Closed || !s.rotationEnd(name, a.ID, OutcomeResumed, "aborted by "+by+": back on its old conversation "+a.Session, nil, false) {
-		s.rotationAppend(name, rotationLine{ID: a.ID, At: s.Now().UTC(), Phase: phaseEvidence, What: EvidenceAborted, By: by,
-			Session: a.Session})
+	s.log(name, "rotation-abort", "", fmt.Sprintf("rotation %s aborted by %s: back on its old conversation %s; %d hand-out lines taken out, "+
+		"%d deliveries put back", a.ID, by, a.Session, lines, tasks))
+
+	if !a.Closed {
+		s.rotationEnd(name, a.ID, OutcomeResumed, "aborted by "+by+": back on its old conversation "+a.Session, nil, false)
 	}
 
+	// Said in a line of its own for either, so that what looks at the rotation (retry, ls) knows it was aborted.
+	s.rotationAppend(name, rotationLine{ID: a.ID, At: s.Now().UTC(), Phase: phaseEvidence, What: EvidenceAborted, By: by, Session: a.Session})
+
 	return nil
+}
+
+// undoHandOut leaves the old conversation the way restartRollback's way back leaves it. The lines the rotation's hand-out left
+// in the role's queue (its restart line, the packets of its tasks: whatever the fresh session was not shown, which the start
+// just made gave back to the head of the queue) are taken out, each card closed as dropped. The deliveries the hand-out
+// renewed are put back as the hand-out found them when the record kept that (RotationBefore); a record that did not (an older
+// one) has the delivery re-bound to the old conversation instead, queued and not sent, not accepted: nothing is claimed of it,
+// and it is not left bound to a session that is gone, which would be an acceptance alert about the wrong conversation. It
+// returns how many lines it took out and deliveries it put right.
+func (s *Shift) undoHandOut(name string, rot Rotation, old string) (lines, deliveries int) {
+	rs := s.State.Role(name)
+	tasks := rot.acceptTasks()
+	why := "rotation " + rot.ID + " was aborted: the role is back on its old conversation"
+
+	var out []string
+
+	for _, l := range rs.Inbox {
+		packet := slices.ContainsFunc(tasks, func(id string) bool { return strings.HasPrefix(l, "[zmina "+id+"] Read handoff packet ") })
+		if packet || rot.hasLine() && strings.HasPrefix(l, rot.restartLineHead()) {
+			out = append(out, l)
+		}
+	}
+
+	s.takeOutLines(name, out, ClosedDropped, why)
+
+	if s.Tasks == nil {
+		return len(out), 0
+	}
+
+	for _, id := range tasks {
+		t, err := s.Tasks.Get(id)
+		if err != nil || t.Delivery == nil || t.Delivery.QueuedAt.Before(rot.Prepared) ||
+			!strings.HasPrefix(t.Delivery.Line, "[zmina "+id+"] Read handoff packet ") {
+			continue
+		}
+
+		if i := slices.IndexFunc(rot.Before, func(b RotationBefore) bool { return b.Task == id }); i >= 0 {
+			t.Delivery = rot.Before[i].Delivery
+		} else {
+			d := *t.Delivery
+			d.Session, d.SentAt, d.AcceptedAt = old, time.Time{}, time.Time{}
+			t.Delivery = &d
+		}
+
+		if err := s.Tasks.Put(t); err != nil {
+			if s.Warn != nil {
+				s.Warn(err)
+			}
+
+			continue
+		}
+
+		deliveries++
+	}
+
+	return len(out), deliveries
 }
 
 // lineWhere says where a line the role was handed is on record, empty when it is nowhere: in its queue, typed to it and not
@@ -475,6 +617,10 @@ func (s *Shift) RetryRotation(name string) ([]string, error) {
 		return nil, err
 	}
 
+	if s.Tasks == nil {
+		return nil, fmt.Errorf("%s: no task ledger to read the tasks it holds from", name)
+	}
+
 	rot, ok, err := s.newestRotation(name)
 	if err != nil {
 		return nil, err
@@ -483,6 +629,9 @@ func (s *Shift) RetryRotation(name string) ([]string, error) {
 	switch {
 	case !ok:
 		return nil, fmt.Errorf("%s: no rotation of it to retry (zmina rotation ls %s)", name, name)
+	case rot.Aborted() != nil:
+		return nil, fmt.Errorf("%s: rotation %s was aborted: the role was put back on its old conversation, which has its context "+
+			"(zmina rotation show %s)", name, rot.ID, rot.ID)
 	case !rot.Open() && rot.Closed.Outcome != OutcomeLost:
 		return nil, fmt.Errorf("%s: its newest rotation %s closed %s; only an open or a lost one is retried (zmina rotation show %s)",
 			name, rot.ID, rot.Closed.Outcome, rot.ID)
@@ -499,11 +648,16 @@ func (s *Shift) RetryRotation(name string) ([]string, error) {
 	}
 
 	live := s.session(name)
+	if live != nil && live.SessionID == rot.From.Session {
+		return nil, fmt.Errorf("%s: it runs its old conversation %s, which has what the rotation took it from: there is nothing to hand "+
+			"again to it", name, rot.From.Session)
+	}
 
 	var (
 		report []string
 		heads  []headLine
 		packet []handedPacket
+		held   []RotationArtifact
 	)
 
 	// A hand-out that cannot be made whole puts the deliveries it renewed back.
@@ -516,12 +670,16 @@ func (s *Shift) RetryRotation(name string) ([]string, error) {
 	for _, a := range rot.acceptTasks() {
 		t, err := s.Tasks.Get(a)
 
-		switch {
-		case err != nil || !t.State.Active() || t.Role != name:
+		if err != nil || !t.State.Active() || t.Role != name {
 			report = append(report, a+": left, the role does not hold it any more")
 
 			continue
-		case s.acceptedHere(t, live, rot):
+		}
+
+		// The restart line names what the role still holds, and no task it has lost.
+		held = append(held, rotationArtifact(rot, a))
+
+		if s.acceptedHere(t, live, rot) {
 			report = append(report, a+": left, it accepted the task in this session")
 
 			continue
@@ -549,9 +707,17 @@ func (s *Shift) RetryRotation(name string) ([]string, error) {
 		report = append(report, a+": its packet is queued again")
 	}
 
-	if line := restartLineFor(rot.Why, rot.notes(), doneOf(rot)); !s.restartLineHandled(name, rot, line) {
-		heads = append([]headLine{{line: line, f: Facts{From: "zmina"}}}, heads...)
-		report = append(report, "its restart line is queued again")
+	// Its restart line, naming only the tasks the role still holds; a rotation that held none and was not about a task done has
+	// no line to hand.
+	var earlier []string
+
+	if done := doneOf(rot); done != "" || len(held) > 0 {
+		line := restartLineFor(rot.Why, artifactNotes(held), done)
+		if !s.restartLineHandled(name, rot, line) {
+			earlier = s.restartLinesWaiting(name)
+			heads = append([]headLine{{line: line, f: Facts{From: "zmina"}}}, heads...)
+			report = append(report, "its restart line is queued again")
+		}
 	}
 
 	rs := s.State.Role(name)
@@ -560,11 +726,13 @@ func (s *Shift) RetryRotation(name string) ([]string, error) {
 		return report, nil
 	}
 
-	if len(rs.Inbox)+len(heads) > inboxMax {
+	if len(rs.Inbox)-len(earlier)+len(heads) > inboxMax {
 		return fail(fmt.Errorf("%s: %d lines already wait for it and the hand-out needs room for %d more; let it read them first",
 			name, len(rs.Inbox), len(heads)))
 	}
 
+	// The restart line is never queued beside another: an earlier one that still waits is replaced.
+	s.takeOutLines(name, earlier, ClosedDropped, "a newer restart line replaces it")
 	s.enqueueHeadLines(name, heads...)
 
 	for _, p := range packet {
@@ -606,15 +774,37 @@ func doneOf(r Rotation) string {
 	return r.Artifacts[len(r.Artifacts)-1].Task
 }
 
-// notes are the checkpoints a rotation's restart line names, as the line it queued names them.
-func (r Rotation) notes() string {
-	var notes []string
+// artifactNotes names tasks and their checkpoints, as the restart line does.
+func artifactNotes(arts []RotationArtifact) string {
+	notes := make([]string, 0, len(arts))
 
-	for _, a := range r.Artifacts {
+	for _, a := range arts {
 		notes = append(notes, a.Task+" "+noteOf(a))
 	}
 
 	return strings.Join(notes, ", ")
+}
+
+// rotationArtifact is the artifact of a task the rotation handed.
+func rotationArtifact(r Rotation, id string) RotationArtifact {
+	if i := slices.IndexFunc(r.Artifacts, func(a RotationArtifact) bool { return a.Task == id }); i >= 0 {
+		return r.Artifacts[i]
+	}
+
+	return RotationArtifact{Task: id}
+}
+
+// restartLinesWaiting are the restart lines of earlier hand-outs that wait in the role's queue.
+func (s *Shift) restartLinesWaiting(name string) []string {
+	var out []string
+
+	for _, l := range s.State.Role(name).Inbox {
+		if strings.HasPrefix(l, restartLineHead) {
+			out = append(out, l)
+		}
+	}
+
+	return out
 }
 
 // restartLineHandled reports whether a rotation's restart line needs no hand-out again: it is on record (lineWhere), or it was

@@ -717,7 +717,7 @@ func (s *Shift) FinishRestart(job Restart) string {
 		s.replacePackets(p.task, p.head.line)
 	}
 
-	s.rotationStarted(job.Name, rid, out.lines())
+	s.rotationStarted(job.Name, rid, out)
 
 	if job.Done != "" {
 		s.log(job.Name, "restarted", job.Done, job.Why)
@@ -736,7 +736,9 @@ type oldRun struct{ session, dir string }
 // handout is what a restart queued for the fresh session: its line (empty until it is queued) and, for each task, the
 // packet's line and the task's delivery as it was before.
 type handout struct {
-	line    string
+	line string
+	// queued: the hand-out was made (its lines are in the queue); a failed one returns what it did before it failed with this unset.
+	queued  bool
 	packets []handedPacket
 }
 
@@ -751,11 +753,15 @@ type handedPacket struct {
 
 // lines are the lines the restart queued, in queue order.
 func (h handout) lines() []string {
-	if h.line == "" {
+	if !h.queued {
 		return nil
 	}
 
-	lines := []string{h.line}
+	var lines []string
+	if h.line != "" {
+		lines = append(lines, h.line)
+	}
+
 	for _, p := range h.packets {
 		if p.queued {
 			lines = append(lines, p.head.line)
@@ -763,6 +769,17 @@ func (h handout) lines() []string {
 	}
 
 	return lines
+}
+
+// befores are the deliveries of the tasks of a hand-out as it found them (nil: the task had none), for the rotation's record:
+// what an abort puts back.
+func (h handout) befores() []RotationBefore {
+	out := make([]RotationBefore, 0, len(h.packets))
+	for _, p := range h.packets {
+		out = append(out, RotationBefore{Task: p.task, Delivery: p.before})
+	}
+
+	return out
 }
 
 // restartLineFor is the line a restart queues first for the fresh session: why it was restarted, and where its note is (in each
@@ -777,13 +794,20 @@ func restartLineFor(why, notes, done string) string {
 
 // handOut queues a restart's lines at the head of the role's queue, in order: the line its Talk shows, then each task's
 // packet (HandTask's, in the order the restart holds the tasks). A packet whose line waits in the queue already is left
-// where it is, not queued twice. It returns what it did also when it fails: the deliveries of the tasks before the one
-// that failed are renewed, and nothing is queued (the lines go in last).
-func (s *Shift) handOut(job Restart) (handout, error) {
+// where it is, not queued twice. The restart line is never queued beside another: one of an earlier hand-out that still waits
+// in the queue (the role never took it) is taken out, its card closed as dropped, and the newest goes in. It returns what it
+// did also when it fails: the deliveries of the tasks before the one that failed are renewed, and nothing is queued (the
+// lines go in last).
+func (s *Shift) handOut(job Restart) (handout, error) { return s.handOutFit(job, false) }
+
+// handOutFit is handOut; with fit the restart line is queued only when it fits the bound of the queue (inboxMax) once the
+// lines it replaces are out: the packets are queued all the same, which no bound refuses (a role cannot start without its tasks).
+func (s *Shift) handOutFit(job Restart, fit bool) (handout, error) {
 	var out handout
 
 	line := restartLineFor(job.Why, job.Notes, job.Done)
-	heads := []headLine{{line: line, f: Facts{From: "zmina"}}}
+
+	var heads []headLine
 
 	for _, id := range job.Tasks {
 		t, err := s.Tasks.Get(id)
@@ -805,8 +829,19 @@ func (s *Shift) handOut(job Restart) (handout, error) {
 		}
 	}
 
+	// The restart line: the newest replaces what waits of the earlier ones.
+	rs := s.State.Role(job.Name)
+
+	earlier := s.restartLinesWaiting(job.Name)
+
+	if !fit || len(rs.Inbox)-len(earlier)+1 <= inboxMax {
+		s.takeOutLines(job.Name, earlier, ClosedDropped, "a newer restart line replaces it")
+		heads = append([]headLine{{line: line, f: Facts{From: "zmina"}}}, heads...)
+		out.line = line
+	}
+
 	s.enqueueHeadLines(job.Name, heads...)
-	out.line = line
+	out.queued = true
 
 	return out, nil
 }
@@ -877,7 +912,7 @@ func (s *Shift) restartRollback(job Restart, rid string, back oldRun, out handou
 	}
 
 	// A copy of a role is not a seat: nothing keeps it down or its queue (forget, below).
-	if out.line != "" && !isInstance(name) {
+	if out.queued && !isInstance(name) {
 		var kept []headLine
 
 		for _, p := range out.packets {

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -158,4 +159,38 @@ func TestUpAndRestartFreshHandTheHeldTaskAndRetryHandsNothingTwice(t *testing.T)
 
 	_, _, err = zm(t, file, "rotation", "retry", "dev")
 	require.ErrorContains(t, err, "closed resumed; only an open or a lost one is retried")
+}
+
+// abort of a rotation whose fresh conversation did work needs --force: the refusal names the conversation it would leave and the
+// command that comes back to it, and the success says it again.
+func TestRotationAbortOfAFreshConversationThatDidWorkNeedsForce(t *testing.T) {
+	file := testCrew(t, "  dev: {}\n")
+	_, _, err := zm(t, file, "up", "dev")
+	require.NoError(t, err)
+	screenHas(t, file, "dev", "claude ")
+
+	at := time.Now().Add(-2 * time.Hour)
+	lines := rotationLinesAt("fresh001", "dev", "restart_at", "context 262k over restart_at 250k", at,
+		`"phase":"evidence","what":"session","session":"sid-fresh"`)
+	lines = append(lines,
+		fmt.Sprintf(`{"id":"fresh001","at":%q,"phase":"closed","outcome":"lost","detail":"it did not accept T-1"}`, at.Add(time.Hour).UTC().Format(time.RFC3339Nano)),
+		fmt.Sprintf(`{"id":"fresh001","at":%q,"phase":"evidence","what":"accepted","task":"T-1","by":"dev","session":"sid-fresh"}`, at.Add(time.Hour+time.Minute).UTC().Format(time.RFC3339Nano)))
+	rotationRecord(t, file, "dev", lines...)
+
+	_, _, err = zm(t, file, "rotation", "abort", "dev")
+	require.ErrorContains(t, err, "its fresh conversation sid-fresh did work (it accepted T-1)")
+	assert.ErrorContains(t, err, "zmina rotation abort dev --force")
+	assert.ErrorContains(t, err, "up 'dev' --resume='sid-fresh'")
+
+	out, _, perr := zm(t, file, "peek", "dev")
+	require.NoError(t, perr)
+	assert.NotContains(t, out, "--resume", "nothing was put down")
+
+	out, _, err = zm(t, file, "rotation", "abort", "dev", "--force")
+	require.NoError(t, err)
+	assert.Contains(t, out, "dev is back on its conversation sid-old (rotation fresh001 aborted)")
+	screenHas(t, file, "dev", "--resume sid-old")
+
+	_, _, err = zm(t, file, "rotation", "retry", "dev")
+	require.ErrorContains(t, err, "rotation fresh001 was aborted")
 }

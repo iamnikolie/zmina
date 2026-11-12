@@ -101,7 +101,7 @@ func (a *app) rotationCommand() *cobra.Command {
 	}
 	show.Flags().BoolVar(&asJSON, "json", false, "JSON output")
 
-	var clear bool
+	var clear, force bool
 
 	abort := &cobra.Command{
 		Use: "abort <role>",
@@ -109,10 +109,11 @@ func (a *app) rotationCommand() *cobra.Command {
 			"and started on it, and the rotation closes resumed",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return a.rotationAbort(args[0], clear)
+			return a.rotationAbort(args[0], clear, force)
 		},
 	}
 	abort.Flags().BoolVar(&clear, "clear", false, "drop a draft (C-c) or close a dialog (Escape) first instead of refusing")
+	abort.Flags().BoolVar(&force, "force", false, "abort although the fresh conversation did work (it accepted a task, or it has run for over 30 min)")
 
 	retry := &cobra.Command{
 		Use: "retry <role>",
@@ -132,7 +133,7 @@ func (a *app) rotationCommand() *cobra.Command {
 // rotationAbort puts a role back on its old conversation in three steps like zmina down: begin under the lock (the checks, the
 // down), wait for /exit outside it, finish under it (the start, the record). Run from inside the role's own session it refuses:
 // putting the role down would end this very command; another session, or the owner's shell, runs it.
-func (a *app) rotationAbort(name string, clear bool) error {
+func (a *app) rotationAbort(name string, clear, force bool) error {
 	var (
 		plan shift.RotationAbort
 		wait bool
@@ -146,7 +147,7 @@ func (a *app) rotationAbort(name string, clear bool) error {
 
 		var err error
 
-		plan, wait, err = s.BeginAbort(name, shift.DownOptions{Force: true, Clear: clear})
+		plan, wait, err = s.BeginAbort(name, shift.DownOptions{Force: true, Clear: clear}, force)
 
 		return err
 	})
@@ -169,6 +170,10 @@ func (a *app) rotationAbort(name string, clear bool) error {
 		}
 
 		fmt.Fprintf(a.out, "%s is back on its conversation %s (rotation %s aborted)\n", name, plan.Session, plan.ID)
+
+		if plan.Left != "" {
+			fmt.Fprintf(a.out, "it left conversation %s, which stays on disk; to go back to it: %s\n", plan.Left, plan.Return)
+		}
 
 		return nil
 	})

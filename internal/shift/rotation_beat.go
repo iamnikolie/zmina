@@ -134,8 +134,16 @@ func (s *Shift) rotationSwitching(name, id string, claim time.Time) {
 func (s *Shift) rotationSuperseded(name string, r Rotation, by string) {
 	detail := "superseded by rotation " + by
 
-	// A compact or a clear has no fresh conversation to lose: what it did is over, what it was not seen to do did not happen.
+	// A compact has no fresh conversation to lose: what it did is over, what it was not seen to do did not happen. A clear is
+	// judged by the conversation the role is on as it is put down: another than the one it was typed into is the clear's.
 	if r.Trim() {
+		if cur := s.currentConversation(name); r.Kind == KindClear && cur != "" && cur != r.From.Session {
+			s.rotationAppend(name, rotationLine{ID: r.ID, At: s.Now().UTC(), Phase: phaseEvidence, What: evidenceSession, Session: cur})
+			s.rotationClose(name, r, OutcomeRebuilt, detail, []string{"new conversation " + cur}, false, false)
+
+			return
+		}
+
 		s.rotationClose(name, r, OutcomeResumed, detail, nil, false, false)
 
 		return
@@ -148,6 +156,16 @@ func (s *Shift) rotationSuperseded(name string, r Rotation, by string) {
 	}
 
 	s.rotationClose(name, r, OutcomeLost, detail, nil, false, false)
+}
+
+// currentConversation is the conversation the role runs, or ran when it was last seen: its live session, else the one the shift
+// remembered as it put it down. Empty when neither is known.
+func (s *Shift) currentConversation(name string) string {
+	if sess := s.session(name); sess != nil && sess.SessionID != "" {
+		return sess.SessionID
+	}
+
+	return s.State.Role(name).LastSession
 }
 
 // rotationNotDown closes the record of a restart whose down could not be begun: the role is on its conversation as it was,
@@ -179,19 +197,20 @@ func (s *Shift) rotationOf(name string, claim time.Time) string {
 	return ""
 }
 
-// rotationStarted notes that the fresh session runs and its lines are in the queue.
-func (s *Shift) rotationStarted(name, id string, lines []string) {
+// rotationStarted notes that the fresh session runs, the lines queued for it and the deliveries its hand-out found.
+func (s *Shift) rotationStarted(name, id string, out handout) {
 	if id != "" {
-		s.rotationAppend(name, rotationLine{ID: id, At: s.Now().UTC(), Phase: PhaseStarted, Lines: clipLines(lines)})
+		s.rotationAppend(name, rotationLine{ID: id, At: s.Now().UTC(), Phase: PhaseStarted, Lines: clipLines(out.lines()),
+			Before: out.befores()})
 	}
 }
 
 // rotationStartedWith is rotationStarted for a start that handed tasks over: the tasks it handed are the rotation's artifacts
-// when its prepared line planned none (a resume that fell back to a fresh start).
-func (s *Shift) rotationStartedWith(name, id string, lines []string, tasks []task.Task) {
+// (fold), also those assigned to the role since the rotation was prepared.
+func (s *Shift) rotationStartedWith(name, id string, out handout, tasks []task.Task) {
 	if id != "" {
-		s.rotationAppend(name, rotationLine{ID: id, At: s.Now().UTC(), Phase: PhaseStarted, Lines: clipLines(lines),
-			Artifacts: s.rotationArtifacts(tasks, "")})
+		s.rotationAppend(name, rotationLine{ID: id, At: s.Now().UTC(), Phase: PhaseStarted, Lines: clipLines(out.lines()),
+			Before: out.befores(), Artifacts: s.rotationArtifacts(tasks, "")})
 	}
 }
 
@@ -251,14 +270,7 @@ func (s *Shift) rotationBack(name string, from RotationFrom) string {
 		return ""
 	}
 
-	crewArg := shellWord(s.Crew.Path)
-	up := fmt.Sprintf("zmina --crew %s up %s --resume=%s", crewArg, shellWord(name), shellWord(from.Session))
-
-	if s.State.Role(name).Up {
-		return fmt.Sprintf("zmina --crew %s down %s --clear && %s", crewArg, shellWord(name), up)
-	}
-
-	return up
+	return s.resumeCommand(name, from.Session, s.State.Role(name).Up)
 }
 
 // rotationTail is what a note of a restart that failed says of its rotation: where to look.
@@ -352,6 +364,11 @@ func (s *Shift) reconcileUnstarted(name string, r Rotation, now time.Time) strin
 	startedSince := rs.Started.After(r.Prepared)
 	if !r.Claim.IsZero() {
 		startedSince = !rs.Started.Before(r.Claim)
+	} else if r.Switching.IsZero() && (r.Kind == KindUp || r.Kind == KindCrash) {
+		// A start by hand or the ticker's reopen: its record is written after the start (there is no down to wait for), so a
+		// role that is up is a role started for it. One whose process died before it handed anything is lost for want of its
+		// context, not "not begun".
+		startedSince = rs.Up
 	}
 
 	switch {
@@ -380,7 +397,8 @@ func (s *Shift) reconcileUnstarted(name string, r Rotation, now time.Time) strin
 		// A command may still be finishing the down.
 		return ""
 	default:
-		if s.rotationEnd(name, r.ID, OutcomeLost, "no session: the role was put down and none was started", nil, true) {
+		// The ticker's own notes of a crash (ended, started again, dies on boot) tell a reopen that left no session.
+		if s.rotationEnd(name, r.ID, OutcomeLost, "no session: the role was put down and none was started", nil, r.Kind != KindCrash) {
 			return name + ": rotation " + r.ID + " closed, lost (no session)"
 		}
 	}
@@ -436,13 +454,16 @@ func (s *Shift) reconcileStarted(name string, r Rotation, now time.Time) string 
 		return ""
 	}
 
-	var why string
+	var (
+		why   string
+		ended bool
+	)
 
 	switch {
 	case !rs.Up:
-		why = "its session ended before it confirmed" + s.rotationMissing(r, held)
+		why, ended = "its session ended before it confirmed"+s.rotationMissing(r, held), true
 	case rs.Started.After(r.Started):
-		why = "it was started again before it confirmed" + s.rotationMissing(r, held)
+		why, ended = "it was started again before it confirmed"+s.rotationMissing(r, held), true
 	case changed:
 		why = "its conversation changed before it confirmed" + s.rotationMissing(r, held)
 	default:
@@ -450,7 +471,7 @@ func (s *Shift) reconcileStarted(name string, r Rotation, now time.Time) string 
 	}
 
 	if why != "" {
-		if s.rotationEnd(name, r.ID, OutcomeLost, why, nil, true) {
+		if s.rotationEnd(name, r.ID, OutcomeLost, why, nil, r.tellsLost(ended)) {
 			return name + ": rotation " + r.ID + " closed, lost: " + why
 		}
 
@@ -458,7 +479,7 @@ func (s *Shift) reconcileStarted(name string, r Rotation, now time.Time) string 
 	}
 
 	// Still open and not lost: the dispatcher is told once if it stays so.
-	if now.Sub(r.Started) >= rotationSlow && r.SlowTold.IsZero() {
+	if now.Sub(r.Started) >= rotationSlow && r.SlowTold.IsZero() && r.tellsLost(false) {
 		if s.rotationAppend(name, rotationLine{ID: r.ID, At: now.UTC(), Phase: phaseEvidence, What: evidenceSlow}) {
 			s.addNotes([]string{fmt.Sprintf("%s: rotation %s (%s) is open %s after its start, not confirmed yet%s; zmina --crew %s "+
 				"rotation show %s", name, r.ID, r.Kind, span(now.Sub(r.Started)), s.rotationMissing(r, held), shellWord(s.Crew.Path),
@@ -469,6 +490,13 @@ func (s *Shift) reconcileStarted(name string, r Rotation, now time.Time) string 
 	}
 
 	return ""
+}
+
+// tellsLost reports whether the dispatcher is to hear that the rotation was lost, or stays open too long. A reopen after a crash
+// (kind crash) is told by the ticker's notes of the crash: ended, started again, dies on boot; its rotation adds none when its
+// session ended again before it confirmed (ended), nor for a role that holds nothing to accept, whose reopen is only recorded.
+func (r Rotation) tellsLost(ended bool) bool {
+	return r.Kind != KindCrash || !ended && len(r.Artifacts) > 0
 }
 
 // rotationNote records what the beat can see of the fresh conversation that the record does not show yet: its boot turn

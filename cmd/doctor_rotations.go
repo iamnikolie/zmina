@@ -34,7 +34,9 @@ func checkRotations(c *crew.Crew, now time.Time, add func(name, level, format st
 			since = r.Started
 		}
 
-		add("rotations", "warn", "%s: rotation %s (%s) has been open for %s, %s: zmina rotation show %s; zmina rotation abort %s puts it "+
-			"back on its old conversation", r.Role, r.ID, r.Kind, age(now.Sub(since)), r.Phase, r.Role, r.Role)
+		// What it is, and where to look: an abort is the owner's to decide, never a hint of a check (the role may be at work).
+		add("rotations", "warn", "%s: rotation %s (%s) has been open for %s, %s: its fresh conversation was not confirmed to have its "+
+			"context, and the role may be at work in it; zmina rotation show %s", r.Role, r.ID, r.Kind, age(now.Sub(since)), r.Phase,
+			r.Role)
 	}
 }

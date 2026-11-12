@@ -167,7 +167,16 @@ func TestDoctorSaysOfARotationOpenTooLong(t *testing.T) {
 	rotationRecord(t, file, "sage", rotationLinesAt("cmp00003", "sage", "compact", "context 200k over 150k", now.Add(-5*time.Hour))...)
 
 	out, _, _ = zm(t, file, "doctor")
-	assert.Contains(t, out, "warn  rotations dev: rotation old00001 (restart_at) has been open for 1h, started: zmina rotation show dev")
+	assert.Contains(t, out, "warn  rotations dev: rotation old00001 (restart_at) has been open for 1h, started: ")
+	assert.Contains(t, out, "was not confirmed to have its context, and the role may be at work in it; zmina rotation show dev")
+
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, " rotations ") {
+			assert.NotContains(t, line, "abort", "nothing destructive is hinted at: the role may be at work")
+			assert.NotContains(t, line, "--resume")
+		}
+	}
+
 	assert.NotContains(t, out, "new00002")
 	assert.NotContains(t, out, "cmp00003")
 

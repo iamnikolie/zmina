@@ -78,7 +78,7 @@ func TestViewShowsTheRotation(t *testing.T) {
 	rotID := lastRotation(t, f3, "designer").ID
 	*f3.now = f3.now.Add(rotationAcceptWait + 20*time.Minute)
 	f3.s.rotationEnd("designer", rotID, OutcomeLost, "it did not accept T-1", nil, true)
-	require.NoError(t, abort(t, f3))
+	require.NoError(t, abortWith(t, f3, true))
 	assert.Equal(t, "aborted", rotViewOf(t, f3).Rotation.Then)
 }
 
