@@ -392,7 +392,12 @@ func (s *Shift) Views() []View {
 			v.State, v.PID = PresenceUp, p.PID
 
 			if sess, err = s.registryFor(name).ByPID(p.PID); err != nil {
-				v.Status, v.StatusError = "unknown", err.Error()
+				v.Status = "unknown"
+
+				// Only a file that does not read is said: another error of the registry is not the file's.
+				if bad := (*registry.BadFileError)(nil); errors.As(err, &bad) {
+					v.StatusError = err.Error()
+				}
 			}
 		case p.State == tmux.Dead:
 			v.State = PresenceDead

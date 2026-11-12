@@ -1141,6 +1141,11 @@ func (a *app) tickCommand() *cobra.Command {
 			}
 
 			err := shift.RunTick(a.withState, runWatches, a.rang, a.printTick)
+			if errors.Is(err, shift.ErrStateFuture) {
+				// The state is a newer zmina's: the rest of the beat would run on an empty one.
+				return err
+			}
+
 			a.meshTick()
 			a.budgetTick(time.Now())
 			a.morningTick(time.Now())

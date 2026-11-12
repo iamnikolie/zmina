@@ -47,6 +47,22 @@ func TestAStateFromANewerZminaIsNotWrittenByAnyCommand(t *testing.T) {
 
 			return err
 		},
+		// A look is refused too: an empty state shown in its place would pass for the crew's own.
+		"a look": func() error {
+			_, _, err := zm(t, crewFile, "ls")
+
+			return err
+		},
+		"what waits for an ack": func() error {
+			_, _, err := zm(t, crewFile, "pending")
+
+			return err
+		},
+		"the state shown": func() error {
+			_, _, err := zm(t, crewFile, "state", "show")
+
+			return err
+		},
 		"state recover": func() error {
 			_, _, err := zm(t, crewFile, "state", "recover")
 
@@ -69,22 +85,6 @@ func TestAStateFromANewerZminaIsNotWrittenByAnyCommand(t *testing.T) {
 			assert.Equal(t, before, stateFiles(t, dir), "no state file was made or moved beside it")
 		})
 	}
-
-	t.Run("a look", func(t *testing.T) {
-		require.NoError(t, os.WriteFile(state, []byte(newer), 0o600))
-
-		out, errOut, err := zm(t, crewFile, "ls")
-		require.NoError(t, err, "a look still works")
-		assert.Contains(t, out, "dispatcher")
-		assert.Contains(t, errOut, "newer zmina")
-
-		raw, err := os.ReadFile(state)
-		require.NoError(t, err)
-		assert.Equal(t, newer, string(raw))
-
-		_, _, err = zm(t, crewFile, "state", "show")
-		require.ErrorIs(t, err, shift.ErrStateFuture)
-	})
 }
 
 // stateFiles is the names in dir that are state.json or one of its companions (.prev, .v1.bak, .broken-<time>), to see
