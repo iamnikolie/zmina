@@ -318,25 +318,31 @@ also works from the dispatcher's own session): zmina records the hooks each star
 gets, and asks the process (`ps`) of a role an earlier zmina started.
 
 The settings also carry a `PermissionRequest` hook, `zmina _permission-request --role <role>` (timeout 5 s, output to
-`/dev/null`, `|| true`), which tells zmina the question an `AskUserQuestion` puts on the role's screen without the screen
-being read. It reads the hook's input and, for that tool only, writes the questions and their options as the tool had
-them, with the session id and the time, to `hooks/<role>.question.json` next to the crew file (a copy has its own file;
-one write replaces the last). It prints nothing, never allows or denies anything, and exits 0 on any error, so it neither
-settles nor breaks the dialog it runs for. Every other tool's request, and anything that is not JSON, records nothing.
-`zmina ls --json` and the cockpit take the `dialog` of such a role from that file when the session file says the role
-waits on a question (`waitingFor: input needed`), the file is of the role's current session, and it was written no
-earlier than that wait began (2 s of slack); otherwise, and whenever the file is gone or does not read, the screen is
-read as before. A file is never deleted: one that is not the current question is ignored, and the next question replaces
-it. With several questions in one call the dialog is the first, its words end `(and N more after this one: …)`; once the
-screen has moved on to another question (its choices are not the file's) the screen's dialog is shown. `choose` still
-answers by the dialog read from the screen: the file's choice order is not proven to be the screen's numbering, so it
-only supplies the words, the descriptions and a question the screen does not read, and a dialog that only the file
-describes (an id no screen has) is never answered blind. A role started by an earlier zmina has no such hook until its
-next start and shows what the screen shows.
+`/dev/null`, `|| true`). For an `AskUserQuestion` it writes the questions and options as the tool had them, with the
+session id and the time, to `hooks/<role>.question.json` next to the crew file (one write replaces the last); any other
+tool or input records nothing. It prints nothing, never allows or denies, and exits 0 on any error, so it neither settles
+nor breaks the dialog. `zmina ls --json` and the cockpit take the role's `dialog` from that file while the session file
+says it waits on a question (`waitingFor: input needed`), the file is of the current session and no older than that wait
+(2 s of slack); otherwise the screen is read as before. A file is never deleted, a stale one is ignored. Of several
+questions in one call the first is shown, its words ending `(and N more after this one: …)`, and the screen's dialog
+wins once its choices are not the file's (the next question). `choose` still answers by the dialog read from the screen,
+the file's choice order not being proven to be the screen's numbering: a dialog only the file describes (an id no screen
+has) is never answered blind.
+
+A turn that ends on an API error runs no `Stop` hook, so the settings carry a `StopFailure` hook too, `zmina
+_stop-failure --role <role>` (same timeout and silence). It records the error's kind and text as Claude Code gave
+them, never sorted into kinds (which errors are a usage limit is not established), with the session id and time, to
+`hooks/<role>.failure.json`, and starts the same detached copy as `_turn-end`, which for such a turn waits only for the
+session to be idle (the transcript need not show a turn closed). It retries nothing. While the role is idle since that
+turn (file of its current session, no older than the idle, 2 s of slack) `zmina ls` shows `idle (last turn ended in an
+API error: <text>)` and `--json` has `turn_error`; the next turn takes it away. The dispatcher hears it once, as for a
+role without the hook (see The ticker).
+
+A role started by an earlier zmina has neither hook until its next start and shows what the screen and transcript show.
 
 A start also records the zmina version that made it. After an install the roles keep the hook command lines the
 earlier zmina wrote and run them with the new executable: the hidden commands and flags those lines name
-(`pending --brief`, `_turn-end`, `_permission-request`, `_read-guard`, `_limits-tap`, the `_codex` bridge's flags) stay valid across versions, a renamed one
+(`pending --brief`, `_turn-end`, `_permission-request`, `_stop-failure`, `_read-guard`, `_limits-tap`, the `_codex` bridge's flags) stay valid across versions, a renamed one
 keeps its old name. A Codex role's bridge and a running `zmina ui` keep the earlier zmina's code until they are started
 again. `zmina doctor` says which (`versions`): a cockpit or a Codex bridge of another version warns, Claude roles
 started by another version are listed without a warning; `zmina restart <role> --continue` starts one with this
@@ -482,7 +488,7 @@ goes over the crew's field by field; a change applies at the role's next start. 
 
 | Command | Does |
 |---|---|
-| `zmina ls [role...] [--all] [--wide] [--json]` | first line: when the ticker last beat (and `STOPPED` while the shift is stopped), how many roles are up and down. Then a line per role that is not down: role, `up`/`dead` (its process ended, the ticker collects it within a minute)/`outside` (a claude with that name runs, not under zmina)/`unknown` (tmux did not answer) with `idle`/`busy`/`waiting` (`waiting (question)` or `waiting (permission)` when Claude Code's session file says what a waiting role waits on, `--json` as `waiting_for`; `(dialog)` while its screen shows a question instead of its input line; `up unknown (session file unreadable; zmina doctor)` when Claude Code's session file for the role is empty or cut short, which `doctor` names with the role to restart, and `--json` says in `status_error`), for how long (`3m`, `4h12m`, `2d3h`), how many tokens its conversation fills (`362k/150k` with its `context_max`), the active tasks it holds. The down roles follow in one line, `down: designer, dev3 (T-4), seo (broken)`, each with what is worth knowing in brackets: tasks, `broken` (dies on boot), `bad dir` (its dir is gone — it does not start, the rest of the crew runs on), `N failed lines` (see `zmina queue`), `asleep until Mon 09:00` (`zmina sleep`), next scheduled run, expiry. `--all`: a line for the down ones too. `--wide`: the whole table with SESSION, KEEP (+ next scheduled run, expiry) and ABOUT; `zmina ls <role>` the same for that role and its copies, with what it says it does. A second line says it when the crew is retired (where the live crew is), or has stood still for over an hour (stopped, or its ticker silent; see `zmina retire`). `*` marks the dispatcher. Last line `later: N parked` while the parked list is not empty. `--json` has every field, also `prompt: true` while an up role's screen shows a dialog or a question, and `now` / `now_at`: the role's last status line in words (its screen's last `⏺ …` line that is not a tool call) and since when it says so. If tool output scrolls that line away, the last line and its timestamp are kept until new words appear. |
+| `zmina ls [role...] [--all] [--wide] [--json]` | first line: when the ticker last beat (and `STOPPED` while the shift is stopped), how many roles are up and down. Then a line per role that is not down: role, `up`/`dead` (its process ended, the ticker collects it within a minute)/`outside` (a claude with that name runs, not under zmina)/`unknown` (tmux did not answer) with `idle`/`busy`/`waiting` (`waiting (question)` or `waiting (permission)` when Claude Code's session file says what a waiting role waits on, `--json` as `waiting_for`; `idle (last turn ended in an API error: …)` while the role is idle since a turn its `StopFailure` hook recorded as ended that way, `--json` as `turn_error`; `(dialog)` while its screen shows a question instead of its input line; `up unknown (session file unreadable; zmina doctor)` when Claude Code's session file for the role is empty or cut short, which `doctor` names with the role to restart, and `--json` says in `status_error`), for how long (`3m`, `4h12m`, `2d3h`), how many tokens its conversation fills (`362k/150k` with its `context_max`), the active tasks it holds. The down roles follow in one line, `down: designer, dev3 (T-4), seo (broken)`, each with what is worth knowing in brackets: tasks, `broken` (dies on boot), `bad dir` (its dir is gone — it does not start, the rest of the crew runs on), `N failed lines` (see `zmina queue`), `asleep until Mon 09:00` (`zmina sleep`), next scheduled run, expiry. `--all`: a line for the down ones too. `--wide`: the whole table with SESSION, KEEP (+ next scheduled run, expiry) and ABOUT; `zmina ls <role>` the same for that role and its copies, with what it says it does. A second line says it when the crew is retired (where the live crew is), or has stood still for over an hour (stopped, or its ticker silent; see `zmina retire`). `*` marks the dispatcher. Last line `later: N parked` while the parked list is not empty. `--json` has every field, also `prompt: true` while an up role's screen shows a dialog or a question, and `now` / `now_at`: the role's last status line in words (its screen's last `⏺ …` line that is not a tool call) and since when it says so. If tool output scrolls that line away, the last line and its timestamp are kept until new words appear. |
 | `zmina up <role...>` / `--all` | start roles. Refuses a role already up (with `--fresh` it names `zmina restart <role> --fresh`), and a name a claude outside zmina already holds. Clears a hold and a broken mark. A sleeping role resumes its last known conversation, as at its alarm; the alarm still rings later. |
 | `zmina up <role> --as N` | a copy of the role, `<role>#N` (2–9) under `<session>-N`, same dir/boot/model/args; never kept up, gone once it is down. `zmina down dev --as 2` (or `zmina down 'dev#2'`). |
 | `zmina up <role> [--as N] --task T-1` | start a seat for an active recorded task, in its worktree when present. Queue one short handoff packet locator, never the inline task body. Read that file, check `task show` and its latest Note, then run the exact `task accept` command carried by the locator before work. By default continue a compatible task conversation, otherwise start fresh; `--continue` / `--fresh` make the choice explicit. The task names this role. Claude Code trust is answered only for worktrees zmina made under `<crew>/worktrees/`. |
@@ -2087,12 +2093,13 @@ until it can go.
    and may be tried again.
 9. Screens: each up role's screen and transcript end are read. No input line for 3 min (a dialog,
    a login, a permission question) → `<role>: no input line on its screen for 3 min, waiting on:
-   <the screen's last lines>` (once per stretch; `waiting on a question:` or `waiting on a permission
-   prompt:` when Claude Code's session file says which); a role still booting with no input line 45 s
-   after its start is held by a dialog and nothing queued reaches it → `<role>: up 60 s and still no input
+   <the screen's last lines>` (once per stretch; `waiting on a question:` or `a permission prompt:` when
+   Claude Code's session file says which); a role still booting with no input line 45 s after
+   its start is held by a dialog and nothing queued reaches it → `<role>: up 60 s and still no input
    line, a dialog holds its boot and its queued lines wait: <the screen's last lines>` (once; `a question`
-   or `a permission prompt` in place of `a dialog` when the file says which). A last turn that ended in an API error →
-   `<role>: its last turn ended in an API error: …` (once per error). A usage-limit notice at the
+   or `a permission prompt` for `a dialog` likewise). A last turn that ended in an API error →
+   `<role>: its last turn ended in an API error: …` (once per error; at once when the role has a `StopFailure`
+   hook). A usage-limit notice at the
    bottom of the screen → `<role>: stopped by a usage limit: …` (once per notice). Folder trust in
    a role's own task worktree is answered (`trusted` in the log).
 

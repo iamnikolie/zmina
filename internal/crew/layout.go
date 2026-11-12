@@ -68,6 +68,11 @@ func (l Layout) HookQuestion(role string) string {
 	return filepath.Join(l.Hooks(), role+".question.json")
 }
 
+// HookFailure is the API error a role's StopFailure hook saw end its turn.
+func (l Layout) HookFailure(role string) string {
+	return filepath.Join(l.Hooks(), role+".failure.json")
+}
+
 // Worktrees holds the tasks' git worktrees.
 func (l Layout) Worktrees() string { return filepath.Join(l.Dir, "worktrees") }
 

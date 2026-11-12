@@ -91,13 +91,9 @@ func (s *Shift) watchScreen(name string, now time.Time) []string {
 		notes = append(notes, note)
 	}
 
-	if sess := s.session(name); sess != nil {
-		if turn, err := s.registryFor(name).Last(sess.SessionID); err == nil && turn.Error != "" && turn.ErrorID != rs.ErrorNoted {
-			rs.ErrorNoted = turn.ErrorID
-			note := name + ": its last turn ended in an API error: " + clip(turn.Error)
-			s.log(name, "api-error", "", note)
-			notes = append(notes, note)
-		}
+	// A last turn that ended in an API error: from its StopFailure hook when it has one, else from the transcript.
+	if note := s.apiErrorNote(name, rs); note != "" {
+		notes = append(notes, note)
 	}
 
 	// Claude Code shows a limit as a notice at the bottom of the screen; a reply that talks about limits is

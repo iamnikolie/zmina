@@ -248,6 +248,10 @@ type View struct {
 	// WaitPermission (a permission prompt), WaitQuestion (a question put to the owner), empty when it is not waiting
 	// or the file does not say. Computed on every look; it is not kept in the state.
 	WaitingFor string `json:"waiting_for,omitempty"`
+	// TurnError says why an idle role's last turn ended, when it ended on an API error its StopFailure hook recorded:
+	// Claude Code's own words for it, empty when the role is not idle since such a turn or has no such hook. Computed on
+	// every look, and gone when the next turn starts; it is not kept in the state.
+	TurnError string `json:"turn_error,omitempty"`
 	// Context is how many tokens the conversation fills (0: not known); ContextMax the role's context_max.
 	Context    int `json:"context,omitempty"`
 	ContextMax int `json:"context_max,omitempty"`
@@ -439,6 +443,10 @@ func (s *Shift) Views() []View {
 						v.NowAt = s.Now()
 					}
 				}
+			}
+
+			if f := s.failureFor(name, sess); f != nil {
+				v.TurnError = f.Text()
 			}
 
 			// The question its hook recorded, when that is the one on screen; else what the screen reads as.

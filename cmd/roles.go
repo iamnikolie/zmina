@@ -967,7 +967,7 @@ func (a *app) peekCommand() *cobra.Command {
 
 // peekHead is peek's first line: the role's state and status, for how long, its context and tasks.
 func peekHead(v shift.View) string {
-	parts := []string{v.Role, strings.TrimSpace(stateCell(v)+" "+waitingCell(v)) + " " + shortSince(v)}
+	parts := []string{v.Role, strings.TrimSpace(stateCell(v)+" "+statusWords(v)) + " " + shortSince(v)}
 	if v.Prompt {
 		parts = append(parts, "dialog on screen")
 	}
@@ -1227,13 +1227,17 @@ func statusCell(v shift.View) string {
 		return v.Status + " (session file unreadable; zmina doctor)"
 	}
 
-	return waitingCell(v)
+	return statusWords(v)
 }
 
-// waitingCell is the role's status and, for one that waits, what on: `waiting (question)` or `waiting (permission)`.
-func waitingCell(v shift.View) string {
-	if v.WaitingFor != "" {
+// statusWords is the role's status and, for one that waits, what on: `waiting (question)` or `waiting (permission)`;
+// for one idle since a turn that ended on an API error, that: `idle (last turn ended in an API error: …)`.
+func statusWords(v shift.View) string {
+	switch {
+	case v.WaitingFor != "":
 		return v.Status + " (" + v.WaitingFor + ")"
+	case v.TurnError != "":
+		return v.Status + " (last turn ended in an API error: " + clip(v.TurnError, 60) + ")"
 	}
 
 	return v.Status

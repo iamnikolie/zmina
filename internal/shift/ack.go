@@ -714,7 +714,8 @@ func (s *Shift) readGuard(name string) bool {
 // turnEndTimeout is the Stop hook's timeout in seconds; the hook itself returns in milliseconds (TurnEnd).
 const turnEndTimeout = 5
 
-// recordTimeout is the timeout in seconds of the hooks that only record what they are told (_permission-request).
+// recordTimeout is the timeout in seconds of the hooks that only record what they are told (_permission-request,
+// _stop-failure).
 const recordTimeout = 5
 
 // roleSettings are the settings a socket role starts with: other sessions' messages let in, a hook that tells it
@@ -761,6 +762,12 @@ func (s *Shift) roleSettingsIn(name, dir string) string {
 		// off the screen (zmina _permission-request). Silent, no decision, exit 0 always.
 		hooks["PermissionRequest"] = []any{map[string]any{"hooks": []any{map[string]any{"type": "command",
 			"timeout": recordTimeout, "command": base + " _permission-request --role " + shellWord(name) + " >/dev/null 2>&1 || true"}}}}
+
+		// A turn that ends on an API error runs no Stop hook; its StopFailure hook records the error for the views and the
+		// dispatcher's note, and has what waits for the role posted as a Stop hook would (zmina _stop-failure). Silent,
+		// exit 0 always.
+		hooks["StopFailure"] = []any{map[string]any{"hooks": []any{map[string]any{"type": "command",
+			"timeout": recordTimeout, "command": base + " _stop-failure --role " + shellWord(name) + " >/dev/null 2>&1 || true"}}}}
 
 		settings["hooks"] = hooks
 		settings["statusLine"] = s.tapStatusLine(name, base, dir)

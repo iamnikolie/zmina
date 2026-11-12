@@ -77,3 +77,49 @@ func (a *app) permissionRequestCommand() *cobra.Command {
 
 	return c
 }
+
+// stopFailureCommand is the StopFailure hook of a Claude role (roleSettings): Claude Code runs it when a turn ends on an
+// API error, which runs no Stop hook. It records the error for the role (shift.RecordFailure), so the role's view and
+// the dispatcher's note say how the turn ended, and starts the detached copy of _turn-end that posts what waits once
+// the session is idle, as the Stop hook does for any other turn's end. It retries nothing and prints nothing, and
+// exits 0 whatever goes wrong, a record that cannot be written included.
+func (a *app) stopFailureCommand() *cobra.Command {
+	var role string
+
+	c := &cobra.Command{
+		Use:                "_stop-failure",
+		Hidden:             true,
+		Args:               cobra.ArbitraryArgs,
+		FParseErrWhitelist: cobra.FParseErrWhitelist{UnknownFlags: true},
+		SilenceErrors:      true,
+		SilenceUsage:       true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			defer func() { _ = recover() }()
+
+			input := readHookInput(cmd.InOrStdin())
+
+			l, ok := a.hookLayout()
+			if !ok || len(input) == 0 || role == "" {
+				return nil
+			}
+
+			sid, _ := shift.RecordFailure(l, role, input, time.Now())
+			if sid == "" {
+				return nil
+			}
+
+			spawn := a.spawn
+			if spawn == nil {
+				spawn = spawnDetached
+			}
+
+			_ = spawn([]string{"--crew", a.crewPath(), "_turn-end", "--role", role, "--session", sid, "--wait", "--failed"})
+
+			return nil
+		},
+	}
+
+	c.Flags().StringVar(&role, "role", "", "the role the hook runs for")
+
+	return c
+}
