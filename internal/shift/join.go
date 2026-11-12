@@ -106,14 +106,20 @@ func (s *Shift) joinRun(name string) []string {
 	return run
 }
 
-// postJoined posts lines, the first of a role's queue and as many after it as joinRun found, as one numbered message. The
-// record of the post has a part for each line, with the ids it carries; the card of each line is accepted. A post that
-// never started is tried again as a line's is (typeTries beats); one whose write broke is followed as posted (post);
-// any other failure keeps the first line as failed, as when it goes alone, and leaves the others waiting.
-func (s *Shift) postJoined(name string, sess *registry.Session, lines []string, now time.Time) string {
+// postJoined posts lines, the first of a role's queue and as many after it as joinRun found, as one numbered message, or,
+// when b is a bell (bellFor), the bell for them: the message is the bell's text and the numbered lines wait in the inbox
+// for the role to read. The record of the post has a part for each line, with the ids it carries; the card of each line
+// is accepted. A post that never started is tried again as a line's is (typeTries beats); one whose write broke is
+// followed as posted (post); any other failure keeps the first line as failed, as when it goes alone, and leaves the
+// others waiting.
+func (s *Shift) postJoined(name string, sess *registry.Session, lines []string, b *bell, now time.Time) string {
 	rs := s.State.Role(name)
 	text := numbered(lines)
 	what := strconv.Itoa(len(lines)) + " lines joined: " + text
+
+	if b != nil {
+		text, what = b.text, bellWhat(len(lines), b.text)
+	}
 
 	if err := s.postAs(name, sess, text, what, now); err != nil {
 		rs.Attempts++
@@ -148,7 +154,12 @@ func (s *Shift) postJoined(name string, sess *registry.Session, lines []string, 
 	}
 
 	s.delivered(ids, now)
-	s.cardsAccepted(name, text, parts, s.acceptedBy(name), sess.SessionID, now)
+
+	if b != nil {
+		s.cardsBelled(name, parts, b.id, s.acceptedBy(name), sess.SessionID, now)
+	} else {
+		s.cardsAccepted(name, text, parts, s.acceptedBy(name), sess.SessionID, now)
+	}
 
 	return "posted to " + name + ": " + oneLine(what)
 }

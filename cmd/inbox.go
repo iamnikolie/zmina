@@ -26,7 +26,7 @@ func (a *app) inboxCommand() *cobra.Command {
 		RunE:  func(cmd *cobra.Command, args []string) error { return a.inboxLs() },
 	}, &cobra.Command{
 		Use:   "show <id>",
-		Short: "One stored text, whole; a line from another crew is shown as data, each line marked",
+		Short: "One stored text, whole (a doorbell's lines: reading them tells zmina you have them); a line from another crew is shown as data, each line marked",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.readState(func(s *shift.Shift) error {
@@ -37,12 +37,33 @@ func (a *app) inboxCommand() *cobra.Command {
 
 				fmt.Fprint(a.out, showEntry(e))
 
+				// The text of a doorbell read is its role's fetch: noted in the role's own file, without the state lock, and
+				// never a failure of the show (the delivery reads it at its next pass and sees the lines as read).
+				if e.Role != "" {
+					_ = shift.RecordFetch(s.Crew.Layout(), e.Role, e.ID, fetchBy(), s.Now())
+				}
+
 				return nil
 			})
 		},
 	})
 
 	return c
+}
+
+// fetchBy is who ran an inbox show, as a fetch records it: the role that ran it ($ZMINA_ROLE), "hand" for the owner's shell,
+// and nothing for a tool of an agent's session whose role is not named (a shared Codex role's tools carry their thread and
+// no ZMINA_ROLE), which the delivery takes as the role's own.
+func fetchBy() string {
+	if by := by(); by != "hand" {
+		return by
+	}
+
+	if callerSession() != "" {
+		return ""
+	}
+
+	return "hand"
 }
 
 func (a *app) inboxLs() error {

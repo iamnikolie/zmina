@@ -128,18 +128,32 @@ func (a *app) queueCommand() *cobra.Command {
 					}
 
 					if q.Sent != nil {
-						line("typed    ", q.Sent.Line, fmt.Sprintf(" (typed into its prompt %s, %s ago, not landed yet: it may have it)",
-							q.Sent.At.Local().Format("01-02 15:04"), age(now.Sub(q.Sent.At))))
-						facts(q.SentFacts())
+						// A doorbell typed is shown as the lines it is for, each with its own facts.
+						if q.Bell(q.Sent.Line, q.Sent.Parts) {
+							for j, part := range q.Sent.Parts {
+								line("typed    ", part.Line, fmt.Sprintf(" (typed into its prompt %s, %s ago, not landed yet: it may have it, %d of %d in one bell)",
+									q.Sent.At.Local().Format("01-02 15:04"), age(now.Sub(q.Sent.At)), j+1, len(q.Sent.Parts)))
+								facts(q.SentPartFacts(j))
+							}
+						} else {
+							line("typed    ", q.Sent.Line, fmt.Sprintf(" (typed into its prompt %s, %s ago, not landed yet: it may have it)",
+								q.Sent.At.Local().Format("01-02 15:04"), age(now.Sub(q.Sent.At))))
+							facts(q.SentFacts())
+						}
 					}
 
 					for i, p := range q.Posted {
 						// The lines a role's queue gave to one numbered message are shown as the lines they are, each with
-						// its own facts.
+						// its own facts; a doorbell the same, said to be one.
 						if q.Joined(p.Parts) {
+							one := "one post"
+							if q.Bell(p.Line, p.Parts) {
+								one = "one bell"
+							}
+
 							for j, part := range p.Parts {
-								line("posted   ", part.Line, fmt.Sprintf(" (to its inbox socket %s, %s ago, not yet seen, %d of %d in one post)",
-									p.At.Local().Format("01-02 15:04"), age(now.Sub(p.At)), j+1, len(p.Parts)))
+								line("posted   ", part.Line, fmt.Sprintf(" (to its inbox socket %s, %s ago, not yet seen, %d of %d in %s)",
+									p.At.Local().Format("01-02 15:04"), age(now.Sub(p.At)), j+1, len(p.Parts), one))
 								facts(q.PostedPartFacts(i, j))
 							}
 
@@ -149,6 +163,15 @@ func (a *app) queueCommand() *cobra.Command {
 						line("posted   ", p.Line, fmt.Sprintf(" (to its inbox socket %s, %s ago, not yet seen)",
 							p.At.Local().Format("01-02 15:04"), age(now.Sub(p.At))))
 						facts(q.PostedFacts(i))
+					}
+
+					// The lines of a doorbell the role was shown and has not read: the bell is no record in flight, and its lines
+					// wait for the role to fetch them.
+					for i := range q.Unfetched {
+						c := q.Unfetched[i]
+						line("bell     ", c.Head, fmt.Sprintf(" (a bell shown %s, %s ago, its text not fetched by %s)",
+							c.Bell.Shown.Local().Format("01-02 15:04"), age(now.Sub(c.Bell.Shown)), q.Role))
+						facts(&c)
 					}
 
 					// Two groups in words: what may have reached the role is looked at before it is sent again; what
@@ -168,9 +191,14 @@ func (a *app) queueCommand() *cobra.Command {
 							}
 
 							if q.Joined(f.Parts) {
+								one := "one post"
+								if q.Bell(f.Line, f.Parts) {
+									one = "one bell"
+								}
+
 								for j, part := range f.Parts {
-									line("  ", part.Line, fmt.Sprintf(" (%s, %s, %s ago, %d of %d in one post)", f.Error,
-										f.At.Local().Format("01-02 15:04"), age(now.Sub(f.At)), j+1, len(f.Parts)))
+									line("  ", part.Line, fmt.Sprintf(" (%s, %s, %s ago, %d of %d in %s)", f.Error,
+										f.At.Local().Format("01-02 15:04"), age(now.Sub(f.At)), j+1, len(f.Parts), one))
 									facts(q.FailedPartFacts(i, j))
 								}
 

@@ -371,6 +371,13 @@ func (s *Shift) closeTypedAs(name, how string) {
 	}
 
 	s.cardsClosed(name, rs.Sent.Line, rs.Sent.Parts, how, "")
+
+	// A typed bell that landed was shown: its lines are seen when their body is fetched. Its cards are closed first: a card
+	// whose bell was shown is no longer the one a closing is about (rung).
+	if id := s.bellRecord(name, rs.Sent.Line, rs.Sent.Parts); id != "" && how == ClosedLanded {
+		s.cardsBellShown(name, id, s.cardNow())
+	}
+
 	rs.Sent = nil
 }
 

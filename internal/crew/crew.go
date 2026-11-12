@@ -302,6 +302,11 @@ type Crew struct {
 	// role started again) go as `FYI …` lines with no ack id, closed once its conversation shows them. Default true;
 	// false gives every such line the id and the wait for an ack it had before.
 	InfoLines *bool `yaml:"info_lines"`
+	// Doorbell lets the lines that wait for a role go as a short doorbell, `[zmina] N lines wait for you (…): zmina
+	// inbox show <id>`, when together they are big (more than a line waits for a role typed into, or one line is long),
+	// the text itself stored in the crew's inbox for the role to read with the command. Default true; false sends every
+	// line whole, as before.
+	Doorbell *bool `yaml:"doorbell"`
 	// BootGrace is how long a started role is left to boot before lines are typed into it (default 2m).
 	BootGrace string `yaml:"boot_grace"`
 	// DropEnv lists environment variables (NAME, or PREFIX*) kept from the roles, on top of the built-in list.
@@ -613,6 +618,10 @@ func (c *Crew) MidTurn() bool { return c.DeliveryMidTurn == nil || *c.DeliveryMi
 // InfoLinesOn reports whether the dispatcher's lines that ask nothing of it go as FYI lines without an ack id
 // (info_lines).
 func (c *Crew) InfoLinesOn() bool { return c.InfoLines == nil || *c.InfoLines }
+
+// DoorbellOn reports whether big deliveries to a role may go as a doorbell and a command that reads their text
+// (doorbell).
+func (c *Crew) DoorbellOn() bool { return c.Doorbell == nil || *c.Doorbell }
 
 // SystemdUnit is the crew's ticker on Linux: zmina (.service and .timer), or zmina-<name>.
 func (c *Crew) SystemdUnit() string { return suffixed("zmina", "-", c.Name) }

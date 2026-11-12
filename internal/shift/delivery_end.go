@@ -99,12 +99,57 @@ func (s *Shift) settleEnded(name string, now time.Time) {
 	case s.sessionBound(name, sent.Line):
 		s.log(name, "dropped", "", "typed into a session that ended, meant for that conversation only: "+sent.Line)
 		s.cardsClosed(name, sent.Line, sent.Parts, ClosedDropped, "typed into a session that ended, meant for that conversation only")
+	case len(sent.Parts) > 0:
+		s.settleEndedParts(name, sent, now)
 	case s.stillTracked(sent):
 		s.log(name, "dropped", "", "typed into a session that ended, never seen to land; its ack says it again: "+sent.Line)
 		s.cardsClosed(name, sent.Line, sent.Parts, ClosedDropped, "typed into a session that ended, never seen to land; its ack says it again")
 	default:
 		s.failUnclear(name, Failed{Line: sent.Line, Error: UnclearEnded, At: now, IDs: sent.IDs, Parts: sent.Parts})
 	}
+}
+
+// settleEndedParts settles a typed record made of parts (a doorbell typed to a role, a line to the dispatcher of signals and
+// notes), part by part, by the same three kinds as a line: a part acked by every id it carries is cleared, a part any id
+// of which still waits for its ack is dropped (its ack says it again), and any other part (one with no id, or one whose
+// ids are merely gone from the acks, which says nothing of its being read) is kept as failed and needing attention, as one
+// record of what remains whose text is the record's. Judged as a whole, one tracked part would drop the parts that no ack
+// says again.
+func (s *Shift) settleEndedParts(name string, sent *Sent, now time.Time) {
+	var acked, dropped, kept []Part
+
+	for _, p := range sent.Parts {
+		switch {
+		case len(p.IDs) > 0 && !slices.ContainsFunc(p.IDs, func(id string) bool { return !slices.Contains(sent.AckedIDs, id) }):
+			acked = append(acked, p)
+		case s.tracked(p.IDs):
+			dropped = append(dropped, p)
+		default:
+			kept = append(kept, p)
+		}
+	}
+
+	if len(acked) > 0 {
+		s.log(name, "acked-cleared", "", "typed: "+sent.Line)
+		s.cardsClosed(name, sent.Line, acked, ClosedAcked, "its reader acked it")
+	}
+
+	if len(dropped) > 0 {
+		s.log(name, "dropped", "", "typed into a session that ended, never seen to land; its ack says it again: "+sent.Line)
+		s.cardsClosed(name, sent.Line, dropped, ClosedDropped, "typed into a session that ended, never seen to land; its ack says it again")
+	}
+
+	if len(kept) == 0 {
+		return
+	}
+
+	var ids []string
+
+	for _, p := range kept {
+		ids = append(ids, p.IDs...)
+	}
+
+	s.failUnclear(name, Failed{Line: sent.Line, Error: UnclearEnded, At: now, IDs: ids, Parts: kept})
 }
 
 // stillTracked reports a typed line any id of which still waits for its ack.

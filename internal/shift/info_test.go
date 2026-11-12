@@ -451,7 +451,7 @@ func TestBootRuleNamesInfoLines(t *testing.T) {
 
 	r, err := f.s.Role("designer")
 	require.NoError(t, err)
-	assert.True(t, strings.HasSuffix(f.s.bootText(r, false), f.s.ackRule()))
+	assert.True(t, strings.HasSuffix(f.s.bootText(r, false), f.s.ackRule()+"\n\n"+BellRule))
 	assert.NotContains(t, f.s.BootText(r), "FYI")
 }
 

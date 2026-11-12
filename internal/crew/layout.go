@@ -80,6 +80,16 @@ func (l Layout) Delivery() string { return filepath.Join(l.Dir, "delivery") }
 // DeliveryCards is one role's cards (delivery/<role>.json).
 func (l Layout) DeliveryCards(role string) string { return filepath.Join(l.Delivery(), role+".json") }
 
+// DeliveryFetched is one role's fetches (delivery/<role>.fetched.jsonl): one line each time the text of a doorbell it was
+// rung was read with zmina inbox show. It is appended to without the state lock, and read by the delivery.
+func (l Layout) DeliveryFetched(role string) string {
+	return filepath.Join(l.Delivery(), role+".fetched.jsonl")
+}
+
+// DeliveryBell is the mark of a role's start that told it what a doorbell is (delivery/<role>.bell): written by the start,
+// read before a doorbell is rung. A role with none, or a mark of another start, is sent every line whole.
+func (l Layout) DeliveryBell(role string) string { return filepath.Join(l.Delivery(), role+".bell") }
+
 // Worktrees holds the tasks' git worktrees.
 func (l Layout) Worktrees() string { return filepath.Join(l.Dir, "worktrees") }
 

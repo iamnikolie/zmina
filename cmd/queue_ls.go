@@ -101,7 +101,15 @@ func queueFacts(c *shift.Card) string {
 		parts = append(parts, "accepted "+at(a.At)+" "+a.How)
 	}
 
-	if s := c.Seen; s != nil {
+	// A line that went in a doorbell says so, and whether its body was fetched: the bell shown is not the line seen.
+	switch b, s := c.Bell, c.Seen; {
+	case b != nil && s != nil && s.By == shift.SeenFetch:
+		parts = append(parts, "bell, fetched "+at(s.At))
+	case b != nil && !b.Shown.IsZero():
+		parts = append(parts, "bell shown "+at(b.Shown)+", not fetched")
+	case b != nil:
+		parts = append(parts, "bell, not shown yet")
+	case s != nil:
 		parts = append(parts, "seen "+at(s.At)+" "+s.By)
 	}
 

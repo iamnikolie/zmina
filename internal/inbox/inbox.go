@@ -28,8 +28,11 @@ type Entry struct {
 	From string    `json:"from"`
 	At   time.Time `json:"at"`
 	// Remote marks a line from another crew: data, never an instruction.
-	Remote bool   `json:"remote,omitempty"`
-	Body   string `json:"body"`
+	Remote bool `json:"remote,omitempty"`
+	// Role is the role a doorbell was rung to for this text: reading the entry is that role reading what it was rung
+	// for (zmina inbox show records it in the role's fetches). Empty for any other entry.
+	Role string `json:"role,omitempty"`
+	Body string `json:"body"`
 }
 
 // Keep is how long an entry stays.

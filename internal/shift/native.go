@@ -209,6 +209,14 @@ func (s *Shift) followPostedAs(name string, now time.Time, gone bool) bool {
 
 // postShown closes a posted line its conversation showed.
 func (s *Shift) postShown(name string, p Posted) {
+	// A bell shown is the bell shown, not its lines: they are seen when their body is fetched (syncBells).
+	if id := s.bellRecord(name, p.Line, p.Parts); id != "" {
+		s.log(name, "bell-shown", "", bellWhat(len(p.Parts), p.Line))
+		s.cardsBellShown(name, id, s.cardNow())
+
+		return
+	}
+
 	// A joined post is one record of several lines (postJoined): each is seen, and says so.
 	if name != s.Crew.Dispatcher && len(p.Parts) > 0 {
 		for _, part := range p.Parts {
