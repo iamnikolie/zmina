@@ -327,6 +327,25 @@ func LockAs(dir string, opts LockOpts) (*Locked, error) {
 		return nil, err
 	}
 
+	return readLocked(dir, f)
+}
+
+// ErrLockHeld is TryLockAs finding the lock held by another process.
+var ErrLockHeld = errors.New("state: locked by another zmina")
+
+// TryLockAs is LockAs that does not wait: when another process holds the lock it returns ErrLockHeld at once, having
+// written nothing and logged nothing (no lock-wait event, no holder record, the state file not read).
+func TryLockAs(dir string, opts LockOpts) (*Locked, error) {
+	f, err := tryTakeLock(dir, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	return readLocked(dir, f)
+}
+
+// readLocked reads the state under the lock just taken; a state that cannot be read lets the lock go.
+func readLocked(dir string, f *hold) (*Locked, error) {
 	l := &Locked{path: crew.Layout{Dir: dir}.State(), lock: f}
 
 	raw, err := os.ReadFile(l.path)
@@ -404,7 +423,12 @@ func stateError(path string, err error) error {
 }
 
 // takeLock opens and locks the lock file in dir, waiting up to LockWait, and writes this pid into it.
-func takeLock(dir string, opts LockOpts) (*hold, error) {
+func takeLock(dir string, opts LockOpts) (*hold, error) { return acquire(dir, opts, true) }
+
+// tryTakeLock is takeLock that makes one try: a lock another process holds is ErrLockHeld, with nothing written.
+func tryTakeLock(dir string, opts LockOpts) (*hold, error) { return acquire(dir, opts, false) }
+
+func acquire(dir string, opts LockOpts, wait bool) (*hold, error) {
 	if err := fsx.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("state: %w", err)
 	}
@@ -429,6 +453,12 @@ func takeLock(dir string, opts LockOpts) (*hold, error) {
 			_ = f.Close()
 
 			return nil, fmt.Errorf("state: lock: %w", err)
+		}
+
+		if !wait {
+			_ = f.Close()
+
+			return nil, ErrLockHeld
 		}
 
 		w.poll()
