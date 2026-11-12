@@ -160,20 +160,31 @@ type bell struct {
 	id   string
 }
 
+// crossAt is the mark of the i-th line of a run, nil when it has none or the run has no marks.
+func crossAt(marks []*crossMark, i int) *crossMark {
+	if i < len(marks) {
+		return marks[i]
+	}
+
+	return nil
+}
+
 // bellFor is the doorbell the lines of run (the longest run joinRun found: the first line, and those that may be read
 // with it) go as, nil when they go as they are: the role is not rung bells, or they are not big enough. Posted to its own
 // channel they are big past bellInline bytes; typed they are more than one line, or one line past bellTyped characters.
 // The text of the bell — the numbered lines, or the one line — is stored in the crew's inbox before the bell is returned,
 // under an id made of the role and the text, so that a delivery that is tried again stores it over itself. A text that
-// cannot be stored is a bell that cannot be rung: the lines go as they are.
-func (s *Shift) bellFor(name string, run []string, typed bool, now time.Time) *bell {
+// cannot be stored is a bell that cannot be rung: the lines go as they are. A line that carries a mark (crossing.go, marks
+// in step with the run) is in the text with it, and counts with it against the thresholds; the bell says how many lines
+// crossed.
+func (s *Shift) bellFor(name string, run []string, marks []*crossMark, typed bool, now time.Time) *bell {
 	if len(run) == 0 || !s.bellsOn(name) {
 		return nil
 	}
 
-	body := run[0]
+	body := crossAt(marks, 0).withMark(run[0])
 	if len(run) > 1 {
-		body = numbered(run)
+		body = numberedMarked(run, marks)
 	}
 
 	if typed {
@@ -196,7 +207,7 @@ func (s *Shift) bellFor(name string, run []string, typed bool, now time.Time) *b
 
 	who, what := s.bellWhoWhat(name, run)
 
-	return &bell{text: bellText(len(run), who, what, id), id: id}
+	return &bell{text: bellText(len(run), who, what, crossCount(marks), id), id: id}
 }
 
 // BellSupersededText is what the text of a bell says once its lines were given back to the queue.
@@ -257,8 +268,8 @@ func (s *Shift) bellWhoWhat(name string, run []string) (who, what []string) {
 }
 
 // bellText is the line a role is rung: how many lines wait, who wrote them and what they are about where that is known,
-// and the command that prints them.
-func bellText(n int, who, what []string, id string) string {
+// how many of them crossed a newer line of its own (crossing.go), and the command that prints them.
+func bellText(n int, who, what []string, crossed int, id string) string {
 	var b strings.Builder
 
 	b.WriteString("[zmina] ")
@@ -271,13 +282,27 @@ func bellText(n int, who, what []string, id string) string {
 
 	names, tasks := bellList(who), bellList(what)
 
+	var about string
+
 	switch {
 	case names != "" && tasks != "":
-		b.WriteString(" (" + names + " on " + tasks + ")")
+		about = names + " on " + tasks
 	case names != "":
-		b.WriteString(" (" + names + ")")
+		about = names
 	case tasks != "":
-		b.WriteString(" (on " + tasks + ")")
+		about = "on " + tasks
+	}
+
+	if crossed > 0 {
+		if about != "" {
+			about += " · "
+		}
+
+		about += strconv.Itoa(crossed) + " crossed"
+	}
+
+	if about != "" {
+		b.WriteString(" (" + about + ")")
 	}
 
 	b.WriteString(": zmina inbox show " + id)
@@ -312,7 +337,7 @@ func bellList(names []string) string {
 // role, so all the lines it is for are kept for a look (a tracked one by its ack alone), and none is typed again by
 // itself; any other failure is the first line's alone, counted, and the lines after it wait. The caller has checked the
 // input line and the last line typed.
-func (s *Shift) typeBell(name string, run []string, b *bell, now time.Time) string {
+func (s *Shift) typeBell(name string, run []string, marks []*crossMark, b *bell, now time.Time) string {
 	rs := s.State.Role(name)
 	what := bellWhat(len(run), b.text)
 
@@ -375,6 +400,7 @@ func (s *Shift) typeBell(name string, run []string, b *bell, now time.Time) stri
 	rs.Inbox = rs.Inbox[len(run):]
 	rs.clearTries()
 	s.log(name, "typed", "", what)
+	s.cardsCrossed(name, run, marks, now)
 	s.cardsBelled(name, parts, b.id, AcceptedTyped, s.cardSession(name), typedAt)
 	s.delivered(ids, now)
 

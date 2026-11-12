@@ -845,14 +845,14 @@ func TestBellFallsBackToTheLinesWhenItsBodyCannotBeStored(t *testing.T) {
 func TestBellTextIsBoundedAndLeavesOutWhatIsUnknown(t *testing.T) {
 	id := "in-0123456789ab"
 
-	assert.Equal(t, "[zmina] 1 line waits for you: zmina inbox show "+id, bellText(1, nil, nil, id))
-	assert.Equal(t, "[zmina] 2 lines wait for you (dev): zmina inbox show "+id, bellText(2, []string{"dev"}, nil, id))
-	assert.Equal(t, "[zmina] 2 lines wait for you (on T-1): zmina inbox show "+id, bellText(2, nil, []string{"T-1"}, id))
+	assert.Equal(t, "[zmina] 1 line waits for you: zmina inbox show "+id, bellText(1, nil, nil, 0, id))
+	assert.Equal(t, "[zmina] 2 lines wait for you (dev): zmina inbox show "+id, bellText(2, []string{"dev"}, nil, 0, id))
+	assert.Equal(t, "[zmina] 2 lines wait for you (on T-1): zmina inbox show "+id, bellText(2, nil, []string{"T-1"}, 0, id))
 	assert.Equal(t, "[zmina] 8 lines wait for you (dev, ops, owner +2 on T-1, T-2, T-3 +1): zmina inbox show "+id,
-		bellText(8, []string{"dev", "ops", "owner", "zmina", "qa"}, []string{"T-1", "T-2", "T-3", "T-4"}, id))
+		bellText(8, []string{"dev", "ops", "owner", "zmina", "qa"}, []string{"T-1", "T-2", "T-3", "T-4"}, 0, id))
 
 	long := strings.Repeat("n", 90)
-	text := bellText(8, []string{long, long, long, long}, []string{"T-" + long, "T-2", "T-3", "T-4"}, id)
+	text := bellText(8, []string{long, long, long, long}, []string{"T-" + long, "T-2", "T-3", "T-4"}, 0, id)
 	assert.Less(t, len(text), 200)
 	assert.Equal(t, id, bellID(text), "and it still reads as a bell")
 
@@ -1027,7 +1027,7 @@ func TestTheDispatcherIsNeverRungABell(t *testing.T) {
 	upNative(t, f, "dispatcher")
 
 	assert.False(t, f.s.bellsOn("dispatcher"))
-	assert.Empty(t, f.s.bellFor("dispatcher", []string{fill("a", 700), fill("b", 700)}, false, *f.now))
+	assert.Empty(t, f.s.bellFor("dispatcher", []string{fill("a", 700), fill("b", 700)}, nil, false, *f.now))
 
 	big := []string{fill("a", 700), fill("b", 700)}
 	queueFrom(t, f, "dispatcher", big...)
@@ -1459,14 +1459,14 @@ func TestBellRefreshesItsStoredTextEachTime(t *testing.T) {
 
 	run := []string{fill("a", 700), fill("b", 700)}
 
-	b := f.s.bellFor("designer", run, false, *f.now)
+	b := f.s.bellFor("designer", run, nil, false, *f.now)
 	require.NotNil(t, b)
 
 	path := filepath.Join(f.s.Crew.Layout().Inbox(), b.id+".json")
 	old := time.Now().Add(-29 * 24 * time.Hour)
 	require.NoError(t, os.Chtimes(path, old, old))
 
-	again := f.s.bellFor("designer", run, false, *f.now)
+	again := f.s.bellFor("designer", run, nil, false, *f.now)
 	require.NotNil(t, again)
 	assert.Equal(t, b.id, again.id)
 

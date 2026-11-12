@@ -94,10 +94,18 @@ func (s *Shift) post(name string, sess *registry.Session, line string, now time.
 // postAs is post for a text whose events say something else of it than the text itself: what, which a joined post gives as
 // how many lines it joins (postJoined).
 func (s *Shift) postAs(name string, sess *registry.Session, line, what string, now time.Time) error {
+	return s.postText(name, sess, line, line, what, now)
+}
+
+// postText is postAs for a line that goes out as another text: sent is what is posted, and line what the record of the
+// post keeps, which every later step (shown, given back, failed, acked) acts on. A queued line that carries a crossing
+// mark (crossing.go) is posted behind it and recorded as it was queued. A post is found shown by the message's id, never
+// by its text, so what goes in front of the line changes nothing there.
+func (s *Shift) postText(name string, sess *registry.Session, sent, line, what string, now time.Time) error {
 	p, ns := s.peerFor(name)
 	rs := s.State.Role(name)
 
-	id, err := p.Post(ns, sess, tagMark(rs.Tag)+" "+line)
+	id, err := p.Post(ns, sess, tagMark(rs.Tag)+" "+sent)
 
 	var broke *peer.Committed
 	if err != nil && (!errors.As(err, &broke) || id == "") {

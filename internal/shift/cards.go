@@ -23,7 +23,9 @@ import (
 // how it ended. The cards of a role are one small file, delivery/<role>.json in the crew's directory, written through
 // fsx under the state lock the delivery already holds, once per pass and only when something changed.
 //
-// A card is a record of what was seen and nothing else: no delivery decision reads one. A card file that cannot be
+// A card is a record of what was seen and nothing else: no delivery decision reads one, and the one thing a card changes
+// in a delivery is the mark a line carries in front of its words when it crossed a newer line of its reader's on its task
+// (crossing.go), made from the cards of the line's writer, read and never written. A card file that cannot be
 // read or written is told once as an event (cards-failed) and the delivery goes on; one that is corrupt is moved aside
 // as <file>.broken-<time>, as state.json is, and started anew. Looks (zmina queue ls) read the file and never write it.
 
@@ -66,7 +68,7 @@ type Card struct {
 	// they were written in.
 	ID string `json:"id"`
 	// From is who wrote the line where zmina knows it (a role, "owner", "zmina"); Task the task it is about where that is
-	// structure (a task packet, a scheduled run), never read from the words.
+	// structure (zmina send --task, a task packet, a scheduled run), never read from the words.
 	From string `json:"from,omitempty"`
 	Task string `json:"task,omitempty"`
 	// Head is the start of the line, bounded.
@@ -85,8 +87,11 @@ type Card struct {
 	Acks []string `json:"acks,omitempty"`
 	// Bell is set when the line went in a doorbell (bell.go): which body, and when the bell was shown. Its Acks are then
 	// the line's own, which close the card as they close any line's.
-	Bell   *CardBell   `json:"bell,omitempty"`
-	Closed *CardClosed `json:"closed,omitempty"`
+	Bell *CardBell `json:"bell,omitempty"`
+	// Crossed is set when the line was delivered with a mark that says it crossed a newer line of the role's on its task
+	// (crossing.go): the id of that line's card, how, and when the mark was made.
+	Crossed *CardCrossed `json:"crossed,omitempty"`
+	Closed  *CardClosed  `json:"closed,omitempty"`
 }
 
 // CardBell is the doorbell a line went in: Body is the id of the text stored in the crew's inbox (zmina inbox show), Shown
@@ -308,6 +313,9 @@ type roleCards struct {
 // cardBook is the cards a shift has loaded: lazily, a role at a time.
 type cardBook struct {
 	roles map[string]*roleCards
+	// peeked are the cards of a role read for a look at another role's delivery (cardsPeek): as the file had them, never
+	// written back.
+	peeked map[string][]Card
 }
 
 // cardWarned remembers the card failures already told, by file and kind, so that a courier that goes on passing and
@@ -737,6 +745,9 @@ func (s *Shift) cardBack(name, line, why string, at time.Time) {
 	}
 
 	c.Back, c.Accepted, c.Seen, c.Attention, c.Closed = &CardBack{At: at, Why: why, N: n}, nil, nil, nil, nil
+
+	// A mark is made at each delivery, from what the cards say then: the new delivery has its own.
+	c.Crossed = nil
 
 	// The bell it went in did not reach its role with it: the new delivery has its own, and the text of the old one says so
 	// (bellSuperseded).

@@ -532,9 +532,37 @@ func (s *Shift) clearInput(name, line string) {
 	s.log(name, "unsent-cleared", "", line)
 }
 
-// holds reports whether an input line holds a line zmina typed: its start, as the input line shows it.
+// holds reports whether an input line holds a line zmina typed: its start, as the input line shows it. A line that crossed
+// another (crossing.go) is typed behind its mark, which the queue's line does not have: an input line that opens with a
+// mark holds the line when what follows the mark is the line's start, and holds it whatever follows when the mark is all
+// the input line shows (a narrow screen cuts it there).
 func holds(draft, line string) bool {
-	return draft != "" && strings.HasPrefix(oneLine(line), firstWords(draft))
+	if draft == "" {
+		return false
+	}
+
+	if strings.HasPrefix(oneLine(line), firstWords(draft)) {
+		return true
+	}
+
+	rest, marked := afterMark(oneLine(draft))
+
+	return marked && (rest == "" || strings.HasPrefix(oneLine(line), firstWords(rest)))
+}
+
+// afterMark is what follows a crossing mark at the start of a draft, and whether the draft opens with one. A mark that is
+// not closed in the draft (the screen cut it) leaves nothing after it.
+func afterMark(draft string) (string, bool) {
+	if !strings.HasPrefix(draft, crossOpen) {
+		return "", false
+	}
+
+	i := strings.Index(draft, crossClose)
+	if i < 0 {
+		return "", true
+	}
+
+	return draft[i+len(crossClose):], true
 }
 
 func (s *Shift) pause(d time.Duration) {

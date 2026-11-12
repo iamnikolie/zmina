@@ -54,7 +54,11 @@ func (s *Shift) joinable(name, line string) bool {
 }
 
 // numbered is the text of a joined post: each line after its place in the queue, "1. …", one to a line of the message.
-func numbered(lines []string) string {
+func numbered(lines []string) string { return numberedMarked(lines, nil) }
+
+// numberedMarked is numbered for lines that may carry a mark (crossing.go), each in step with its line: the mark stands
+// after the number, in front of the line's words, "2. [written 14:02, …] …".
+func numberedMarked(lines []string, marks []*crossMark) string {
 	var b strings.Builder
 
 	for i, line := range lines {
@@ -64,6 +68,11 @@ func numbered(lines []string) string {
 
 		b.WriteString(strconv.Itoa(i + 1))
 		b.WriteString(". ")
+
+		if i < len(marks) {
+			b.WriteString(marks[i].prefix())
+		}
+
 		b.WriteString(line)
 	}
 
@@ -73,7 +82,8 @@ func numbered(lines []string) string {
 // joinRun is the lines a role's next post joins: the longest prefix of its queue whose lines are all joinable, no more
 // than joinMax, the numbered message within postMax, none the same words as one before it (each line has a card and ids
 // of its own, told apart by their words). The dispatcher's own queued lines are joined by its own post (postDispatcher),
-// never here. A run of one line, or none, is no join.
+// never here. A run of one line, or none, is no join. A line that carries a mark counts with it: the message is the text
+// that goes out.
 func (s *Shift) joinRun(name string) []string {
 	if name == s.Crew.Dispatcher {
 		return nil
@@ -90,7 +100,7 @@ func (s *Shift) joinRun(name string) []string {
 		}
 
 		// The line as the message holds it, and the break before it.
-		add := len(strconv.Itoa(len(run)+1)) + len(". ") + len(line)
+		add := len(strconv.Itoa(len(run)+1)) + len(". ") + len(s.crossingFor(name, line).withMark(line))
 		if len(run) > 0 {
 			add++
 		}
@@ -111,10 +121,11 @@ func (s *Shift) joinRun(name string) []string {
 // for the role to read. The record of the post has a part for each line, with the ids it carries; the card of each line
 // is accepted. A post that never started is tried again as a line's is (typeTries beats); one whose write broke is
 // followed as posted (post); any other failure keeps the first line as failed, as when it goes alone, and leaves the
-// others waiting.
-func (s *Shift) postJoined(name string, sess *registry.Session, lines []string, b *bell, now time.Time) string {
+// others waiting. marks are the marks the lines carry (crossing.go), each in step with its line: they are in the text that
+// goes out, and on the cards of the lines, and nowhere else.
+func (s *Shift) postJoined(name string, sess *registry.Session, lines []string, marks []*crossMark, b *bell, now time.Time) string {
 	rs := s.State.Role(name)
-	text := numbered(lines)
+	text := numberedMarked(lines, marks)
 	what := strconv.Itoa(len(lines)) + " lines joined: " + text
 
 	if b != nil {
@@ -154,6 +165,7 @@ func (s *Shift) postJoined(name string, sess *registry.Session, lines []string, 
 	}
 
 	s.delivered(ids, now)
+	s.cardsCrossed(name, lines, marks, now)
 
 	if b != nil {
 		s.cardsBelled(name, parts, b.id, s.acceptedBy(name), sess.SessionID, now)
