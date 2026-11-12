@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/iamnikolie/zmina/internal/donecheck"
 )
 
 func write(t *testing.T, body string) string {
@@ -853,4 +855,42 @@ func TestCrossingSwitch(t *testing.T) {
 
 	_, err := Load(write(t, "crossing: sometimes\n"+roles))
 	assert.Error(t, err)
+}
+
+// done_check is a command line or its three keys; none is the default, and a bad one stops the load.
+func TestDoneCheckKey(t *testing.T) {
+	const roles = "namespace: /ns\nroles:\n  dispatcher:\n"
+
+	c, err := Load(write(t, roles))
+	require.NoError(t, err)
+	assert.Nil(t, c.DoneCheck, "no check unless the crew file gives one")
+
+	c, err = Load(write(t, "done_check: make test\n"+roles))
+	require.NoError(t, err)
+	assert.Equal(t, &donecheck.Spec{Run: "make test"}, c.DoneCheck)
+	assert.Empty(t, c.Warnings, "it is no unknown key")
+
+	c, err = Load(write(t, "done_check:\n  run: go test ./...\n  timeout: 20m\n  commit: true\n"+roles))
+	require.NoError(t, err)
+	assert.Equal(t, &donecheck.Spec{Run: "go test ./...", Timeout: "20m", Commit: true}, c.DoneCheck)
+	assert.Empty(t, c.Warnings)
+
+	// off, none and nothing are no check, as in the keys that take off.
+	for _, off := range []string{"done_check: off\n", "done_check: none\n", "done_check: OFF\n", "done_check: \"\"\n", "done_check:\n",
+		"done_check: {run: off}\n", "done_check: \" none \"\n"} {
+		c, err = Load(write(t, off+roles))
+		require.NoError(t, err, off)
+		assert.Nil(t, c.DoneCheck, off)
+		assert.Empty(t, c.Warnings, off)
+	}
+
+	for _, bad := range []string{"done_check: {timeout: 5m}\n",
+		"done_check: \"make\\ntest\"\n", "done_check: \"make test \\u202e\"\n", "done_check: {run: x, timeout: 2h}\n",
+		"done_check: {run: x, timeout: soon}\n", "done_check: [make, test]\n"} {
+		_, err = Load(write(t, bad+roles))
+		assert.Error(t, err, bad)
+	}
+
+	_, err = Load(write(t, "done_check: {run: x, timeot: 5m}\n"+roles))
+	require.ErrorContains(t, err, `a check has no key "timeot"`, "a gate that silently asks for less is not a warning")
 }

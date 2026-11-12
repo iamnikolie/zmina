@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/iamnikolie/zmina/internal/crew"
+	"github.com/iamnikolie/zmina/internal/donecheck"
 	"github.com/iamnikolie/zmina/internal/task"
 	"github.com/iamnikolie/zmina/internal/worktree"
 )
@@ -25,6 +26,13 @@ type Trees interface {
 	ResolveBase(repo, base string) (string, error)
 	Add(repo, path, branch, base string) error
 	Dirty(t worktree.Tree) (string, error)
+	// Head is the commit the worktree stands at; Ahead how many commits it has beyond its base.
+	Head(t worktree.Tree) (string, error)
+	Ahead(t worktree.Tree) (int, error)
+	// Since is how many commits the worktree has since the commit from; Created the commit its branch was made at, ""
+	// when git does not say.
+	Since(t worktree.Tree, from string) (int, error)
+	Created(t worktree.Tree) (string, error)
 	Merged(t worktree.Tree) (bool, error)
 	Remove(t worktree.Tree, force bool) error
 	// Repair re-points the linked worktrees of repo, which has moved, at it (git worktree repair); it says what git
@@ -51,6 +59,18 @@ func (Git) Add(repo, path, branch, base string) error {
 // Dirty is Tree.Dirty.
 func (Git) Dirty(t worktree.Tree) (string, error) { return t.Dirty() }
 
+// Head is Tree.Head.
+func (Git) Head(t worktree.Tree) (string, error) { return t.Head() }
+
+// Ahead is Tree.Ahead.
+func (Git) Ahead(t worktree.Tree) (int, error) { return t.Ahead() }
+
+// Since is Tree.Since.
+func (Git) Since(t worktree.Tree, from string) (int, error) { return t.Since(from) }
+
+// Created is Tree.Created.
+func (Git) Created(t worktree.Tree) (string, error) { return t.Created() }
+
 // Merged is Tree.Merged.
 func (Git) Merged(t worktree.Tree) (bool, error) { return t.Merged() }
 
@@ -76,6 +96,17 @@ type Ledger struct {
 	Now  func() time.Time
 	// Log records an event (role, event, task id, detail); nil is quiet.
 	Log func(role, event, id, detail string)
+	// DoneCheck is the crew file's done_check: the check a task with a worktree and no check of its own is closed
+	// on; nil: none.
+	DoneCheck *donecheck.Spec
+	// Dispatcher is the crew's dispatcher: with the owner, the only one that sets a task's check or closes a task
+	// past it.
+	Dispatcher string
+	// Env is the environment a check runs with (secret-looking names are dropped from it); nil: this process's.
+	Env []string
+	// InCheck says this process was started by a check: it acts for no one, so it sets no task's check and forces past
+	// none (donecheck.InCheckEnv).
+	InCheck bool
 }
 
 // NewTask is what a new task is made of.
@@ -94,6 +125,9 @@ type NewTask struct {
 	Route *task.Route
 	// Criteria is what must be true for the task to count as finished (task.Task.Criteria), one line each.
 	Criteria []string
+	// Check is the command closing the task as done runs (task.Task.Check); only the owner and the dispatcher set
+	// one, and it needs a worktree.
+	Check *donecheck.Spec
 }
 
 // New records a task. With a worktree, the task is written first — with the worktree's path, branch and base — and
@@ -114,6 +148,12 @@ func (l *Ledger) New(n NewTask) (task.Task, error) {
 
 	t := task.Task{Role: n.Role, Asked: n.Asked, Note: n.Note, By: n.By, Title: n.Title, Project: n.Project, URL: n.URL,
 		Budget: n.Budget, Route: n.Route, Criteria: criteria}
+
+	if n.Check != nil {
+		if t.Check, err = l.cleanCheck(*n.Check, n.By, n.Worktree); err != nil {
+			return task.Task{}, err
+		}
+	}
 
 	if n.Repo != "" {
 		repo, err := l.repo(n.Repo)
@@ -152,6 +192,16 @@ func (l *Ledger) New(n NewTask) (task.Task, error) {
 			l.log(t.Role, "task", t.ID, "dropped: worktree not made: "+err.Error())
 
 			return t, fmt.Errorf("%s recorded as dropped, its worktree could not be made: %w", t.ID, err)
+		}
+
+		// Where the worktree started: a check that wants a commit of the task's own tells a branch merged into its base
+		// from one nothing was committed on by it. Not knowing it is no failure.
+		if head, err := l.Trees.Head(tree(t)); err == nil && head != "" {
+			t.Fork = head
+
+			if err := l.Store.Put(t); err != nil {
+				return t, err
+			}
 		}
 	}
 
@@ -192,7 +242,13 @@ type Change struct {
 	Budget string
 	// Criteria replaces the task's criteria when not nil; an empty list clears them.
 	Criteria *[]string
-	// Force closes a task although its worktree has uncommitted changes, or although it has criteria and no result.
+	// Check replaces the task's check; ClearCheck takes it away. Only the owner and the dispatcher (By) may.
+	Check      *donecheck.Spec
+	ClearCheck bool
+	// Checked is the passed check a task with a check is closed as done on (PlanCheck, RunCheck).
+	Checked *Checked
+	// Force closes a task although its worktree has uncommitted changes, although it has criteria and no result, or
+	// (the owner and the dispatcher) although its check was not run or did not pass.
 	Force bool
 	// By is who makes the change (a role, "hand"); a task it closes keeps it (Task.Closed).
 	By string
@@ -205,31 +261,62 @@ var ErrDirty = errors.New("uncommitted changes")
 var ErrNoResult = errors.New("has criteria and no saved result")
 
 // Set changes a task. Closing one (done, dropped) whose worktree has uncommitted changes is refused without Force;
-// the worktree stays either way until GC. So is closing as done a task that has criteria and no saved result.
+// the worktree stays either way until GC. So is closing as done a task that has criteria and no saved result, and one
+// that has a check and no passed run of it (see PlanCheck).
 func (l *Ledger) Set(id string, c Change) (task.Task, error) {
 	t, err := l.Store.Get(id)
 	if err != nil {
 		return t, err
 	}
 
-	var changes []string
+	t, changes, err := l.apply(t, c, false)
+	if err != nil {
+		return t, err
+	}
+
+	if err := l.Store.Put(t); err != nil {
+		return t, err
+	}
+
+	l.log(t.Role, "task", t.ID, strings.Join(changes, ", "))
+
+	return t, nil
+}
+
+// apply is what Set does to t before it writes it: t as it becomes, and what changed. A preflight does all of it but
+// ask for the run of the check a close needs (PlanCheck uses one to refuse, before a check runs, what Set would refuse
+// after it); it writes nothing either way.
+func (l *Ledger) apply(t task.Task, c Change, preflight bool) (task.Task, []string, error) {
+	var (
+		err       error
+		changes   []string
+		checked   *donecheck.Result
+		unchecked *task.Unchecked
+	)
+
+	alreadyDone := t.State == task.Done && c.State == task.Done
 
 	if c.State != "" {
 		if !c.State.Active() && t.Worktree != "" && !c.Force {
-			dirty, err := l.Trees.Dirty(tree(t))
-			if err != nil {
-				return t, err
-			}
-
-			if dirty != "" {
-				return t, fmt.Errorf("%s: %w in %s:\n%s\ncommit them, or --force closes it anyway (the worktree "+
-					"stays until 'zmina task gc')", t.ID, ErrDirty, t.Worktree, dirty)
+			if err := l.refuseDirty(t); err != nil {
+				return t, nil, err
 			}
 		}
 
-		if c.State == task.Done && len(t.Criteria) > 0 && t.Result == nil && !c.Force {
-			return t, fmt.Errorf("%s: %w: save one with zmina task result %s --file <json> (--force closes it anyway)",
-				t.ID, ErrNoResult, t.ID)
+		if c.State == task.Done && !c.Force {
+			if err := refuseNoResult(t); err != nil {
+				return t, nil, err
+			}
+		}
+
+		switch {
+		case alreadyDone && t.Closed != nil:
+			// It closed once, on the check it had then: closing it again, to say more, runs nothing and keeps that.
+			checked, unchecked = t.Closed.Check, t.Closed.Unchecked
+		case c.State == task.Done && !alreadyDone:
+			if checked, unchecked, err = l.closeCheck(t, c, preflight); err != nil {
+				return t, nil, err
+			}
 		}
 
 		t.State = c.State
@@ -246,7 +333,7 @@ func (l *Ledger) Set(id string, c Change) (task.Task, error) {
 			t.On = ""
 		}
 	case t.State != task.Waiting:
-		return t, fmt.Errorf("%s: --on goes with waiting (it is %s)", t.ID, t.State)
+		return t, nil, fmt.Errorf("%s: --on goes with waiting (it is %s)", t.ID, t.State)
 	case c.On == "-":
 		t.On = ""
 		changes = append(changes, "on the owner")
@@ -288,7 +375,7 @@ func (l *Ledger) Set(id string, c Change) (task.Task, error) {
 	default:
 		v, err := strconv.ParseFloat(strings.TrimPrefix(c.Budget, "$"), 64)
 		if err != nil || v < 0 {
-			return t, fmt.Errorf("budget %q: a number of dollars, or - to clear it", c.Budget)
+			return t, nil, fmt.Errorf("budget %q: a number of dollars, or - to clear it", c.Budget)
 		}
 
 		t.Budget = v
@@ -298,7 +385,7 @@ func (l *Ledger) Set(id string, c Change) (task.Task, error) {
 	if c.Criteria != nil {
 		criteria, err := task.CleanCriteria(*c.Criteria)
 		if err != nil {
-			return t, err
+			return t, nil, err
 		}
 
 		t.Criteria = criteria
@@ -310,9 +397,18 @@ func (l *Ledger) Set(id string, c Change) (task.Task, error) {
 		}
 	}
 
+	said, err := l.setCheck(&t, c)
+	if err != nil {
+		return t, nil, err
+	}
+
+	if said != "" {
+		changes = append(changes, said)
+	}
+
 	if len(changes) == 0 {
-		return t, errors.New("nothing to change: give a state, --note, --role, --title, --project, --url, --budget or " +
-			"--criteria")
+		return t, nil, errors.New("nothing to change: give a state, --note, --role, --title, --project, --url, --budget, " +
+			"--criteria or --check")
 	}
 
 	t.Updated = l.Now()
@@ -322,16 +418,35 @@ func (l *Ledger) Set(id string, c Change) (task.Task, error) {
 	case c.State.Active():
 		t.Closed = nil
 	case c.By != "":
-		t.Closed = &task.Closure{By: c.By, At: t.Updated, State: c.State, Note: c.Note}
+		t.Closed = &task.Closure{By: c.By, At: t.Updated, State: c.State, Note: c.Note, Check: checked, Unchecked: unchecked}
 	}
 
-	if err := l.Store.Put(t); err != nil {
-		return t, err
+	return t, changes, nil
+}
+
+// refuseNoResult is the error that says t has criteria and no saved result, nil when it is fine to close as done.
+func refuseNoResult(t task.Task) error {
+	if len(t.Criteria) == 0 || t.Result != nil {
+		return nil
 	}
 
-	l.log(t.Role, "task", t.ID, strings.Join(changes, ", "))
+	return fmt.Errorf("%s: %w: save one with zmina task result %s --file <json> (--force closes it anyway)",
+		t.ID, ErrNoResult, t.ID)
+}
 
-	return t, nil
+// refuseDirty is the error that says t's worktree has uncommitted changes, nil when it has none.
+func (l *Ledger) refuseDirty(t task.Task) error {
+	dirty, err := l.Trees.Dirty(tree(t))
+	if err != nil {
+		return err
+	}
+
+	if dirty != "" {
+		return fmt.Errorf("%s: %w in %s:\n%s\ncommit them, or --force closes it anyway (the worktree "+
+			"stays until 'zmina task gc')", t.ID, ErrDirty, t.Worktree, dirty)
+	}
+
+	return nil
 }
 
 // Collected is what GC did with one closed task's worktree.
