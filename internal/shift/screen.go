@@ -285,7 +285,7 @@ func (s *Shift) landed(name string, now time.Time) bool {
 	}
 	if !unsent || sent.Tries >= typeTries {
 		if unsent {
-			s.clearInput(name, sent.Line)
+			s.clearInput(name, sent.typedText())
 		}
 
 		// Acked meanwhile, every id of it by name (clearInFlight recorded them): its readers have it, so there is
@@ -319,7 +319,7 @@ func (s *Shift) landed(name string, now time.Time) bool {
 // role's status changed since it was typed. unsent is that it still sits in the input line.
 func (s *Shift) typedLanded(name string, sent *Sent) (landed, unsent bool) {
 	draft, ok, err := s.Tmux.Prompt(name)
-	if err == nil && ok && holds(draft, sent.Line) {
+	if err == nil && ok && holds(draft, sent.typedText()) {
 		return false, true
 	}
 
@@ -532,7 +532,8 @@ func (s *Shift) clearInput(name, line string) {
 	s.log(name, "unsent-cleared", "", line)
 }
 
-// holds reports whether an input line holds a line zmina typed: its start, as the input line shows it.
+// holds reports whether an input line holds a line zmina typed: its start, as the input line shows it. The line is what was
+// typed (Sent.typedText), which for a line typed behind a crossing mark is the mark and the line.
 func holds(draft, line string) bool {
 	return draft != "" && strings.HasPrefix(oneLine(line), firstWords(draft))
 }

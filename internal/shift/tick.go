@@ -1426,15 +1426,23 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 	// More than one line that may be read together, or a long one, is typed as a doorbell, one line, and what it is for is
 	// read with its command (bell.go).
 	run := s.joinRun(name)
-	if b := s.bellFor(name, run, true, now); b != nil {
-		return s.typeBell(name, run, b, now)
+	marks := s.crossMarks(name, run)
+
+	if b := s.bellFor(name, run, marks, true, now); b != nil {
+		return s.typeBell(name, run, marks, b, now)
 	}
 
 	// The line's time is the moment its typing starts, not the beat's: a turn that ended earlier in this beat is not a
 	// sign that the role took it (typedTaken).
 	typedAt := s.Now()
 
-	if err := s.typeLine(name, head); err != nil {
+	// It is typed behind its mark when it crossed a newer line of its reader's (crossing.go), and is the queue's line in
+	// everything that follows: kept, failed, given back, retried and closed as it was written. What the input line holds
+	// while it is not taken is that line behind the mark (holds).
+	mark := s.crossingFor(name, head)
+	typed := mark.withMark(head)
+
+	if err := s.typeLine(name, typed); err != nil {
 		// It may have reached the pane: it is not typed again by itself, on this try or any other.
 		if typedMayHaveReached(err) {
 			ids := s.takeIDs(name, head)
@@ -1475,7 +1483,8 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 
 	rs.Inbox = rs.Inbox[1:]
 	rs.clearTries()
-	s.log(name, "typed", "", head)
+	s.log(name, "typed", "", typed)
+	s.cardCrossed(name, head, mark, now)
 	s.cardAccept(name, head, AcceptedTyped, s.cardSession(name), typedAt)
 
 	// The rename this start queued is typed: from now on the conversation runs under that name.
@@ -1494,6 +1503,11 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 		s.cardClose(name, head, ClosedLanded, "a slash command: waited for by its time, not by a status", typedAt)
 	} else {
 		rs.Sent, rs.TypedAt = &Sent{Line: head, At: typedAt, IDs: ids}, now
+
+		// A line typed behind its mark is looked for in the input line as it was typed.
+		if typed != head {
+			rs.Sent.Typed = typed
+		}
 	}
 
 	return "typed into " + name + ": " + head
@@ -1516,15 +1530,22 @@ func (s *Shift) postInbox(name string, sess *registry.Session, now time.Time) st
 	// Several lines that may be read together go as one numbered message (join.go); one goes as it is. What is big goes
 	// as a doorbell, one line or several (bell.go).
 	run := s.joinRun(name)
-	if b := s.bellFor(name, run, false, now); b != nil {
-		return s.postJoined(name, sess, run, b, now)
+	marks := s.crossMarks(name, run)
+
+	if b := s.bellFor(name, run, marks, false, now); b != nil {
+		return s.postJoined(name, sess, run, marks, b, now)
 	}
 
 	if len(run) > 1 {
-		return s.postJoined(name, sess, run, nil, now)
+		return s.postJoined(name, sess, run, marks, nil, now)
 	}
 
-	if err := s.post(name, sess, head, now); err != nil {
+	// One line goes as it was queued, behind its mark when it crossed a newer line of its reader's (crossing.go); what is
+	// recorded of the post is the line.
+	mark := s.crossingFor(name, head)
+	out := mark.withMark(head)
+
+	if err := s.postText(name, sess, out, head, out, now); err != nil {
 		rs.Attempts++
 		rs.TriedAt = now
 		s.log(name, "post-failed", "", fmt.Sprintf("try %d: %s: %s", rs.Attempts, head, err))
@@ -1549,6 +1570,7 @@ func (s *Shift) postInbox(name string, sess *registry.Session, now time.Time) st
 	rs.clearTries()
 	s.submittedTask(name, head)
 	s.delivered(ids, now)
+	s.cardCrossed(name, head, mark, now)
 	s.cardAccept(name, head, s.acceptedBy(name), sess.SessionID, now)
 
 	return "posted to " + name + ": " + head

@@ -307,6 +307,11 @@ type Crew struct {
 	// the text itself stored in the crew's inbox for the role to read with the command. Default true; false sends every
 	// line whole, as before.
 	Doorbell *bool `yaml:"doorbell"`
+	// Crossing marks a line delivered to a role that its writer wrote before the writer had read, or before the role
+	// wrote, its own newest line to the writer on the same task: `[written 14:02, before your last line on T-12
+	// (14:05)] …`. The task is only what the line's sender said by structure (zmina send --task), never read from its
+	// words. Default true; false delivers every line as it was written.
+	Crossing *bool `yaml:"crossing"`
 	// BootGrace is how long a started role is left to boot before lines are typed into it (default 2m).
 	BootGrace string `yaml:"boot_grace"`
 	// DropEnv lists environment variables (NAME, or PREFIX*) kept from the roles, on top of the built-in list.
@@ -622,6 +627,10 @@ func (c *Crew) InfoLinesOn() bool { return c.InfoLines == nil || *c.InfoLines }
 // DoorbellOn reports whether big deliveries to a role may go as a doorbell and a command that reads their text
 // (doorbell).
 func (c *Crew) DoorbellOn() bool { return c.Doorbell == nil || *c.Doorbell }
+
+// CrossingOn reports whether a line that crossed a newer line on its task is delivered with a mark that says so
+// (crossing).
+func (c *Crew) CrossingOn() bool { return c.Crossing == nil || *c.Crossing }
 
 // SystemdUnit is the crew's ticker on Linux: zmina (.service and .timer), or zmina-<name>.
 func (c *Crew) SystemdUnit() string { return suffixed("zmina", "-", c.Name) }

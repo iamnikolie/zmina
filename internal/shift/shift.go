@@ -201,7 +201,8 @@ type Shift struct {
 	Mark func(phase, detail string)
 	// flushErr is the first flush that failed: the beat then types, posts and starts nothing more.
 	flushErr error
-	// cards are the delivery cards this shift has loaded and not yet written (FlushCards); never read to decide a delivery.
+	// cards are the delivery cards this shift has loaded and not yet written (FlushCards); never read to decide a delivery,
+	// but for the mark a line carries when it crossed a newer one (crossing.go).
 	cards *cardBook
 
 	warned bool
@@ -599,12 +600,7 @@ func (s *Shift) rulesText(r *crew.Role, text string) string {
 		text = strings.TrimSpace(text + "\n\n" + RemoteRule)
 	}
 	if text != "" {
-		rules := RoleRules
-		if r.IsCodex() {
-			rules = CodexRoleRules
-		}
-
-		text = strings.TrimSpace(text + "\n\n" + rules)
+		text = strings.TrimSpace(text + "\n\n" + s.roleRules(r))
 	}
 	if s.Crew.ReadGuardFor(r) {
 		rule := ReadRule
@@ -714,11 +710,35 @@ const CodexWaitRule = "[zmina] Waiting: wait for a build, CI, a deploy or a file
 	"a status check again and again: each call is a model turn that reads your whole conversation again. Waiting for " +
 	"another role, just end your turn: zmina brings you its line. Look once when it returns."
 
-// RoleRules are the rules every Claude role hears at boot; CodexRoleRules every Codex role's.
+// CrossingRule is what zmina tells every role at boot about the task of a line: the task comes only from what the sender
+// says by structure, so a line that crossed a newer one can be marked (crossing.go) only for a task it was told.
+const CrossingRule = "[zmina] Say the task with `zmina send <role> --when-idle --task T-n …` when a line is about one: zmina cannot " +
+	"tell it from the words, and a line that crossed a newer one on that task can be marked only when it knows it."
+
+// RoleRules are the rules every Claude role hears at boot; CodexRoleRules every Codex role's. A crew with crossing: off
+// leaves CrossingRule out (roleRules).
 const (
-	RoleRules      = OwnerRules + "\n\n" + WaitRule
-	CodexRoleRules = OwnerRules + "\n\n" + CodexWaitRule
+	RoleRules      = OwnerRules + "\n\n" + WaitRule + "\n\n" + CrossingRule
+	CodexRoleRules = OwnerRules + "\n\n" + CodexWaitRule + "\n\n" + CrossingRule
+
+	ownerWaitRules      = OwnerRules + "\n\n" + WaitRule
+	ownerCodexWaitRules = OwnerRules + "\n\n" + CodexWaitRule
 )
+
+// roleRules are the rules every role of the crew hears at boot, by its runtime: all but the sentence about marks when the
+// crew has them off.
+func (s *Shift) roleRules(r *crew.Role) string {
+	switch {
+	case r.IsCodex() && !s.Crew.CrossingOn():
+		return ownerCodexWaitRules
+	case r.IsCodex():
+		return CodexRoleRules
+	case !s.Crew.CrossingOn():
+		return ownerWaitRules
+	}
+
+	return RoleRules
+}
 
 const MixedRuntimeRule = "[zmina] This crew includes Codex seats. For inter-role messages use " +
 	"`zmina send <role> --when-idle <text>` with a role key from `zmina ls`; Claude SendMessage cannot reach " +
@@ -1240,7 +1260,8 @@ func (s *Shift) remember(name string, p tmux.Pane) {
 	}
 }
 
-// Send types one line into a role, as if typed at its prompt.
+// Send types one line into a role, as if typed at its prompt. It carries no task and no mark (crossing.go): a line sent
+// now keeps no card when it has to be typed, so only a queued line (zmina send --when-idle --task) is marked.
 func (s *Shift) Send(name, text string) error {
 	if _, err := s.Role(name); err != nil {
 		return err
