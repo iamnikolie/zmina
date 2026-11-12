@@ -28,7 +28,7 @@ func (a *app) deliverPass() error {
 		return err
 	}
 
-	s.State, s.Flush, s.By = l.State, l.Flush, "ticker"
+	s.State, s.Flush, s.Mark, s.By = l.State, l.Flush, l.Mark, "ticker"
 
 	changed, err := s.DeliverPass()
 	if err != nil || !changed {
