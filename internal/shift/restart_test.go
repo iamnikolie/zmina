@@ -1499,6 +1499,10 @@ func TestRestartHandOutKeepsTheAcceptanceAlert(t *testing.T) {
 	f, _ := restartBegun(t, 0)
 	f.finish(t)
 
+	// The restart's rotation record would tell the dispatcher about a packet not accepted, and hold this alert back (the
+	// rotation tests); the record is no part of delivery, and with it gone this is the alert of a packet queued before the start.
+	require.NoError(t, os.RemoveAll(f.s.Crew.Layout().RotationsDir()))
+
 	d, packet := deliveryOf(t, f), packetLineOf(t, f)
 	assert.Equal(t, packet, d.Line)
 	assert.True(t, d.SentAt.IsZero(), "queued, not sent to any session")

@@ -1,6 +1,9 @@
 package crew
 
-import "path/filepath"
+import (
+	"path/filepath"
+	"strings"
+)
 
 // Layout is where a crew keeps its files: all of them next to the crew file, so a crew is one directory.
 type Layout struct {
@@ -89,6 +92,17 @@ func (l Layout) DeliveryFetched(role string) string {
 // DeliveryBell is the mark of a role's start that told it what a doorbell is (delivery/<role>.bell): written by the start,
 // read before a doorbell is rung. A role with none, or a mark of another start, is sent every line whole.
 func (l Layout) DeliveryBell(role string) string { return filepath.Join(l.Delivery(), role+".bell") }
+
+// RotationsDir is the directory of the rotation records: one append-only file a role (Rotations), the report of each
+// restart of the role into a fresh conversation. A record is read by looks and never decides a restart.
+func (l Layout) RotationsDir() string { return filepath.Join(l.Dir, "rotations") }
+
+// Rotations is one role's rotation records (rotations/<role>.jsonl), one line a step of a rotation. It is appended to by
+// the shift under the state lock and, for what the role itself did, by the role's own commands without it. A copy of a
+// role (dev#2) is kept under dev-2, as its screens are.
+func (l Layout) Rotations(role string) string {
+	return filepath.Join(l.RotationsDir(), strings.ReplaceAll(role, "#", "-")+".jsonl")
+}
 
 // Worktrees holds the tasks' git worktrees.
 func (l Layout) Worktrees() string { return filepath.Join(l.Dir, "worktrees") }

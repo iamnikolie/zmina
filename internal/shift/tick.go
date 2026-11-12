@@ -219,6 +219,11 @@ func (s *Shift) Tick() []string {
 		}
 	}
 
+	// The rotations that are open: what the fresh conversations did is noted, and each closes when it has its context or its
+	// time ran out.
+	s.mark("rotations", "")
+	did = append(did, s.reconcileRotations(now)...)
+
 	s.mark("notes", "")
 	// Delivery records past their age limit go, told once (one more note).
 	// The beat after a gap judges no record by age (beatGapMax): nobody could have looked at it or retried it meanwhile.

@@ -63,6 +63,7 @@ func (s *Shift) AcceptTask(id, handoff string) error {
 		return err
 	}
 	s.log(t.Role, "accepted", t.ID, handoff)
+	s.rotationEvidence(t.Role, EvidenceAccepted, t.ID, sess.SessionID)
 	return nil
 }
 
@@ -96,7 +97,8 @@ func (s *Shift) acceptanceDue(t task.Task) bool {
 	if d.Runtime != runtime || d.Home != home {
 		return false
 	}
-	return true
+	// A task a rotation handed out, which the rotation tells as lost if it is not accepted, is told once, by it.
+	return !s.rotationOwns(t)
 }
 
 // The durable marker includes the actual submission, so resubmitting identical packet content starts a new
