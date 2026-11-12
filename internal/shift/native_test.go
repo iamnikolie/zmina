@@ -140,7 +140,6 @@ func TestNativeInboxIsPostedNotTyped(t *testing.T) {
 	*f.now = f.now.Add(3 * time.Minute)
 
 	require.NoError(t, f.s.Queue("designer", "[dispatcher] first"))
-	require.NoError(t, f.s.Queue("designer", "[dispatcher] second"))
 
 	did := f.s.deliverInbox("designer", *f.now)
 	assert.Equal(t, "posted to designer: [dispatcher] first", did, "a draft does not hold a posted line")
@@ -149,6 +148,7 @@ func TestNativeInboxIsPostedNotTyped(t *testing.T) {
 	assert.Equal(t, []string{"[dispatcher] first"}, p.posted["sid-designer"])
 	assert.True(t, f.ev.has("designer", "posted"))
 
+	require.NoError(t, f.s.Queue("designer", "[dispatcher] second"))
 	*f.now = f.now.Add(time.Minute)
 	assert.Empty(t, f.s.deliverInbox("designer", *f.now), "the next waits until the first shows")
 

@@ -104,9 +104,9 @@ func TestDeliverToKeepsTheBeatsGuards(t *testing.T) {
 		f, p := nativeFixture(t, crewYAML)
 		upNative(t, f, "designer")
 		require.NoError(t, f.s.Queue("designer", "[dev] one"))
-		require.NoError(t, f.s.Queue("designer", "[dev] two"))
 
 		assert.NotEmpty(t, f.s.DeliverTo("designer"))
+		require.NoError(t, f.s.Queue("designer", "[dev] two"))
 		assert.Empty(t, f.s.DeliverTo("designer"), "the next waits for the first to show")
 		assert.Len(t, p.raw, 1)
 

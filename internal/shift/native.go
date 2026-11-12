@@ -88,6 +88,12 @@ func (s *Shift) quiet(name string, sess *registry.Session) bool {
 // it. A post whose write broke after it started is followed the same way (the session may have it), never posted
 // again; an error wrapping peer.ErrUnavailable means nothing reached the session.
 func (s *Shift) post(name string, sess *registry.Session, line string, now time.Time) error {
+	return s.postAs(name, sess, line, line, now)
+}
+
+// postAs is post for a text whose events say something else of it than the text itself: what, which a joined post gives as
+// how many lines it joins (postJoined).
+func (s *Shift) postAs(name string, sess *registry.Session, line, what string, now time.Time) error {
 	p, ns := s.peerFor(name)
 	rs := s.State.Role(name)
 
@@ -101,9 +107,9 @@ func (s *Shift) post(name string, sess *registry.Session, line string, now time.
 	rs.Posted = append(rs.Posted, Posted{Line: line, MsgID: id, Session: sess.SessionID, At: now})
 
 	if broke != nil {
-		s.log(name, "post-broken", "", broke.Error()+"; followed until it shows or "+span(postedWait)+" pass: "+line)
+		s.log(name, "post-broken", "", broke.Error()+"; followed until it shows or "+span(postedWait)+" pass: "+what)
 	} else {
-		s.log(name, "posted", "", line)
+		s.log(name, "posted", "", what)
 	}
 
 	return nil
@@ -203,7 +209,14 @@ func (s *Shift) followPostedAs(name string, now time.Time, gone bool) bool {
 
 // postShown closes a posted line its conversation showed.
 func (s *Shift) postShown(name string, p Posted) {
-	s.log(name, "seen", "", p.Line)
+	// A joined post is one record of several lines (postJoined): each is seen, and says so.
+	if name != s.Crew.Dispatcher && len(p.Parts) > 0 {
+		for _, part := range p.Parts {
+			s.log(name, "seen", "", part.Line)
+		}
+	} else {
+		s.log(name, "seen", "", p.Line)
+	}
 
 	at, by := s.cardNow(), s.seenBy(name)
 	for _, line := range postedLines(p.Line, p.Parts) {
@@ -229,13 +242,7 @@ func (s *Shift) ownerChat(name, line string) bool {
 		return false
 	}
 
-	for _, receipt := range s.State.Role(name).ChatReceipts {
-		if receipt.Line == line {
-			return true
-		}
-	}
-
-	return false
+	return s.State.Role(name).ownerMessage(line)
 }
 
 // postableFor is postable for a line queued for a role: never the owner's own message (ownerChat), which is typed.

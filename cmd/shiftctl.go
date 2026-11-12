@@ -134,6 +134,18 @@ func (a *app) queueCommand() *cobra.Command {
 					}
 
 					for i, p := range q.Posted {
+						// The lines a role's queue gave to one numbered message are shown as the lines they are, each with
+						// its own facts.
+						if q.Joined(p.Parts) {
+							for j, part := range p.Parts {
+								line("posted   ", part.Line, fmt.Sprintf(" (to its inbox socket %s, %s ago, not yet seen, %d of %d in one post)",
+									p.At.Local().Format("01-02 15:04"), age(now.Sub(p.At)), j+1, len(p.Parts)))
+								facts(q.PostedPartFacts(i, j))
+							}
+
+							continue
+						}
+
 						line("posted   ", p.Line, fmt.Sprintf(" (to its inbox socket %s, %s ago, not yet seen)",
 							p.At.Local().Format("01-02 15:04"), age(now.Sub(p.At))))
 						facts(q.PostedFacts(i))
@@ -153,6 +165,16 @@ func (a *app) queueCommand() *cobra.Command {
 								fmt.Fprintln(a.out, "  "+heading)
 
 								first = false
+							}
+
+							if q.Joined(f.Parts) {
+								for j, part := range f.Parts {
+									line("  ", part.Line, fmt.Sprintf(" (%s, %s, %s ago, %d of %d in one post)", f.Error,
+										f.At.Local().Format("01-02 15:04"), age(now.Sub(f.At)), j+1, len(f.Parts)))
+									facts(q.FailedPartFacts(i, j))
+								}
+
+								continue
 							}
 
 							line("  ", f.Line, fmt.Sprintf(" (%s, %s, %s ago)", f.Error,

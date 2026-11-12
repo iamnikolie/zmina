@@ -894,7 +894,10 @@ func (a *app) sendCommand() *cobra.Command {
 					queued := rs.Inbox[len(rs.Inbox)-1]
 					s.DeliverTo(args[0])
 					went := !slices.Contains(rs.Inbox, queued) &&
-						!slices.ContainsFunc(rs.Failed, func(f shift.Failed) bool { return f.Line == queued })
+						!slices.ContainsFunc(rs.Failed, func(f shift.Failed) bool {
+							// A line that went in one post with others (a joined post) failed with them, as a part.
+							return f.Line == queued || slices.ContainsFunc(f.Parts, func(p shift.Part) bool { return p.Line == queued })
+						})
 
 					switch {
 					case id != "" && went:
