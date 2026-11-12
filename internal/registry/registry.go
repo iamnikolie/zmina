@@ -3,8 +3,10 @@
 package registry
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -70,11 +72,70 @@ func read(path string) (*Session, error) {
 	}
 
 	var s Session
-	if err := json.Unmarshal(raw, &s); err != nil {
+	if err := decode(path, raw, &s); err != nil {
 		return nil, err
 	}
 
 	return &s, nil
+}
+
+// BadFileError is a session file that exists but holds no entry: it is empty (0 bytes, or blanks, or no field at all),
+// or it does not parse. Claude Code writes such files when the disk it writes to is full, and the role stays as it is
+// until it is restarted, so the message says that instead of a bare parse error.
+type BadFileError struct {
+	Path string
+	// Empty is a file with nothing in it; otherwise Err is why it does not parse.
+	Empty bool
+	Err   error
+}
+
+// What says what is wrong with the file, without what to do about it.
+func (e *BadFileError) What() string {
+	if e.Empty {
+		return fmt.Sprintf("session file %s is empty", e.Path)
+	}
+
+	return fmt.Sprintf("session file %s does not parse (%v): a file cut short or damaged reads like this", e.Path, e.Err)
+}
+
+func (e *BadFileError) Error() string {
+	return e.What() + ", likely written while the disk was full; restart the role to get a fresh one"
+}
+
+func (e *BadFileError) Unwrap() error { return e.Err }
+
+// decode reads the JSON of a session file into v; a file with nothing in it, or one that does not parse, is a
+// *BadFileError.
+func decode(path string, raw []byte, v any) error {
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return &BadFileError{Path: path, Empty: true}
+	}
+
+	if err := json.Unmarshal(raw, v); err != nil {
+		return &BadFileError{Path: path, Err: err}
+	}
+
+	return nil
+}
+
+// ReadEntry reads one session file as the loose set of fields Claude Code wrote, for a look at its shape (doctor): the
+// file's own error when it cannot be read, a *BadFileError when it is empty, holds no field or does not parse.
+func ReadEntry(path string) (map[string]any, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var entry map[string]any
+	if err := decode(path, raw, &entry); err != nil {
+		return nil, err
+	}
+
+	if len(entry) == 0 {
+		return nil, &BadFileError{Path: path, Empty: true}
+	}
+
+	return entry, nil
 }
 
 func alive(pid int) bool {
