@@ -22,6 +22,9 @@ type Ref struct {
 	Task     string    `json:"task,omitempty"`
 	Revision string    `json:"revision"`
 	At       time.Time `json:"at"`
+	// Gen is the hand-out of the task (task.Delivery.Gen) the record was saved under, when it had one: set by the
+	// task's own reference to it, not by Save.
+	Gen int `json:"gen,omitempty"`
 }
 
 // Document deliberately has no development-specific fields.

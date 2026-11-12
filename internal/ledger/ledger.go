@@ -252,6 +252,12 @@ type Change struct {
 	Force bool
 	// By is who makes the change (a role, "hand"); a task it closes keeps it (Task.Closed).
 	By string
+	// Caller, when set, is held to the task's current hand-out: a change from a session that does not hold it is refused
+	// as a late report (ErrLate) before anything is read or run. nil: the change is zmina's own, or is not made by a session.
+	Caller *Caller
+
+	// unbound is what Current said of Caller, for the closing to keep.
+	unbound bool
 }
 
 // ErrDirty is returned when a task would close over uncommitted work.
@@ -267,6 +273,15 @@ func (l *Ledger) Set(id string, c Change) (task.Task, error) {
 	t, err := l.Store.Get(id)
 	if err != nil {
 		return t, err
+	}
+
+	if c.Caller != nil {
+		st := l.Current(t, *c.Caller)
+		if st.Late {
+			return t, st.Err(t.ID)
+		}
+
+		c.unbound = st.Unbound
 	}
 
 	t, changes, err := l.apply(t, c, false)
@@ -418,7 +433,11 @@ func (l *Ledger) apply(t task.Task, c Change, preflight bool) (task.Task, []stri
 	case c.State.Active():
 		t.Closed = nil
 	case c.By != "":
-		t.Closed = &task.Closure{By: c.By, At: t.Updated, State: c.State, Note: c.Note, Check: checked, Unchecked: unchecked}
+		t.Closed = &task.Closure{By: c.By, At: t.Updated, State: c.State, Note: c.Note, Check: checked, Unchecked: unchecked,
+			Unbound: c.unbound}
+		if t.Delivery != nil {
+			t.Closed.Gen = t.Delivery.Gen
+		}
 	}
 
 	return t, changes, nil

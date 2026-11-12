@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/iamnikolie/zmina/internal/donecheck"
+	"github.com/iamnikolie/zmina/internal/record"
 )
 
 func TestStore(t *testing.T) {
@@ -243,4 +244,72 @@ func TestCheckFieldsAreOptionalInTheFile(t *testing.T) {
 	again, err := s.Get("T-1")
 	require.NoError(t, err)
 	assert.Equal(t, got, again)
+}
+
+// A task file written before hand-outs were counted reads with generation 0 and writes back without the keys; one with a
+// generation, a closure under it and late reports reads back whole.
+func TestGenerationFieldsAreOptionalInTheFile(t *testing.T) {
+	s := &Store{Dir: t.TempDir()}
+	require.NoError(t, os.MkdirAll(s.Dir, 0o700))
+
+	old := `{"id": "T-1", "role": "dev", "asked": "x", "state": "done", "created": "2026-10-26T12:00:00Z",
+  "updated": "2026-10-26T12:00:00Z", "result": {"revision": "ab", "at": "2026-10-26T12:00:00Z"},
+  "delivery": {"id": "pkt", "role": "dev", "runtime": "claude", "home": "/h", "line": "l", "task_updated": "2026-10-26T12:00:00Z",
+  "queued_at": "2026-10-26T12:00:00Z"}, "closed": {"by": "dev", "at": "2026-10-26T12:00:00Z", "state": "done"}}`
+	require.NoError(t, os.WriteFile(filepath.Join(s.Dir, "T-1.json"), []byte(old), 0o600))
+
+	got, err := s.Get("T-1")
+	require.NoError(t, err)
+	assert.Zero(t, got.Delivery.Gen)
+	assert.Zero(t, got.Result.Gen)
+	assert.Zero(t, got.Closed.Gen)
+	assert.Empty(t, got.Late)
+
+	require.NoError(t, s.Put(got))
+
+	raw, err := os.ReadFile(filepath.Join(s.Dir, "T-1.json"))
+	require.NoError(t, err)
+
+	for _, key := range []string{`"gen"`, `"unbound"`, `"late"`} {
+		assert.NotContains(t, string(raw), key)
+	}
+
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	got.Delivery.Gen, got.Result.Gen, got.Closed.Gen, got.Closed.Unbound = 3, 3, 3, true
+	got.Late = []Late{{At: now, What: "result", Revision: "cd", By: "dev", Session: "sess-a", Gen: 3}}
+	require.NoError(t, s.Put(got))
+
+	again, err := s.Get("T-1")
+	require.NoError(t, err)
+	assert.Equal(t, got, again)
+}
+
+// The next hand-out is one over the last delivery, and over any record or closing a delivery that was put back had
+// made: a number is not given to two sessions.
+func TestNextGenIsNeverAGivenOne(t *testing.T) {
+	assert.Equal(t, 1, Task{}.NextGen(), "a task never handed out")
+	assert.Equal(t, 4, Task{Delivery: &Delivery{Gen: 3}}.NextGen())
+	assert.Equal(t, 6, Task{Delivery: &Delivery{Gen: 3}, Result: &record.Ref{Gen: 5}}.NextGen())
+	assert.Equal(t, 7, Task{Delivery: &Delivery{Gen: 3}, Checkpoint: &record.Ref{Gen: 6}}.NextGen())
+	assert.Equal(t, 8, Task{Closed: &Closure{Gen: 7}}.NextGen())
+}
+
+func TestLateReportsAreTheSameOnlyForTheSameCallerOnTheSameHandOut(t *testing.T) {
+	l := Late{What: "result", Revision: "ab", By: "dev", Session: "sess-a", Gen: 2}
+
+	assert.True(t, l.Same(l))
+
+	same := l
+	same.At = time.Now()
+	assert.True(t, l.Same(same), "the time is no part of it")
+
+	for _, o := range []Late{
+		{What: "checkpoint", Revision: "ab", By: "dev", Session: "sess-a", Gen: 2},
+		{What: "result", Revision: "cd", By: "dev", Session: "sess-a", Gen: 2},
+		{What: "result", Revision: "ab", By: "review", Session: "sess-a", Gen: 2},
+		{What: "result", Revision: "ab", By: "dev", Session: "sess-b", Gen: 2},
+		{What: "result", Revision: "ab", By: "dev", Session: "sess-a", Gen: 3},
+	} {
+		assert.False(t, l.Same(o), "%+v", o)
+	}
 }
