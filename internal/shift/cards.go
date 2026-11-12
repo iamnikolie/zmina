@@ -385,24 +385,40 @@ func (s *Shift) FlushCards() {
 		return
 	}
 
-	now := s.Now()
-
 	for _, name := range slices.Sorted(maps.Keys(s.cards.roles)) {
-		rc := s.cards.roles[name]
-		if rc.off || !rc.dirty {
-			continue
-		}
-
-		rc.dirty = false
-		rc.cards = pruneCards(rc.cards, now)
-		path := s.Crew.Layout().DeliveryCards(name)
-
-		if err := writeCardFile(s.Crew.Layout(), path, rc.cards); err != nil {
-			rc.off = true
-
-			s.cardWarn(name, path, "not written", err)
-		}
+		s.flushRole(name)
 	}
+}
+
+// flushRole writes one role's cards when they changed, and reports whether they are on disk as they stand: false when the
+// file could not be written (the cards of the role are then off for the rest of the pass, and the failure told once).
+func (s *Shift) flushRole(name string) bool {
+	if s.cards == nil || s.Crew == nil {
+		return false
+	}
+
+	rc := s.cards.roles[name]
+	if rc == nil || rc.off {
+		return false
+	}
+
+	if !rc.dirty {
+		return true
+	}
+
+	rc.dirty = false
+	rc.cards = pruneCards(rc.cards, s.Now())
+	path := s.Crew.Layout().DeliveryCards(name)
+
+	if err := writeCardFile(s.Crew.Layout(), path, rc.cards); err != nil {
+		rc.off = true
+
+		s.cardWarn(name, path, "not written", err)
+
+		return false
+	}
+
+	return true
 }
 
 // writeCardFile puts a role's cards on disk whole or not at all.
@@ -429,9 +445,9 @@ const asideInfix = ".json.broken-"
 // PruneCards drops, in every card file of the crew, the cards past their keep and over the cap, and writes the files that
 // changed; it removes the files moved aside as corrupt (<role>.json.broken-<time>) once they are older than the keep,
 // and the file of a role known no longer to be in the crew (known says) once every card in it is past its keep — a card
-// still in play counts from its last fact. A role's fetches (delivery/<role>.fetched.jsonl) are cut to the lines within
-// the keep, and the mark of a start of a role gone from the crew is removed (bell.go). It returns how many cards, fetch
-// lines, marks and aside files went. With dry it only counts. A
+// still in play counts from its last fact. A role's fetches (delivery/<role>.fetched.jsonl) go whole once nothing was written
+// to the file for the keep, never rewritten, and the mark of a start of a role gone from the crew is removed (bell.go). It
+// returns how many cards, fetch lines, marks and aside files went. With dry it only counts. A
 // nil known takes every role as in the crew. Call it under the state lock (the retention pass takes it), since the
 // delivery writes the same files.
 func PruneCards(l crew.Layout, now time.Time, known func(role string) bool, dry bool) (int, error) {
@@ -454,8 +470,8 @@ func PruneCards(l crew.Layout, now time.Time, known func(role string) bool, dry 
 			continue
 		}
 
-		// A role's fetches (<role>.fetched.jsonl) are not a card file: they are cut to the lines still within the keep, and
-		// the file goes with its last line.
+		// A role's fetches (<role>.fetched.jsonl) are not a card file: the file goes whole once it was not written to for the
+		// keep, and is never rewritten (the role may append at any moment).
 		if role, ok := strings.CutSuffix(e.Name(), ".fetched.jsonl"); ok && hookRole(role) {
 			n, err := pruneFetches(filepath.Join(l.Delivery(), e.Name()), now, cardKeep, dry)
 			if err != nil {
@@ -722,9 +738,13 @@ func (s *Shift) cardBack(name, line, why string, at time.Time) {
 
 	c.Back, c.Accepted, c.Seen, c.Attention, c.Closed = &CardBack{At: at, Why: why, N: n}, nil, nil, nil, nil
 
-	// The bell it went in did not reach its role with it: the new delivery has its own.
+	// The bell it went in did not reach its role with it: the new delivery has its own, and the text of the old one says so
+	// (bellSuperseded).
 	if c.Bell != nil {
+		body := c.Bell.Body
 		c.Bell, c.Acks = nil, nil
+
+		s.bellSuperseded(name, body)
 	}
 
 	rc.dirty = true

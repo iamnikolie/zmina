@@ -165,6 +165,15 @@ func (a *app) queueCommand() *cobra.Command {
 						facts(q.PostedFacts(i))
 					}
 
+					// The lines of a doorbell the role was shown and has not read: the bell is no record in flight, and its lines
+					// wait for the role to fetch them.
+					for i := range q.Unfetched {
+						c := q.Unfetched[i]
+						line("bell     ", c.Head, fmt.Sprintf(" (a bell shown %s, %s ago, its text not fetched by %s)",
+							c.Bell.Shown.Local().Format("01-02 15:04"), age(now.Sub(c.Bell.Shown)), q.Role))
+						facts(&c)
+					}
+
 					// Two groups in words: what may have reached the role is looked at before it is sent again; what
 					// did not is safe to send again.
 					failed := func(unclear bool, heading string) {

@@ -40,7 +40,7 @@ func (a *app) inboxCommand() *cobra.Command {
 				// The text of a doorbell read is its role's fetch: noted in the role's own file, without the state lock, and
 				// never a failure of the show (the delivery reads it at its next pass and sees the lines as read).
 				if e.Role != "" {
-					_ = shift.RecordFetch(s.Crew.Layout(), e.Role, e.ID, by(), s.Now())
+					_ = shift.RecordFetch(s.Crew.Layout(), e.Role, e.ID, fetchBy(), s.Now())
 				}
 
 				return nil
@@ -49,6 +49,21 @@ func (a *app) inboxCommand() *cobra.Command {
 	})
 
 	return c
+}
+
+// fetchBy is who ran an inbox show, as a fetch records it: the role that ran it ($ZMINA_ROLE), "hand" for the owner's shell,
+// and nothing for a tool of an agent's session whose role is not named (a shared Codex role's tools carry their thread and
+// no ZMINA_ROLE), which the delivery takes as the role's own.
+func fetchBy() string {
+	if by := by(); by != "hand" {
+		return by
+	}
+
+	if callerSession() != "" {
+		return ""
+	}
+
+	return "hand"
 }
 
 func (a *app) inboxLs() error {

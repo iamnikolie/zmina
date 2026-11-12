@@ -1,8 +1,10 @@
 package shift
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -473,8 +475,10 @@ func TestUnfetchedBellNeedsAttentionAndTheDispatcherHearsOnce(t *testing.T) {
 	notes := f.s.bellWatch(*f.now)
 	f.s.FlushCards()
 	require.Len(t, notes, 1)
-	assert.Contains(t, notes[0], "designer: a bell for 2 lines was shown 10m")
-	assert.Contains(t, notes[0], "zmina inbox show "+id)
+	assert.Contains(t, notes[0], "designer: a bell for 2 lines was shown 10m ago and the role has not fetched them")
+	assert.Contains(t, notes[0], "zmina queue ls")
+	assert.NotContains(t, notes[0], "inbox show", "the command that prints the lines is the role's to run, not the dispatcher's")
+	assert.NotContains(t, notes[0], id)
 	assert.Equal(t, 1, f.eventCount("bell-unfetched"))
 	f.s.addNotes(notes)
 
@@ -494,7 +498,7 @@ func TestUnfetchedBellNeedsAttentionAndTheDispatcherHearsOnce(t *testing.T) {
 
 	assert.Len(t, p.raw, 1+len(p.posted["sid-dispatcher"]), "no bell but the first was rung to the role")
 	assert.Len(t, p.posted["sid-designer"], 1, "a bell shown is not rung again by itself")
-	assert.Equal(t, 1, strings.Count(strings.Join(p.posted["sid-dispatcher"], "\n"), "zmina inbox show "+id),
+	assert.Equal(t, 1, strings.Count(strings.Join(p.posted["sid-dispatcher"], "\n"), "a bell for 2 lines was shown"),
 		"the dispatcher has one note for the bell")
 
 	// The fetch ends it: the attention goes with the seen.
@@ -858,8 +862,9 @@ func TestBellTextIsBoundedAndLeavesOutWhatIsUnknown(t *testing.T) {
 	}
 }
 
-// Fetches older than the keep go with the cards' own, and a role gone from the crew loses its mark; fresh lines stay.
-func TestRetentionCutsTheFetchesAndRemovesTheMarkOfAGoneRole(t *testing.T) {
+// A role's fetches are never rewritten, for the role may append at any moment: the file goes whole, once nothing was written
+// to it for as long as a card is kept, and until then stays as it is. A role gone from the crew loses its mark.
+func TestRetentionRemovesAnOldFetchFileWholeAndNeverRewritesAFreshOne(t *testing.T) {
 	f, _ := nativeFixture(t, bellYAML)
 	l := f.s.Crew.Layout()
 	now := *f.now
@@ -868,26 +873,35 @@ func TestRetentionCutsTheFetchesAndRemovesTheMarkOfAGoneRole(t *testing.T) {
 	require.NoError(t, RecordFetch(l, "designer", id, "designer", now.Add(-cardKeep-time.Hour)))
 	require.NoError(t, RecordFetch(l, "designer", id, "designer", now.Add(-time.Hour)))
 	require.NoError(t, RecordFetch(l, "old", id, "old", now.Add(-cardKeep-time.Hour)))
+	require.NoError(t, RecordFetch(l, "old", id, "old", now.Add(-cardKeep-2*time.Hour)))
 	require.NoError(t, os.WriteFile(l.DeliveryBell("gone"), []byte("{}\n"), 0o600))
 	require.NoError(t, os.WriteFile(l.DeliveryBell("designer"), []byte("{}\n"), 0o600))
 
+	// The file of designer was written to a moment ago, the file of old long ago.
+	require.NoError(t, os.Chtimes(l.DeliveryFetched("designer"), now.Add(-time.Hour), now.Add(-time.Hour)))
+	require.NoError(t, os.Chtimes(l.DeliveryFetched("old"), now.Add(-cardKeep-time.Hour), now.Add(-cardKeep-time.Hour)))
+
 	known := func(role string) bool { return role == "designer" }
+
+	before, err := os.ReadFile(l.DeliveryFetched("designer"))
+	require.NoError(t, err)
 
 	n, err := PruneCards(l, now, known, true)
 	require.NoError(t, err)
-	assert.Equal(t, 3, n, "two stale fetch lines and the mark of a role gone")
-	assert.Len(t, readFetches(l.DeliveryFetched("designer")), 2, "a dry run moves nothing")
+	assert.Equal(t, 3, n, "the two lines of the old file and the mark of a role gone")
+	assert.FileExists(t, l.DeliveryFetched("old"), "a dry run moves nothing")
 
 	n, err = PruneCards(l, now, known, false)
 	require.NoError(t, err)
 	assert.Equal(t, 3, n)
 
-	left := readFetches(l.DeliveryFetched("designer"))
-	require.Len(t, left, 1)
-	assert.True(t, left[0].At.Equal(now.Add(-time.Hour)))
-	assert.NoFileExists(t, l.DeliveryFetched("old"), "nothing left in it")
+	assert.NoFileExists(t, l.DeliveryFetched("old"), "not touched for as long as a card is kept: gone whole")
 	assert.NoFileExists(t, l.DeliveryBell("gone"))
 	assert.FileExists(t, l.DeliveryBell("designer"))
+
+	after, err := os.ReadFile(l.DeliveryFetched("designer"))
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after), "a file written to within the keep is not rewritten, its old line with it")
 }
 
 // A fetch is one line appended without a lock, and a line that does not read is left out, not fatal.
@@ -1026,4 +1040,506 @@ func TestTheDispatcherIsNeverRungABell(t *testing.T) {
 	}
 
 	assert.NoDirExists(t, f.s.Crew.Layout().Inbox())
+}
+
+// --- the review's fixes ---
+
+// typedBellFixture is a role told of acks that is typed into all the same (its socket is down), up and idle, whose typed
+// lines never show as landed.
+func typedBellFixture(t *testing.T, role string) fix {
+	t.Helper()
+
+	f := fixtureWith(t, bellYAML)
+	require.NoError(t, f.s.Up(role))
+	f.s.State.Role(role).Inbound = true // told of acks, typed all the same
+	f.status(role, "idle", *f.now)
+	f.tm.onType = nil // the status never changes: the line never shows as landed
+	*f.now = f.now.Add(3 * time.Minute)
+
+	return f
+}
+
+// A typed bell of a session that ended before it landed is settled line by line: the line an ack says again is dropped, the
+// line nothing says again is kept for a look, as one record whose text is the bell's; judged as a whole, the one tracked
+// line would take the other with it, unseen.
+func TestTypedBellOfAnEndedSessionKeepsTheLinesNoAckSaysAgain(t *testing.T) {
+	f := typedBellFixture(t, "designer")
+
+	id, err := f.s.QueueTracked("designer", "[dev] look at T-1")
+	require.NoError(t, err)
+
+	rs := f.s.State.Role("designer")
+	tracked := rs.Inbox[0]
+
+	const plain = "[ops] the build is red"
+
+	require.NoError(t, f.s.QueueFrom("designer", plain, Facts{From: "ops"}))
+	require.NotEmpty(t, f.s.deliverInbox("designer", *f.now))
+	require.NotNil(t, rs.Sent)
+	require.True(t, IsBell(rs.Sent.Line))
+	text := rs.Sent.Line
+
+	f.tm.die("designer")
+	f.s.Tick()
+	f.s.Tick()
+
+	assert.Nil(t, rs.Sent)
+	assert.Empty(t, rs.Inbox, "not typed again")
+
+	require.Len(t, rs.Failed, 1, "the line no ack says again is not lost")
+	failed := rs.Failed[0]
+	assert.True(t, strings.HasPrefix(failed.Error, UnclearEnded))
+	assert.True(t, failed.Unclear())
+	assert.Equal(t, text, failed.Line, "the record's text is the bell's")
+	assert.Equal(t, []Part{{Line: plain}}, failed.Parts)
+
+	require.NotNil(t, f.s.State.Acks[id], "the tracked line's ack stays, and says it again")
+	assert.True(t, f.ev.has("designer", "dropped"))
+
+	require.NotNil(t, cardOn(t, f, "designer", plain).Attention, "needs a look")
+
+	trackedCard := cardOn(t, f, "designer", tracked)
+	require.NotNil(t, trackedCard.Closed)
+	assert.Equal(t, ClosedDropped, trackedCard.Closed.How)
+
+	// A retry gives the line back, alone.
+	n, _, err := f.s.Retry("designer", true)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+	assert.Equal(t, []string{plain}, rs.Inbox)
+}
+
+// A typed bell all of whose lines an ack says again is dropped, as one line is; one with none is kept whole.
+func TestTypedBellOfAnEndedSessionWhoseLinesAreAllTrackedOrAllNot(t *testing.T) {
+	t.Run("all tracked", func(t *testing.T) {
+		f := typedBellFixture(t, "designer")
+
+		_, err := f.s.QueueTracked("designer", "[dev] one")
+		require.NoError(t, err)
+		_, err = f.s.QueueTracked("designer", "[dev] two")
+		require.NoError(t, err)
+		require.NotEmpty(t, f.s.deliverInbox("designer", *f.now))
+
+		f.tm.die("designer")
+		f.s.Tick()
+		f.s.Tick()
+
+		rs := f.s.State.Role("designer")
+		assert.Nil(t, rs.Sent)
+		assert.Empty(t, rs.Failed, "each is said again by its ack")
+		assert.Len(t, f.s.State.Acks, 2)
+	})
+
+	t.Run("none tracked", func(t *testing.T) {
+		f := typedBellFixture(t, "designer")
+
+		queueFrom(t, f, "designer", "one", "two")
+		require.NotEmpty(t, f.s.deliverInbox("designer", *f.now))
+
+		f.tm.die("designer")
+		f.s.Tick()
+		f.s.Tick()
+
+		rs := f.s.State.Role("designer")
+		require.Len(t, rs.Failed, 1)
+		assert.Equal(t, []Part{{Line: "one"}, {Line: "two"}}, rs.Failed[0].Parts)
+	})
+}
+
+// The dispatcher's typed line is made of signals and notes, never of its own queued lines (those go alone). One signal an ack
+// says again used to drop the notes beside it, which nothing says again; each part is settled by its own kind now.
+func TestDispatcherTypedLineOfAnEndedSessionKeepsItsNotes(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	require.NoError(t, f.s.Up("dispatcher"))
+	f.s.State.Role("dispatcher").Inbound = true
+	f.status("dispatcher", "idle", *f.now)
+	f.tm.onType = nil
+	*f.now = f.now.Add(3 * time.Minute)
+
+	_, err := f.s.Note("dev", "T-5 result ready", false)
+	require.NoError(t, err)
+
+	const note = "dev: delivery failed: tmux refused; inspect zmina queue ls"
+
+	f.s.addNotes([]string{note})
+	require.NotEmpty(t, f.s.deliver(*f.now))
+
+	rs := f.s.State.Role("dispatcher")
+	require.NotNil(t, rs.Sent)
+	require.Len(t, rs.Sent.Parts, 2, "one signal with its id, and the notes")
+	require.Len(t, rs.Sent.IDs, 1)
+
+	f.tm.die("dispatcher")
+	f.s.settleEnded("dispatcher", *f.now)
+
+	assert.Nil(t, rs.Sent)
+	require.Len(t, rs.Failed, 1, "the note is not lost")
+	assert.Equal(t, []Part{{Notes: []string{note}}}, rs.Failed[0].Parts)
+	assert.Empty(t, rs.Failed[0].IDs, "no id: it is what no ack says again")
+	assert.Len(t, f.s.State.Acks, 1, "the signal's ack stays, and says it again")
+
+	// A retry puts the notes back where they waited.
+	_, _, err = f.s.Retry("dispatcher", true)
+	require.NoError(t, err)
+	assert.Contains(t, f.s.State.Notes, note)
+}
+
+// shownBell rings a bell of two lines to designer on its channel, has the conversation show it, and returns the body id, the
+// lines, and the time it was accepted.
+func shownBell(t *testing.T, f fix, p *fakePeer) (string, []string) {
+	t.Helper()
+
+	lines := []string{fill("a", 700), fill("b", 700)}
+	queueFrom(t, f, "designer", lines...)
+	f.s.deliverInbox("designer", *f.now)
+
+	id := bellIDOf(t, f.s.State.Role("designer").Posted[0].Line)
+	p.showAll()
+	f.s.deliverInbox("designer", *f.now)
+
+	return id, lines
+}
+
+// A fetch counts only when the role ran it. One run by another role of the crew, the dispatcher included, or by the owner's
+// shell, reads the lines for nobody; one by a caller that does not say who it is (a shared Codex role's tool) is the role's.
+func TestAFetchCountsOnlyWhenTheRoleRanIt(t *testing.T) {
+	for _, tc := range []struct {
+		by     string
+		counts bool
+	}{
+		{"designer", true},
+		{"", true},
+		{"scribe", false},
+		{"dispatcher", false},
+		{"hand", false},
+		{"designer#2", false},
+	} {
+		t.Run("by "+tc.by, func(t *testing.T) {
+			f, p := nativeFixture(t, bellYAML)
+			upNative(t, f, "designer")
+
+			id, lines := shownBell(t, f, p)
+
+			*f.now = f.now.Add(time.Minute)
+			require.NoError(t, RecordFetch(f.s.Crew.Layout(), "designer", id, tc.by, *f.now))
+
+			// The brief reads the fetches too, before any pass puts them on the cards.
+			assert.Equal(t, tc.counts, !strings.Contains(f.s.PendingBrief("designer", false), "inbox show "+id))
+			assert.Equal(t, !tc.counts, len(f.s.BellWaits("designer", *f.now)) == 1)
+
+			f.s.deliverInbox("designer", *f.now)
+
+			for _, l := range lines {
+				c := cardOn(t, f, "designer", l)
+				assert.Equal(t, tc.counts, c.Seen != nil, "seen by the fetch")
+			}
+
+			assert.Equal(t, map[bool]int{true: 1, false: 0}[tc.counts], f.eventCount("fetched"))
+		})
+	}
+}
+
+// A fetch older than the bell's acceptance is the lines of an earlier bell of the same words: the brief does not take it
+// for the role having read these.
+func TestTheBriefIgnoresAFetchOlderThanTheBell(t *testing.T) {
+	f, p := nativeFixture(t, bellYAML)
+	upNative(t, f, "designer")
+
+	body := bodyOf(fill("a", 700), fill("b", 700))
+	id := inbox.IDOf("bell designer\x00" + body)
+	require.NoError(t, RecordFetch(f.s.Crew.Layout(), "designer", id, "designer", f.now.Add(-time.Hour)))
+
+	queueFrom(t, f, "designer", fill("a", 700), fill("b", 700))
+	f.s.deliverInbox("designer", *f.now)
+	p.showAll()
+	f.s.deliverInbox("designer", *f.now)
+
+	assert.Contains(t, f.s.PendingBrief("designer", false), "zmina inbox show "+id)
+}
+
+// The tail of a long file of fetches is read, the newest lines, and the line cut at the start of it is left out.
+func TestFetchesAreReadFromTheTail(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "designer.fetched.jsonl")
+	at := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
+
+	var b strings.Builder
+
+	old := fetchLine{ID: "in-aaaaaaaaaaaa", At: at, By: "designer"}
+	raw, err := json.Marshal(old)
+	require.NoError(t, err)
+
+	for b.Len() < 2*bellFetchMax {
+		b.Write(raw)
+		b.WriteByte('\n')
+	}
+
+	last, err := json.Marshal(fetchLine{ID: "in-bbbbbbbbbbbb", At: at.Add(time.Hour), By: "designer"})
+	require.NoError(t, err)
+	b.Write(last)
+	b.WriteByte('\n')
+
+	require.NoError(t, os.WriteFile(path, []byte(b.String()), 0o600))
+
+	got := readFetches(path)
+	require.NotEmpty(t, got)
+	assert.Equal(t, "in-bbbbbbbbbbbb", got[len(got)-1].ID, "the newest line is read")
+
+	for _, f := range got {
+		assert.True(t, inbox.ValidID(f.ID))
+	}
+
+	assert.Less(t, len(got), strings.Count(b.String(), "\n")*6/10, "the last bellFetchMax bytes of a file twice as big, not all of it")
+}
+
+// The text of a bell whose lines went back to the queue says so, and no fetch is noted for it: a failed bell's lines given
+// back by queue retry, and a bell whose conversation ended before it showed.
+func TestTheTextOfABellWhoseLinesWentBackIsSuperseded(t *testing.T) {
+	supersededBody := func(t *testing.T, f fix, id string) inbox.Entry {
+		t.Helper()
+
+		e, err := f.s.inboxStore().Get(id)
+		require.NoError(t, err)
+
+		return e
+	}
+
+	t.Run("queue retry of a failed bell", func(t *testing.T) {
+		f, _ := nativeFixture(t, bellYAML)
+		upNative(t, f, "designer")
+
+		lines := []string{fill("a", 700), fill("b", 700)}
+		queueFrom(t, f, "designer", lines...)
+		f.s.deliverInbox("designer", *f.now)
+
+		rs := f.s.State.Role("designer")
+		id := bellIDOf(t, rs.Posted[0].Line)
+
+		*f.now = f.now.Add(postedWait)
+		f.s.deliverInbox("designer", *f.now)
+		require.Len(t, rs.Failed, 1)
+
+		e := supersededBody(t, f, id)
+		assert.Equal(t, numbered(lines), e.Body, "kept readable while it may have been read")
+		assert.Equal(t, "designer", e.Role)
+
+		_, _, err := f.s.Retry("designer", true)
+		require.NoError(t, err)
+
+		e = supersededBody(t, f, id)
+		assert.Equal(t, BellSupersededText, e.Body)
+		assert.Empty(t, e.Role, "reading it is no fetch")
+		assert.NotContains(t, e.Body, lines[0])
+
+		// The same lines rung again are their text again.
+		f.s.deliverInbox("designer", *f.now)
+		e = supersededBody(t, f, id)
+		assert.Equal(t, numbered(lines), e.Body)
+		assert.Equal(t, "designer", e.Role)
+	})
+
+	t.Run("a conversation that ended before the bell showed", func(t *testing.T) {
+		f, _ := nativeFixture(t, bellYAML)
+		upNative(t, f, "designer")
+
+		lines := []string{fill("a", 700), fill("b", 700)}
+		queueFrom(t, f, "designer", lines...)
+		f.s.deliverInbox("designer", *f.now)
+		id := bellIDOf(t, f.s.State.Role("designer").Posted[0].Line)
+
+		f.rg.byPID[f.tm.up["designer"]].SessionID = "sid-designer-2"
+		f.s.followPosted("designer", *f.now)
+
+		assert.Equal(t, lines, f.s.State.Role("designer").Inbox, "back in the queue")
+		assert.Equal(t, BellSupersededText, supersededBody(t, f, id).Body)
+	})
+
+	t.Run("a typed bell that may have reached the pane stays readable until a retry", func(t *testing.T) {
+		f := typedFixture(t, bellYAML, "scribe")
+		f.tm.typeErr = fmt.Errorf("tmux: send-keys timed out")
+
+		queueFrom(t, f, "scribe", "one", "two")
+		f.s.deliverInbox("scribe", *f.now)
+
+		rs := f.s.State.Role("scribe")
+		require.Len(t, rs.Failed, 1)
+		id := bellIDOf(t, rs.Failed[0].Line)
+
+		assert.Equal(t, "1. one\n2. two", supersededBody(t, f, id).Body)
+
+		f.tm.typeErr = nil
+		_, _, err := f.s.Retry("scribe", true)
+		require.NoError(t, err)
+		assert.Equal(t, BellSupersededText, supersededBody(t, f, id).Body)
+	})
+}
+
+// A bell whose cards cannot be written makes no note: the attention on the cards is what says the dispatcher was told, and
+// without it the note would be made again each beat.
+func TestNoNoteForABellWhoseCardsCannotBeWritten(t *testing.T) {
+	f, p := nativeFixture(t, bellYAML)
+	upNative(t, f, "designer")
+
+	shownBell(t, f, p)
+	shown := *f.now
+
+	path := f.s.Crew.Layout().DeliveryCards("designer")
+	good, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	// The cards are loaded; then the file can no longer be written (a directory stands where it is).
+	f.s.cards = nil
+	require.NotNil(t, f.s.cardsOf("designer"))
+	require.NoError(t, os.Remove(path))
+	require.NoError(t, os.Mkdir(path, 0o700))
+
+	*f.now = shown.Add(postedWait)
+	assert.Empty(t, f.s.bellWatch(*f.now), "no durable guard, no note")
+	assert.Equal(t, 1, f.eventCount("cards-failed"))
+	assert.Zero(t, f.eventCount("bell-unfetched"))
+
+	// The file is back (the cards are as they were): the one note is made, and once.
+	require.NoError(t, os.Remove(path))
+	require.NoError(t, os.WriteFile(path, good, 0o600))
+	f.s.cards = nil
+
+	notes := f.s.bellWatch(*f.now)
+	require.Len(t, notes, 1)
+	assert.Empty(t, f.s.bellWatch(*f.now), "once")
+
+	f.s.cards = nil
+	assert.Empty(t, f.s.bellWatch(*f.now), "once, from the file too: the attention is on disk")
+}
+
+// After a clear the boot, which carries the sentence, waits at the tail of the queue: what is ahead of it goes as it always
+// went, and the bells begin once the boot has left the queue.
+func TestNoBellUntilTheQueuedBootHasLeft(t *testing.T) {
+	f, p := nativeFixture(t, bellYAML)
+	upNative(t, f, "designer")
+
+	r, err := f.s.Role("designer")
+	require.NoError(t, err)
+
+	boot := f.s.bootText(r, false)
+	rs := f.s.State.Role("designer")
+
+	big := []string{fill("a", 700), fill("b", 700)}
+	queueFrom(t, f, "designer", big...)
+	f.s.enqueue("designer", boot, Facts{From: "zmina"})
+	rs.QueuedBoot = boot
+
+	assert.False(t, f.s.bellsOn("designer"))
+	f.s.deliverInbox("designer", *f.now)
+
+	require.Len(t, p.raw, 1)
+	assert.Equal(t, tagged(f, "designer", "1. "+big[0]+"\n2. "+big[1]), p.raw[0], "as it went before the doorbell")
+	assert.NoDirExists(t, f.s.Crew.Layout().Inbox())
+
+	// The boot goes alone, and once it showed, the bells are back.
+	p.showAll()
+	f.s.deliverInbox("designer", *f.now)
+	require.Len(t, p.raw, 2)
+	assert.Equal(t, tagged(f, "designer", boot), p.raw[1])
+	assert.Empty(t, rs.Inbox)
+	assert.True(t, f.s.bellsOn("designer"), "QueuedBoot is still set, and the boot is not in the queue")
+
+	p.showAll()
+	f.s.deliverInbox("designer", *f.now)
+
+	queueFrom(t, f, "designer", big...)
+	f.s.deliverInbox("designer", *f.now)
+	require.Len(t, p.raw, 3)
+	assert.True(t, IsBell(strings.TrimPrefix(p.raw[2], tagMark(rs.Tag)+" ")))
+}
+
+// A text that is stored is stored again each time its bell is made, so that the keep starts again, even when an identical
+// entry is there.
+func TestBellRefreshesItsStoredTextEachTime(t *testing.T) {
+	f, _ := nativeFixture(t, bellYAML)
+	upNative(t, f, "designer")
+
+	run := []string{fill("a", 700), fill("b", 700)}
+
+	b := f.s.bellFor("designer", run, false, *f.now)
+	require.NotNil(t, b)
+
+	path := filepath.Join(f.s.Crew.Layout().Inbox(), b.id+".json")
+	old := time.Now().Add(-29 * 24 * time.Hour)
+	require.NoError(t, os.Chtimes(path, old, old))
+
+	again := f.s.bellFor("designer", run, false, *f.now)
+	require.NotNil(t, again)
+	assert.Equal(t, b.id, again.id)
+
+	st, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.WithinDuration(t, time.Now(), st.ModTime(), time.Minute, "kept again")
+
+	entries, err := f.s.inboxStore().List()
+	require.NoError(t, err)
+	assert.Len(t, entries, 1)
+}
+
+// A bell that failed as never shown and was fetched all the same had its lines read: its failed record is closed, the cards
+// are seen, and queue retry has nothing to say twice. A fetch by another role closes nothing.
+func TestAFailedBellThatWasFetchedIsClosed(t *testing.T) {
+	setup := func(t *testing.T) (fix, string, []string) {
+		t.Helper()
+
+		f, _ := nativeFixture(t, bellYAML)
+		upNative(t, f, "designer")
+
+		lines := []string{fill("a", 700), fill("b", 700)}
+		queueFrom(t, f, "designer", lines...)
+		f.s.deliverInbox("designer", *f.now)
+
+		id := bellIDOf(t, f.s.State.Role("designer").Posted[0].Line)
+
+		*f.now = f.now.Add(postedWait)
+		f.s.deliverInbox("designer", *f.now)
+		require.Len(t, f.s.State.Role("designer").Failed, 1)
+
+		return f, id, lines
+	}
+
+	t.Run("by the role", func(t *testing.T) {
+		f, id, lines := setup(t)
+
+		*f.now = f.now.Add(time.Minute)
+		require.NoError(t, RecordFetch(f.s.Crew.Layout(), "designer", id, "designer", *f.now))
+		f.s.deliverInbox("designer", *f.now)
+
+		rs := f.s.State.Role("designer")
+		assert.Empty(t, rs.Failed, "its lines were read")
+
+		for _, l := range lines {
+			c := cardOn(t, f, "designer", l)
+			require.NotNil(t, c.Seen)
+			assert.Equal(t, SeenFetch, c.Seen.By)
+		}
+
+		var said string
+
+		for _, e := range f.ev.list {
+			if e.Event == "fetched" {
+				said = e.Detail
+			}
+		}
+
+		assert.Contains(t, said, "its failed record closed")
+
+		n, left, err := f.s.Retry("designer", true)
+		require.NoError(t, err)
+		assert.Zero(t, n+left)
+		assert.Empty(t, rs.Inbox, "not delivered again")
+	})
+
+	t.Run("by another role", func(t *testing.T) {
+		f, id, _ := setup(t)
+
+		*f.now = f.now.Add(time.Minute)
+		require.NoError(t, RecordFetch(f.s.Crew.Layout(), "designer", id, "dispatcher", *f.now))
+		f.s.deliverInbox("designer", *f.now)
+
+		assert.Len(t, f.s.State.Role("designer").Failed, 1)
+	})
 }

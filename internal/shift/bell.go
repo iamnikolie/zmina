@@ -140,10 +140,18 @@ func (s *Shift) bellKnown(name string) bool {
 		m.Started.Equal(s.State.Role(name).Started)
 }
 
-// bellsOn reports whether a role may be rung a bell: not the dispatcher, the crew has not turned them off, and the start
-// that runs told the role what one is.
+// bellsOn reports whether a role may be rung a bell: not the dispatcher, the crew has not turned them off, the start that
+// runs told the role what one is, and no boot line waits in its queue. A clear starts a conversation that has not read the
+// sentence, and queues the boot, which carries it, at the tail: what waits ahead of the boot goes as it always went, and
+// the bells begin once the boot has left the queue.
 func (s *Shift) bellsOn(name string) bool {
-	return s.Crew != nil && name != s.Crew.Dispatcher && s.Crew.DoorbellOn() && s.bellKnown(name)
+	if s.Crew == nil || name == s.Crew.Dispatcher || !s.Crew.DoorbellOn() || !s.bellKnown(name) {
+		return false
+	}
+
+	rs := s.State.Role(name)
+
+	return rs.QueuedBoot == "" || !slices.Contains(rs.Inbox, rs.QueuedBoot)
 }
 
 // bell is a delivery that goes as a doorbell: the line that goes out and the id of the text it is about.
@@ -176,20 +184,42 @@ func (s *Shift) bellFor(name string, run []string, typed bool, now time.Time) *b
 		return nil
 	}
 
+	// Stored each time, whether an entry of the id is there or not: the same text replaces itself (one entry for the lines,
+	// not one for each try), which keeps it for as long as the lines are being rung; and a text that was given up
+	// (bellSuperseded) is the text again.
 	id := inbox.IDOf("bell " + name + "\x00" + body)
-	store := s.inboxStore()
+	if err := s.inboxStore().Put(inbox.Entry{ID: id, From: "queue " + name, At: now, Role: name, Body: body}); err != nil {
+		s.log(name, "bell-failed", "", "its text could not be stored, the lines go as they are: "+err.Error())
 
-	if e, err := store.Get(id); err != nil || e.Body != body || e.Role != name {
-		if err := store.Put(inbox.Entry{ID: id, From: "queue " + name, At: now, Role: name, Body: body}); err != nil {
-			s.log(name, "bell-failed", "", "its text could not be stored, the lines go as they are: "+err.Error())
-
-			return nil
-		}
+		return nil
 	}
 
 	who, what := s.bellWhoWhat(name, run)
 
 	return &bell{text: bellText(len(run), who, what, id), id: id}
+}
+
+// BellSupersededText is what the text of a bell says once its lines were given back to the queue.
+const BellSupersededText = "These lines were queued again and will come with a new bell; nothing here is current."
+
+// bellSuperseded gives up the text of a bell whose lines went back to the queue (its conversation ended before it showed,
+// queue retry): what it holds is no longer what is rung, and a role that reads it finds that said, and no fetch is
+// noted for it. The text is stored again, whole, if the same lines are rung again (bellFor). A text that is not there, or
+// is not this role's, is left.
+func (s *Shift) bellSuperseded(name, id string) {
+	if s.Crew == nil || !inbox.ValidID(id) {
+		return
+	}
+
+	store := s.inboxStore()
+
+	e, err := store.Get(id)
+	if err != nil || e.Role != name {
+		return
+	}
+
+	e.Body, e.Role = BellSupersededText, ""
+	_ = store.Put(e)
 }
 
 // inboxStore is the crew's inbox, where the whole text of what is too long to send goes.
@@ -294,6 +324,7 @@ func (s *Shift) typeBell(name string, run []string, b *bell, now time.Time) stri
 			parts, _ := s.takeParts(name, run)
 			rs.Inbox = rs.Inbox[len(run):]
 			rs.clearTries()
+			s.cardsBellUnclear(name, parts, b.id)
 
 			// A tracked line counts as delivered and is said again by its ack alone, as one typed alone is.
 			var (
@@ -372,6 +403,21 @@ func (s *Shift) cardsBelled(name string, parts []Part, id, how, session string, 
 	}
 }
 
+// cardsBellUnclear notes, on the cards of the lines of a bell that was typed where it may have reached the pane, which body
+// they are in: they are kept for a look and not typed again, and a retry that gives them back (cardBack) gives up the text,
+// while a fetch of it, before that, is the lines read. Nothing is said of their being accepted.
+func (s *Shift) cardsBellUnclear(name string, parts []Part, id string) {
+	rc := s.cardsOf(name)
+	if rc == nil {
+		return
+	}
+
+	for _, p := range parts {
+		rc.known(name, p.Line, false).Bell = &CardBell{Body: id}
+		rc.dirty = true
+	}
+}
+
 // cardsBellShown notes that the bell of a body was shown: on each card in it that was not told so yet, done or not.
 func (s *Shift) cardsBellShown(name, id string, at time.Time) {
 	rc := s.cardsOf(name)
@@ -437,7 +483,32 @@ func RecordFetch(l crew.Layout, role, id, by string, at time.Time) error {
 	return errors.Join(werr, f.Close())
 }
 
-// readFetches reads a role's fetches: every line that reads, none for a file that is not there or does not read.
+// by reports a fetch that is the role's own: run by the role itself, or by a caller that does not say who it is (an agent's
+// tool with no ZMINA_ROLE, as a shared Codex role's). Run by another role of the crew, the dispatcher included, or by the
+// owner's shell (hand), it is no one reading the lines for the role.
+func (f fetchLine) by(role string) bool { return f.By == "" || f.By == role }
+
+// sees reports whether a fetch is the role reading the lines of a card: the card went in the bell the fetch is for, was
+// accepted before the fetch (a fetch of the same words from an earlier bell is not this one's), and the role ran it.
+func (f fetchLine) sees(role string, c *Card) bool {
+	if c.Bell == nil || c.Bell.Body != f.ID || !f.by(role) {
+		return false
+	}
+
+	switch {
+	case c.Accepted != nil:
+		return !f.At.Before(c.Accepted.At)
+	case c.Attention != nil:
+		// A bell typed where it may have reached the pane is kept for a look with no acceptance: its lines are read from the
+		// time it needed that look.
+		return !f.At.Before(c.Attention.At)
+	}
+
+	return false
+}
+
+// readFetches reads a role's fetches: every line that reads, none for a file that is not there or does not read. Only the
+// last bellFetchMax bytes are read, the newest lines, and a line cut at the start of them is left out.
 func readFetches(path string) []fetchLine {
 	f, err := os.Open(path)
 	if err != nil {
@@ -446,12 +517,27 @@ func readFetches(path string) []fetchLine {
 
 	defer func() { _ = f.Close() }()
 
+	cut := false
+
+	if st, err := f.Stat(); err == nil && st.Size() > bellFetchMax {
+		if _, err := f.Seek(st.Size()-bellFetchMax, io.SeekStart); err != nil {
+			return nil
+		}
+
+		cut = true
+	}
+
 	var out []fetchLine
 
-	sc := bufio.NewScanner(io.LimitReader(f, bellFetchMax))
+	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 4096), 64<<10)
 
-	for sc.Scan() {
+	for first := true; sc.Scan(); first = false {
+		// The first line of a tail starts somewhere in the middle of a line.
+		if cut && first {
+			continue
+		}
+
 		var l fetchLine
 		if json.Unmarshal(sc.Bytes(), &l) == nil && inbox.ValidID(l.ID) && !l.At.IsZero() {
 			out = append(out, l)
@@ -461,21 +547,12 @@ func readFetches(path string) []fetchLine {
 	return out
 }
 
-// fetched is the ids of the bodies a role fetched, from its fetches.
-func fetched(l crew.Layout, role string) map[string]bool {
-	got := map[string]bool{}
-
-	for _, f := range readFetches(l.DeliveryFetched(role)) {
-		got[f.ID] = true
-	}
-
-	return got
-}
-
 // syncBells marks the lines whose body the role fetched as seen, by fetch, on their cards: each fetch seen in the role's
 // fetches that is not on the cards yet (a fetch is applied once, to the cards of the bell it was read for that were
-// accepted before it; reading the file again changes nothing). It says each in the log. Call it under the state lock,
-// where the cards are written.
+// accepted before it, and only when the role ran it; reading the file again changes nothing). A bell that was kept as
+// failed because its conversation never showed it, and was read all the same, has its failed record closed: its lines were
+// read, and queue retry would say them twice. It says each in the log. Call it under the state lock, where the cards are
+// written.
 func (s *Shift) syncBells(name string) {
 	if s.Crew == nil || s.Now == nil || !hookRole(name) {
 		return
@@ -501,8 +578,7 @@ func (s *Shift) syncBells(name string) {
 
 		for i := range rc.cards {
 			c := &rc.cards[i]
-			if c.Bell == nil || c.Bell.Body != f.ID || c.Seen != nil || c.Accepted == nil || f.At.Before(c.Accepted.At) ||
-				c.Closed != nil && c.Closed.How != ClosedLanded && c.Closed.How != ClosedAcked {
+			if !f.sees(name, c) || c.Seen != nil || c.Closed != nil && c.Closed.How != ClosedLanded && c.Closed.How != ClosedAcked {
 				continue
 			}
 
@@ -520,14 +596,33 @@ func (s *Shift) syncBells(name string) {
 			n++
 		}
 
-		if n > 0 {
-			by := ""
-			if f.By != "" {
-				by = " by " + f.By
+		if n == 0 {
+			continue
+		}
+
+		said := fmt.Sprintf("%s: %d lines seen", f.ID, n)
+		if f.By != "" {
+			said = f.ID + " by " + f.By + ": " + strconv.Itoa(n) + " lines seen"
+		}
+
+		// The cards are seen first, so that closing the failed record leaves them so.
+		failed := 0
+
+		s.trimFailed(name, func(fl Failed) bool {
+			if s.bellRecord(name, fl.Line, fl.Parts) != f.ID {
+				return false
 			}
 
-			s.log(name, "fetched", "", fmt.Sprintf("%s%s: %d lines seen", f.ID, by, n))
+			failed++
+
+			return true
+		}, ClosedDropped, "its body was fetched")
+
+		if failed > 0 {
+			said += ", its failed record closed"
 		}
+
+		s.log(name, "fetched", "", said)
 	}
 }
 
@@ -535,6 +630,11 @@ func (s *Shift) syncBells(name string) {
 // whose body is still not fetched puts attention on each of its lines' cards and gives the dispatcher one note (the note
 // is made once: the attention is what says it was), and a bell that has gone unfetched for as long as a card is kept is
 // let go. It rings nothing again. It returns the notes for the dispatcher. Call it under the state lock.
+//
+// The attention on the cards is what says the dispatcher was told, so a role's note is made only once its cards are on disk
+// with the attention: a role whose cards cannot be written (or were lost, a file that was corrupt and started anew) is
+// told of nothing this pass, rather than told again each beat. What that leaves is a gap, said here: with its cards lost a
+// bell unfetched makes no note; the lines' acks (said again as ever) and the queue's own records still stand.
 func (s *Shift) bellWatch(now time.Time) []string {
 	var notes []string
 
@@ -552,18 +652,38 @@ func (s *Shift) bellWatch(now time.Time) []string {
 
 		s.syncBells(name)
 
-		if rc := s.cardsOf(name); rc != nil {
-			notes = append(notes, s.bellOverdue(name, rc, now)...)
+		rc := s.cardsOf(name)
+		if rc == nil {
+			continue
+		}
+
+		if told := s.bellOverdue(name, rc, now); len(told) > 0 && s.flushRole(name) {
+			for _, n := range told {
+				notes = append(notes, n.text)
+				s.log(name, "bell-unfetched", "", n.event)
+			}
 		}
 	}
 
 	return notes
 }
 
+// countLines is how many lines, in words.
+func countLines(n int) string {
+	if n == 1 {
+		return "1 line"
+	}
+
+	return strconv.Itoa(n) + " lines"
+}
+
+// bellNote is what a bell left unfetched has to say: the dispatcher's note and the event.
+type bellNote struct{ text, event string }
+
 // bellOverdue is bellWatch for the cards of one role.
-func (s *Shift) bellOverdue(name string, rc *roleCards, now time.Time) []string {
+func (s *Shift) bellOverdue(name string, rc *roleCards, now time.Time) []bellNote {
 	var (
-		notes  []string
+		notes  []bellNote
 		order  []string
 		groups = map[string][]*Card{}
 	)
@@ -602,14 +722,38 @@ func (s *Shift) bellOverdue(name string, rc *roleCards, now time.Time) []string 
 			}
 
 			if !told {
-				notes = append(notes, fmt.Sprintf("%s: a bell for %d lines was shown %s ago and its body was not fetched; "+
-					"it is not rung again: zmina inbox show %s", name, len(cards), span(waited), id))
-				s.log(name, "bell-unfetched", "", fmt.Sprintf("%d lines, shown %s ago: %s", len(cards), span(waited), id))
+				// The dispatcher is told which role, how many lines and for how long, and where to look; the command that prints
+				// the lines is the role's to run, and a run by anyone else is no fetch.
+				notes = append(notes, bellNote{
+					text: fmt.Sprintf("%s: a bell for %s was shown %s ago and the role has not fetched them; "+
+						"it is not rung again: zmina queue ls", name, countLines(len(cards)), span(waited)),
+					event: fmt.Sprintf("%d lines, shown %s ago: %s", len(cards), span(waited), id),
+				})
 			}
 		}
 	}
 
 	return notes
+}
+
+// rungCards are the cards of a role's lines whose bell was shown and whose body was not fetched, the oldest bell first: the
+// lines of a bell that was accepted, shown within the time a card is kept, still waiting for their ack where they have one,
+// and not read by a fetch the role ran after the bell was accepted (whether a pass put it on the card yet or not).
+func (s *Shift) rungCards(role string, cards []Card, now time.Time) []Card {
+	fetches := readFetches(s.Crew.Layout().DeliveryFetched(role))
+
+	var out []Card
+
+	for _, c := range cards {
+		if s.bellOpen(&c) && c.rung() && now.Sub(c.Bell.Shown) <= cardKeep &&
+			!slices.ContainsFunc(fetches, func(f fetchLine) bool { return f.sees(role, &c) }) {
+			out = append(out, c)
+		}
+	}
+
+	slices.SortStableFunc(out, func(a, b Card) int { return a.Bell.Shown.Compare(b.Bell.Shown) })
+
+	return out
 }
 
 // BellWait is a bell its role was shown and has not fetched: the command that prints its lines, how many there are, who
@@ -630,19 +774,12 @@ func (s *Shift) BellWaits(role string, now time.Time) []BellWait {
 		return nil
 	}
 
-	l := s.Crew.Layout()
-	got := fetched(l, role)
-
 	var (
 		out []BellWait
 		at  = map[string]int{}
 	)
 
-	for _, c := range ReadCards(l, role) {
-		if !s.bellOpen(&c) || !c.rung() || got[c.Bell.Body] || now.Sub(c.Bell.Shown) > cardKeep {
-			continue
-		}
-
+	for _, c := range s.rungCards(role, ReadCards(s.Crew.Layout(), role), now) {
 		i, ok := at[c.Bell.Body]
 		if !ok {
 			i = len(out)
@@ -660,13 +797,7 @@ func (s *Shift) BellWaits(role string, now time.Time) []BellWait {
 		if task := oneLine(c.Task); task != "" && !slices.Contains(w.What, task) {
 			w.What = append(w.What, task)
 		}
-
-		if c.Bell.Shown.Before(w.Shown) {
-			w.Shown = c.Bell.Shown
-		}
 	}
-
-	slices.SortStableFunc(out, func(a, b BellWait) int { return a.Shown.Compare(b.Shown) })
 
 	return out
 }
@@ -705,10 +836,13 @@ func (s *Shift) bellBrief(role string) string {
 		"ack each by its own id:\n- " + strings.Join(items, "\n- ")
 }
 
-// pruneFetches keeps, in a role's fetches, the lines younger than keep, and returns how many went. With dry it only
-// counts; a file with nothing left is removed.
+// pruneFetches removes a role's fetches once the file is older than keep, by its modification time, and returns how many
+// lines went. A file is never rewritten: the role may append to it at any moment, and a rewrite would lose the line it is
+// writing. A file that was written to within the keep stays whole, its older lines with it, until the time comes; they
+// are read from its tail and cannot be taken for new ones (a fetch counts only for a bell accepted before it). With dry
+// it only counts.
 func pruneFetches(path string, now time.Time, keep time.Duration, dry bool) (int, error) {
-	raw, err := os.ReadFile(path)
+	st, err := os.Stat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return 0, nil
 	}
@@ -717,41 +851,19 @@ func pruneFetches(path string, now time.Time, keep time.Duration, dry bool) (int
 		return 0, err
 	}
 
-	var (
-		kept    []byte
-		removed int
-	)
-
-	for _, line := range strings.SplitAfter(string(raw), "\n") {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-
-		var f fetchLine
-		if json.Unmarshal([]byte(line), &f) == nil && !f.At.IsZero() && now.Sub(f.At) <= keep {
-			kept = append(kept, line...)
-
-			if !strings.HasSuffix(line, "\n") {
-				kept = append(kept, '\n')
-			}
-
-			continue
-		}
-
-		removed++
+	if now.Sub(st.ModTime()) <= keep {
+		return 0, nil
 	}
 
-	if removed == 0 || dry {
-		return removed, nil
+	lines := max(len(readFetches(path)), 1)
+
+	if dry {
+		return lines, nil
 	}
 
-	if len(kept) == 0 {
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return 0, err
-		}
-
-		return removed, nil
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return 0, err
 	}
 
-	return removed, fsx.WriteFile(path, kept, 0o600)
+	return lines, nil
 }

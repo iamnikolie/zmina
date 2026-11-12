@@ -221,3 +221,103 @@ func TestPendingBriefListsTheUnfetchedBell(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, out, "inbox show")
 }
+
+// A fetch says who ran it: the role, hand for the owner's shell, and nothing for a tool of an agent's session whose role is
+// not named, which the delivery takes as the role's own.
+func TestInboxShowSaysWhoRanIt(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+		by   string
+	}{
+		{"the role", map[string]string{"ZMINA_ROLE": "dev"}, "dev"},
+		{"another role", map[string]string{"ZMINA_ROLE": "ops"}, "ops"},
+		{"the owner's shell", map[string]string{}, "hand"},
+		{"a Claude tool with no role", map[string]string{"CLAUDE_CODE_SESSION_ID": "s-1"}, ""},
+		{"a shared Codex tool with no role", map[string]string{"CODEX_THREAD_ID": "thread-1"}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			file := testCrew(t, "  dev: {}\n  ops: {}\n")
+
+			c, err := crew.Load(file)
+			require.NoError(t, err)
+
+			id := putBell(t, c, "dev", "1. one\n2. two")
+
+			t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+			t.Setenv("CODEX_THREAD_ID", "")
+
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+
+			_, _, err = zm(t, file, "inbox", "show", id)
+			require.NoError(t, err)
+
+			raw, err := os.ReadFile(c.Layout().DeliveryFetched("dev"))
+			require.NoError(t, err)
+
+			var line struct {
+				By string `json:"by"`
+			}
+
+			require.NoError(t, json.Unmarshal(raw, &line))
+			assert.Equal(t, tc.by, line.By)
+		})
+	}
+}
+
+// The text of a bell whose lines went back to the queue says so in one line, and reading it is no fetch.
+func TestInboxShowOfASupersededBellSaysSoAndRecordsNothing(t *testing.T) {
+	file := testCrew(t, "  dev: {}\n")
+
+	c, err := crew.Load(file)
+	require.NoError(t, err)
+
+	id := inbox.IDOf("bell dev\x00gone")
+	require.NoError(t, (&inbox.Store{Dir: c.Layout().Inbox()}).Put(inbox.Entry{ID: id, From: "queue dev", Body: shift.BellSupersededText}))
+
+	out, _, err := zm(t, file, "inbox", "show", id)
+	require.NoError(t, err)
+	assert.Contains(t, out, "| These lines were queued again and will come with a new bell")
+	assert.Equal(t, 2, strings.Count(out, "\n"), "the header and the one line")
+	assert.NoDirExists(t, c.Layout().Delivery())
+}
+
+// The lines of a doorbell that was shown and not fetched are listed under the role: the bell is no record in flight any
+// more, and they wait. One the role fetched is not; one a different role fetched still is.
+func TestQueueLsListsTheLinesOfABellShownAndNotFetched(t *testing.T) {
+	file := testCrew(t, "  dev: {}\n")
+
+	c, err := crew.Load(file)
+	require.NoError(t, err)
+
+	now := time.Now()
+	accepted := &shift.CardAccepted{At: now.Add(-20 * time.Minute), How: shift.AcceptedSocket, Session: "s-1"}
+	shown := now.Add(-15 * time.Minute)
+
+	const open, read, other = "[ops] the build is red", "[ops] read already", "[ops] read by someone else"
+
+	writeCards(t, file, "dev",
+		shift.Card{ID: shift.CardID("dev", open), Head: open, From: "ops", Task: "T-1", Accepted: accepted, Bell: &shift.CardBell{Body: "in-0123456789ab", Shown: shown}},
+		shift.Card{ID: shift.CardID("dev", read), Head: read, From: "ops", Accepted: accepted, Bell: &shift.CardBell{Body: "in-ba9876543210", Shown: shown}},
+		shift.Card{ID: shift.CardID("dev", other), Head: other, From: "ops", Accepted: accepted, Bell: &shift.CardBell{Body: "in-aaaaaaaaaaaa", Shown: shown}},
+	)
+
+	require.NoError(t, shift.RecordFetch(c.Layout(), "dev", "in-ba9876543210", "dev", now.Add(-10*time.Minute)))
+	require.NoError(t, shift.RecordFetch(c.Layout(), "dev", "in-aaaaaaaaaaaa", "ops", now.Add(-10*time.Minute)))
+
+	out, _, err := zm(t, file, "queue", "ls")
+	require.NoError(t, err)
+
+	assert.Contains(t, out, "dev:\n")
+	assert.Contains(t, out, "  bell     "+open+" (a bell shown "+shown.Local().Format("01-02 15:04")+", 15m ago, its text not fetched by dev)")
+	assert.Contains(t, out, "bell shown "+shown.Local().Format("01-02 15:04")+", not fetched", "its facts")
+	assert.Contains(t, out, "  bell     "+other)
+	assert.NotContains(t, out, read)
+	assert.NotContains(t, out, "inbox show", "the command that prints the lines is the role's")
+
+	js, _, err := zm(t, file, "queue", "ls", "--json")
+	require.NoError(t, err)
+	assert.Contains(t, js, `"unfetched"`)
+}

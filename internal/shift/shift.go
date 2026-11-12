@@ -1520,6 +1520,9 @@ type QueueView struct {
 	// it was accepted and how, when it was seen. Read from the card file, apart from the state; a line has none until it
 	// is queued by a zmina that keeps them.
 	Facts []Card `json:"facts,omitempty"`
+	// Unfetched are the cards of the lines of a doorbell that was shown to the role and whose text it has not fetched: the
+	// bell is no record in flight any more, and these are the lines that wait for it to read them (bell.go).
+	Unfetched []Card `json:"unfetched,omitempty"`
 
 	rows rowCards
 	// joined is that a record of this view made of parts is a joined post (a role's, postJoined): each part is a queued
@@ -1737,8 +1740,13 @@ func (s *Shift) Queues() []QueueView {
 			q.Signals, q.Notes = s.State.Signals, s.State.Notes
 		}
 
-		if len(q.Inbox)+len(q.Posted)+len(q.Failed)+len(q.Signals)+len(q.Notes) > 0 || q.Sent != nil {
-			q.resolveCards(ReadCards(s.Crew.Layout(), name))
+		cards := ReadCards(s.Crew.Layout(), name)
+		if name != s.Crew.Dispatcher && s.Now != nil {
+			q.Unfetched = s.rungCards(name, cards, s.Now())
+		}
+
+		if len(q.Inbox)+len(q.Posted)+len(q.Failed)+len(q.Signals)+len(q.Notes)+len(q.Unfetched) > 0 || q.Sent != nil {
+			q.resolveCards(cards)
 			out = append(out, q)
 		}
 	}
