@@ -24,9 +24,9 @@ func cardWith(cards []shift.Card, words string) *shift.Card {
 	return nil
 }
 
-// zmina send --task says what a line is about, by structure: the card of the line keeps the task and the role that ran the
-// command as the sender. The task has to exist, with the flag or without --when-idle, and a number names a task as it does
-// in every other command.
+// zmina send --when-idle --task says what a line is about, by structure: the card of the line keeps the task and the role that
+// ran the command as the sender. The task has to exist, and a number names a task as it does in every other command. Without
+// --when-idle the flag is an error: a line sent now keeps no card when it has to be typed.
 func TestSendTaskIsKeptOnTheCardAndMustExist(t *testing.T) {
 	file := testCrew(t, "  dev: {}\n")
 
@@ -41,8 +41,7 @@ func TestSendTaskIsKeptOnTheCardAndMustExist(t *testing.T) {
 	// A task that is not there: nothing is queued, and the line has no card.
 	for _, args := range [][]string{
 		{"send", "dev", "--when-idle", "--task", "T-9999", "look at the build"},
-		{"send", "dev", "--task", "T-9999", "look at the build"},
-		{"send", "dev", "--task", "nonsense", "look at the build"},
+		{"send", "dev", "--when-idle", "--task", "nonsense", "look at the build"},
 	} {
 		_, _, err = zm(t, file, args...)
 		require.ErrorContains(t, err, "no task", args)
@@ -75,14 +74,20 @@ func TestSendTaskIsKeptOnTheCardAndMustExist(t *testing.T) {
 	require.NotNil(t, card)
 	assert.Empty(t, card.Task)
 
-	// Without --when-idle the line goes at once or not at all: a role that is down is told so, after the task was checked.
-	_, _, err = zm(t, file, "send", "dev", "--task", "T-1", "now, please")
-	require.ErrorContains(t, err, "not up")
+	// Without --when-idle there is no card to keep the task on: the flag is refused, before the task is looked at and whether the
+	// role is up or not.
+	for _, task := range []string{"T-1", "T-9999"} {
+		_, _, err = zm(t, file, "send", "dev", "--task", task, "now, please")
+		require.ErrorContains(t, err, "--task needs --when-idle")
+	}
+
+	assert.Nil(t, cardWith(shift.ReadCards(c.Layout(), "dev"), "now, please"))
 
 	// The flag is described where the command is.
 	out, _, err := zm(t, file, "send", "--help")
 	require.NoError(t, err)
 	assert.Contains(t, out, "--task string")
+	assert.Contains(t, out, "needs --when-idle")
 	assert.Contains(t, out, "[written")
 }
 

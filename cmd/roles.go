@@ -876,12 +876,18 @@ func (a *app) sendCommand() *cobra.Command {
 
 	c := &cobra.Command{
 		Use:   "send <role> <text>",
-		Short: "Type one line into a role's prompt and press Enter (--when-idle: queued; it goes at once when the role can take it, else with the ticker; --task: the task it is about)",
+		Short: "Type one line into a role's prompt and press Enter (--when-idle: queued; it goes at once when the role can take it, else with the ticker; --task T-n, with --when-idle: the task it is about)",
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			text := strings.Join(args[1:], " ")
 			if strings.ContainsAny(text, "\r\n") {
 				return errors.New("send takes one line; for more, use SendMessage from a session")
+			}
+
+			// A line sent now keeps no card when it has to be typed, so no task could be kept on it and no mark made: the task
+			// goes with a queued line.
+			if taskID != "" && !whenIdle {
+				return errors.New("--task needs --when-idle: only a queued line keeps its task, and a line sent now has no card to keep it on")
 			}
 
 			return a.withState(func(s *shift.Shift) error {
@@ -929,13 +935,13 @@ func (a *app) sendCommand() *cobra.Command {
 					return nil
 				}
 
-				return s.SendFrom(args[0], text, facts)
+				return s.Send(args[0], text)
 			})
 		},
 	}
 
 	c.Flags().BoolVar(&whenIdle, "when-idle", false, "queue the line: it goes at once when the role is up and can take it, else the ticker types it once the role is idle")
-	c.Flags().StringVar(&taskID, "task", "", "the task the line is about (T-n, must exist): the line says so on its card, and when it was written before its reader's last line to you on that task, or before you had read it, it reaches the reader behind a [written …] mark")
+	c.Flags().StringVar(&taskID, "task", "", "the task the line is about (T-n, must exist; needs --when-idle): the line says so on its card, and when it was written before its reader's last line to you on that task, or before you were handed or had fetched it, it reaches the reader behind a [written …] mark")
 
 	return c
 }
