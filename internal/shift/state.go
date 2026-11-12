@@ -16,9 +16,15 @@ import (
 	"github.com/iamnikolie/zmina/internal/watch"
 )
 
-// stateVersion is the format this zmina writes. Files without a version are the first format and are converted on
-// read; a file from a newer zmina is never rewritten.
-const stateVersion = 2
+// stateVersion is the number this zmina writes. Files without a number are the first format and are converted on read;
+// a file with a higher number than this is from a newer zmina and is refused, never rewritten (ErrStateFuture). A
+// number below it reads as it is: what changed between two numbers is only optional fields. The number moves with the
+// set of fields State holds, and TestStateFieldsGolden fails until it has: a zmina that reads a field it does not know
+// drops it and saves the state back, unless the number tells it to refuse.
+//
+// 3 covers every field added since 2 first shipped, none of which moved the number (RoleState.Partial, TypedAt and
+// DispatchTriedAt among them). All of them are optional, so a 2 reads as it is and no conversion is made.
+const stateVersion = 3
 
 // LockWait is how long a command waits for another zmina holding the lock before it gives up.
 var LockWait = 30 * time.Second
@@ -401,7 +407,7 @@ func Read(dir string) (*State, error) {
 }
 
 // Recover moves an unreadable state file aside as state.json.broken-<time> so zmina starts fresh, and returns the
-// new name. A readable file is left alone.
+// new name. A readable file is left alone, and so is one from a newer zmina (ErrStateFuture).
 func Recover(dir string, now time.Time) (string, error) {
 	f, err := takeLock(dir, LockOpts{Verb: "state recover"})
 	if err != nil {
@@ -418,6 +424,9 @@ func Recover(dir string, now time.Time) (string, error) {
 
 	if _, _, err := decode(raw); err == nil {
 		return "", errors.New("state.json reads fine; nothing to recover")
+	} else if errors.Is(err, ErrStateFuture) {
+		// A state a newer zmina wrote reads fine there: an older one does not move it aside to start over.
+		return "", stateError(path, err)
 	}
 
 	aside := path + ".broken-" + now.Format("20060102-150405")

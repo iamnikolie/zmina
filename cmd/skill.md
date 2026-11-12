@@ -2081,8 +2081,10 @@ it is in. Whoever takes the lock writes it (one small write, no sync; a write th
 before letting go; the beat updates its phase at each big step and per role, in memory and in that file only. It is
 advisory: nothing decides by it. `zmina lock` reads it.
 
-State: `~/.zmina/state.json` (version 2; the first format is read and kept as `state.json.v1.bak`
-on the first save). Part of it is what zmina saw and could see again; most is what it was told or
+State: `~/.zmina/state.json` (version 3; an older number reads as it is, the first format is read and
+kept as `state.json.v1.bak` on the first save; a state with a higher number than the zmina's own is
+refused by every command, the beat and the courier, which write nothing and say to upgrade zmina,
+and `zmina state recover` leaves it alone). Part of it is what zmina saw and could see again; most is what it was told or
 decided — holds, broken marks, queues, last session ids, schedule progress, watch fingerprints —
 and exists nowhere else. It is written whole (rename) and never over a file zmina cannot read: see
 `zmina state recover`; the state before each write stays beside it as `state.json.prev` (a beat
