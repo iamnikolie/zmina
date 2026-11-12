@@ -254,9 +254,8 @@ func TestTrackedLineWhoseTypingBrokeUnclearlyIsSaidAgainByItsAck(t *testing.T) {
 	f.tm.typeErr = errors.New("tmux: send-keys timed out")
 	f.s.deliverInbox("designer", *f.now)
 
-	require.Len(t, rs.Failed, 1)
-	require.True(t, rs.Failed[0].Unclear())
-	assert.Equal(t, []string{id}, rs.Failed[0].IDs)
+	// No failed record stands beside the ack: the ack is the one way the line is said again.
+	assert.Empty(t, rs.Failed)
 	assert.Empty(t, rs.Inbox)
 
 	ack := f.s.State.Acks[id]
@@ -275,11 +274,10 @@ func TestTrackedLineWhoseTypingBrokeUnclearlyIsSaidAgainByItsAck(t *testing.T) {
 	assert.Contains(t, rs.Inbox[0], "still pending since")
 	assert.Equal(t, 1, f.s.State.Acks[id].Renotes)
 
-	// A plain retry does not type it a second time from the failed list.
-	n, skipped, err := f.s.Retry("designer", false)
+	// Nothing is left for a retry, plain or of the unclear ones, to say a second time.
+	n, skipped, err := f.s.Retry("designer", true)
 	require.NoError(t, err)
 	assert.Zero(t, n)
-	assert.Equal(t, 1, skipped)
+	assert.Zero(t, skipped)
 	assert.Len(t, rs.Inbox, 1)
-	assert.Len(t, rs.Failed, 1)
 }

@@ -1253,7 +1253,8 @@ func (s *Shift) Send(name, text string) error {
 	}
 
 	if err := s.Tmux.Type(name, text); err != nil {
-		return err
+		// What the look before it closed or failed (typingBlock) is saved with the error.
+		return Partial(err)
 	}
 
 	s.log(name, "sent", "", text)

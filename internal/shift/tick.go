@@ -1256,6 +1256,8 @@ func (s *Shift) typeDispatcher(d string, local, remote, notes []string, now time
 	// that runs unattended is worse off with a dispatcher that hears nothing than with a signal told twice, and what the
 	// line carries has ids (and the dispatcher's ack), which make a repeat recognisable. What it left in the input line
 	// is cleared by typeLine all the same, and looked for again by the next try (clearLeftover).
+	typedAt := s.Now()
+
 	if err := s.typeLine(d, line); err != nil {
 		s.State.Role(d).dispatchTried(now)
 
@@ -1266,7 +1268,7 @@ func (s *Shift) typeDispatcher(d string, local, remote, notes []string, now time
 		return ""
 	}
 
-	s.State.Role(d).Sent, s.State.Role(d).TypedAt = &Sent{Line: line, At: now, IDs: ids, Parts: kept}, now
+	s.State.Role(d).Sent, s.State.Role(d).TypedAt = &Sent{Line: line, At: typedAt, IDs: ids, Parts: kept}, now
 	s.delivered(ids, now)
 	s.stageIDs(ids, "submitted")
 
@@ -1412,16 +1414,28 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 
 	head := rs.Inbox[0]
 
+	// The line's time is the moment its typing starts, not the beat's: a turn that ended earlier in this beat is not a
+	// sign that the role took it (typedTaken).
+	typedAt := s.Now()
+
 	if err := s.typeLine(name, head); err != nil {
 		// It may have reached the pane: it is not typed again by itself, on this try or any other.
 		if typedMayHaveReached(err) {
-			// It counts as delivered, a tracked line included: its ack, the one way it is said again, runs from now
-			// (renotify), and a retry from the failed list is not what says it again.
 			ids := s.takeIDs(name, head)
-			s.delivered(ids, now)
-			s.failUnclear(name, Failed{Line: head, Error: err.Error(), At: now, IDs: ids})
 			rs.Inbox = rs.Inbox[1:]
 			rs.clearTries()
+
+			// A tracked line counts as delivered and has one way of being said again, its ack (renotify), as a typed
+			// line whose session ended has (settleEnded): no failed record stands beside it, which a retry or a drop
+			// would act on apart from the ack.
+			if s.tracked(ids) {
+				s.delivered(ids, now)
+				s.log(name, "type-unclear", "", "may have reached the pane; its ack says it again: "+head)
+
+				return ""
+			}
+
+			s.failUnclear(name, Failed{Line: head, Error: err.Error(), At: now, IDs: ids})
 
 			return name + ": a queued line may have reached its pane, kept in zmina queue as needing attention: " + head
 		}
@@ -1460,7 +1474,7 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 	if strings.HasPrefix(head, "/") {
 		rs.SlashAt = now
 	} else {
-		rs.Sent, rs.TypedAt = &Sent{Line: head, At: now, IDs: ids}, now
+		rs.Sent, rs.TypedAt = &Sent{Line: head, At: typedAt, IDs: ids}, now
 	}
 
 	return "typed into " + name + ": " + head

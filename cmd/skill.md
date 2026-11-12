@@ -538,8 +538,8 @@ after three tries, and the dispatcher is told once (`delivery failed`). Look at 
 a pause. A typed line whose session ended is closed when its role took it (its status moved, or its conversation shows a
 turn after it), else failed as above, or dropped with an event instead when it made sense to that conversation only (a slash command, the boot a clear queued, a release or restart
 request) or is tracked (an id of it still waits for its ack, which says it again and lists it in the next brief, so no
-failed record stands beside it). A tracked role line failed unclearly counts as delivered: its ack says it again after the
-renotify interval, and a plain `queue retry` does not type it from the failed list too. The kind is read from the text of
+failed record stands beside it). A tracked line whose typing broke unclearly is treated the same: it counts as delivered,
+its ack says it again after the renotify interval, and no failed record is kept. The kind is read from the text of
 the failure; no field of the state keeps it.
 
 **A crew that is not the one at work says so.** A retired crew tells it plainly: to every role at boot, as the second

@@ -105,8 +105,11 @@ func (s *Shift) settleEnded(name string, now time.Time) {
 }
 
 // stillTracked reports a typed line any id of which still waits for its ack.
-func (s *Shift) stillTracked(sent *Sent) bool {
-	return slices.ContainsFunc(sent.IDs, func(id string) bool { return s.State.Acks[id] != nil })
+func (s *Shift) stillTracked(sent *Sent) bool { return s.tracked(sent.IDs) }
+
+// tracked reports ids any of which still waits for its ack.
+func (s *Shift) tracked(ids []string) bool {
+	return slices.ContainsFunc(ids, func(id string) bool { return s.State.Acks[id] != nil })
 }
 
 // requeuePosted gives back a posted line whose conversation ended before it showed (followPosted). When the session is
