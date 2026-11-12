@@ -81,6 +81,11 @@ roles:
 	hasTranscript = func(string, string) bool { return true }
 	t.Cleanup(func() { hasTranscript = keep })
 
+	// The free space of the machine the tests run on is no business of theirs: a crew has room unless a test says not.
+	keepFree := diskFree
+	diskFree = func(string) (diskSpace, error) { return diskSpace{Free: 200 << 30, Total: 500 << 30, ID: "test"}, nil }
+	t.Cleanup(func() { diskFree = keepFree })
+
 	return path
 }
 

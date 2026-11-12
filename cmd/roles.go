@@ -1143,6 +1143,7 @@ func (a *app) tickCommand() *cobra.Command {
 			a.worktreeBeat(time.Now())
 			a.retentionBeat(time.Now())
 			a.versionBeat(time.Now())
+			a.diskBeat(time.Now())
 
 			return err
 		},
