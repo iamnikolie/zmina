@@ -38,6 +38,11 @@ const (
 	// no progress (see roleWait): every change a pass makes is a line given, a try counted or a record settled, none of
 	// which can go on for long, so a run this long is a bug that would otherwise rewrite state.json at the poll's pace.
 	spinRun = 8
+	// gatedLook is how often the courier looks again while a role that is up has something queued that Waiting leaves
+	// out for a time (a slash command just typed, a try that failed a moment ago, info lines still riding): such a gate
+	// ends with no change of state.json, so nothing else would call for the look before the beat. A look is a read of
+	// the state without the lock.
+	gatedLook = 5 * time.Second
 )
 
 // fileSig is what a stat says about a file: if it is there, when it was written, how big it is, which inode it is and
@@ -78,6 +83,8 @@ type courierPass struct {
 	Waiting []string
 	// Tried are the roles the pass asked and what it did for each.
 	Tried []shift.RoleDelivery
+	// Gated is that a role that is up has something queued that Waiting does not name yet (see gatedLook).
+	Gated bool
 }
 
 // roleWait is what the courier keeps of a role that is waiting: when it may be tried next, and the wait the next try
@@ -153,6 +160,8 @@ func (l *courierLoop) Run(ctx context.Context) error {
 		waits    = map[string]*roleWait{}
 		errDelay time.Duration
 		errUntil time.Time
+		// gatedDue is when to look again for a queue a time gate holds (gatedLook); zero when there is none.
+		gatedDue time.Time
 	)
 
 	for {
@@ -186,7 +195,10 @@ func (l *courierLoop) Run(ctx context.Context) error {
 		}
 
 		cur, statErr := l.State()
-		if (statErr != nil || !looked || cur != lastState || again || anyDue(waits, now)) && !now.Before(errUntil) {
+		gated := !gatedDue.IsZero() && !now.Before(gatedDue)
+
+		if (statErr != nil || !looked || cur != lastState || again || gated || anyDue(waits, now)) &&
+			!now.Before(errUntil) {
 			res, err := l.Pass(func(role string) bool { return waits[role] == nil || !now.Before(waits[role].due) })
 
 			switch {
@@ -205,6 +217,11 @@ func (l *courierLoop) Run(ctx context.Context) error {
 			default:
 				errDelay, errUntil = 0, time.Time{}
 				lastState, looked, again = cur, statErr == nil, false
+
+				gatedDue = time.Time{}
+				if res.Gated {
+					gatedDue = l.Now().Add(gatedLook)
+				}
 
 				settle(waits, res, l.Now())
 			}
@@ -523,7 +540,7 @@ func (a *app) courierDeliver(base *shift.Shift, try func(role string) bool) (cou
 	peek.State = st
 
 	if waiting := peek.Waiting(); !slices.ContainsFunc(waiting, try) {
-		return courierPass{Waiting: waiting}, nil
+		return courierPass{Waiting: waiting, Gated: queueGated(&peek, waiting)}, nil
 	}
 
 	l, err := shift.TryLockAs(dir, shift.LockOpts{Verb: a.verb, Log: base.LogEvent})
@@ -544,6 +561,7 @@ func (a *app) courierDeliver(base *shift.Shift, try func(role string) bool) (cou
 	due := slices.DeleteFunc(slices.Clone(out.Waiting), func(role string) bool { return !try(role) })
 
 	out.Tried, err = s.DeliverRoles(due)
+	out.Gated = queueGated(&s, s.Waiting())
 	if err != nil || !slices.ContainsFunc(out.Tried, func(d shift.RoleDelivery) bool { return d.Changed }) {
 		l.Release()
 
@@ -555,4 +573,24 @@ func (a *app) courierDeliver(base *shift.Shift, try func(role string) bool) (cou
 	}
 
 	return out, nil
+}
+
+// queueGated reports whether a role that is up has something queued that waiting does not name: a line of its own,
+// or, for the dispatcher, a signal or a note. Waiting leaves such a role out only for a time (see gatedLook).
+func queueGated(s *shift.Shift, waiting []string) bool {
+	for name, rs := range s.State.Roles {
+		if rs == nil || !rs.Up || slices.Contains(waiting, name) {
+			continue
+		}
+
+		if len(rs.Inbox) > 0 {
+			return true
+		}
+
+		if name == s.Crew.Dispatcher && len(s.State.Signals)+len(s.State.Notes) > 0 {
+			return true
+		}
+	}
+
+	return false
 }

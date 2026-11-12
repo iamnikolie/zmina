@@ -165,6 +165,19 @@ func TestCourierDoesNothingWhileNothingChanges(t *testing.T) {
 	assert.Empty(t, r.warns)
 }
 
+// While a pass says a queue is held by a time gate, the courier looks again every gatedLook though state.json stays as
+// it was; once a pass says none is, it stops.
+func TestCourierLooksAgainWhileAQueueIsGated(t *testing.T) {
+	r := newCourierRig(t)
+	r.pass = func(func(string) bool) (courierPass, error) {
+		return courierPass{Gated: r.since() < 12*time.Second}, nil
+	}
+
+	require.NoError(t, r.run(40*time.Second))
+
+	assert.Equal(t, secs(0, 5, 10, 15), r.passes)
+}
+
 // A change of state.json (its time, its inode, its size) is a pass at the next look; an own save is one too.
 func TestCourierPassesWhenTheStateChanges(t *testing.T) {
 	r := newCourierRig(t)
