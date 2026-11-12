@@ -38,6 +38,7 @@ func set(t *testing.T, f fix, al *alarm.Store, a alarm.Alarm) alarm.Alarm {
 
 func TestOwnerReminderLandsOnTheTodoOnce(t *testing.T) {
 	f, al, as := alarmed(t)
+	notifying(f)
 	a := set(t, f, al, alarm.Alarm{Kind: alarm.Remind, At: f.now.Add(2 * time.Minute), Text: "the site is still on hold",
 		Note: "decide on the one-pager", By: "dispatcher"})
 
@@ -52,8 +53,14 @@ func TestOwnerReminderLandsOnTheTodoOnce(t *testing.T) {
 
 	got, err := al.Get(a.ID)
 	require.NoError(t, err)
-	assert.Equal(t, alarm.Rang, got.State)
+	assert.Equal(t, alarm.Set, got.State, "not rung before its notify went out")
 	assert.Equal(t, "A-1", got.Ask)
+
+	f.s.RungDone(a.ID, nil)
+
+	got, err = al.Get(a.ID)
+	require.NoError(t, err)
+	assert.Equal(t, alarm.Rang, got.State)
 
 	ask, err := as.Get("A-1")
 	require.NoError(t, err)
@@ -73,6 +80,7 @@ func TestOwnerReminderLandsOnTheTodoOnce(t *testing.T) {
 
 func TestMissedAlarmRingsOnceAndSaysWhenItWasDue(t *testing.T) {
 	f, al, as := alarmed(t)
+	notifying(f)
 	set(t, f, al, alarm.Alarm{Kind: alarm.Remind, At: f.now.Add(time.Minute), Text: "standup"})
 
 	// The Mac slept through it.
@@ -169,6 +177,7 @@ func TestManualWakeResumesSleepingRole(t *testing.T) {
 
 func TestLaterAlarmBringsTheItemBack(t *testing.T) {
 	f, al, _ := alarmed(t)
+	notifying(f)
 	f.lt.list = []later.Item{{ID: "L-1", State: later.Parked, Text: "the one-pager"},
 		{ID: "L-2", State: later.Done, Text: "gone"}}
 	set(t, f, al, alarm.Alarm{Kind: alarm.Later, Later: "L-1", At: *f.now, Text: "the one-pager"})

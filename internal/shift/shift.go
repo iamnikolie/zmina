@@ -128,6 +128,7 @@ type Later interface {
 type Alarms interface {
 	Add(a alarm.Alarm, now time.Time) (alarm.Alarm, error)
 	Put(a alarm.Alarm) error
+	Get(id string) (alarm.Alarm, error)
 	Pending() []alarm.Alarm
 	Due(now time.Time) []alarm.Alarm
 }
@@ -189,8 +190,8 @@ type Shift struct {
 	// dones is the newest done task of each role, read from the ledger once per beat (doneAt) for restart_done.
 	dones  map[string]task.Task
 	doneAt time.Time
-	// Rang are the alarms this shift's tick rang with a part left for the caller outside the lock: a notify
-	// command to run, a crew on another node to tell.
+	// Rang are the alarms this shift's tick rang or tried again with a part left for the caller outside the lock: a
+	// notify command to run, a crew on another node to tell. The caller runs each and says how it ended (RungDone).
 	Rang []Rung
 	// Warn reports a problem that must not fail the command (the event log cannot be written); nil is quiet.
 	Warn func(error)

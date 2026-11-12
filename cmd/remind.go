@@ -395,41 +395,42 @@ func heldBy(s *shift.Shift, name string) []string {
 	return out
 }
 
-// rang does what the alarms rung by a beat left outside the lock: a reminder for the owner goes through the crew's
-// notify command, a line for another crew is queued for it (the mesh round after the beat takes it). It returns
-// lines for the log; a failure is also in the event log.
-func (a *app) rang(rungs []shift.Rung) []string {
+// rang does what one alarm rung by a beat left outside the lock: a reminder for the owner goes through the crew's
+// notify command, a line for another crew is queued for it (the mesh round after the beat takes it). It returns a
+// line for the log and how it ended: an error leaves the alarm to be tried again (shift.RunTick records it); a
+// failure is also in the event log.
+func (a *app) rang(r shift.Rung) (string, error) {
 	c, err := a.loadCrew()
 	if err != nil {
-		return []string{"alarms: " + err.Error()}
+		return "alarms: " + err.Error(), err
 	}
 
-	var lines []string
-
-	fail := func(id, what string, err error) {
-		line := id + ": " + what + ": " + err.Error()
-		lines = append(lines, line)
+	fail := func(what string, err error) (string, error) {
+		err = fmt.Errorf("%s: %w", what, err)
+		line := r.ID + ": " + err.Error()
 		_ = eventLog(c).Add(events.Event{TS: time.Now(), Event: "alarm-failed", By: "ticker", Detail: line})
+
+		return line, err
 	}
 
-	for _, r := range rungs {
-		switch {
-		case r.Notify != "" && c.NotifiesOn(crew.NotifyReminder):
-			if err := notify(c, crew.NotifyReminder, r.ID, r.Notify); err != nil {
-				fail(r.ID, "notify", err)
-			} else {
-				lines = append(lines, r.ID+": notified")
-			}
-		case r.Tell != "":
-			if line, err := a.tellAlarm(r.Tell, r.Line); err != nil {
-				fail(r.ID, "tell "+r.Tell, err)
-			} else {
-				lines = append(lines, r.ID+": "+line)
-			}
+	switch {
+	case r.Notify != "" && c.NotifiesOn(crew.NotifyReminder):
+		if err := notify(c, crew.NotifyReminder, r.ID, r.Notify); err != nil {
+			return fail("notify", err)
 		}
+
+		return r.ID + ": notified", nil
+	case r.Tell != "":
+		line, err := a.tellAlarm(r.Tell, r.Line)
+		if err != nil {
+			return fail("tell "+r.Tell, err)
+		}
+
+		return r.ID + ": " + line, nil
 	}
 
-	return lines
+	// No notify command any more (the crew file changed since the beat): nothing to run, so nothing is owed.
+	return "", nil
 }
 
 // notify runs the crew's notify command for one event (crew.NotifyReminder, NotifyBlocking, NotifyAsk, in

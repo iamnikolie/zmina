@@ -11,9 +11,9 @@ type WithLock func(fn func(s *Shift) error) error
 
 // RunTick is one whole beat: the roles under the lock; the alarms' notify commands and tells, the watch sources
 // and the wait for released roles to end outside it (a slow source never blocks another zmina command); their
-// results under the lock again, and the dispatcher's queue typed once. run runs the sources, rang does what the
-// rung alarms left (it returns lines for the log); out receives the lines for the log.
-func RunTick(locked WithLock, run func([]WatchRun) []watch.Result, rang func([]Rung) []string,
+// results under the lock again, and the dispatcher's queue typed once. run runs the sources, rang does what one
+// rung alarm left (it returns a line for the log and how it ended); out receives the lines for the log.
+func RunTick(locked WithLock, run func([]WatchRun) []watch.Result, rang func(Rung) (string, error),
 	out func([]string)) error {
 	var (
 		runs     []WatchRun
@@ -37,8 +37,28 @@ func RunTick(locked WithLock, run func([]WatchRun) []watch.Result, rang func([]R
 		return err
 	}
 
-	if len(rung) > 0 && rang != nil {
-		out(rang(rung))
+	// Each part outside the lock is recorded as soon as it ran, in a lock of its own: an alarm is rung only when it
+	// went out, and a beat that dies after a part and before its record repeats that one part (RungDone).
+	if rang != nil {
+		for _, r := range rung {
+			line, err := rang(r)
+			if line != "" {
+				out([]string{line})
+			}
+
+			if lerr := locked(func(s *Shift) error {
+				s.By = "ticker"
+				out(s.RungDone(r.ID, err))
+
+				return nil
+			}); lerr != nil {
+				// The lock is not to be had: the parts after this one wait for a beat that gets it, rather than
+				// run with nowhere to be recorded.
+				out([]string{r.ID + ": not recorded, the state lock was not taken: " + lerr.Error()})
+
+				break
+			}
+		}
 	}
 
 	if len(runs)+len(released)+len(restarts) == 0 {
