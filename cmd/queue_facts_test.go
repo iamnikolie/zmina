@@ -245,7 +245,7 @@ func TestRetentionPrunesTheDeliveryCards(t *testing.T) {
 
 	out, _, err := zm(t, file, "retention", "--dry-run")
 	require.NoError(t, err)
-	assert.Contains(t, out, "delivery cards (1 cards or set-aside files past their keep or over the cap)")
+	assert.Contains(t, out, "delivery cards (1 cards, fetches or set-aside files past their keep or over the cap)")
 	assert.Len(t, shift.ReadCards(c.Layout(), "dev"), 2, "a dry run writes nothing")
 
 	out, _, err = zm(t, file, "retention")
@@ -379,7 +379,7 @@ func TestRetentionRemovesAsideCardFilesAndFilesOfRolesGone(t *testing.T) {
 
 	out, _, err := zm(t, file, "retention", "--dry-run")
 	require.NoError(t, err)
-	assert.Contains(t, out, "delivery cards (2 cards or set-aside files past their keep or over the cap)")
+	assert.Contains(t, out, "delivery cards (2 cards, fetches or set-aside files past their keep or over the cap)")
 	assert.FileExists(t, aside, "a dry run removes nothing")
 
 	_, _, err = zm(t, file, "retention")

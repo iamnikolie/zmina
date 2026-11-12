@@ -641,7 +641,7 @@ func (p *retentionPass) deliveryCards() {
 	}
 
 	if n > 0 {
-		p.say("delivery cards (%d cards or set-aside files past their keep or over the cap)", n)
+		p.say("delivery cards (%d cards, fetches or set-aside files past their keep or over the cap)", n)
 		p.moved["delivery cards"] = n
 	}
 }
