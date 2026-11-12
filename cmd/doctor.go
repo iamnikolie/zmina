@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"maps"
 	"os"
@@ -286,6 +285,13 @@ func (a *app) checkClaude(c *crew.Crew, add func(name, level, format string, arg
 		return
 	}
 
+	if strings.TrimSpace(string(help)) == "" {
+		add("claude", "warn", "%s --help printed nothing, so the flags zmina passes cannot be checked (a full disk can "+
+			"leave a claude silent: see disk above)", bin)
+
+		return
+	}
+
 	var missing []string
 
 	for _, flag := range []string{"--name", "--resume", "--remote-control", "--model"} {
@@ -323,49 +329,9 @@ func lookIn(path, name string) (string, error) {
 // checkRegistry reads Claude Code's session registry: zmina tells idle from busy by it, and it is not a public
 // interface.
 func (a *app) checkRegistry(c *crew.Crew, add func(name, level, format string, args ...any)) {
-	dir := filepath.Join(c.Namespace, "sessions")
-
-	files, err := filepath.Glob(filepath.Join(dir, "*.json"))
-	if err != nil || len(files) == 0 {
-		add("registry", "warn", "no session entries in %s yet (none running, or Claude Code moved them)", dir)
-
-		return
+	for _, l := range registryReport(c.Namespace, a.roleOwners) {
+		add("registry", l.level, "%s", l.text)
 	}
-
-	var entry map[string]any
-
-	raw, err := os.ReadFile(files[0])
-	if err == nil {
-		err = json.Unmarshal(raw, &entry)
-	}
-
-	if err != nil {
-		add("registry", "fail", "%s does not parse: %v", files[0], err)
-
-		return
-	}
-
-	var missing []string
-
-	for _, k := range []string{"pid", "sessionId", "name", "status", "statusUpdatedAt"} {
-		if _, ok := entry[k]; !ok {
-			missing = append(missing, k)
-		}
-	}
-
-	if len(missing) > 0 {
-		add("registry", "fail", "entries lack %s: Claude Code changed its registry; idle/busy and delivery will "+
-			"not work", strings.Join(missing, ", "))
-
-		return
-	}
-
-	detail := fmt.Sprintf("%d entries in %s", len(files), dir)
-	if v, ok := entry["version"].(string); ok {
-		detail += " · written by Claude Code " + v
-	}
-
-	add("registry", "ok", "%s", detail)
 }
 
 func (a *app) checkTicker(c *crew.Crew, add func(name, level, format string, args ...any)) {
