@@ -137,7 +137,12 @@ func chatSnapshot(s *shift.Shift, role string) (chat.Snapshot, error) {
 		} else {
 			for _, failed := range rs.Failed {
 				if failed.Line == receipt.Line {
+					// A line that may have reached the role is not one that failed: the owner looks at the role first
+					// (queue ls says attention required).
 					state = "failed"
+					if failed.Unclear() {
+						state = "unconfirmed"
+					}
 					break
 				}
 			}

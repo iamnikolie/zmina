@@ -334,7 +334,7 @@ func TestInfoLineTyped(t *testing.T) {
 		assert.Equal(t, line, rs.Failed[0].Line)
 		assert.Empty(t, closed(f))
 
-		_, err := f.s.Retry("dispatcher")
+		_, _, err := f.s.Retry("dispatcher", true)
 		require.NoError(t, err)
 		require.Len(t, f.s.State.Signals, 2)
 		assert.Equal(t, "S-1 mrs: acme/site!12 approved", f.s.State.Signals[0])

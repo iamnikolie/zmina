@@ -78,7 +78,7 @@ func TestAckClearsAFailedLine(t *testing.T) {
 	f.s.currentNotes()
 	assert.NotContains(t, strings.Join(f.s.State.Notes, "|"), "designer: delivery failed", "no longer reported")
 
-	n, err := f.s.Retry("designer")
+	n, _, err := f.s.Retry("designer", false)
 	require.NoError(t, err)
 	assert.Zero(t, n)
 	assert.Empty(t, rs.Inbox, "nothing to retry")
@@ -217,7 +217,7 @@ func TestAckOfOneSignalLeavesTheNoteOfAFailedPost(t *testing.T) {
 	require.Len(t, rs.Failed, 1, "its note is not acked")
 
 	f.s.State.Notes = nil
-	_, err = f.s.Retry("dispatcher")
+	_, _, err = f.s.Retry("dispatcher", true)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"released designer after 31m idle"}, f.s.State.Notes)
 	assert.Empty(t, f.s.State.Signals)

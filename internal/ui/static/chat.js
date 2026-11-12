@@ -244,7 +244,7 @@
     const d = new Date(at), today = new Date(), yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
     return d.toDateString() === today.toDateString() ? "Today" : d.toDateString() === yesterday.toDateString() ? "Yesterday" : dayName.format(d);
   }
-  const deliveryText = {uploading: "Uploading…", transmitting: "Sending…", local: "Saved on this device · waiting to send", queued: "Queued · delivered when the role is idle", sent: "Sent to the role · awaiting agent confirmation", accepted: "", unconfirmed: "Delivery unconfirmed · the conversation changed", expired: "Delivery unconfirmed · check Terminal before sending again", failed: "Delivery failed", sending: "Saving…", uncertain: "Delivery unconfirmed · retry with the same message ID"};
+  const deliveryText = {uploading: "Uploading…", transmitting: "Sending…", local: "Saved on this device · waiting to send", queued: "Queued · delivered when the role is idle", sent: "Sent to the role · awaiting agent confirmation", accepted: "", unconfirmed: "Delivery unconfirmed · it may have reached the role; check Terminal before sending again", expired: "Delivery unconfirmed · check Terminal before sending again", failed: "Delivery failed", sending: "Saving…", uncertain: "Delivery unconfirmed · retry with the same message ID"};
   const deliveryKey = (row) => [row.state, row.upload || "", row.uploadFile || "", row.failure || "", Boolean(row.outboxKey)].join("|");
   // fillDelivery writes the delivery state of a group of owner messages (one, or a run in the same state) under its
   // last one; its buttons act on every message of the group, one after another.

@@ -903,7 +903,7 @@ func TestQueuedLineThatFailsMovesToFailed(t *testing.T) {
 	f.s.Tick()
 	assert.Equal(t, []string{"good"}, f.tm.typed["designer"], "the failed line does not block the next")
 
-	n, err := f.s.Retry("designer")
+	n, _, err := f.s.Retry("designer", false)
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
 	f.s.Tick()
@@ -915,7 +915,8 @@ func TestQueuedLineThatFailsMovesToFailed(t *testing.T) {
 	assert.Equal(t, 1, n)
 
 	for _, q := range f.s.Queues() {
-		assert.NotEqual(t, "designer", q.Role, "nothing waits for the designer")
+		assert.Empty(t, q.Inbox, "nothing waits for the designer")
+		assert.Empty(t, q.Failed)
 	}
 }
 

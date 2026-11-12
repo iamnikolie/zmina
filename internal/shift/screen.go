@@ -279,7 +279,7 @@ func (s *Shift) landed(name string, now time.Time) bool {
 
 	reason := "typed, never taken"
 	if !unsent {
-		reason = "typed, acceptance unconfirmed; inspect before retry"
+		reason = UnclearUnconfirmed
 	}
 	if !unsent || sent.Tries >= typeTries {
 		if unsent {
