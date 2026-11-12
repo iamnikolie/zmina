@@ -11,9 +11,9 @@ import (
 	"github.com/iamnikolie/zmina/internal/task"
 )
 
-// Compiles on main and on the branch (FlushInbox only). A typed role gets a packet line, never takes it and dies;
+// A typed role gets a packet line, never takes it and dies;
 // the task is handed again before the beat settles the dead session; the role is started again.
-func TestReviewRehandOfATypedPacketToADeadRole(t *testing.T) {
+func TestPacketHandedAgainToADeadTypedRoleWaitsForItsNextSession(t *testing.T) {
 	for _, how := range []string{"up", "beats"} {
 		t.Run(how, func(t *testing.T) {
 			f := fixtureWith(t, crewYAML)
