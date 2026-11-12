@@ -331,7 +331,7 @@ Typed into the input line as before: a slash command (a posted one is plain text
 (below: his own turn, never another session's message), a role whose `args`
 pass their own `--settings` (zmina's are not passed: a warning), a role with `delivery: tmux`, a role started by an
 earlier zmina (no settings: until its next start), and a session with no inbox socket or another `peerProtocol`.
-A post that never started is tried three times, at least 30 s apart, then kept as failed; one whose write broke after it started is
+A post that never started is tried three times, at least 55 s apart (a try a minute at the beat), then kept as failed; one whose write broke after it started is
 followed like a posted line (`post-broken` in the log: the role may have it), never posted again. A posted line an idle session never shows within 10 min is kept as failed (`posted to its
 inbox socket, never seen in its conversation (held or dropped); inspect before retry`); one that went to a
 conversation that is over (the role restarted, was put down, released or ended, or a `/clear` started another in the
@@ -1908,7 +1908,7 @@ there stops the beat's further typing and starting, and says so.
    starts is not a boot); so its first line goes at the first beat after it read its boot, not minutes later. When the dispatcher is booted and idle, the waiting signals and notes go to it: posted to its
    own channel, everything in one post (see Delivery; its acked lines also into a turn it is in), else typed as one line: `[zmina] mr-watch: !35 … · designer: ended · director: busy for 95 min on
    T-3`. Then each other role that is booted and idle gets its first queued line; a line
-   tmux refuses is tried three times, at least 30 s apart (passes seconds apart count as one try), then
+   tmux refuses is tried three times, at least 55 s apart (passes seconds apart count as one try), then
    kept as failed (`zmina queue`). A slash command typed into a role (a trim's, a queued `/rename`) leaves no line
    to wait for: nothing more goes to that role for 15 s. A typed line is sent or not left
    typed: Claude Code can take a long line typed in one burst, its Enter with it, as a paste and keep it in the
@@ -2121,7 +2121,7 @@ the crew are dropped from it. A role missing from the crew file keeps its state 
   Raw tmux targets are `=name` / `=name:` and need quotes in zsh. zmina itself aims every command at
   the first window's first pane, where claude runs: windows the owner opens while attached do not
   confuse it, close as usual when left, and are killed with the role.
-- A queued line tmux refuses is tried three times, at least 30 s apart (event `type-failed`), then moves to the
+- A queued line tmux refuses is tried three times, at least 55 s apart (event `type-failed`), then moves to the
   failed list, so it never blocks the lines after it: `zmina queue ls`, `queue retry`.
 - Nothing here keeps the Mac awake: while it sleeps, the roles are paused, not gone, and a
   schedule that came due runs once on the first beat after waking.

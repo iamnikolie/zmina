@@ -9,10 +9,11 @@ import (
 
 // Waiting names the roles that have something DeliverTo could give now, in the crew's order (the dispatcher first):
 // a role up under zmina, not just given a slash command (slashSettle), with a line queued for it that did not fail
-// less than retryGap ago; the dispatcher also with a signal or a note waiting, bar info lines that still ride
-// (infoRide), and not one a post or a typed line failed to less than retryGap ago. It reads the loaded state and the clock and nothing else: no tmux, no registry, no inbox socket, no
-// task file, and it makes no state of a role that has none. A role it names may still not take its line (busy, a
-// draft, a dialog): that is for the pass to find out; a role it leaves out has nothing a pass could give.
+// less than countedGap ago; the dispatcher also with a signal or a note waiting, bar info lines that still ride
+// (infoRide), and not one a post or a typed line failed to less than retryGap ago. It reads the loaded state and the
+// clock and nothing else: no tmux, no registry, no inbox socket, no task file, and it makes no state of a role that
+// has none. A role it names may still not take its line (busy, a draft, a dialog): that is for the pass to find out; a
+// role it leaves out has nothing a pass could give.
 func (s *Shift) Waiting() []string {
 	now := s.Now()
 

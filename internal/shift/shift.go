@@ -36,11 +36,17 @@ const (
 	inboxMax   = 20
 	signalsMax = 20
 	// typeTries is how many tries a queued line gets before it moves to the failed list. A try is a pass that fails
-	// at least retryGap after the one before it: passes that run seconds apart (a command's delivery and the beat)
+	// at least countedGap after the one before it: passes that run seconds apart (a command's delivery and the beat)
 	// are one try.
 	typeTries = 3
-	// retryGap is how soon after a failed try the line is tried, and counted, again. The beat comes every minute, so
-	// at that cadence it changes nothing.
+	// countedGap is how soon after a failed try the line is tried, and counted, again. The beat tried a line once a
+	// minute, so its tries were a minute apart and a tmux or an inbox socket that was gone for about a minute cost it
+	// none; a caller that passes every few seconds gets the same budget from this gap. It is under the minute so that
+	// the beat itself never skips a try for the jitter of its start.
+	countedGap = 55 * time.Second
+	// retryGap is how soon after a failed post or typed line to the dispatcher it is tried again. Nothing is counted
+	// there (the signals wait however long it takes), so the gap only keeps a caller that passes every few seconds
+	// from posting, and logging, each time. The beat comes every minute, so at that cadence it changes nothing.
 	retryGap = 30 * time.Second
 	// slashSettle is how long after a slash command was typed into a role nothing more is delivered to it: the
 	// command leaves no Sent record to wait for, and a /clear or a /compact has not shown in the status yet. It is

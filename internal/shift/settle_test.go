@@ -14,8 +14,8 @@ import (
 )
 
 // A pass that fails counts as one try; passes seconds apart (a command's delivery, then the beat) are the same try.
-// Past retryGap the line is tried and counted again, and typeTries counted tries move it to the failed list.
-func TestTypedTriesCountedAtLeastRetryGapApart(t *testing.T) {
+// Past countedGap the line is tried and counted again, and typeTries counted tries move it to the failed list.
+func TestTypedTriesCountedAtLeastCountedGapApart(t *testing.T) {
 	f := fixtureWith(t, crewYAML)
 	require.NoError(t, f.s.Up("designer"))
 	require.NoError(t, f.s.Queue("designer", "bad"))
@@ -34,11 +34,11 @@ func TestTypedTriesCountedAtLeastRetryGapApart(t *testing.T) {
 	assert.Empty(t, rs.Failed)
 	assert.Equal(t, 1, f.eventCount("type-failed"), "the line was tried once")
 
-	*f.now = f.now.Add(retryGap)
+	*f.now = f.now.Add(countedGap)
 	assert.Empty(t, f.s.deliverInbox("designer", *f.now))
-	assert.Equal(t, 2, rs.Attempts, "a pass retryGap after the last try counts")
+	assert.Equal(t, 2, rs.Attempts, "a pass countedGap after the last try counts")
 
-	*f.now = f.now.Add(retryGap)
+	*f.now = f.now.Add(countedGap)
 	assert.NotEmpty(t, f.s.deliverInbox("designer", *f.now))
 	assert.Empty(t, rs.Inbox)
 	require.Len(t, rs.Failed, 1)
@@ -60,7 +60,7 @@ func TestTypedTryIsForgottenOnceTheLineGoes(t *testing.T) {
 	require.Equal(t, 1, f.s.State.Role("designer").Attempts)
 
 	f.tm.typeErr = nil
-	*f.now = f.now.Add(retryGap)
+	*f.now = f.now.Add(countedGap)
 	assert.Equal(t, "typed into designer: once", f.s.deliverInbox("designer", *f.now))
 
 	rs := f.s.State.Role("designer")
@@ -69,7 +69,7 @@ func TestTypedTryIsForgottenOnceTheLineGoes(t *testing.T) {
 }
 
 // A post that never started is held to the same gap.
-func TestPostTriesCountedAtLeastRetryGapApart(t *testing.T) {
+func TestPostTriesCountedAtLeastCountedGapApart(t *testing.T) {
 	f, p := nativeFixture(t, crewYAML)
 	require.NoError(t, f.s.Up("designer"))
 	f.status("designer", "idle", *f.now)
@@ -90,10 +90,10 @@ func TestPostTriesCountedAtLeastRetryGapApart(t *testing.T) {
 	assert.Equal(t, 1, f.eventCount("post-failed"))
 
 	p.err = nil
-	assert.Empty(t, f.s.deliverInbox("designer", *f.now), "not before retryGap, though the post would now work")
+	assert.Empty(t, f.s.deliverInbox("designer", *f.now), "not before countedGap, though the post would now work")
 	assert.Empty(t, p.raw)
 
-	*f.now = f.now.Add(retryGap)
+	*f.now = f.now.Add(countedGap)
 	assert.NotEmpty(t, f.s.deliverInbox("designer", *f.now))
 	assert.Len(t, p.raw, 1)
 	assert.Zero(t, rs.Attempts)
@@ -193,10 +193,11 @@ func TestStampsHoldOnlyForTheirSpan(t *testing.T) {
 	rs := &RoleState{TriedAt: now}
 	assert.False(t, rs.triedLately(now), "a stamp with no counted try means nothing")
 	rs.Attempts = 1
-	assert.True(t, rs.triedLately(now.Add(retryGap-time.Second)))
-	assert.False(t, rs.triedLately(now.Add(retryGap)))
+	assert.True(t, rs.triedLately(now.Add(countedGap-time.Second)))
+	assert.False(t, rs.triedLately(now.Add(countedGap)))
 
 	assert.Less(t, retryGap, time.Minute, "the beat's own cadence must change nothing")
+	assert.Less(t, countedGap, time.Minute, "the beat's own cadence must change nothing")
 	assert.Less(t, slashSettle, time.Minute, "the beat's own cadence must change nothing")
 }
 
@@ -247,4 +248,89 @@ func TestTurnEndAfterACompactionDoesNotWaitOutTheSettleTime(t *testing.T) {
 	assert.Equal(t, []string{"posted to designer: [dispatcher] after the compaction"}, f.s.TurnEnd("designer", "sid-designer"))
 	assert.Equal(t, []string{"[dispatcher] after the compaction"}, p.posted["sid-designer"])
 	assert.True(t, rs.SlashAt.IsZero())
+}
+
+// passes runs the delivery pass once a second from now until the clock reaches end, calling heal each time with the
+// time since the start.
+func passes(t *testing.T, f fix, end time.Duration, heal func(since time.Duration)) {
+	t.Helper()
+
+	start := *f.now
+
+	for since := time.Duration(0); since <= end; since += time.Second {
+		*f.now = start.Add(since)
+		heal(since)
+
+		_, err := f.s.DeliverPass()
+		require.NoError(t, err)
+	}
+}
+
+// A caller that passes every second spends the tries a line has as slowly as the beat did, one a minute: tmux that
+// refuses for about a minute, and then types again, does not move the line to the failed list.
+func TestTypedLineSurvivesAnOutageOfAboutAMinuteUnderPasses(t *testing.T) {
+	f := typedFixture(t, crewYAML, "designer")
+	require.NoError(t, f.s.Queue("designer", "hello"))
+	f.tm.typeErr = errors.New("tmux refused")
+
+	passes(t, f, 2*time.Minute, func(since time.Duration) {
+		if since > time.Minute {
+			f.tm.typeErr = nil
+		}
+	})
+
+	rs := f.s.State.Role("designer")
+	assert.Empty(t, rs.Failed)
+	assert.Equal(t, []string{"hello"}, f.tm.typed["designer"])
+	assert.Empty(t, rs.Inbox)
+}
+
+// The same for a post that never started (the inbox socket not there for a minute).
+func TestPostedLineSurvivesAnOutageOfAboutAMinuteUnderPasses(t *testing.T) {
+	f, p := nativeFixture(t, crewYAML)
+	upNative(t, f, "designer")
+	require.NoError(t, f.s.Queue("designer", "[dev] hello"))
+	p.err = fmt.Errorf("%w: dial: no such file", peer.ErrUnavailable)
+
+	passes(t, f, 2*time.Minute, func(since time.Duration) {
+		if since > time.Minute {
+			p.err = nil
+		}
+	})
+
+	rs := f.s.State.Role("designer")
+	assert.Empty(t, rs.Failed)
+	assert.Equal(t, []string{"[dev] hello"}, p.posted["sid-designer"])
+	assert.Empty(t, rs.Inbox)
+}
+
+// A line that is refused for good still moves to the failed list, after typeTries tries at least countedGap apart,
+// and the beat, a minute from the last, is never held back by the gap, whatever its start time's jitter.
+func TestRefusedLineReachesTheFailedListAfterTwoCountedGaps(t *testing.T) {
+	f := typedFixture(t, crewYAML, "designer")
+	require.NoError(t, f.s.Queue("designer", "hello"))
+	f.tm.typeErr = errors.New("tmux refused")
+	start := *f.now
+
+	for len(f.s.State.Role("designer").Failed) == 0 && f.now.Sub(start) < 10*time.Minute {
+		_, err := f.s.DeliverPass()
+		require.NoError(t, err)
+
+		*f.now = f.now.Add(time.Second)
+	}
+
+	// Two minutes where the beat took them, less the jitter its start leaves room for.
+	assert.GreaterOrEqual(t, f.now.Sub(start)-time.Second, 100*time.Second)
+
+	// Beats a little under a minute apart still count each: the gap is under the beat's cadence.
+	g := typedFixture(t, crewYAML, "designer")
+	require.NoError(t, g.s.Queue("designer", "hello"))
+	g.tm.typeErr = errors.New("tmux refused")
+
+	for try := 1; try <= typeTries-1; try++ {
+		g.s.deliverInbox("designer", *g.now)
+		assert.Equal(t, try, g.s.State.Role("designer").Attempts)
+
+		*g.now = g.now.Add(time.Minute - 4*time.Second)
+	}
 }

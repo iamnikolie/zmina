@@ -282,7 +282,7 @@ func TestWaitingNamesTheRolesAPassCouldGiveTo(t *testing.T) {
 	rs := f.s.State.Role("designer")
 	rs.Attempts, rs.TriedAt = 1, *f.now
 	assert.Equal(t, []string{"dispatcher", "harvester"}, waiting())
-	*f.now = f.now.Add(retryGap)
+	*f.now = f.now.Add(countedGap)
 	assert.Equal(t, []string{"dispatcher", "designer", "harvester"}, waiting())
 
 	// A role the crew file does not have is not named, and looking makes no state for a role that has none.
@@ -380,9 +380,9 @@ func TestDeliverPassLeavesABusyRoleItsLine(t *testing.T) {
 	assert.Empty(t, p.raw)
 }
 
-// A line tmux refuses is tried again only after retryGap, not by the next pass: the pass names no role for it, so it
+// A line tmux refuses is tried again only after countedGap, not by the next pass: the pass names no role for it, so it
 // asks tmux nothing either.
-func TestDeliverPassHonoursTheRetryGap(t *testing.T) {
+func TestDeliverPassHonoursTheCountedGap(t *testing.T) {
 	f := typedFixture(t, crewYAML, "designer")
 	require.NoError(t, f.s.Queue("designer", "hello"))
 	f.tm.typeErr = errors.New("tmux: no server")
@@ -395,7 +395,7 @@ func TestDeliverPassHonoursTheRetryGap(t *testing.T) {
 	assert.Equal(t, *f.now, rs.TriedAt)
 
 	// Seconds later: neither tried nor counted again, and nothing asked of tmux.
-	*f.now = f.now.Add(retryGap - time.Second)
+	*f.now = f.now.Add(countedGap - time.Second)
 	calls := counted(f, nil)
 	before := stateJSON(t, f.s)
 

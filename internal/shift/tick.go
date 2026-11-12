@@ -1313,7 +1313,7 @@ func IsRemote(signal string) bool { return strings.HasPrefix(signal, "remote ") 
 func (s *Shift) Deliver() string { return s.deliver(s.Now()) }
 
 // deliverInbox types a role's first waiting line when it is up, booted and idle; one line per pass, so the role
-// reads each before the next. A line tmux refuses is tried typeTries times, at least retryGap apart, then moves to
+// reads each before the next. A line tmux refuses is tried typeTries times, at least countedGap apart, then moves to
 // the failed list (zmina queue), so it never blocks the lines after it. Nothing goes to a role a slash command was
 // just typed into (slashSettle). It returns a line for the log.
 func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
@@ -1443,9 +1443,9 @@ func (s *Shift) postInbox(name string, sess *registry.Session, now time.Time) st
 	return "posted to " + name + ": " + head
 }
 
-// triedLately reports whether the role's first queued line failed a try less than retryGap ago.
+// triedLately reports whether the role's first queued line failed a try less than countedGap ago.
 func (rs *RoleState) triedLately(now time.Time) bool {
-	return rs.Attempts > 0 && within(now, rs.TriedAt, retryGap)
+	return rs.Attempts > 0 && within(now, rs.TriedAt, countedGap)
 }
 
 // dispatchTried notes that a post or a typed line to the dispatcher failed now, so the next try waits retryGap
@@ -1458,9 +1458,10 @@ func (rs *RoleState) dispatchTried(now time.Time) {
 	}
 }
 
-// dispatchTriedLately reports whether a delivery to the dispatcher failed less than retryGap ago.
+// dispatchTriedLately reports whether a delivery to the dispatcher failed less than retryGap ago, or a queued line of
+// its own less than countedGap ago.
 func (rs *RoleState) dispatchTriedLately(now time.Time) bool {
-	return within(now, rs.TriedAt, retryGap)
+	return within(now, rs.TriedAt, retryGap) || rs.triedLately(now)
 }
 
 // settling reports whether a slash command was typed into the role less than slashSettle ago.
