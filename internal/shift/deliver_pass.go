@@ -41,10 +41,11 @@ func (s *Shift) Waiting() []string {
 	return out
 }
 
-// dispatcherWaits reports whether deliver has something for the dispatcher: its own queued lines, a signal, a note.
+// dispatcherWaits reports whether deliver has something for the dispatcher: a queued line of its own that did not fail
+// less than countedGap ago, a signal, a note.
 // Info lines alone wait for a line to go with (infoWaits), as deliver does.
 func (s *Shift) dispatcherWaits(rs *RoleState, now time.Time) bool {
-	if len(rs.Inbox) > 0 {
+	if len(rs.Inbox) > 0 && !rs.triedLately(now) {
 		return true
 	}
 

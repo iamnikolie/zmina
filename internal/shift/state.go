@@ -151,10 +151,12 @@ type RoleState struct {
 	Inbox    []string `json:"inbox,omitempty"`
 	Attempts int      `json:"attempts,omitempty"`
 	// TriedAt is when the try Attempts last counted failed: a failed first line is neither tried nor counted again
-	// within countedGap, so passes seconds apart (a command's delivery, then the beat) are one try. For the dispatcher
-	// it is also when a post or a typed line to it last failed, with Attempts at zero: nothing is counted then, and the
-	// next try only waits retryGap (dispatchTriedLately).
+	// within countedGap, so passes seconds apart (a command's delivery, then the beat) are one try. It means something
+	// only while Attempts is above zero.
 	TriedAt time.Time `json:"tried_at,omitzero"`
+	// DispatchTriedAt is when a post or a typed line of signals and notes to the dispatcher last failed. Nothing is
+	// counted there; the next try only waits retryGap (dispatchTriedLately).
+	DispatchTriedAt time.Time `json:"dispatch_tried_at,omitzero"`
 	// TypedAt is when a line for the conversation was last typed into the role's input line. The line after it waits
 	// for the transcript to show a turn after it, or for typedSettle (atPrompt).
 	TypedAt time.Time `json:"typed_at,omitzero"`

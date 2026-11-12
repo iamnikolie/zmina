@@ -1457,18 +1457,13 @@ func (rs *RoleState) triedLately(now time.Time) bool {
 
 // dispatchTried notes that a post or a typed line to the dispatcher failed now, so the next try waits retryGap
 // (dispatchTriedLately). It counts nothing: the dispatcher's signals and notes stay queued however often it fails, and
-// no line moves to the failed list for it. A queued line of its own that already counts tries keeps its stamp: the
-// stamp is that count's (triedLately), and it must not move for a failure the count did not see.
-func (rs *RoleState) dispatchTried(now time.Time) {
-	if rs.Attempts == 0 {
-		rs.TriedAt = now
-	}
-}
+// no line moves to the failed list for it. The stamp is its own, apart from the one a queued line's count keeps
+// (TriedAt), so neither moves for a failure the other saw.
+func (rs *RoleState) dispatchTried(now time.Time) { rs.DispatchTriedAt = now }
 
-// dispatchTriedLately reports whether a delivery to the dispatcher failed less than retryGap ago, or a queued line of
-// its own less than countedGap ago.
+// dispatchTriedLately reports whether a post or a typed line to the dispatcher failed less than retryGap ago.
 func (rs *RoleState) dispatchTriedLately(now time.Time) bool {
-	return within(now, rs.TriedAt, retryGap) || rs.triedLately(now)
+	return within(now, rs.DispatchTriedAt, retryGap)
 }
 
 // settling reports whether a slash command was typed into the role less than slashSettle ago.

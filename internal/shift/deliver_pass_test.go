@@ -519,7 +519,7 @@ func TestDeliverPassHonoursTheRetryGapOfAFailedPostToTheDispatcher(t *testing.T)
 	require.NoError(t, err)
 	assert.True(t, changed, "a try that failed is a change: the next pass must wait for it")
 	assert.Equal(t, 1, calls.count("peer Post"))
-	assert.Equal(t, first, rs.TriedAt)
+	assert.Equal(t, first, rs.DispatchTriedAt)
 
 	// Pass after pass for a second and more: no post, no event, no change, nothing asked.
 	calls.calls = nil
@@ -800,4 +800,36 @@ func TestDeliverPassLeavesALineInFlightAlone(t *testing.T) {
 		assert.Empty(t, rs.Failed)
 		assert.Empty(t, f.tm.keys["designer"], "no Enter pressed again")
 	})
+}
+
+// The gap after a failed post to the dispatcher is its own: it holds also while a queued line of the dispatcher's
+// already counts tries, and the count does not move for it.
+func TestAFailedPostToTheDispatcherIsHeldWhileItsOwnLineCountsTries(t *testing.T) {
+	f, p := nativeFixture(t, crewYAML)
+	upNative(t, f, "dispatcher")
+
+	_, err := f.s.Note("dev", "T-1 needs a decision", false)
+	require.NoError(t, err)
+	require.NoError(t, f.s.Queue("dispatcher", "[dev] its own line"))
+
+	rs := f.s.State.Role("dispatcher")
+	tried := f.now.Add(-countedGap - time.Second)
+	rs.Attempts, rs.TriedAt = 1, tried
+
+	f.status("dispatcher", "busy", *f.now)
+	f.rg.endedAt = map[string]time.Time{} // mid-turn: its own line is not tried
+
+	p.err = errors.New("connection refused")
+	calls := counted(f, p)
+
+	for range 10 {
+		*f.now = f.now.Add(500 * time.Millisecond)
+
+		_, err := f.s.DeliverPass()
+		require.NoError(t, err)
+	}
+
+	assert.Equal(t, 1, calls.count("peer Post"))
+	assert.Equal(t, 1, rs.Attempts)
+	assert.Equal(t, tried, rs.TriedAt)
 }
