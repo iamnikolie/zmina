@@ -253,3 +253,116 @@ func TestRemindLsLaterAlarmNamesTheItemAfterItsWords(t *testing.T) {
 	require.NoError(t, err)
 	assert.Regexp(t, `^renew the certificate\s+R-1 · L-1\s+.*\s+you\s+later\n$`, out)
 }
+
+// An alarm whose notify failed is not rung: remind ls says it is not delivered yet and why, a later beat tries the
+// notify again once its gap is over, and one that went out is rung and runs no more.
+func TestReminderWhoseNotifyFailedIsNotRungAndIsTriedAgain(t *testing.T) {
+	dir := t.TempDir()
+	pushed := filepath.Join(dir, "pushed")
+	script := filepath.Join(dir, "push")
+	failing := "#!/bin/sh\necho boom >&2\nexit 1\n"
+	working := "#!/bin/sh\nprintf '%s\\n' \"$ZMINA_ALARM\" >> " + pushed + "\n"
+	require.NoError(t, os.WriteFile(script, []byte(failing), 0o700))
+
+	crewFile := testCrew(t, "notify: ["+script+"]\n")
+
+	_, _, err := zm(t, crewFile, "remind", "+2m", "pay", "the", "invoice")
+	require.NoError(t, err)
+	due(t, crewFile, "R-1")
+
+	out, _, err := zm(t, crewFile, "tick")
+	require.NoError(t, err)
+	assert.Contains(t, out, "R-1: reminded you: pay the invoice → A-1")
+	assert.Contains(t, out, "R-1: notify: exit status 1: boom")
+
+	out, _, err = zm(t, crewFile, "remind", "ls")
+	require.NoError(t, err)
+	assert.Regexp(t, `pay the invoice\s+R-1\s.*\s+you\s+remind\s+set, not delivered yet \(1 try, last: notify: exit status 1: boom\)\n$`, out)
+
+	// Its gap is not over: the next beat leaves it.
+	out, _, err = zm(t, crewFile, "tick")
+	require.NoError(t, err)
+	assert.NotContains(t, out, "R-1")
+
+	// The gap over, and the command working again.
+	c, err := crew.Load(crewFile)
+	require.NoError(t, err)
+
+	al, err := alarmStore(c).Get("R-1")
+	require.NoError(t, err)
+
+	al.Tried = time.Now().Add(-time.Hour)
+	require.NoError(t, alarmStore(c).Put(al))
+	require.NoError(t, os.WriteFile(script, []byte(working), 0o700))
+
+	out, _, err = zm(t, crewFile, "tick")
+	require.NoError(t, err)
+	assert.Contains(t, out, "R-1: trying again (2 of ")
+	assert.Contains(t, out, "R-1: notified")
+	assert.Equal(t, "R-1\n", string(mustRead(t, pushed)))
+
+	out, _, err = zm(t, crewFile, "remind", "ls", "--all")
+	require.NoError(t, err)
+	assert.Regexp(t, `pay the invoice\s+R-1\s.*\s+you\s+remind\s+rang → A-1\n$`, out)
+
+	_, _, err = zm(t, crewFile, "tick")
+	require.NoError(t, err)
+	assert.Equal(t, "R-1\n", string(mustRead(t, pushed)), "rung: not pushed again")
+
+	todo, _, err := zm(t, crewFile, "todo", "ls")
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(todo, "pay the invoice"), "one check on the todo, not one per try")
+}
+
+// An alarm that could not be delivered stays on remind ls, in words, until it is taken off.
+func TestRemindLsShowsAnAlarmThatCouldNotBeDelivered(t *testing.T) {
+	crewFile := testCrew(t, "")
+
+	for _, words := range []string{"call the bank", "renew the domain", "later one"} {
+		_, _, err := zm(t, crewFile, "remind", "+1h", words)
+		require.NoError(t, err)
+	}
+
+	c, err := crew.Load(crewFile)
+	require.NoError(t, err)
+
+	failed, err := alarmStore(c).Get("R-1")
+	require.NoError(t, err)
+
+	failed.State, failed.Tries, failed.TryErr = alarm.Failed, 6, "notify: exit status 1: boom"
+	require.NoError(t, alarmStore(c).Put(failed))
+
+	trying, err := alarmStore(c).Get("R-2")
+	require.NoError(t, err)
+
+	trying.Owed, trying.Tries, trying.TryErr = "renew the domain", 2, "tell box/ops: outbox is full"
+	require.NoError(t, alarmStore(c).Put(trying))
+
+	out, _, err := zm(t, crewFile, "remind", "ls")
+	require.NoError(t, err)
+	assert.Regexp(t, `(?m)^call the bank\s+R-1\s.*\s+you\s+remind\s+failed, not delivered after 6 tries: notify: exit status 1: boom$`, out)
+	assert.Regexp(t, `(?m)^renew the domain\s+R-2\s.*\s+you\s+remind\s+set, not delivered yet \(2 tries, last: tell box/ops: outbox is full\)$`, out)
+	assert.Regexp(t, `(?m)^later one\s+R-3\s.*\s+you\s+remind$`, out, "an alarm that waits has no state to say")
+
+	out, _, err = zm(t, crewFile, "show", "R-1")
+	require.NoError(t, err)
+	assert.Contains(t, out, "failed, not delivered after 6 tries")
+	assert.Contains(t, out, "last try failed: notify: exit status 1: boom")
+
+	text, _, err := zm(t, crewFile, "remind", "ls", "--json")
+	require.NoError(t, err)
+
+	var list []alarm.Alarm
+	require.NoError(t, json.Unmarshal([]byte(text), &list))
+	require.Len(t, list, 3)
+	assert.Equal(t, alarm.Failed, list[0].State, "failed first")
+	assert.Equal(t, 6, list[0].Tries)
+
+	out, _, err = zm(t, crewFile, "remind", "off", "R-1")
+	require.NoError(t, err)
+	assert.Equal(t, "R-1 · off\n", out)
+
+	out, _, err = zm(t, crewFile, "remind", "ls")
+	require.NoError(t, err)
+	assert.NotContains(t, out, "call the bank")
+}

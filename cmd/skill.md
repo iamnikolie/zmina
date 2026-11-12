@@ -1471,17 +1471,22 @@ A time that has passed is refused. Several words are one argument: quote them.
 | `zmina remind <when> <text...> [--note file\|-]` | a reminder for the owner. At its time it lands on the todo as a check (title = text, the note under it; from the role that set it, else `remind`) and goes through the crew's `notify` command. Prints `R-3 · you · Sun 8 Nov 09:00 (in 6d)`. |
 | `zmina remind <when> <text...> --role <role> [--note …]` | for a role: at its time the role is started if it is down — on the conversation its newest parked work came from (a released role, `task park`), else as `zmina up` would — and `[zmina alarm] <text> — <note>` waits in its queue, typed once it is booted and idle. While the shift is stopped it waits for `zmina start`. |
 | `zmina remind <when> <text...> --to <node>[/<crew>]` | another crew's dispatcher: at its time `[zmina alarm] <text> — <note>` goes to it as `zmina tell` sends a line (this node's crew at once, another node's through the outbox and the round after the beat). |
-| `zmina remind ls [--all] [--full] [--json]` | the alarms still to ring, soonest first: the alarm's words first (72 characters, `--full` whole; a sleep alarm shows its note when set), then its id (`R-3`, and `R-3 · L-9` for a parked item's return), time (and how far), for whom, kind (`remind`, `sleep`, `later`). `--all`: rung and taken off too, with their state after the kind (`rang → A-7`, `off`) and an error when one could not do its part. |
+| `zmina remind ls [--all] [--full] [--json]` | the alarms still to ring, soonest first: the alarm's words first (72 characters, `--full` whole; a sleep alarm shows its note when set), then its id (`R-3`, and `R-3 · L-9` for a parked item's return), time (and how far), for whom, kind (`remind`, `sleep`, `later`). An alarm whose notify or tell did not go out says so after the kind — `set, not delivered yet (2 tries, last: …)` while it is tried again, `failed, not delivered after 6 tries: …` once given up (listed first, until `remind off` clears it). `--all`: rung and taken off too, with their state after the kind (`rang → A-7`, `off`) and an error when one could not do its part. |
 | `zmina remind move <id> <when>` | another time for an alarm still to ring — a reminder, a role's wake-up, a parked item's return. Ids: `R-3`, `r-3`, `3`. |
-| `zmina remind off <id>` | take it off. A sleeping role then stays down until started by hand. |
+| `zmina remind off <id>` | take it off; one that `failed` is cleared. A sleeping role then stays down until started by hand. |
 
 `notify` in the crew file: a list is argv and the reminder's text goes last (`[push-cli, send, --title, zmina]` runs
 `push-cli send --title zmina "<text>"`); a string runs with `/bin/sh -c`, the text as `$1`. Both get `$ZMINA_REMIND`
 (the text), `$ZMINA_ALARM` (the id), `$ZMINA_EVENT` (`reminder`) and `$ZMINA_CREW`. A crew whose `notify_on` leaves
 out `reminder` pushes no reminders; the same command pushes what blocks on the owner (Pushes, under Todo). It runs outside the lock, 30 s at most, for a reminder for the
-owner and for a parked item back (`back from later: <text>`) — never for a role's alarm. A failure is in tick.log and
-the log (`alarm-failed`), and the todo item is there all the same. Without `notify` a reminder only lands on the
-todo. The log has `alarm` (set, moved, off, rang) and `sleep`.
+owner and for a parked item back (`back from later: <text>`) — never for a role's alarm. A reminder or a tell counts
+as rung only once its notify or tell went out: a failure (tick.log, and `alarm-failed` in the log) leaves it set and
+due, with the try counted (`tries`, `tried`, `try_err` in `remind ls --json`), and a later beat tries again, at least 5
+minutes after the last try, up to 6 tries in all — only the notify or tell again, not the todo item, which is there
+from the first try. After the last it is `failed`, shown so in `remind ls`, and the dispatcher gets one note. A crash
+after a notify went out and before its record makes the next beat send it once more: the one duplicate this allows.
+Without `notify` a reminder only lands on the todo and is rung at once. The log has `alarm` (set, moved, off, rang)
+and `sleep`.
 
 ## Reading files — zmina read, zmina grep, the read guard
 

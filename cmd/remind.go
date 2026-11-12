@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -149,11 +150,12 @@ func (a *app) remindLsCommand() *cobra.Command {
 
 	c := &cobra.Command{
 		Use:   "ls",
-		Short: "The alarms still to ring, soonest first (reminders, sleeping roles, parked items to bring back)",
+		Short: "The alarms still to ring, soonest first (reminders, sleeping roles, parked items to bring back), and any that could not be delivered",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.readState(func(s *shift.Shift) error {
-				list := alarmStore(s.Crew).Pending()
+				// An alarm that could not be delivered stays on the list, first, until it is taken off: it is not lost.
+				list := slices.Concat(alarmStore(s.Crew).Failed(), alarmStore(s.Crew).Pending())
 
 				if all {
 					var problems []string
@@ -202,7 +204,7 @@ func (a *app) remindLsCommand() *cobra.Command {
 					}
 
 					line := words + "\t" + id + "\t" + at(s, al.At) + "\t" + al.For() + "\t" + string(al.Kind)
-					if all {
+					if all || al.State == alarm.Failed || al.Owed != "" {
 						line += "\t" + alarmState(al)
 					}
 
@@ -221,10 +223,16 @@ func (a *app) remindLsCommand() *cobra.Command {
 	return c
 }
 
-// alarmState is set, off, or rang with what it became.
+// alarmState is set, off, or rang with what it became; failed, or set and trying again, with how often and why.
 func alarmState(al alarm.Alarm) string {
 	out := string(al.State)
-	if al.State == alarm.Rang && al.Ask != "" {
+
+	switch {
+	case al.State == alarm.Failed:
+		out = "failed, not delivered after " + tries(al.Tries) + ifSet(": ", al.TryErr)
+	case al.State == alarm.Set && al.Owed != "":
+		out = "set, not delivered yet (" + tries(al.Tries) + ifSet(", last: ", al.TryErr) + ")"
+	case al.State == alarm.Rang && al.Ask != "":
 		out += " → " + al.Ask
 	}
 
@@ -233,6 +241,15 @@ func alarmState(al alarm.Alarm) string {
 	}
 
 	return out
+}
+
+// tries is a count of tries in words.
+func tries(n int) string {
+	if n == 1 {
+		return "1 try"
+	}
+
+	return fmt.Sprintf("%d tries", n)
 }
 
 func (a *app) remindMoveCommand() *cobra.Command {

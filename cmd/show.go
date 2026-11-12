@@ -290,6 +290,12 @@ func alarmCard(s *shift.Shift, id string) (textCard, bool) {
 		state = "rang " + when + ifSet(" → ", al.Ask)
 	case alarm.Off:
 		state = "taken off"
+	case alarm.Failed:
+		state = "failed, not delivered after " + tries(al.Tries) + " · was due " + when
+	default:
+		if al.Owed != "" {
+			state = "due " + when + ", not delivered yet (" + tries(al.Tries) + ")"
+		}
 	}
 
 	what := map[alarm.Kind]string{alarm.Later: "brings back " + al.Later}[al.Kind]
@@ -298,13 +304,14 @@ func alarmCard(s *shift.Shift, id string) (textCard, bool) {
 	}
 
 	act := "zmina remind ls"
-	if al.Pending() {
+	if al.Pending() || al.State == alarm.Failed {
 		act = "zmina remind off " + al.ID
 	}
 
 	return textCard{Head: al.ID + " · " + clip(oneLine(al.Text), 160), Lines: []string{
 		what + " · for " + al.For() + " · " + state,
 		ifSet("error: ", al.Err),
+		ifSet("last try failed: ", al.TryErr),
 	}, Act: act}, true
 }
 
