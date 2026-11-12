@@ -375,8 +375,11 @@ func (s *Shift) typeLine(name, line string) error {
 	}
 
 	if err := typ(name, line); err != nil {
-		return err
+		return s.clearPartial(name, line, err)
 	}
+
+	// Typed whole into an input line read empty: nothing of an earlier broken line is left to look for.
+	s.State.Role(name).Partial = ""
 
 	for try := 0; ; try++ {
 		s.pause(submitWait)
@@ -395,6 +398,59 @@ func (s *Shift) typeLine(name, line string) error {
 		_ = s.Tmux.Keys(name, "Enter")
 		s.log(name, "pressed-again", "", line)
 	}
+}
+
+// clearPartial is what is left of a line whose typing failed, cleared from the input line, and returns typeErr. Typing
+// goes in pieces, so a failure half way leaves the typed start in the input line, where it would pass for the owner's
+// draft and hold the queue for good. Both callers type only into an input line they read empty, so what sits there now
+// is zmina's own when it is the start of the line it was typing (holds); anything else is the owner's and stays.
+//
+// The line is kept as the role's Partial until the input line is seen without it: the tmux that failed the typing
+// often cannot be read either, and a send-keys that timed out can still reach the pane later, so the delivery that
+// comes next looks again (clearLeftover). When the start is seen and cannot be cleared, the error says so; the line
+// stays queued and the try counts, as any failed one.
+func (s *Shift) clearPartial(name, line string, typeErr error) error {
+	s.State.Role(name).Partial = line
+
+	// The screen is given the time to show what was typed, as after an Enter.
+	s.pause(submitWait)
+
+	draft, ok, err := s.Tmux.Prompt(name)
+	if err != nil || !ok || !holds(draft, line) {
+		return typeErr
+	}
+
+	s.clearInput(name, line)
+	s.pause(submitWait)
+
+	if draft, ok, err = s.Tmux.Prompt(name); err != nil || !ok || !holds(draft, line) {
+		return typeErr
+	}
+
+	return fmt.Errorf("%w; its start could not be cleared from the input line", typeErr)
+}
+
+// clearLeftover looks again for the start of a line whose typing failed (Partial), before a delivery reads the input
+// line for the owner's draft: a start still there is cleared, and the mark goes once the input line is read without
+// it, empty or holding the owner's own words. An input line that cannot be read keeps the mark.
+func (s *Shift) clearLeftover(name string) {
+	rs := s.State.Role(name)
+	if rs.Partial == "" {
+		return
+	}
+
+	draft, ok, err := s.Tmux.Prompt(name)
+	if err != nil || !ok {
+		return
+	}
+
+	if holds(draft, rs.Partial) {
+		s.clearInput(name, rs.Partial)
+
+		return
+	}
+
+	rs.Partial = ""
 }
 
 // clearInput takes a typed line zmina could not send out of the role's input line: C-e, then C-u (line end, then

@@ -160,12 +160,16 @@ type RoleState struct {
 	// TypedAt is when a line for the conversation was last typed into the role's input line. The line after it waits
 	// for the transcript to show a turn after it, or for typedSettle (atPrompt).
 	TypedAt time.Time `json:"typed_at,omitzero"`
+	// Partial is a line whose typing failed half way and whose start may still sit in the role's input line. It is
+	// cleared from there, and the mark dropped, once the input line can be read (clearLeftover).
+	Partial string `json:"partial,omitempty"`
 	// SlashAt is when a slash command (/compact, /clear, /rename) was last typed into the role. It leaves no Sent
 	// record to wait for, so nothing is delivered to the role until slashSettle has passed.
 	SlashAt time.Time `json:"slash_at,omitzero"`
 	// Failed holds lines that could not be typed after several tries, for zmina queue.
 	Failed []Failed `json:"failed,omitempty"`
-	// NextRun is the next scheduled run, counted from the schedule in NextSpec.
+	// NextRun is the next scheduled run, counted from the schedule in NextSpec: the schedule, and the crew's
+	// timezone when its file sets one, so a change of either counts the run anew.
 	NextRun  time.Time `json:"next_run,omitzero"`
 	NextSpec string    `json:"next_spec,omitempty"`
 	// Expired is the expires value already reported; SkipNoted the tasks a skipped run was reported for.

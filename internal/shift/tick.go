@@ -545,6 +545,16 @@ func (s *Shift) saveScreen(name string, now time.Time) string {
 	return rel
 }
 
+// CrewClock is t on the crew file's timezone when it sets one, and as it is, the host's, when it does not. What is read
+// as a time of day (a role's schedule, the budget's day) is read on it.
+func (s *Shift) CrewClock(t time.Time) time.Time {
+	if s.Crew.Timezone == "" {
+		return t
+	}
+
+	return t.In(s.Crew.Location())
+}
+
 // schedule runs a role's schedule: at each time it records a task, queues the prompt and starts the role if it is
 // down. A run is skipped while the role holds an active task (the dispatcher hears of it once per set of tasks), and
 // while the shift is stopped. It returns a line for the log, a health note, and whether it started the role.
@@ -559,9 +569,17 @@ func (s *Shift) schedule(name string, r *crew.Role, now time.Time, tasks []strin
 		return "", "", false
 	}
 
-	if rs.NextRun.IsZero() || rs.NextSpec != r.Schedule {
-		// First sight, or the schedule changed: count from now.
-		rs.NextRun, rs.NextSpec = sched.Next(now), r.Schedule
+	// The schedule's hours are the crew's clock, as a reminder's are (CrewClock).
+	at := s.CrewClock(now)
+
+	spec := r.Schedule
+	if s.Crew.Timezone != "" {
+		spec += " @" + s.Crew.Timezone
+	}
+
+	if rs.NextRun.IsZero() || rs.NextSpec != spec {
+		// First sight, or the schedule or its timezone changed: count from now.
+		rs.NextRun, rs.NextSpec = sched.Next(at), spec
 
 		return "", "", false
 	}
@@ -570,7 +588,7 @@ func (s *Shift) schedule(name string, r *crew.Role, now time.Time, tasks []strin
 		return "", "", false
 	}
 
-	rs.NextRun = sched.Next(now)
+	rs.NextRun = sched.Next(at)
 
 	if stopped {
 		s.log(name, "schedule-skipped", "", "the shift is stopped")
@@ -1179,7 +1197,10 @@ func (s *Shift) typeDispatcher(d string, local, remote, notes []string, now time
 	act, info := s.splitInfo(local)
 	local = append(act, info...)
 
-	// Never into a draft: the owner's half-typed words would go out joined with the line.
+	// Never into a draft: the owner's half-typed words would go out joined with the line. What zmina itself left of
+	// a line that broke is not one.
+	s.clearLeftover(d)
+
 	if draft, ok, err := s.Tmux.Prompt(d); err == nil && ok && draft != "" {
 		return ""
 	}
@@ -1356,7 +1377,10 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 	}
 
 	// Retiring an obsolete Sent record must not append a replacement packet to a preserved owner draft.
-	// An unreadable input is ambiguous too; leave it alone until it is visibly empty.
+	// An unreadable input is ambiguous too; leave it alone until it is visibly empty. What zmina itself left of a
+	// line that broke is not the owner's draft.
+	s.clearLeftover(name)
+
 	if draft, ok, err := s.Tmux.Prompt(name); err != nil || !ok || draft != "" {
 		return ""
 	}

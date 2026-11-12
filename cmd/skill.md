@@ -78,7 +78,7 @@ notify: [push-cli, send, --title, zmina] # a push to you goes through this (text
 notify_on: [reminder, blocking]          # what is pushed: reminder, blocking (an item that holds a role up), ask (every new ask); default reminder, blocking
 quiet_hours: 23:00-08:00                 # in timezone:; blocking and ask pushes wait until it is over (default none)
 notify_again: 24h                        # an item that still blocks is pushed again this often (default 24h, 1h at least; off)
-timezone: Europe/Warsaw                  # the clock reminder times are read on (default: this machine's)
+timezone: Europe/Warsaw                  # the clock reminder times, role schedules and the budget's day are read on (default: this machine's)
 lessons: on                              # daily triage of the roles' lessons into one draft MR on the crew's agentic-os (default off; see Lessons)
 worktree_gc: daily                       # the ticker runs `task gc` once a day: closed tasks' merged, clean worktrees go (default off)
 courier: off                             # no courier service beside the ticker: a line for a role waits for the beat, up to a minute (on or off; default on; see The ticker)
@@ -125,7 +125,7 @@ roles:
     restart_at: 300k                     # its own (off: never restarted for its context); restart_idle, restart_done too
     budget: 20                           # API-equivalent $ a day it (its copies with it) may spend (default none)
   scribe:
-    schedule: "0 19 * * 1-5"             # cron: minute hour day-of-month month day-of-week
+    schedule: "0 19 * * 1-5"             # cron: minute hour day-of-month month day-of-week, on timezone: (default: this machine's)
     prompt: write today's summary        # one line typed at each run
 ```
 
@@ -1611,11 +1611,11 @@ paid for: `Of the cost: cache reads 60%, cache writes 17%, output 18%, input 5%.
   crews (`zmina usage --all --local --cells`); one table, crews named `<node>/<crew>`. A peer that does not answer
   (down, or a zmina older than this) is listed under the table as `missing:` with why.
 - **Budgets**, in API-equivalent dollars, none by default: a role's `budget:` in the crew file is per day (its
-  copies with it), a task's `--budget` for its whole life (its own turns, not the ones it shares). Every ten
-  minutes the ticker checks them — and reads nothing while none is set — and tells the dispatcher once per
-  crossing: `budget: dev spent $23.10 today (API-equivalent), over its $20.00 a day`, `budget: T-5 (dev) cost
-  $52.00 so far (API-equivalent), over its $50.00`. A note, never a stop. `task show` says `within` or `over its
-  $50.00 budget`.
+  copies with it; a day of the crew's `timezone:`, else of this machine's), a task's `--budget` for its whole life
+  (its own turns, not the ones it shares). Every ten minutes the ticker checks them — and reads nothing while none
+  is set — and tells the dispatcher once per crossing: `budget: dev spent $23.10 today (API-equivalent), over its
+  $20.00 a day`, `budget: T-5 (dev) cost $52.00 so far (API-equivalent), over its $50.00`. A note, never a stop.
+  `task show` says `within` or `over its $50.00 budget`.
 - **Restarts**: under the table, how often roles were restarted fresh in the window (see The ticker, Restart), by
   role, a copy's with its role's, and what for: `Restarted fresh 4 times: backend 2 (context 1, idle 0, task done
   1), dev 2 (context 1, idle 1).` (`task done` only when there is one) `--json` has them as `restarts` (role, when, task, why);
