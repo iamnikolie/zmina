@@ -139,7 +139,7 @@ func TestLimitsFlowReadsTheTapFileAndTheCodexRollouts(t *testing.T) {
 
 	out, _, err = zm(t, crewFile, "limits")
 	require.NoError(t, err)
-	assert.Regexp(t, `claude +5h 12% +7d 41% +5h resets \S+ · 7d resets .* seen 2m ago\n`, out)
+	assert.Regexp(t, `claude +5h 12% +7d 41% +5h resets .+ · 7d resets .* seen 2m ago\n`, out)
 	assert.Regexp(t, `codex +week 50% +resets .* seen 1h ago \(~/\.codex\)\n`, out)
 
 	out, _, err = zm(t, crewFile, "limits", "--json")

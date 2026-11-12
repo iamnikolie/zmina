@@ -278,6 +278,9 @@ func (a *app) laterTakeCommand() *cobra.Command {
 					return err
 				}
 
+				// Goes now when the role is up and can take it; one just started by --resume has not booted: the beat.
+				s.DeliverTo(role)
+
 				fmt.Fprintln(a.out)
 
 				return nil

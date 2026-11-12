@@ -407,6 +407,9 @@ func (s *Shift) trim(name string, r *crew.Role, now time.Time, tasks []string) s
 		return fmt.Sprintf("%s: /%s (%s): %s", name, do, detail, err)
 	}
 
+	// A /compact or a /clear leaves no record to wait for: what is queued behind it waits slashSettle.
+	rs.SlashAt = now
+
 	// The boot again, without the tag: queued, it is a line the log, the queue and the recovery pack show; the
 	// clear's hook gives the tag.
 	if boot := s.bootText(r, false); do == crew.ContextClear && !r.IsCodex() && boot != "" {
@@ -805,6 +808,12 @@ func (s *Shift) atPrompt(name string, now time.Time) bool {
 // it is up, booted and idle (typeDispatcher).
 func (s *Shift) deliverOnce(now time.Time) string {
 	d := s.Crew.Dispatcher
+
+	// A slash command was just typed into it (a trim's): its queue waits as any role's does (slashSettle).
+	if s.State.Role(d).settling(now) {
+		return ""
+	}
+
 	s.pruneTaskInbox(d)
 	s.pruneInfo()
 
@@ -1046,7 +1055,7 @@ func (s *Shift) postDispatcher(d string, sess *registry.Session, local, remote, 
 	}
 
 	rs.Inbox = rs.Inbox[nOwn:]
-	rs.Attempts = 0
+	rs.clearTries()
 	rs.Posted[len(rs.Posted)-1].IDs = slices.Clone(ids)
 	rs.Posted[len(rs.Posted)-1].Parts = parts
 	s.delivered(ids, now)
@@ -1300,12 +1309,17 @@ func IsRemote(signal string) bool { return strings.HasPrefix(signal, "remote ") 
 // Deliver types the waiting queue into the dispatcher when it is up, booted and idle, and returns the line.
 func (s *Shift) Deliver() string { return s.deliver(s.Now()) }
 
-// deliverInbox types a role's first waiting line when it is up, booted and idle; one line per beat, so the role
-// reads each before the next. A line tmux refuses is tried typeTries beats, then moves to the failed list (zmina
-// queue), so it never blocks the lines after it. It returns a line for the log.
+// deliverInbox types a role's first waiting line when it is up, booted and idle; one line per pass, so the role
+// reads each before the next. A line tmux refuses is tried typeTries times, at least retryGap apart, then moves to
+// the failed list (zmina queue), so it never blocks the lines after it. Nothing goes to a role a slash command was
+// just typed into (slashSettle). It returns a line for the log.
 func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
-	s.pruneTaskInbox(name)
 	rs := s.State.Role(name)
+	if rs.settling(now) {
+		return ""
+	}
+
+	s.pruneTaskInbox(name)
 
 	// A line posted to the inbox socket needs no empty input line and no Enter: it goes once the one before it
 	// showed in the conversation and the role is between turns. A slash command is typed.
@@ -1337,10 +1351,16 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 		return ""
 	}
 
+	// A line that failed a moment ago is neither tried nor counted again yet.
+	if rs.triedLately(now) {
+		return ""
+	}
+
 	head := rs.Inbox[0]
 
 	if err := s.typeLine(name, head); err != nil {
 		rs.Attempts++
+		rs.TriedAt = now
 		s.deliveryFailure(name, head, err.Error())
 		s.log(name, "type-failed", "", fmt.Sprintf("try %d: %s: %s", rs.Attempts, head, err))
 
@@ -1349,12 +1369,14 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 		}
 
 		rs.Failed = append(rs.Failed, Failed{Line: head, Error: err.Error(), At: now, IDs: s.takeIDs(name, head)})
-		rs.Inbox, rs.Attempts = rs.Inbox[1:], 0
+		rs.Inbox = rs.Inbox[1:]
+		rs.clearTries()
 
 		return name + ": a queued line failed " + fmt.Sprint(typeTries) + " times, kept in zmina queue: " + head
 	}
 
-	rs.Inbox, rs.Attempts = rs.Inbox[1:], 0
+	rs.Inbox = rs.Inbox[1:]
+	rs.clearTries()
 	s.log(name, "typed", "", head)
 
 	// The rename this start queued is typed: from now on the conversation runs under that name.
@@ -1366,8 +1388,11 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 	s.delivered(ids, now)
 	s.submittedTask(name, head)
 
-	// A slash command may not change the status; only a line for the conversation is watched until it lands.
-	if !strings.HasPrefix(head, "/") {
+	// A slash command may not change the status; only a line for the conversation is watched until it lands. A
+	// command is waited for by its time instead (slashSettle).
+	if strings.HasPrefix(head, "/") {
+		rs.SlashAt = now
+	} else {
 		rs.Sent = &Sent{Line: head, At: now, IDs: ids}
 	}
 
@@ -1381,8 +1406,14 @@ func (s *Shift) postInbox(name string, sess *registry.Session, now time.Time) st
 	rs := s.State.Role(name)
 	head := rs.Inbox[0]
 
+	// A line that failed a moment ago is neither tried nor counted again yet.
+	if rs.triedLately(now) {
+		return ""
+	}
+
 	if err := s.post(name, sess, head, now); err != nil {
 		rs.Attempts++
+		rs.TriedAt = now
 		s.log(name, "post-failed", "", fmt.Sprintf("try %d: %s: %s", rs.Attempts, head, err))
 
 		if unavailable(err) && rs.Attempts < typeTries {
@@ -1391,7 +1422,8 @@ func (s *Shift) postInbox(name string, sess *registry.Session, now time.Time) st
 
 		s.deliveryFailure(name, head, err.Error())
 		rs.Failed = append(rs.Failed, Failed{Line: head, Error: err.Error(), At: now, IDs: s.takeIDs(name, head)})
-		rs.Inbox, rs.Attempts = rs.Inbox[1:], 0
+		rs.Inbox = rs.Inbox[1:]
+		rs.clearTries()
 
 		return name + ": a queued line could not be posted, kept in zmina queue: " + head
 	}
@@ -1400,16 +1432,64 @@ func (s *Shift) postInbox(name string, sess *registry.Session, now time.Time) st
 	rs.Posted[len(rs.Posted)-1].IDs = ids
 	rs.Posted[len(rs.Posted)-1].Boot = rs.QueuedBoot != "" && head == rs.QueuedBoot
 
-	rs.Inbox, rs.Attempts = rs.Inbox[1:], 0
+	rs.Inbox = rs.Inbox[1:]
+	rs.clearTries()
 	s.submittedTask(name, head)
 	s.delivered(ids, now)
 
 	return "posted to " + name + ": " + head
 }
 
+// triedLately reports whether the role's first queued line failed a try less than retryGap ago.
+func (rs *RoleState) triedLately(now time.Time) bool {
+	return rs.Attempts > 0 && within(now, rs.TriedAt, retryGap)
+}
+
+// settling reports whether a slash command was typed into the role less than slashSettle ago.
+func (rs *RoleState) settling(now time.Time) bool { return within(now, rs.SlashAt, slashSettle) }
+
+// clearTries forgets the failed tries of the first queued line: it went, failed for good, or is gone.
+func (rs *RoleState) clearTries() { rs.Attempts, rs.TriedAt = 0, time.Time{} }
+
+// within reports whether at lies less than d before now. No stamp, or one after now (the clock moved back), is not
+// within: a stamp must never hold a role for longer than d.
+func within(now, at time.Time, d time.Duration) bool {
+	if at.IsZero() {
+		return false
+	}
+
+	gap := now.Sub(at)
+
+	return gap >= 0 && gap < d
+}
+
 // FlushInbox attempts the ordinary safe idle delivery path for one role, without starting any roles.
 // Call under the crew state lock. Busy roles, dialogs, drafts and unlanded messages retain their queue.
 func (s *Shift) FlushInbox(name string) string { return s.deliverInbox(name, s.Now()) }
+
+// DeliverTo gives a role what waits for it now, when it can take it, instead of at the next beat: the dispatcher its
+// signals, notes and own queue (deliver, then deliverInbox, as the beat does), any other role its first queued line
+// (deliverInbox). The beat's own rules decide whether it can: the role is up under zmina and booted, idle or able to
+// take a post, no dialog and no draft in the way, the line before it shown or landed, the last failed try and the
+// last slash command far enough back. It starts no role, trims nothing, tells nobody again, sweeps no record and
+// writes neither LastTick nor Up: what it cannot give stays queued for the beat, which stays the safety net. Call it
+// under the crew state lock, after the command has queued what it queued. It returns a line for the log, "" when
+// nothing went.
+func (s *Shift) DeliverTo(name string) string {
+	if _, err := s.Role(name); err != nil {
+		return ""
+	}
+
+	now := s.Now()
+
+	if name == s.Crew.Dispatcher {
+		if line := s.deliver(now); line != "" {
+			return "told the dispatcher: " + line
+		}
+	}
+
+	return s.deliverInbox(name, now)
+}
 
 // pruneAfterBeats is how many beats in a row a role must be missing from the crew file before its state is dropped:
 // long enough for an edit, a merge or a rename and back to finish.

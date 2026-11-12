@@ -615,6 +615,7 @@ func TestClearedConversationGetsItsBoot(t *testing.T) {
 	require.NotEmpty(t, boot)
 
 	if len(rs.Posted) == 0 {
+		*f.now = f.now.Add(time.Minute)
 		f.s.Tick()
 	}
 

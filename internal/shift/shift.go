@@ -35,8 +35,17 @@ const (
 	// inboxMax caps the lines waiting for one role; signalsMax the signals waiting for the dispatcher.
 	inboxMax   = 20
 	signalsMax = 20
-	// typeTries is how many beats a queued line is tried before it moves to the failed list.
+	// typeTries is how many tries a queued line gets before it moves to the failed list. A try is a pass that fails
+	// at least retryGap after the one before it: passes that run seconds apart (a command's delivery and the beat)
+	// are one try.
 	typeTries = 3
+	// retryGap is how soon after a failed try the line is tried, and counted, again. The beat comes every minute, so
+	// at that cadence it changes nothing.
+	retryGap = 30 * time.Second
+	// slashSettle is how long after a slash command was typed into a role nothing more is delivered to it: the
+	// command leaves no Sent record to wait for, and a /clear or a /compact has not shown in the status yet. It is
+	// the time a role is given to end its conversation after /exit (ExitWait), far under the beat's minute.
+	slashSettle = ExitWait
 )
 
 // ErrNotUp is returned for a role whose tmux session is not there.

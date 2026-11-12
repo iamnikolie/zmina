@@ -150,6 +150,13 @@ type RoleState struct {
 	// Inbox holds lines typed into the role the next time it is idle; Attempts counts failed tries of the first.
 	Inbox    []string `json:"inbox,omitempty"`
 	Attempts int      `json:"attempts,omitempty"`
+	// TriedAt is when the try Attempts last counted failed: a failed first line is neither tried nor counted again
+	// within retryGap, so passes seconds apart (a command's delivery, then the beat) are one try. It means something
+	// only while Attempts is above zero.
+	TriedAt time.Time `json:"tried_at,omitzero"`
+	// SlashAt is when a slash command (/compact, /clear, /rename) was last typed into the role. It leaves no Sent
+	// record to wait for, so nothing is delivered to the role until slashSettle has passed.
+	SlashAt time.Time `json:"slash_at,omitzero"`
 	// Failed holds lines that could not be typed after several tries, for zmina queue.
 	Failed []Failed `json:"failed,omitempty"`
 	// NextRun is the next scheduled run, counted from the schedule in NextSpec.

@@ -57,6 +57,7 @@ func TestAckClearsAFailedLine(t *testing.T) {
 	f.tm.typeErr = errors.New("tmux refused")
 	for range typeTries {
 		f.s.Tick()
+		*f.now = f.now.Add(time.Minute)
 	}
 
 	rs := f.s.State.Role("designer")
