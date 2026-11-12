@@ -368,8 +368,18 @@ func (a *app) taskShowCommand() *cobra.Command {
 				}
 
 				if t.Delivery != nil {
-					fmt.Fprintf(a.out, "handoff: %s · %s\n", t.Delivery.ID, t.Delivery.Status())
+					fmt.Fprintf(a.out, "handoff: %s · %s", t.Delivery.ID, t.Delivery.Status())
+
+					if t.Delivery.Gen > 0 {
+						fmt.Fprintf(a.out, " · hand-out %d to %s", t.Delivery.Gen, t.Delivery.Role)
+					}
+
+					fmt.Fprintln(a.out)
 				}
+
+				a.printClosedGen(t)
+				a.printLate(t, full)
+
 				view := recordLine
 				if full {
 					view = recordFull
@@ -458,7 +468,9 @@ type taskChange struct {
 	note, role, on      string
 	title, project, url string
 	budget              string
-	force               bool
+	// handoff is the packet --handoff names: the hand-out the caller reports for.
+	handoff string
+	force   bool
 	// criteria is the values of --criteria; setCriteria the list they make when the flag was given (set only).
 	criteria    []string
 	setCriteria *[]string
@@ -468,6 +480,7 @@ type taskChange struct {
 }
 
 func (o *taskChange) flags(c *cobra.Command, withRole bool) {
+	handoffFlag(c, &o.handoff)
 	c.Flags().StringVar(&o.note, "note", "", "a note on the task")
 	c.Flags().BoolVar(&o.force, "force", false, "close it although its worktree has uncommitted changes, or (done) "+
 		"it has criteria and no result, or (the owner and the dispatcher) its check was not run or failed: it is then "+
@@ -540,7 +553,7 @@ func (a *app) taskCloseCommand(use string, st task.State) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if resultFile != "" {
-				if err := a.saveRecordFile(args[0], "result", resultFile, cmd); err != nil {
+				if err := a.saveRecordFile(args[0], "result", resultFile, o.handoff, cmd); err != nil {
 					return err
 				}
 			}
@@ -582,7 +595,7 @@ func replacementCriteria(values []string) ([]string, error) {
 }
 
 func (a *app) taskParkCommand() *cobra.Command {
-	var note string
+	var note, handoff string
 
 	c := &cobra.Command{
 		Use:   "park <id>",
@@ -595,6 +608,11 @@ func (a *app) taskParkCommand() *cobra.Command {
 				t, err := taskStore(s.Crew).Get(args[0])
 				if err != nil {
 					return err
+				}
+
+				// A session that does not hold the task does not park it.
+				if st := a.ledger(s).Current(t, *a.caller(s, handoff)); st.Late {
+					return a.lateReport(s, t, "park", "", st)
 				}
 
 				it, err := s.Park(t, note)
@@ -618,6 +636,7 @@ func (a *app) taskParkCommand() *cobra.Command {
 	}
 
 	c.Flags().StringVar(&note, "note", "", "what remains, in one or two lines (default: the task's title)")
+	handoffFlag(c, &handoff)
 
 	return c
 }
@@ -641,24 +660,32 @@ func (a *app) doneCheck(id string, st task.State, o taskChange) (*ledger.Checked
 		return nil, nil //nolint:nilnil // no check to run is not an error
 	}
 
-	// The crew file is read here without the lock; its warnings are said once, by the close.
+	// The crew file and the state are read here without the lock; the crew file's warnings are said once, by the close. The
+	// state names the role's live conversation, which a delivery not yet submitted to one is held by.
 	quiet := *a
 	quiet.err = io.Discard
 
-	s, err := quiet.newShift()
-	if err != nil {
-		return nil, err
-	}
+	var (
+		l    *ledger.Ledger
+		plan *ledger.CheckPlan
+	)
 
-	if o.role != "" {
-		if _, err := s.Role(o.role); err != nil {
-			return nil, err
+	err := quiet.readState(func(s *shift.Shift) error {
+		if o.role != "" {
+			if _, err := s.Role(o.role); err != nil {
+				return err
+			}
 		}
-	}
 
-	l := a.ledger(s)
+		l = a.ledger(s)
 
-	plan, err := l.PlanCheck(id, a.changeOf(st, o))
+		var err error
+
+		// A session that does not hold the task is refused here, before anything runs for it.
+		plan, err = l.PlanCheck(id, a.changeOf(s, st, o))
+
+		return err
+	})
 	if err != nil || plan == nil {
 		return nil, checkExit(err)
 	}
@@ -682,17 +709,26 @@ func checkExit(err error) error {
 	return err
 }
 
-// changeOf is the ledger's change that a close or set of a task with these flags is.
-func (a *app) changeOf(st task.State, o taskChange) ledger.Change {
+// changeOf is the ledger's change that a close or set of a task with these flags is, made by whoever runs this command: it
+// is held to the task's current hand-out (ledger.Current).
+func (a *app) changeOf(s *shift.Shift, st task.State, o taskChange) ledger.Change {
 	return ledger.Change{State: st, On: o.on, Note: o.note, Role: o.role, Force: o.force, Title: o.title,
 		Project: o.project, URL: o.url, Budget: o.budget, Criteria: o.setCriteria, By: by(), Check: o.check,
-		ClearCheck: o.clearCheck}
+		ClearCheck: o.clearCheck, Caller: a.caller(s, o.handoff)}
 }
 
 func (a *app) setTask(id string, st task.State, o taskChange) error {
-	var closed *task.Task
+	var (
+		closed *task.Task
+		late   *ledger.LateError
+	)
 
 	checked, err := a.doneCheck(id, st, o)
+	if errors.As(err, &late) {
+		// Refused below, under the lock, where it is kept and told once; no check ran for it.
+		checked, err = nil, nil
+	}
+
 	if err != nil {
 		return err
 	}
@@ -704,10 +740,20 @@ func (a *app) setTask(id string, st task.State, o taskChange) error {
 			}
 		}
 
-		change := a.changeOf(st, o)
+		change := a.changeOf(s, st, o)
 		change.Checked = checked
 
 		t, err := a.ledger(s).Set(id, change)
+		if errors.As(err, &late) {
+			// A session that does not hold the task is not the one to close or change it.
+			held, gerr := s.Tasks.Get(id)
+			if gerr != nil {
+				return gerr
+			}
+
+			return a.lateReport(s, held, closeWhat(st), "", late.Standing)
+		}
+
 		if err != nil {
 			return err
 		}

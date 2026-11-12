@@ -1236,9 +1236,9 @@ which edit files in a repository checkout.
 | `zmina task new <role> [--because "<why>"] <asked...>` | a role picked by hand, with the routes' answer kept beside it (see Routes). `--because` says why it is not the routes' pick; optional unless the crew file has `route_override: required`. Without `routes:` it does nothing. |
 | `zmina task new <role> --repo r --worktree <asked...>` | also gives it its own git worktree `~/.zmina/worktrees/<repo>-T-14` on a new branch `zmina/t-14` (`zmina/<crew>-t-14` for a named crew) from the repo's current branch (`--base` another). The role works there, never in the repo's checkout. The task is written before the worktree is made: if git fails, it stays as `dropped` with the error in its note. |
 | `zmina task ls [<node>/<crew>] [--all] [--role r] [--json]` | active tasks (`--all`: closed too); with an address, that crew's (see `zmina ls <node>/<crew>`). |
-| `zmina task show [<node>/<crew>] <id> [--full]` | one task: what was asked and its latest note (each clipped to 300 characters), its criteria when it has some (a `criteria:` block, numbered, whole), the check closing it as done will run (`check:`), or for a closed task the check that ran (`checked:`, with its output under `--full`) or that it was closed past it (`unchecked:`), its handoff, result and checkpoint in one line each (revision, time, the summary's start), its cost line (see Usage) and its last 8 events, one line each. `--full`: the asked text, note, result and checkpoint whole and the last 20 events. Ids: `T-14`, `t-14` or `14`. |
+| `zmina task show [<node>/<crew>] <id> [--full]` | one task: what was asked and its latest note (each clipped to 300 characters), its criteria when it has some (a `criteria:` block, numbered, whole), the check closing it as done will run (`check:`), or for a closed task the check that ran (`checked:`, with its output under `--full`) or that it was closed past it (`unchecked:`), its handoff (with its hand-out number) and the late reports it has (`late:`), result and checkpoint in one line each (revision, time, the summary's start), its cost line (see Usage) and its last 8 events, one line each. `--full`: the asked text, note, result and checkpoint whole and the last 20 events. Ids: `T-14`, `t-14` or `14`. |
 | `zmina task set <id> [state] [--on <who>] [--note …] [--role r] [--title …] [--project …] [--url …] [--budget …] [--criteria …] [--check …]` | change state, note, title, project, url or budget (`-` clears one), or hand it to another role. `--criteria "<one line>"`, repeated, replaces the task's criteria; an empty `--criteria ""` alone clears them. `waiting --on <who>`: it waits on someone other than the owner — a role of the crew or a person (`--on -`: the owner again); it stays off the owner's todo. Any other state clears it. `--check "<command>" [--check-timeout 10m] [--check-commit]` gives the task its own check, `--check -` clears it (the owner and the dispatcher only; set it before closing, not with it; see What checked means). |
-| `zmina task done <id>` / `task drop <id>` | close it, and print its cost line when turns are found for it; closed by a role, the dispatcher gets a signal with the note (see results). Refuses while its worktree has uncommitted changes (`--force` closes anyway; the worktree stays). `done` also refuses a task that has criteria and no saved result (`task result`, or `done --result <file>`); `--force` closes it anyway. `done` (and `task set <id> done`) on a task with a check runs it first and refuses the close when it fails or times out: exit code 4, the end of its output in the message, the task stays open (see What checked means). |
+| `zmina task done <id>` / `task drop <id>` | close it, and print its cost line when turns are found for it; closed by a role, the dispatcher gets a signal with the note (see results). Refuses while its worktree has uncommitted changes (`--force` closes anyway; the worktree stays). `done` also refuses a task that has criteria and no saved result (`task result`, or `done --result <file>`); `--force` closes it anyway. `done` (and `task set <id> done`) on a task with a check runs it first and refuses the close when it fails or times out: exit code 4, the end of its output in the message, the task stays open (see What checked means). Closing, or any change, from a session that does not hold the task's hand-out is refused as a late report: exit code 5, nothing changes (see Late reports, under Task results). |
 | `zmina task park <id> [--note "<what remains>"]` | move an active task to the later list: a new `L-n` with what remains (default: the task's title), note `from T-48 (designer)`, and the role and its conversation (the running one, else its last) for `later take --resume`. The task closes as `parked L-n`; its worktree stays as it is. `task set <id> parked` is refused: parking goes through here. Prints `T-48 · designer · parked L-15`, then its cost line. |
 | `zmina task gc [--dry-run]` | remove worktrees and branches of closed tasks once clean and merged into their base. `--force` also removes dropped tasks' unmerged branches. Tasks whose repository is no longer at the path they record (moved, deleted) are one plain line for each repository, `repository moved or gone: <path>, N closed tasks`, not a git error for each: git cannot say whether their work is merged, so a worktree directory that exists stays (point the records at the new place with `task relocate`). `--drop-gone` also drops the worktree record (worktree, branch and base) of a done or dropped task whose repository and worktree directory are both gone: nothing is left to lose, and the record stops being listed. A last line counts what was removed, dropped and kept. |
 | `zmina task relocate <old-repo-path> <new-repo-path> [--dry-run]` | a repository moved: every task record (closed and open) whose repo is `<old-repo-path>` gets `<new-repo-path>`, which must be the top level of a git repository (refused otherwise). Only the repo field is rewritten, each record through the task store; an event `relocate` carries the count. Then `git worktree repair` runs in the new repository (one minute at most) and what it said is printed, so worktrees that stayed in `~/.zmina/worktrees` find their repository again. Nothing is deleted. `--dry-run` prints each task that would change and what would run. `task gc` then judges the tasks in their repository's new place. |
@@ -1312,8 +1312,9 @@ neither says, a merged branch is taken to have had commits, so there the rule as
 closed, the command is the leader of a session and process group of its own, with no controlling terminal, which is killed
 when it ends or the timeout passes, and also when zmina gets an interrupt, terminate, hangup or quit signal (the task then
 stays open and the check is reported as interrupted, not as failed: nothing is known of it). Third it closes, but only if
-the task, its worktree's commit and the check in force (the task's, or the crew's) are still the ones it ran with: if any
-moved meanwhile the close is refused and the command is to be run again. A check that exits 0 and leaves files behind in
+the task, its hand-out (see Late reports), its worktree's commit and the check in force (the task's, or the crew's) are still
+the ones it ran with: if any moved meanwhile the close is refused and the command is to be run again. The first step
+also refuses a session that does not hold the task's hand-out, before anything runs, and the third does it again. A check that exits 0 and leaves files behind in
 the clean worktree has failed: it names up to five of them (remove them, or have git ignore them), as the task could not
 close over them.
 
@@ -2653,6 +2654,34 @@ with its note: `dev: T-1 done: <note> (zmina task show T-1)` (`, no note` withou
 assignment (saved since its packet was accepted, else since the task was made) told it already. The task keeps who
 closed it, when and with what note (`closed`, cleared when it is reopened); the ticker reconciles a closure the
 queue lost, once each. Closed by the owner's hand or by the dispatcher, or by a zmina that kept no closure: no signal.
+
+**Late reports.** Each hand-out of a task is numbered: its delivery has a `gen`, 1 the first time it is handed to a role
+and one more for every new delivery (a packet that changed, a role started since, another role, the hand-out of a
+restart, of `up` and of the reopen of a `keep: always` role, `rotation retry`). A delivery that a failed fresh start or
+`rotation abort` puts back puts its number back, and the number is not given again to another session's. A task file from
+before it has none, and nothing is checked of it until its next hand-out. The session that holds a hand-out is the one its
+line was submitted to (`delivery.session`), before that the role's live one. A role (`$ZMINA_ROLE`, the dispatcher aside)
+that saves a result or checkpoint of a task, or closes, parks or changes it, is held to that: it must be the task's own
+role (a copy is not its base) and, where its conversation (`CLAUDE_CODE_SESSION_ID`, `CODEX_THREAD_ID`) and the
+hand-out's are both known, the same one. The owner's hand and the dispatcher are not held. A report that is not the
+hand-out's (the old session of a restarted role, a previous holder after `task set --role`, a background agent of the
+old conversation) is a late report. A result or checkpoint is saved as a revision of the record (`task result T-1
+--revision <hash>` reads it) and is not the task's; a close, a park or a change is refused; nothing else of the task
+moves, `updated` included, so the new hand-out is accepted as it was. The command says `T-1: late report: it was
+handed out again to another session (hand-out 3, to dev, made 14:02); kept as result revision <12 hex>, not the task's
+result, and the task is unchanged` and exits 5; `task done --result` stops at the result. Each late report is a
+`late-report` event and an entry in the task's `late` list (the newest 20; `task show` prints the last 5, `--full`
+all). The dispatcher hears one FYI note for each session on a hand-out, however often that session reports again (it
+names `task handoff <id> --queue`, which hands the task to the live session, for a session that should hold it, such as
+one a role started itself with `/clear`), and a late revision gets no result-ready notice. A late `task done` is refused before its check runs. A role with nothing in
+its environment to tell it by (no session id: a typed role) passes on its role alone, and the closing it makes says
+`unbound` in `closed`; `--handoff <packet id>` (the id of its packet line, as `task accept` takes it) on `task result`,
+`checkpoint`, `done`, `drop`, `set` and `park` binds it to a packet instead, and an owner's hand that names one is held
+to it too. A packet id is the same when an unchanged task is handed out again: it tells one state of the task from
+another, not one session from another, so where both sessions are known they decide. `closed.gen` is the hand-out the
+task was closed under and `result.gen` the one a result was saved under. It is a check of who calls, from the caller's
+environment and the task file, as the role itself is: it keeps a stale session from doing harm by mistake, it is not a
+wall.
 
 ### Task conversation memory
 
