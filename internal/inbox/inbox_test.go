@@ -45,3 +45,20 @@ func TestStore(t *testing.T) {
 	require.Len(t, all, 1)
 	assert.Equal(t, id2, all[0].ID)
 }
+
+// An id made of a key is the same each time and is a valid one: a text stored again under it replaces the first copy.
+func TestIDOf(t *testing.T) {
+	a := IDOf("queue dev\x00one")
+	assert.True(t, ValidID(a), a)
+	assert.Equal(t, a, IDOf("queue dev\x00one"))
+	assert.NotEqual(t, a, IDOf("queue dev\x00two"))
+	assert.NotEqual(t, a, IDOf("queue ops\x00one"))
+
+	s := &Store{Dir: filepath.Join(t.TempDir(), "inbox")}
+	require.NoError(t, s.Put(Entry{ID: a, Body: "one"}))
+	require.NoError(t, s.Put(Entry{ID: a, Body: "one"}))
+
+	all, err := s.List()
+	require.NoError(t, err)
+	assert.Len(t, all, 1)
+}

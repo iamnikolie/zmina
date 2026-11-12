@@ -1103,12 +1103,10 @@ func (s *Shift) boundLine(name, line string, limit int) (string, error) {
 		store = &inbox.Store{Dir: s.Crew.Layout().Inbox(), Now: s.Now}
 	}
 
-	id, err := inbox.NewID()
-	if err == nil {
-		err = store.Put(inbox.Entry{ID: id, From: "queue " + name, Body: body})
-	}
-
-	if err != nil {
+	// The entry is known by the role and the text, so a post that fails and is tried again stores it over itself: one
+	// entry for the line, not one for each try.
+	id := inbox.IDOf("queue " + name + "\x00" + body)
+	if err := store.Put(inbox.Entry{ID: id, From: "queue " + name, Body: body}); err != nil {
 		return "", err
 	}
 

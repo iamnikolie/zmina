@@ -3,12 +3,14 @@ package shift
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/iamnikolie/zmina/internal/inbox"
 	"github.com/iamnikolie/zmina/internal/peer"
 	"github.com/iamnikolie/zmina/internal/registry"
 	"github.com/iamnikolie/zmina/internal/tmux"
@@ -636,4 +638,58 @@ func TestFailedPostsToTheDispatcherStillCountItsOwnQueuedLine(t *testing.T) {
 	require.Len(t, rs.Failed, 1, "the third try failed it")
 	assert.Equal(t, "[dev] its own line", rs.Failed[0].Line)
 	assert.Empty(t, rs.Inbox)
+}
+
+// A queued line over the post limit is stored whole before it is posted; a post that fails and is tried again finds
+// that entry, as it must not add one for each try. The one stored is the one the post that goes carries.
+func TestFailedPostsOfAnOversizedLineStoreItOnce(t *testing.T) {
+	f, p := nativeFixture(t, crewYAML)
+	upNative(t, f, "dispatcher")
+
+	long := "[dev] " + strings.Repeat("x", postMax+100)
+	require.NoError(t, f.s.Queue("dispatcher", long))
+
+	p.err = peer.ErrUnavailable // nothing reached the session: the line stays queued, tried again
+	calls := counted(f, p)
+
+	for range 2 {
+		_, err := f.s.DeliverPass()
+		require.NoError(t, err)
+
+		*f.now = f.now.Add(time.Minute)
+	}
+
+	assert.GreaterOrEqual(t, calls.count("peer Post"), 2, "tried each time")
+	require.Len(t, f.s.State.Role("dispatcher").Inbox, 1, "still queued")
+
+	store := &inbox.Store{Dir: f.s.Crew.Layout().Inbox()}
+	stored := func() []string {
+		t.Helper()
+
+		entries, err := store.List()
+		require.NoError(t, err)
+
+		var ids []string
+		for _, e := range entries {
+			ids = append(ids, e.ID)
+		}
+
+		return ids
+	}
+
+	ids := stored()
+	require.Len(t, ids, 1, "stored once")
+
+	e, err := store.Get(ids[0])
+	require.NoError(t, err)
+	assert.Equal(t, long, e.Body)
+
+	p.err = nil
+
+	_, err = f.s.DeliverPass()
+	require.NoError(t, err)
+	require.Len(t, p.raw, 1)
+	assert.Contains(t, p.raw[0], ids[0], "the post that goes points at it")
+	assert.Empty(t, f.s.State.Role("dispatcher").Inbox)
+	assert.Equal(t, ids, stored())
 }
