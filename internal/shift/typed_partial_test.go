@@ -166,3 +166,63 @@ func TestPartialClearThatFailsCountsAndSaysSo(t *testing.T) {
 	require.NotEmpty(t, f.s.State.Notes)
 	assert.Contains(t, f.s.State.Notes[0], "could not be cleared from the input line")
 }
+
+// blindTmux is a tmux that breaks half way through a line and cannot be read from then on, as one whose server
+// stopped answering: the start is in the input line, and nothing can be told of it yet.
+type blindTmux struct {
+	*cutTmux
+	blind *bool
+}
+
+func (b blindTmux) Type(n, text string) error {
+	*b.blind = true
+
+	return b.cutTmux.Type(n, text)
+}
+
+func (b blindTmux) Prompt(n string) (string, bool, error) {
+	if *b.blind {
+		return "", false, errors.New("tmux: capture-pane timed out")
+	}
+
+	return b.cutTmux.Prompt(n)
+}
+
+// A start that could not even be looked for is remembered: the delivery that comes once the tmux answers clears it
+// before it reads the input line for a draft, so it does not hold the queue as the owner's.
+func TestPartialThatCouldNotBeReadIsClearedByTheNextDelivery(t *testing.T) {
+	f, c := cutFixture(t)
+	line := "[zmina T-1] read the packet and tell me what is missing before you start"
+	require.NoError(t, f.s.Queue("designer", line))
+
+	f.s.Tmux = blindTmux{cutTmux: c, blind: new(bool)}
+	f.s.deliverInbox("designer", *f.now)
+
+	rs := f.s.State.Role("designer")
+	assert.Equal(t, line, rs.Partial, "remembered")
+	assert.Empty(t, f.tm.keys["designer"], "no key into an input line that cannot be read")
+	assert.NotEmpty(t, f.tm.drafts["designer"], "the start is still there")
+
+	// The tmux answers again: the start goes, and the line is typed whole on its next counted try.
+	f.s.Tmux = f.tm
+	*f.now = f.now.Add(countedGap)
+	f.s.deliverInbox("designer", *f.now)
+
+	assert.Equal(t, []string{"C-e", "C-u"}, f.tm.keys["designer"])
+	assert.Empty(t, rs.Partial, "the mark goes with a line typed whole")
+	assert.Equal(t, []string{line}, f.tm.typed["designer"])
+}
+
+// The mark does not outlive the owner's own words: a draft that is not the start of the line stays, and the mark goes.
+func TestLeftoverMarkLeavesTheOwnersDraft(t *testing.T) {
+	f, _ := cutFixture(t)
+	f.s.Tmux = f.tm
+	f.s.State.Role("designer").Partial = "[zmina T-1] read the packet"
+	f.tm.drafts["designer"] = "half a thought of the owner"
+
+	f.s.clearLeftover("designer")
+
+	assert.Equal(t, "half a thought of the owner", f.tm.drafts["designer"])
+	assert.Empty(t, f.tm.keys["designer"])
+	assert.Empty(t, f.s.State.Role("designer").Partial)
+}

@@ -83,3 +83,30 @@ func TestScheduleWithoutTimezoneKeepsTheBeatsClock(t *testing.T) {
 	assert.Equal(t, *f.now, f.s.CrewClock(*f.now))
 	assert.Same(t, time.UTC, f.s.CrewClock(*f.now).Location())
 }
+
+// A change of the crew's timezone counts the next run anew, as a change of the schedule does: the run does not fire
+// once more on the old clock.
+func TestTimezoneChangeCountsTheNextRunAnew(t *testing.T) {
+	tokyo, err := time.LoadLocation("Asia/Tokyo")
+	require.NoError(t, err)
+
+	nightly := crewYAML + `  nightly:
+    schedule: "0 22 * * *"
+    prompt: run
+`
+	f := fixtureWith(t, nightly)
+
+	*f.now = time.Date(2026, 10, 24, 21, 58, 0, 0, time.UTC)
+	f.s.Tick()
+	require.Equal(t, time.Date(2026, 10, 24, 22, 0, 0, 0, time.UTC), f.s.State.Role("nightly").NextRun)
+
+	// The crew file gains a timezone: the shift reads the same crew, loaded with it.
+	f.s.Crew = fixtureWith(t, "timezone: Asia/Tokyo\n"+nightly).s.Crew
+	*f.now = time.Date(2026, 10, 24, 22, 1, 0, 0, time.UTC)
+	f.s.Tick()
+
+	assert.Empty(t, f.tk.list, "22:00 on the old clock does not run it")
+
+	next := f.s.State.Role("nightly").NextRun
+	assert.True(t, next.Equal(time.Date(2026, 10, 25, 22, 0, 0, 0, tokyo)), "22:00 on the 25th in Tokyo, got %s", next)
+}
