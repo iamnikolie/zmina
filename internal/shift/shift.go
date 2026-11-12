@@ -1512,14 +1512,20 @@ type QueueView struct {
 	Facts []Card `json:"facts,omitempty"`
 
 	rows rowCards
+	// joined is that a record of this view made of parts is a joined post (a role's, postJoined): each part is a queued
+	// line of its own. The dispatcher's records of parts are shown as the one post they are.
+	joined bool
 }
 
-// rowCards are the cards under the rows of a queue view, one card for one row at most.
+// rowCards are the cards under the rows of a queue view, one card for one row at most. A joined record has a card for
+// each of its parts too, in the order of its parts (nil for a part with none).
 type rowCards struct {
-	inbox  []*Card
-	sent   *Card
-	posted []*Card
-	failed []*Card
+	inbox       []*Card
+	sent        *Card
+	posted      []*Card
+	failed      []*Card
+	postedParts [][]*Card
+	failedParts [][]*Card
 }
 
 // InboxFacts is the card of the i-th waiting line, nil when it has none of its own.
@@ -1533,6 +1539,29 @@ func (q QueueView) PostedFacts(i int) *Card { return rowCard(q.rows.posted, i) }
 
 // FailedFacts is the card of the i-th failed line.
 func (q QueueView) FailedFacts(i int) *Card { return rowCard(q.rows.failed, i) }
+
+// Joined reports a record made of parts that is a joined post: the lines a role's queue gave to one numbered message
+// (postJoined), each to be shown as the line it is, with its own facts. A record of the dispatcher's, or one made of
+// no parts, is one line.
+func (q QueueView) Joined(parts []Part) bool { return q.joined && len(parts) > 0 }
+
+// PostedPartFacts is the card of the j-th part of the i-th posted record, nil when it has none of its own.
+func (q QueueView) PostedPartFacts(i, j int) *Card {
+	if i < 0 || i >= len(q.rows.postedParts) {
+		return nil
+	}
+
+	return rowCard(q.rows.postedParts[i], j)
+}
+
+// FailedPartFacts is PostedPartFacts for the failed records.
+func (q QueueView) FailedPartFacts(i, j int) *Card {
+	if i < 0 || i >= len(q.rows.failedParts) {
+		return nil
+	}
+
+	return rowCard(q.rows.failedParts[i], j)
+}
 
 func rowCard(cards []*Card, i int) *Card {
 	if i < 0 || i >= len(cards) {
@@ -1574,38 +1603,51 @@ func (q *QueueView) resolveCards(cards []Card) {
 
 	var sentExtra, postedExtra, failedExtra []*Card
 
-	// What a record in flight stands for: its row, and the own lines it was made of.
-	record := func(line string, parts []Part, fits func(*Card) bool, extra *[]*Card) *Card {
+	// What a record in flight stands for: its row, and the own lines it was made of, which are also had in the order of the
+	// record's parts.
+	record := func(line string, parts []Part, fits func(*Card) bool, extra *[]*Card) (*Card, []*Card) {
 		row := take(line, fits)
+		byLine := map[string]*Card{}
 
 		for _, l := range postedLines(line, parts) {
 			if l == line {
+				byLine[l] = row
+
 				continue
 			}
 
 			if c := take(l, fits); c != nil {
 				*extra = append(*extra, c)
+				byLine[l] = c
 			}
 		}
 
-		return row
+		own := make([]*Card, len(parts))
+		for j, p := range parts {
+			if p.Line != "" {
+				own[j] = byLine[p.Line]
+			}
+		}
+
+		return row, own
 	}
 
-	q.rows = rowCards{inbox: make([]*Card, len(q.Inbox)), posted: make([]*Card, len(q.Posted)), failed: make([]*Card, len(q.Failed))}
+	q.rows = rowCards{inbox: make([]*Card, len(q.Inbox)), posted: make([]*Card, len(q.Posted)), failed: make([]*Card, len(q.Failed)),
+		postedParts: make([][]*Card, len(q.Posted)), failedParts: make([][]*Card, len(q.Failed))}
 
 	for i, f := range q.Failed {
 		needsLook := func(c *Card) bool { return !c.done() && c.Attention != nil }
 		closedThen := func(c *Card) bool { return c.Closed != nil && c.Closed.How == ClosedFailed && c.Closed.At.Equal(f.At) }
 
-		q.rows.failed[i] = record(f.Line, f.Parts, func(c *Card) bool { return needsLook(c) || closedThen(c) }, &failedExtra)
+		q.rows.failed[i], q.rows.failedParts[i] = record(f.Line, f.Parts, func(c *Card) bool { return needsLook(c) || closedThen(c) }, &failedExtra)
 	}
 
 	if q.Sent != nil {
-		q.rows.sent = record(q.Sent.Line, q.Sent.Parts, accepted, &sentExtra)
+		q.rows.sent, _ = record(q.Sent.Line, q.Sent.Parts, accepted, &sentExtra)
 	}
 
 	for i, p := range q.Posted {
-		q.rows.posted[i] = record(p.Line, p.Parts, accepted, &postedExtra)
+		q.rows.posted[i], q.rows.postedParts[i] = record(p.Line, p.Parts, accepted, &postedExtra)
 	}
 
 	for i, line := range q.Inbox {
@@ -1657,7 +1699,7 @@ func (s *Shift) Queues() []QueueView {
 
 	for _, name := range s.Names() {
 		rs := s.State.Role(name)
-		q := QueueView{Role: name, Inbox: rs.Inbox, Sent: rs.Sent, Posted: rs.Posted}
+		q := QueueView{Role: name, Inbox: rs.Inbox, Sent: rs.Sent, Posted: rs.Posted, joined: name != s.Crew.Dispatcher}
 
 		for _, f := range rs.Failed {
 			q.Failed = append(q.Failed, FailedView{Failed: f, Unclear: f.Unclear()})

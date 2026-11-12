@@ -1487,16 +1487,23 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 	return "typed into " + name + ": " + head
 }
 
-// postInbox posts a role's first waiting line to its inbox socket. A post that never started is tried again next beat
-// (typeTries beats, then kept as failed); one whose write broke is followed as posted (post), since the role may have
-// it; any other error keeps it as failed at once.
+// postInbox posts a role's first waiting line to its inbox socket, with the lines after it that may be read with it as
+// one numbered message when more than one waits (joinRun, postJoined). A post that never started is tried again next
+// beat (typeTries beats, then kept as failed); one whose write broke is followed as posted (post), since the role may
+// have it; any other error keeps it as failed at once.
 func (s *Shift) postInbox(name string, sess *registry.Session, now time.Time) string {
 	rs := s.State.Role(name)
 	head := rs.Inbox[0]
 
-	// A line that failed a moment ago is neither tried nor counted again yet.
+	// A line that failed a moment ago is neither tried nor counted again yet. It holds the lines after it too: they go
+	// in its post.
 	if rs.triedLately(now) {
 		return ""
+	}
+
+	// Several lines that may be read together go as one numbered message (join.go); one goes as it is.
+	if run := s.joinRun(name); len(run) > 1 {
+		return s.postJoined(name, sess, run, now)
 	}
 
 	if err := s.post(name, sess, head, now); err != nil {

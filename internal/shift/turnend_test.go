@@ -19,7 +19,6 @@ func TestTurnEndPostsWhatABeatWould(t *testing.T) {
 	start := *f.now
 	f.status("designer", "idle", start)
 	require.NoError(t, f.s.Queue("designer", "[dispatcher] first"))
-	require.NoError(t, f.s.Queue("designer", "[dispatcher] second"))
 
 	*f.now = start.Add(10 * time.Second)
 	assert.False(t, f.s.TurnOver("designer", "sid-designer"), "idle, but the transcript does not show the turn closed yet")
@@ -31,6 +30,7 @@ func TestTurnEndPostsWhatABeatWould(t *testing.T) {
 	assert.Empty(t, f.s.TurnEnd("designer", "sid-other"), "a session the hook did not run for")
 
 	assert.Equal(t, []string{"posted to designer: [dispatcher] first"}, f.s.TurnEnd("designer", "sid-designer"))
+	require.NoError(t, f.s.Queue("designer", "[dispatcher] second"))
 	assert.Empty(t, f.s.TurnEnd("designer", "sid-designer"), "the next waits until the first shows")
 
 	p.showAll()

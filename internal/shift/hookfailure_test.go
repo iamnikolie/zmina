@@ -341,14 +341,14 @@ func TestAFailedTurnHoldsTheQueueForAWhile(t *testing.T) {
 		assert.Equal(t, []string{"[dispatcher] first", "[dispatcher] second"}, queued())
 	}
 
-	// The hold is over: one line goes, by whichever path asks first.
+	// The hold is over: what waits goes, by whichever path asks first (the two lines as one post, once).
 	*f.now = failedAt.Add(FailHold + time.Second)
 	assert.True(t, waiting())
-	assert.Equal(t, []string{"posted to designer: [dispatcher] first"}, f.s.TurnEnd("designer", "sid-designer"))
-	assert.Equal(t, []string{"[dispatcher] first"}, p.posted["sid-designer"])
-	assert.Equal(t, []string{"[dispatcher] second"}, queued(), "one line, not the queue")
+	assert.Equal(t, []string{"posted to designer: 2 lines joined: 1. [dispatcher] first 2. [dispatcher] second"}, f.s.TurnEnd("designer", "sid-designer"))
+	assert.Equal(t, []string{"1. [dispatcher] first\n2. [dispatcher] second"}, p.posted["sid-designer"])
+	assert.Empty(t, queued())
 
-	// Its turn fails too: the new record holds the role again, the second line stays.
+	// Its turn fails too: the new record holds the role again, a line queued meanwhile stays.
 	p.showAll()
 	again := *f.now
 	f.status("designer", "busy", again)
@@ -357,13 +357,14 @@ func TestAFailedTurnHoldsTheQueueForAWhile(t *testing.T) {
 	f.status("designer", "idle", *f.now)
 	f.live("designer")
 	f.failed(t, "designer", failedInput, *f.now)
+	require.NoError(t, f.s.Queue("designer", "[dispatcher] third"))
 
 	*f.now = f.now.Add(time.Minute)
 	assert.False(t, waiting())
 	assert.Empty(t, f.s.TurnEnd("designer", "sid-designer"))
 	assert.Empty(t, f.s.DeliverTo("designer"))
-	assert.Equal(t, []string{"[dispatcher] first"}, p.posted["sid-designer"])
-	assert.Equal(t, []string{"[dispatcher] second"}, queued())
+	assert.Equal(t, []string{"1. [dispatcher] first\n2. [dispatcher] second"}, p.posted["sid-designer"])
+	assert.Equal(t, []string{"[dispatcher] third"}, queued())
 
 	*f.now = f.now.Add(FailHold)
 	assert.True(t, waiting())
