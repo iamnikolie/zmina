@@ -258,6 +258,7 @@ func (s *Shift) Tick() []string {
 		}
 	}
 
+	// Again after delivery, which it sees: a report note refused for a full queue is queued once this beat drained it.
 	s.mark("reconcile-end", "")
 	if s.ReconcileMessages != nil {
 		if err := s.ReconcileMessages(s); err != nil && s.Warn != nil {
