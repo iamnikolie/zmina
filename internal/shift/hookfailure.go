@@ -176,6 +176,15 @@ func (s *Shift) failureHeld(name string, now time.Time) bool {
 	return sess != nil && f.SessionID == sess.SessionID && f.current(sess)
 }
 
+// ownerNext reports whether the next line queued for a role is the owner's own message (the cockpit's chat). The hold
+// after a failed turn is for what zmina would feed the role by itself; what the owner sends goes, as their typing into
+// the pane would.
+func (s *Shift) ownerNext(name string) bool {
+	rs, ok := s.State.Roles[name]
+
+	return ok && len(rs.Inbox) > 0 && s.ownerChat(name, rs.Inbox[0])
+}
+
 // sameTurn reports whether the transcript's last error is the failed turn the record is of: written within failSame of
 // it. An error line that carries no time is taken for it.
 func (f *TurnFailure) sameTurn(turn registry.Turn) bool {

@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/iamnikolie/zmina/internal/chat"
 	"github.com/iamnikolie/zmina/internal/crew"
 )
 
@@ -512,4 +513,36 @@ func TestAStartDropsTheRecordsOfTheSessionBefore(t *testing.T) {
 	assert.NoFileExists(t, l.HookFailure("designer"))
 	assert.FileExists(t, l.HookQuestion("harvester"), "another role's")
 	assert.FileExists(t, l.Hooks()+"/notes.txt", "nothing else")
+}
+
+// The hold is for what zmina would feed the role by itself: the owner's own message, next in the queue, goes during it,
+// as their typing into the pane would.
+func TestTheOwnersOwnMessageIsNotHeldAfterAFailedTurn(t *testing.T) {
+	f, _ := nativeFixture(t, crewYAML)
+	require.NoError(t, f.s.Up("designer"))
+	start := *f.now
+	f.status("designer", "idle", start)
+	f.rg.endedAt["sid-designer"] = start.Add(time.Second)
+	f.s.State.Role("designer").Booted = start
+
+	const owner = "try that again, please"
+	require.NoError(t, f.s.Queue("designer", owner))
+	require.NoError(t, f.s.Queue("designer", "[dispatcher] second"))
+
+	failedAt := start.Add(time.Minute)
+	*f.now = failedAt
+	f.status("designer", "idle", failedAt)
+	f.live("designer")
+	f.failed(t, "designer", failedInput, failedAt)
+
+	*f.now = failedAt.Add(time.Second)
+	require.False(t, slicesContain(f.s.Waiting(), "designer"), "held while the next line is not the owner's")
+
+	rs := f.s.State.Role("designer")
+	rs.ChatReceipts = append(rs.ChatReceipts, chat.Receipt{ID: "c1", Line: owner, At: *f.now})
+
+	assert.True(t, slicesContain(f.s.Waiting(), "designer"), "the owner's message is next: the role is asked")
+	assert.True(t, f.s.ownerNext("designer"))
+	assert.NotEmpty(t, f.s.DeliverTo("designer"), "and it goes")
+	assert.Equal(t, []string{"[dispatcher] second"}, rs.Inbox, "what zmina queued behind it waits for that turn")
 }

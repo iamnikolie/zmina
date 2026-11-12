@@ -37,7 +37,7 @@ func (s *Shift) Waiting() []string {
 			continue
 		}
 
-		if len(rs.Inbox) > 0 && !rs.triedLately(now) && !s.failureHeld(name, now) {
+		if len(rs.Inbox) > 0 && !rs.triedLately(now) && (!s.failureHeld(name, now) || s.ownerNext(name)) {
 			out = append(out, name)
 		}
 	}

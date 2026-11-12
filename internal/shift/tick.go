@@ -1358,7 +1358,7 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 
 	// Its last turn ended on an API error a moment ago: no line is posted or typed until the hold is over (failureHeld),
 	// whoever asks, the beat, a pass or a turn's end.
-	if s.failureHeld(name, now) {
+	if s.failureHeld(name, now) && !s.ownerNext(name) {
 		return ""
 	}
 
