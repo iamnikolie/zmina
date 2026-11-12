@@ -19,6 +19,10 @@ func (l Layout) History() string { return filepath.Join(l.Dir, "crew.d", "histor
 // Lock is the file every writing command and the ticker lock.
 func (l Layout) Lock() string { return filepath.Join(l.Dir, "lock") }
 
+// CourierLock is the lock file of the courier (zmina _courier): one courier runs per crew. It is its own file, never the
+// state lock, so a courier that lives holds nothing the beat or a command waits for.
+func (l Layout) CourierLock() string { return filepath.Join(l.Dir, "courier.lock") }
+
 // LockHolder is the advisory record, beside the lock, of who holds it now (pid, command, phase); empty of a record
 // when the lock is free.
 func (l Layout) LockHolder() string { return filepath.Join(l.Dir, "lock.holder") }
