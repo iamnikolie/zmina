@@ -812,3 +812,24 @@ func TestInfoLinesSwitch(t *testing.T) {
 	_, err := Load(write(t, "info_lines: sometimes\n"+roles))
 	assert.Error(t, err)
 }
+
+// doorbell is on unless the crew file turns it off, and is no unknown key.
+func TestDoorbellSwitch(t *testing.T) {
+	const roles = "namespace: /ns\nroles:\n  dispatcher:\n"
+
+	for body, want := range map[string]bool{
+		"":                  true,
+		"doorbell: true\n":  true,
+		"doorbell: on\n":    true,
+		"doorbell: false\n": false,
+		"doorbell: off\n":   false,
+	} {
+		c, err := Load(write(t, body+roles))
+		require.NoError(t, err, body)
+		assert.Equal(t, want, c.DoorbellOn(), body)
+		assert.Empty(t, c.Warnings, body)
+	}
+
+	_, err := Load(write(t, "doorbell: sometimes\n"+roles))
+	assert.Error(t, err)
+}
