@@ -109,7 +109,7 @@ func (s *Shift) joinRun(name string) []string {
 // postJoined posts lines, the first of a role's queue and as many after it as joinRun found, as one numbered message. The
 // record of the post has a part for each line, with the ids it carries; the card of each line is accepted. A post that
 // never started is tried again as a line's is (typeTries beats); one whose write broke is followed as posted (post);
-// any other failure keeps the whole post as one failed record, whose lines a retry gives back in order, one by one.
+// any other failure keeps the first line as failed, as when it goes alone, and leaves the others waiting.
 func (s *Shift) postJoined(name string, sess *registry.Session, lines []string, now time.Time) string {
 	rs := s.State.Role(name)
 	text := numbered(lines)
@@ -124,14 +124,16 @@ func (s *Shift) postJoined(name string, sess *registry.Session, lines []string, 
 			return ""
 		}
 
-		parts, ids := s.takeParts(name, lines)
+		// The tries are the first line's, as they are when it goes alone, and may have begun before the others waited: it
+		// alone is kept as failed, and the lines after it get tries of their own.
+		head := lines[0]
 
-		s.deliveryFailure(name, text, err.Error())
-		s.addFailed(name, Failed{Line: text, Error: err.Error(), At: now, IDs: ids, Parts: parts})
-		rs.Inbox = rs.Inbox[len(lines):]
+		s.deliveryFailure(name, head, err.Error())
+		s.addFailed(name, Failed{Line: head, Error: err.Error(), At: now, IDs: s.takeIDs(name, head)})
+		rs.Inbox = rs.Inbox[1:]
 		rs.clearTries()
 
-		return name + ": " + strconv.Itoa(len(lines)) + " queued lines could not be posted, kept in zmina queue: " + oneLine(text)
+		return name + ": a queued line could not be posted, kept in zmina queue: " + oneLine(head)
 	}
 
 	parts, ids := s.takeParts(name, lines)

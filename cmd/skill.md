@@ -317,7 +317,7 @@ post as its lines, one row each (`2 of 3 in one post`) with that line's facts. W
 lines one by one, as for the dispatcher's post: one the conversation never showed is kept as one failed record that keeps
 its lines, and `zmina queue retry` puts them back at the head of the queue as separate lines, in order; one whose
 conversation ended before it showed goes back the same way, ahead of what was queued since; an ack takes its own line's
-id and no other (a line acked before the post goes back stays out of it, and the record closes once every line is
+id and no other; a post that could not be made at all fails its first line only, after that line's tries, as when it goes alone, and leaves the rest waiting (a line acked before the post goes back stays out of it, and the record closes once every line is
 acked); a post whose write broke after it started is followed as a whole, never posted again, and one that never started
 is tried again and then kept as failed, all its lines in one record. What holds the first line holds the post: a line
 that failed a moment ago waits its gap, a turn that ended on an API error holds the queue. Typed delivery stays a line a

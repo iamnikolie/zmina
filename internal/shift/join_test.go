@@ -425,8 +425,9 @@ func TestJoinedPostNeverShownFailsWithItsParts(t *testing.T) {
 	}
 }
 
-// A post that never started is tried again as a line's is, then kept as one failed record of all its lines.
-func TestJoinedPostThatNeverStartedFailsWhole(t *testing.T) {
+// A post that never started is tried again as a line's is; then the first line alone is kept as failed, as when it goes
+// alone, and the line after it waits with tries of its own.
+func TestJoinedPostThatNeverStartedFailsItsFirstLine(t *testing.T) {
 	f, p := nativeFixture(t, crewYAML)
 	upNative(t, f, "designer")
 
@@ -442,19 +443,19 @@ func TestJoinedPostThatNeverStartedFailsWhole(t *testing.T) {
 	assert.NotEmpty(t, f.s.deliverInbox("designer", *f.now))
 
 	rs := f.s.State.Role("designer")
-	assert.Empty(t, rs.Inbox)
+	assert.Equal(t, lines[1:], rs.Inbox, "the line after it still waits")
+	assert.Zero(t, rs.Attempts, "with tries of its own")
 	assert.Empty(t, rs.Posted)
 	require.Len(t, rs.Failed, 1)
-	assert.Equal(t, ids, rs.Failed[0].IDs)
-	require.Len(t, rs.Failed[0].Parts, 2)
+	assert.Equal(t, lines[0], rs.Failed[0].Line)
+	assert.Equal(t, ids[:1], rs.Failed[0].IDs)
+	assert.Empty(t, rs.Failed[0].Parts)
 	assert.False(t, rs.Failed[0].Unclear(), "nothing reached it: a retry is safe")
 	require.NotEmpty(t, notesOf(f, "designer"))
 
-	for _, l := range lines {
-		c := cardOn(t, f, "designer", l)
-		require.NotNil(t, c.Closed)
-		assert.Equal(t, ClosedFailed, c.Closed.How)
-	}
+	c := cardOn(t, f, "designer", lines[0])
+	require.NotNil(t, c.Closed)
+	assert.Equal(t, ClosedFailed, c.Closed.How)
 
 	n, _, err := f.s.Retry("designer", false)
 	require.NoError(t, err)
