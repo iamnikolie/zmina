@@ -285,7 +285,7 @@ func (s *Shift) landed(name string, now time.Time) bool {
 	}
 	if !unsent || sent.Tries >= typeTries {
 		if unsent {
-			s.clearInput(name, sent.Line)
+			s.clearInput(name, sent.typedText())
 		}
 
 		// Acked meanwhile, every id of it by name (clearInFlight recorded them): its readers have it, so there is
@@ -319,7 +319,7 @@ func (s *Shift) landed(name string, now time.Time) bool {
 // role's status changed since it was typed. unsent is that it still sits in the input line.
 func (s *Shift) typedLanded(name string, sent *Sent) (landed, unsent bool) {
 	draft, ok, err := s.Tmux.Prompt(name)
-	if err == nil && ok && holds(draft, sent.Line) {
+	if err == nil && ok && holds(draft, sent.typedText()) {
 		return false, true
 	}
 
@@ -532,37 +532,10 @@ func (s *Shift) clearInput(name, line string) {
 	s.log(name, "unsent-cleared", "", line)
 }
 
-// holds reports whether an input line holds a line zmina typed: its start, as the input line shows it. A line that crossed
-// another (crossing.go) is typed behind its mark, which the queue's line does not have: an input line that opens with a
-// mark holds the line when what follows the mark is the line's start, and holds it whatever follows when the mark is all
-// the input line shows (a narrow screen cuts it there).
+// holds reports whether an input line holds a line zmina typed: its start, as the input line shows it. The line is what was
+// typed (Sent.typedText), which for a line typed behind a crossing mark is the mark and the line.
 func holds(draft, line string) bool {
-	if draft == "" {
-		return false
-	}
-
-	if strings.HasPrefix(oneLine(line), firstWords(draft)) {
-		return true
-	}
-
-	rest, marked := afterMark(oneLine(draft))
-
-	return marked && (rest == "" || strings.HasPrefix(oneLine(line), firstWords(rest)))
-}
-
-// afterMark is what follows a crossing mark at the start of a draft, and whether the draft opens with one. A mark that is
-// not closed in the draft (the screen cut it) leaves nothing after it.
-func afterMark(draft string) (string, bool) {
-	if !strings.HasPrefix(draft, crossOpen) {
-		return "", false
-	}
-
-	i := strings.Index(draft, crossClose)
-	if i < 0 {
-		return "", true
-	}
-
-	return draft[i+len(crossClose):], true
+	return draft != "" && strings.HasPrefix(oneLine(line), firstWords(draft))
 }
 
 func (s *Shift) pause(d time.Duration) {

@@ -1,6 +1,7 @@
 package shift
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -15,7 +16,6 @@ import (
 	"github.com/iamnikolie/zmina/internal/chat"
 	"github.com/iamnikolie/zmina/internal/codex"
 	"github.com/iamnikolie/zmina/internal/inbox"
-	"github.com/iamnikolie/zmina/internal/peer"
 )
 
 // crossYAML is a crew whose clock is UTC, with a role that reads on its own channel (dev) and one that wrote to it (ops).
@@ -129,67 +129,129 @@ func TestCrossingMarksALineWrittenBeforeTheReadersLastLine(t *testing.T) {
 	require.NotNil(t, card.Crossed, "what was seen of the line did not take the mark off its card")
 }
 
-// The line is also marked when dev's last line to ops was written before it, and ops had not read it by then.
-func TestCrossingMarksALineWrittenBeforeItsWriterHadReadTheReadersLine(t *testing.T) {
+// The line is also marked when dev's last line to ops was written before it and had not been handed to ops by then: it still
+// waited in ops' queue. The card says unhanded.
+func TestCrossingMarksALineWrittenBeforeItsWriterWasHandedTheReadersLine(t *testing.T) {
 	f, p, line := scene(t, crossYAML)
 	c := devLine("how far are you", "T-1", at(13, 50))
 	putCards(t, f, "ops", c)
 
 	f.s.deliverInbox("dev", *f.now)
 
-	want := "[written 14:02, before ops had read your line of 13:50 on T-1] " + line
+	want := "[written 14:02, before ops was handed your line of 13:50 on T-1] " + line
 	assert.Equal(t, []string{tagged(f, "dev", want)}, p.raw)
 
 	card := cardOn(t, f, "dev", line)
 	require.NotNil(t, card.Crossed)
-	assert.Equal(t, CardCrossed{With: c.ID, Kind: CrossUnread, At: *f.now}, *card.Crossed)
+	assert.Equal(t, CardCrossed{With: c.ID, Kind: CrossUnhanded, At: *f.now}, *card.Crossed)
 	assert.Equal(t, line, f.s.State.Role("dev").Posted[0].Line)
+}
+
+// The common flow: dev's line is posted to ops, ops answers it a few seconds later, and the beat has not yet noted that its
+// conversation showed it. That is a reply, not a crossing: what decides is that the line was handed over before the answer was
+// written, not what was observed of it since.
+func TestCrossingADirectReplyIsNoCrossing(t *testing.T) {
+	for name, seen := range map[string]*CardSeen{
+		"the conversation not noted as showing it yet": nil,
+		"noted a beat after the reply was written":     {At: at(14, 2).Add(25 * time.Second), By: SeenTranscript},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f, p := nativeFixture(t, crossYAML)
+			upNative(t, f, "dev")
+
+			// Dev's line to ops was posted at 14:02:00 and ops wrote its answer at 14:02:20.
+			*f.now = at(14, 2).Add(20 * time.Second)
+			const line = "yes, it is ready"
+			require.NoError(t, f.s.QueueFrom("dev", line, Facts{From: "ops", Task: "T-1"}))
+			*f.now = at(14, 6)
+
+			putCards(t, f, "ops", devLine("how far are you", "T-1", at(14, 1), func(c *Card) {
+				c.Accepted = &CardAccepted{At: at(14, 2), How: AcceptedSocket, Session: "sid-ops"}
+				c.Seen = seen
+			}))
+
+			f.s.deliverInbox("dev", *f.now)
+
+			assert.Equal(t, []string{tagged(f, "dev", line)}, p.raw)
+			assert.Nil(t, cardOn(t, f, "dev", line).Crossed)
+		})
+	}
 }
 
 // Only the newest of dev's lines to ops on the task counts, and a line of another task is not one of them.
 func TestCrossingLooksAtTheNewestLineOnTheTask(t *testing.T) {
 	f, p, line := scene(t, crossYAML)
 	putCards(t, f, "ops",
-		devLine("first", "T-1", at(13, 40), func(c *Card) { c.Seen = &CardSeen{At: at(13, 41), By: SeenTranscript} }),
+		devLine("first", "T-1", at(13, 40), func(c *Card) { c.Accepted = &CardAccepted{At: at(13, 40), How: AcceptedSocket} }),
 		devLine("second", "T-1", at(13, 50)),
 		devLine("about the other task", "T-2", at(13, 59)),
 	)
 
 	f.s.deliverInbox("dev", *f.now)
 
-	assert.Equal(t, []string{tagged(f, "dev", "[written 14:02, before ops had read your line of 13:50 on T-1] "+line)}, p.raw,
-		"the first line was read, the newest was not, and the other task's is none of them")
+	assert.Equal(t, []string{tagged(f, "dev", "[written 14:02, before ops was handed your line of 13:50 on T-1] "+line)}, p.raw,
+		"the first line was handed over, the newest was not, and the other task's is none of them")
 
 	assert.Equal(t, CardID("ops", "second"), cardOn(t, f, "dev", line).Crossed.With)
 }
 
-// A line dev wrote that ops had read before it wrote is no crossing: whatever fact says so, at or before the moment it was
-// written; a read after it, or no read, is.
-func TestCrossingNeedsNoMarkWhenTheWriterHadReadTheLine(t *testing.T) {
-	const unread = "[written 14:02, before ops had read your line of 13:50 on T-1] "
+// A line dev wrote that was handed to ops before ops wrote is no crossing, whatever is known of it after; one that was not, or
+// whose doorbell was not fetched, is. Each fact has its own time: the acceptance, the fetch, the ack.
+func TestCrossingNeedsNoMarkWhenTheWriterWasHandedTheLine(t *testing.T) {
+	const (
+		unhanded  = "[written 14:02, before ops was handed your line of 13:50 on T-1] "
+		unfetched = "[written 14:02, before ops had fetched your line of 13:50 on T-1] "
+	)
+
+	accepted := func(h, m int) func(*Card) {
+		return func(c *Card) { c.Accepted = &CardAccepted{At: at(h, m), How: AcceptedSocket, Session: "sid-ops"} }
+	}
+
+	both := func(mods ...func(*Card)) func(*Card) {
+		return func(c *Card) {
+			for _, m := range mods {
+				m(c)
+			}
+		}
+	}
+
+	bell := func(c *Card) { c.Bell = &CardBell{Body: "in-0123456789ab", Shown: at(13, 51)} }
 
 	for _, k := range []struct {
 		name string
 		mod  func(*Card)
 		mark string
 	}{
-		{"never read", func(*Card) {}, unread},
-		{"seen in the transcript before", func(c *Card) { c.Seen = &CardSeen{At: at(13, 55), By: SeenTranscript} }, ""},
-		{"taken by a bridge before", func(c *Card) { c.Seen = &CardSeen{At: at(14, 1), By: SeenTaken} }, ""},
-		{"its doorbell fetched before", func(c *Card) {
-			c.Bell = &CardBell{Body: "in-0123456789ab", Shown: at(13, 51)}
-			c.Seen = &CardSeen{At: at(13, 59), By: SeenFetch}
-		}, ""},
-		{"seen the moment it was written", func(c *Card) { c.Seen = &CardSeen{At: at(14, 2), By: SeenTranscript} }, ""},
-		{"typed and landed before", func(c *Card) { c.Closed = &CardClosed{At: at(13, 52), How: ClosedLanded} }, ""},
-		{"acked before", func(c *Card) { c.Closed = &CardClosed{At: at(13, 58), How: ClosedAcked} }, ""},
-		{"seen after it was written", func(c *Card) { c.Seen = &CardSeen{At: at(14, 3), By: SeenTranscript} }, unread},
-		{"typed and landed after it was written", func(c *Card) { c.Closed = &CardClosed{At: at(14, 4), How: ClosedLanded} }, unread},
-		{"failed: it never reached", func(c *Card) { c.Closed = &CardClosed{At: at(13, 52), How: ClosedFailed} }, unread},
-		{"a typed doorbell landed: its lines are not read until fetched", func(c *Card) {
-			c.Bell = &CardBell{Body: "in-0123456789ab"}
+		{"still queued", func(*Card) {}, unhanded},
+		{"handed before, the conversation not noted as showing it", accepted(13, 51), ""},
+		{"handed the moment it was written", accepted(14, 2), ""},
+		{"handed after it was written", accepted(14, 3), unhanded},
+		{"typed before", both(func(c *Card) { c.Accepted = &CardAccepted{At: at(13, 55), How: AcceptedTyped} }), ""},
+		{"put in a bridge's inbox before", both(func(c *Card) { c.Accepted = &CardAccepted{At: at(13, 55), How: AcceptedCodexInbox} }), ""},
+		{"handed before and seen after", both(accepted(13, 51), func(c *Card) { c.Seen = &CardSeen{At: at(14, 3), By: SeenTranscript} }), ""},
+		{"seen before, never accepted (a card made when it was first met)", func(c *Card) {
+			c.Seen = &CardSeen{At: at(13, 55), By: SeenTranscript}
+		}, unhanded},
+		{"given back to the queue", func(c *Card) { c.Back = &CardBack{At: at(13, 59), Why: "conversation ended", N: 1} }, unhanded},
+		{"failed before it was accepted", func(c *Card) { c.Closed = &CardClosed{At: at(13, 52), How: ClosedFailed} }, unhanded},
+		{"acked before, whatever else the card says", func(c *Card) { c.Closed = &CardClosed{At: at(13, 58), How: ClosedAcked} }, ""},
+		{"acked after", func(c *Card) { c.Closed = &CardClosed{At: at(14, 3), How: ClosedAcked} }, unhanded},
+		{"in a doorbell not handed yet", bell, unhanded},
+		{"in a doorbell handed and not fetched", both(bell, accepted(13, 51)), unfetched},
+		{"in a doorbell, shown and not fetched", both(accepted(13, 51), func(c *Card) {
+			c.Bell = &CardBell{Body: "in-0123456789ab", Shown: at(13, 52)}
+		}), unfetched},
+		{"in a doorbell fetched before", both(bell, accepted(13, 51), func(c *Card) { c.Seen = &CardSeen{At: at(13, 59), By: SeenFetch} }), ""},
+		{"in a doorbell fetched the moment it was written", both(bell, accepted(13, 51), func(c *Card) {
+			c.Seen = &CardSeen{At: at(14, 2), By: SeenFetch}
+		}), ""},
+		{"in a doorbell fetched after", both(bell, accepted(13, 51), func(c *Card) { c.Seen = &CardSeen{At: at(14, 3), By: SeenFetch} }), unfetched},
+		{"in a doorbell, the conversation showing the bell is no fetch", both(bell, accepted(13, 51), func(c *Card) {
+			c.Seen = &CardSeen{At: at(13, 59), By: SeenTranscript}
+		}), unfetched},
+		{"in a typed doorbell that landed: its lines are not read until fetched", both(bell, accepted(13, 51), func(c *Card) {
 			c.Closed = &CardClosed{At: at(13, 52), How: ClosedLanded}
-		}, unread},
+		}), unfetched},
 	} {
 		t.Run(k.name, func(t *testing.T) {
 			f, p, line := scene(t, crossYAML)
@@ -203,13 +265,62 @@ func TestCrossingNeedsNoMarkWhenTheWriterHadReadTheLine(t *testing.T) {
 	}
 }
 
+// B's lines that were given up (dropped, given back to a post that went back on its queues) are not the line that is asked
+// after, whatever their time; the newer form is a fact of time alone and uses any card.
+func TestCrossingGivenUpLinesAreNotTheLineAskedAfter(t *testing.T) {
+	handed := func(c *Card) { c.Accepted = &CardAccepted{At: at(13, 41), How: AcceptedSocket} }
+
+	givenUp := func(how string) func(*Card) {
+		return func(c *Card) { c.Closed = &CardClosed{At: at(13, 59), How: how} }
+	}
+
+	t.Run("a newer line dropped before it was handed does not make the older, handed one a crossing", func(t *testing.T) {
+		for _, how := range []string{ClosedDropped, ClosedGivenBack} {
+			f, p, line := scene(t, crossYAML)
+			putCards(t, f, "ops",
+				devLine("older", "T-1", at(13, 40), handed),
+				devLine("newer, then let go", "T-1", at(13, 50), givenUp(how)),
+			)
+
+			f.s.deliverInbox("dev", *f.now)
+			assert.Equal(t, []string{tagged(f, "dev", line)}, p.raw, how)
+		}
+	})
+
+	t.Run("a failed one is not given up: it never reached", func(t *testing.T) {
+		f, p, line := scene(t, crossYAML)
+		putCards(t, f, "ops", devLine("older", "T-1", at(13, 40), handed), devLine("newer, failed", "T-1", at(13, 50), givenUp(ClosedFailed)))
+
+		f.s.deliverInbox("dev", *f.now)
+		assert.Equal(t, []string{tagged(f, "dev", "[written 14:02, before ops was handed your line of 13:50 on T-1] "+line)}, p.raw)
+	})
+
+	t.Run("nothing else left: no mark", func(t *testing.T) {
+		f, p, line := scene(t, crossYAML)
+		putCards(t, f, "ops", devLine("let go", "T-1", at(13, 50), givenUp(ClosedDropped)))
+
+		f.s.deliverInbox("dev", *f.now)
+		assert.Equal(t, []string{tagged(f, "dev", line)}, p.raw)
+	})
+
+	t.Run("the newer form uses any card, a dropped one too", func(t *testing.T) {
+		f, p, line := scene(t, crossYAML)
+		c := devLine("written after, then dropped", "T-1", at(14, 5), givenUp(ClosedDropped))
+		putCards(t, f, "ops", devLine("older", "T-1", at(13, 40), handed), c)
+
+		f.s.deliverInbox("dev", *f.now)
+		assert.Equal(t, []string{tagged(f, "dev", "[written 14:02, before your last line on T-1 (14:05)] "+line)}, p.raw)
+		assert.Equal(t, c.ID, cardOn(t, f, "dev", line).Crossed.With)
+	})
+}
+
 // What never crosses: each case changes one thing of a line that is marked, and the line goes as it was written.
 func TestCrossingNeverMarksWhatIsNotAStructuralLineOnATaskOfBoth(t *testing.T) {
 	// The control: the scene's own line is marked.
 	f, p, _ := scene(t, crossYAML)
 	putCards(t, f, "ops", devLine("how far are you", "T-1", at(13, 50)))
 	f.s.deliverInbox("dev", *f.now)
-	require.True(t, strings.HasPrefix(p.raw[0], tagMark(f.s.State.Role("dev").Tag)+" [written 14:02, before ops had read"), p.raw[0])
+	require.True(t, strings.HasPrefix(p.raw[0], tagMark(f.s.State.Role("dev").Tag)+" [written 14:02, before ops was handed"), p.raw[0])
 
 	cases := []struct {
 		name  string
@@ -357,7 +468,8 @@ func TestCrossingMarkInAJoinedPostStandsAfterTheNumber(t *testing.T) {
 
 	require.Len(t, rs.Posted, 1)
 	rec := rs.Posted[0]
-	assert.Equal(t, want, rec.Line, "the post is the text that went out")
+	assert.Equal(t, numbered(lines), rec.Line, "the record of the post is the numbered lines, as written")
+	assert.NotContains(t, rec.Line, "[written", "the mark went on the wire and into the event only")
 	assert.Equal(t, ids, rec.IDs)
 	assert.Equal(t, []Part{{Line: lines[0], IDs: ids[:1]}, {Line: lines[1], IDs: ids[1:2]}, {Line: lines[2], IDs: ids[2:]}}, rec.Parts,
 		"the parts are the lines as they were written")
@@ -369,6 +481,12 @@ func TestCrossingMarkInAJoinedPostStandsAfterTheNumber(t *testing.T) {
 	}
 
 	assert.Equal(t, 1, f.eventCount("posted"))
+
+	for _, e := range f.ev.list {
+		if e.Event == "posted" {
+			assert.Equal(t, "3 lines joined: "+want, e.Detail, "the event says what went out")
+		}
+	}
 
 	for i, k := range []string{CrossNewer, "", CrossNewer} {
 		card := cardOn(t, f, "dev", lines[i])
@@ -520,7 +638,7 @@ func TestCrossingMarkInABellBodyAndItsCount(t *testing.T) {
 			}
 
 			body := numberedMarked(lines, marks)
-			wantBell := "[zmina] 2 lines wait for you" + k.crossed + ": zmina inbox show " + inbox.IDOf("bell dev\x00"+body)
+			wantBell := "[zmina] 2 lines wait for you" + k.crossed + ": zmina inbox show " + inbox.IDOf("bell dev\x00"+numbered(lines))
 
 			did := f.s.deliverInbox("dev", *f.now)
 
@@ -530,8 +648,9 @@ func TestCrossingMarkInABellBodyAndItsCount(t *testing.T) {
 
 			stored, err := f.s.inboxStore().Get(bellIDOf(t, wantBell))
 			require.NoError(t, err)
-			assert.Equal(t, body, stored.Body)
+			assert.Equal(t, body, stored.Body, "the stored text is the lines with their marks")
 			assert.Contains(t, stored.Body, "1. "+mark+lines[0], "the mark is inside the stored body, with its line")
+			assert.NotEqual(t, inbox.IDOf("bell dev\x00"+body), stored.ID, "its id is made of the lines as written")
 
 			rs := f.s.State.Role("dev")
 			require.Len(t, rs.Posted, 1)
@@ -545,6 +664,109 @@ func TestCrossingMarkInABellBodyAndItsCount(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The text of a bell is stored under an id made of the lines as they were written, and holds them with their marks: a delivery
+// tried again whose marks changed (a newer line of the reader's came meanwhile) stores its text over the same entry, not under
+// a new one.
+func TestCrossingBellIsStoredUnderTheIDOfTheLinesAsWritten(t *testing.T) {
+	f, _ := nativeFixture(t, strings.Replace(crossYAML, "doorbell: off\n", "", 1))
+	upNative(t, f, "dev")
+
+	*f.now = at(14, 2)
+
+	var run []string
+
+	for _, text := range []string{fill("a", 700), fill("b", 700)} {
+		require.NoError(t, f.s.QueueFrom("dev", text, Facts{From: "ops", Task: "T-1"}))
+		run = append(run, text)
+	}
+
+	*f.now = at(14, 30)
+
+	plain := numbered(run)
+	id := inbox.IDOf("bell dev\x00" + plain)
+
+	bellWith := func(cards ...Card) *bell {
+		putCards(t, f, "ops", cards...)
+
+		b := f.s.bellFor("dev", run, f.s.crossMarks("dev", run), false, *f.now)
+		require.NotNil(t, b)
+
+		return b
+	}
+
+	first := bellWith(devLine("how far are you", "T-1", at(14, 5)))
+	assert.Equal(t, id, first.id, "made of the role and the lines as written")
+	assert.Contains(t, first.text, "· 2 crossed")
+
+	stored, err := f.s.inboxStore().Get(id)
+	require.NoError(t, err)
+	assert.Contains(t, stored.Body, "1. [written 14:02, before your last line on T-1 (14:05)] "+run[0])
+
+	// The marks changed: the newest of dev's lines is another, written later.
+	again := bellWith(devLine("how far are you", "T-1", at(14, 5)), devLine("and now?", "T-1", at(14, 20)))
+	assert.Equal(t, id, again.id)
+	assert.Equal(t, first.text, again.text)
+
+	stored, err = f.s.inboxStore().Get(id)
+	require.NoError(t, err)
+	assert.Contains(t, stored.Body, "(14:20)", "the text now holds the marks of this delivery")
+	assert.NotContains(t, stored.Body, "(14:05)")
+
+	// Nothing crossed any more: the same entry holds the lines as written.
+	plainBell := bellWith()
+	assert.Equal(t, id, plainBell.id)
+	assert.NotContains(t, plainBell.text, "crossed")
+
+	stored, err = f.s.inboxStore().Get(id)
+	require.NoError(t, err)
+	assert.Equal(t, plain, stored.Body)
+
+	all, err := f.s.inboxStore().List()
+	require.NoError(t, err)
+	assert.Len(t, all, 1, "one entry for the lines, however often they were rung")
+}
+
+// A joined post that was kept as failed holds the numbered lines as written, never the marks that went on the wire; the lines go
+// back to the queue as they were written.
+func TestCrossingJoinedPostKeptAsFailedHoldsTheNumberedLinesAsWritten(t *testing.T) {
+	f, p := nativeFixture(t, crossYAML)
+	upNative(t, f, "dev")
+	putCards(t, f, "ops", devLine("how far are you", "T-1", at(14, 5)))
+
+	*f.now = at(14, 2)
+
+	var lines []string
+
+	for _, text := range []string{"first, about the task", "second, about the task"} {
+		_, err := f.s.QueueTrackedFrom("dev", text, Facts{From: "ops", Task: "T-1"})
+		require.NoError(t, err)
+
+		rs := f.s.State.Role("dev")
+		lines = append(lines, rs.Inbox[len(rs.Inbox)-1])
+	}
+
+	*f.now = at(14, 6)
+
+	require.NotEmpty(t, f.s.deliverInbox("dev", *f.now))
+	require.Len(t, p.raw, 1)
+	assert.Equal(t, 2, strings.Count(p.raw[0], "[written 14:02"), "the marks went out")
+
+	*f.now = f.now.Add(postedWait)
+	f.s.deliverInbox("dev", *f.now)
+
+	rs := f.s.State.Role("dev")
+	require.Len(t, rs.Failed, 1)
+	assert.Equal(t, numbered(lines), rs.Failed[0].Line)
+	assert.NotContains(t, rs.Failed[0].Line, "[written")
+	require.Len(t, rs.Failed[0].Parts, 2)
+	assert.Equal(t, lines[0], rs.Failed[0].Parts[0].Line)
+
+	n, _, err := f.s.Retry("dev", true)
+	require.NoError(t, err)
+	require.Equal(t, 1, n)
+	assert.Equal(t, lines, f.s.State.Role("dev").Inbox)
 }
 
 // A line that crossed and goes typed is typed behind its mark, and is the queue's line in everything after it: the record
@@ -570,6 +792,7 @@ func TestCrossingTypedLineLandsAndIsRecordedAsWritten(t *testing.T) {
 	rs := f.s.State.Role("dev")
 	require.NotNil(t, rs.Sent)
 	assert.Equal(t, line, rs.Sent.Line, "what is kept of the typed line is the line")
+	assert.Equal(t, typed, rs.Sent.Typed, "and, apart from it, what was typed")
 	assert.Empty(t, rs.Inbox)
 
 	card := cardOn(t, f, "dev", line)
@@ -734,7 +957,7 @@ func TestCrossingGivenBackAndRetriedLinesAreTheOriginalLine(t *testing.T) {
 
 		f.s.deliverInbox("dev", *f.now)
 		require.Len(t, p.raw, 1)
-		assert.Contains(t, p.raw[0], "[written 14:02, before ops had read")
+		assert.Contains(t, p.raw[0], "[written 14:02, before ops was handed")
 		require.NotNil(t, cardOn(t, f, "dev", line).Crossed)
 
 		require.NoError(t, f.s.Down("dev", DownOptions{}))
@@ -903,7 +1126,7 @@ func TestCrossingTimesAreOnTheCrewClockWithTheDayWhenNotToday(t *testing.T) {
 	assert.Equal(t, "[written "+day(yesterday(14, 2))+", before your last line on T-1 ("+day(yesterday(14, 5))+")] ",
 		mark(t, crossYAML, yesterday(14, 2), yesterday(14, 5)), "both of yesterday")
 
-	assert.Equal(t, "[written 14:02, before ops had read your line of "+day(yesterday(23, 50))+" on T-1] ",
+	assert.Equal(t, "[written 14:02, before ops was handed your line of "+day(yesterday(23, 50))+" on T-1] ",
 		mark(t, crossYAML, at(14, 2), yesterday(23, 50)), "the reader's line of yesterday, the line of today")
 
 	// On a crew clock that is not UTC the hour is that clock's: 14:02 UTC is 16:02 at Warsaw on this day.
@@ -958,41 +1181,6 @@ func TestCrossingRenotifiedCopyIsNotMarked(t *testing.T) {
 
 	assert.Equal(t, 1, crossed)
 	assert.Equal(t, "please review the change", f.s.State.Acks[id].Text)
-}
-
-// zmina send without --when-idle posts at once: the line carries the mark of the moment it is written, its card says the
-// task, and a line typed where the post cannot go carries it too.
-func TestCrossingDirectSendIsMarkedAndKeepsItsTask(t *testing.T) {
-	f, p := nativeFixture(t, crossYAML)
-	upNative(t, f, "dev")
-	f.s.By = "ops"
-
-	*f.now = at(14, 6)
-	putCards(t, f, "ops", devLine("how far are you", "T-1", at(13, 50)))
-
-	const line = "please review the change"
-	require.NoError(t, f.s.SendFrom("dev", line, Facts{Task: "T-1"}))
-	f.s.FlushCards()
-
-	assert.Equal(t, []string{tagged(f, "dev", "[written 14:06, before ops had read your line of 13:50 on T-1] "+line)}, p.raw)
-	assert.Equal(t, line, f.s.State.Role("dev").Posted[0].Line)
-
-	card := cardOn(t, f, "dev", line)
-	assert.Equal(t, "ops", card.From)
-	assert.Equal(t, "T-1", card.Task)
-	require.NotNil(t, card.Crossed)
-	assert.Equal(t, CrossUnread, card.Crossed.Kind)
-	require.NotNil(t, card.Accepted)
-
-	// Without a task it is the line, as ever.
-	require.NoError(t, f.s.Send("dev", "and the other thing"))
-	assert.Equal(t, tagged(f, "dev", "and the other thing"), p.raw[1])
-
-	// Typed where the post cannot go: behind its mark, with no record to keep it on.
-	p.err = fmt.Errorf("%w: dial: no such file", peer.ErrUnavailable)
-	f.s.State.Role("dev").Posted = nil
-	require.NoError(t, f.s.SendFrom("dev", "once more, please", Facts{Task: "T-1"}))
-	assert.Equal(t, []string{"[written 14:06, before ops had read your line of 13:50 on T-1] once more, please"}, f.tm.typed["dev"])
 }
 
 // A line to a Codex role goes into its bridge's inbox behind its mark, and is seen when the bridge takes it, by its id.
@@ -1078,29 +1266,98 @@ func TestCrossingTheDispatcherIsNeverMarked(t *testing.T) {
 	assert.Contains(t, raw[0], "[written 14:02, before your last line on T-1 (14:05)] "+line, "the control: a role's line is marked")
 }
 
-// The mark is read from a draft by what opens it, and the line behind it is compared as the queue's line.
-func TestHoldsSeesALineBehindItsMark(t *testing.T) {
-	const line = "please review the change"
+// What the input line is compared with is what was typed: for a line typed behind its mark that is the mark and the line, and a
+// draft that merely starts like a mark is nothing of zmina's.
+func TestHoldsIsTheStartOfWhatWasTyped(t *testing.T) {
+	const (
+		line  = "please review the change"
+		typed = "[written 14:02, before your last line on T-1 (14:05)] " + line
+	)
 
 	for name, k := range map[string]struct {
-		draft string
-		want  bool
+		draft, of string
+		want      bool
 	}{
-		"the line itself":                        {line, true},
-		"its start":                              {line[:12], true},
-		"behind a mark":                          {"[written 14:02, before your last line on T-1 (14:05)] " + line, true},
-		"behind a mark, the line's start":        {"[written 14:02, before your last line on T-1 (14:05)] please rev", true},
-		"behind a mark, a day said":              {"[written Fri 23 Oct 14:02, before ops had read your line of 13:50 on T-1] " + line, true},
-		"the mark alone":                         {"[written 14:02, before your last line on T-1 (14:05)] ", true},
-		"the mark cut by the screen":             {"[written 14:02, before ops had read yo", true},
-		"behind a mark, another line":            {"[written 14:02, before your last line on T-1 (14:05)] something else", false},
-		"another line":                           {"something else", false},
-		"nothing":                                {"", false},
-		"a draft that only mentions a mark":      {"look, [written 14:02] is how it reads", false},
-		"the owner's draft that opens like none": {"[wrote] " + line, false},
+		"the line itself":                       {line, line, true},
+		"its start":                             {line[:12], line, true},
+		"the typed text, behind its mark":       {typed, typed, true},
+		"a start of the typed text":             {typed[:30], typed, true},
+		"the mark cut by the screen":            {typed[:20], typed, true},
+		"the typed text, for the line":          {typed, line, false},
+		"a mark opening, for the line":          {"[written a note for later", line, false},
+		"a mark opening, for another mark":      {"[written a note for later", typed, false},
+		"nothing":                               {"", line, false},
+		"the line, for the text typed with it":  {line, typed, false},
+		"an owner's draft that opens with none": {"[wrote] " + line, line, false},
 	} {
-		assert.Equal(t, k.want, holds(k.draft, line), name)
+		assert.Equal(t, k.want, holds(k.draft, k.of), name)
 	}
+
+	assert.Equal(t, typed, (&Sent{Line: line, Typed: typed}).typedText())
+	assert.Equal(t, line, (&Sent{Line: line}).typedText())
+}
+
+// An owner's draft that starts like a mark, in the input line of a role that was typed an unmarked line, is not that line:
+// it is not pressed Enter on, and not cleared.
+func TestAnOwnersDraftThatStartsLikeAMarkIsNotTakenForTheTypedLine(t *testing.T) {
+	f := typedFixture(t, crossYAML, "dev")
+
+	const draft = "[written a note for later"
+
+	require.NoError(t, f.s.Queue("dev", "look at the build"))
+	require.NotEmpty(t, f.s.deliverInbox("dev", *f.now))
+
+	rs := f.s.State.Role("dev")
+	require.NotNil(t, rs.Sent)
+	require.Empty(t, rs.Sent.Typed, "no mark: what was typed is the line")
+
+	// The role has not taken the line (its status did not move after it), and the owner is writing in its input line.
+	f.rg.byPID[f.tm.up["dev"]].StatusUpdatedAt = rs.Sent.At.UnixMilli() - 1000
+	f.tm.drafts["dev"] = draft
+	f.tm.keys["dev"] = nil
+
+	*f.now = f.now.Add(confirmAfter + time.Second)
+	f.s.landed("dev", *f.now)
+
+	assert.Equal(t, draft, f.tm.drafts["dev"], "the owner's draft is still there")
+	assert.NotContains(t, f.tm.keys["dev"], "Enter", "no Enter pressed on it")
+	assert.NotContains(t, f.tm.keys["dev"], "C-u", "and nothing cleared")
+	assert.NotContains(t, f.tm.keys["dev"], "C-e")
+}
+
+// A state of version 3, which has no typed text, reads as it is; the field is left out when it is empty and written when it
+// is not, under version 4.
+func TestSentTypedIsOptionalInTheState(t *testing.T) {
+	assert.Equal(t, 4, stateVersion)
+
+	st, _, err := decode([]byte(`{"version":3,"roles":{"dev":{"sent":{"line":"look at the build","at":"2026-10-24T14:06:00Z"}}}}`))
+	require.NoError(t, err)
+
+	sent := st.Roles["dev"].Sent
+	require.NotNil(t, sent)
+	assert.Equal(t, "look at the build", sent.Line)
+	assert.Empty(t, sent.Typed)
+	assert.Equal(t, "look at the build", sent.typedText())
+
+	raw, err := json.Marshal(sent)
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "typed")
+
+	raw, err = json.Marshal(&Sent{Line: "a", Typed: "[written 14:02, before x] a"})
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"typed":"[written 14:02, before x] a"`)
+
+	st, _, err = decode(raw2state(t, raw))
+	require.NoError(t, err)
+	require.NotNil(t, st.Roles["dev"].Sent)
+	assert.Equal(t, "[written 14:02, before x] a", st.Roles["dev"].Sent.Typed)
+}
+
+// raw2state is a state of the current version with one role whose typed line is the JSON given.
+func raw2state(t *testing.T, sent []byte) []byte {
+	t.Helper()
+
+	return []byte(fmt.Sprintf(`{"version":%d,"roles":{"dev":{"sent":%s}}}`, stateVersion, sent))
 }
 
 // The boot says so once, in one sentence, with no other rule moved; the size of zmina's rules stays under its bound.
@@ -1112,7 +1369,7 @@ func TestCrossingRuleIsInTheBootText(t *testing.T) {
 		r := f.s.Crew.Roles[name]
 		boot := f.s.BootText(r)
 		assert.Equal(t, 1, strings.Count(boot, CrossingRule), name)
-		assert.Contains(t, boot, "zmina send <role> --task T-n")
+		assert.Contains(t, boot, "zmina send <role> --when-idle --task T-n")
 	}
 
 	assert.Less(t, len(CrossingRule), 260, "one sentence")

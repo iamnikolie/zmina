@@ -197,8 +197,14 @@ func (s *Shift) bellFor(name string, run []string, marks []*crossMark, typed boo
 
 	// Stored each time, whether an entry of the id is there or not: the same text replaces itself (one entry for the lines,
 	// not one for each try), which keeps it for as long as the lines are being rung; and a text that was given up
-	// (bellSuperseded) is the text again.
-	id := inbox.IDOf("bell " + name + "\x00" + body)
+	// (bellSuperseded) is the text again. The id is made of the role and the lines as they were written, never of the marks
+	// they carry: a delivery tried again whose marks changed stores its text over the same entry, not under a new one.
+	plain := run[0]
+	if len(run) > 1 {
+		plain = numbered(run)
+	}
+
+	id := inbox.IDOf("bell " + name + "\x00" + plain)
 	if err := s.inboxStore().Put(inbox.Entry{ID: id, From: "queue " + name, At: now, Role: name, Body: body}); err != nil {
 		s.log(name, "bell-failed", "", "its text could not be stored, the lines go as they are: "+err.Error())
 

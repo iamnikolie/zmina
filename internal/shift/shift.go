@@ -712,7 +712,7 @@ const CodexWaitRule = "[zmina] Waiting: wait for a build, CI, a deploy or a file
 
 // CrossingRule is what zmina tells every role at boot about the task of a line: the task comes only from what the sender
 // says by structure, so a line that crossed a newer one can be marked (crossing.go) only for a task it was told.
-const CrossingRule = "[zmina] Say the task with `zmina send <role> --task T-n …` when a line is about one: zmina cannot " +
+const CrossingRule = "[zmina] Say the task with `zmina send <role> --when-idle --task T-n …` when a line is about one: zmina cannot " +
 	"tell it from the words, and a line that crossed a newer one on that task can be marked only when it knows it."
 
 // RoleRules are the rules every Claude role hears at boot; CodexRoleRules every Codex role's. A crew with crossing: off
@@ -1260,13 +1260,9 @@ func (s *Shift) remember(name string, p tmux.Pane) {
 	}
 }
 
-// Send types one line into a role, as if typed at its prompt.
-func (s *Shift) Send(name, text string) error { return s.SendFrom(name, text, Facts{}) }
-
-// SendFrom is Send for a caller that knows more of the line (Facts, as QueueFrom has them): the task it is about is kept
-// on the line's card, and a line that crossed a newer line of its reader's on that task goes behind a mark that says so
-// (crossing.go). The sender is whoever runs the command.
-func (s *Shift) SendFrom(name, text string, f Facts) error {
+// Send types one line into a role, as if typed at its prompt. It carries no task and no mark (crossing.go): a line sent
+// now keeps no card when it has to be typed, so only a queued line (zmina send --when-idle --task) is marked.
+func (s *Shift) Send(name, text string) error {
 	if _, err := s.Role(name); err != nil {
 		return err
 	}
@@ -1275,22 +1271,12 @@ func (s *Shift) SendFrom(name, text string, f Facts) error {
 		return fmt.Errorf("%s: %w", name, ErrNotUp)
 	}
 
-	if f.From == "" {
-		f.From = senderOf(s.By)
-	}
-
-	// The line is written now: what it crosses is what its reader wrote to the writer on the task and the writer had not
-	// read.
-	mark := s.crossing(name, text, f.From, f.Task, s.Now())
-	out := mark.withMark(text)
-
 	// Posted to its inbox socket, the line arrives as a message from zmina whatever its input line holds; a post
 	// that never started is typed instead.
 	if sess := s.native(name, s.Now()); sess != nil && postable(text) {
-		err := s.postText(name, sess, out, text, out, s.Now())
+		err := s.post(name, sess, text, s.Now())
 		if err == nil {
-			s.cardNew(name, text, f)
-			s.cardCrossed(name, text, mark, s.Now())
+			s.cardNew(name, text, Facts{From: senderOf(s.By)})
 			s.cardAccept(name, text, s.acceptedBy(name), sess.SessionID, s.Now())
 		}
 
@@ -1305,12 +1291,12 @@ func (s *Shift) SendFrom(name, text string, f Facts) error {
 		return Partial(fmt.Errorf("%s: not typed, %s; zmina send --when-idle queues the line for when the role can take it", name, why))
 	}
 
-	if err := s.Tmux.Type(name, out); err != nil {
+	if err := s.Tmux.Type(name, text); err != nil {
 		// What the look before it closed or failed (typingBlock) is saved with the error.
 		return Partial(err)
 	}
 
-	s.log(name, "sent", "", out)
+	s.log(name, "sent", "", text)
 
 	return nil
 }

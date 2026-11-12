@@ -23,8 +23,11 @@ import (
 // drops it and saves the state back, unless the number tells it to refuse.
 //
 // 3 covers every field added since 2 first shipped, none of which moved the number (RoleState.Partial, TypedAt and
-// DispatchTriedAt among them). All of them are optional, so a 2 reads as it is and no conversion is made.
-const stateVersion = 3
+// DispatchTriedAt among them). All of them are optional, so a 2 reads as it is and no conversion is made. 4 adds Sent.Typed,
+// the text a queued line was typed as when that is not the line (behind a crossing mark): a 3 reads as it is, and a zmina
+// that does not know the field must not save the state back without it, or an input line it holds would no longer be
+// recognised as the line's.
+const stateVersion = 4
 
 // LockWait is how long a command waits for another zmina holding the lock before it gives up.
 var LockWait = 30 * time.Second
@@ -262,9 +265,13 @@ type RoleState struct {
 
 // Sent is a typed line not yet seen to land: the role's status has not changed since.
 type Sent struct {
-	Line  string    `json:"line"`
-	At    time.Time `json:"at"`
-	Tries int       `json:"tries,omitempty"`
+	Line string    `json:"line"`
+	At   time.Time `json:"at"`
+	// Typed is the text that went into the input line when it is not Line: a queued line typed behind a crossing mark
+	// (crossing.go). Line stays the line as it was queued, which every record of it is kept under; what the input line is
+	// compared with, to know whether the line is still there, is Typed when it is set (typedText).
+	Typed string `json:"typed,omitempty"`
+	Tries int    `json:"tries,omitempty"`
 	// IDs are the S-ids the line carries (the dispatcher's signals).
 	IDs []string `json:"ids,omitempty"`
 	// Parts are what a line to the dispatcher was made of, given back each on its own when it never lands.
@@ -273,6 +280,15 @@ type Sent struct {
 	// (clearInFlight), never inferred from an id missing among the acks: landed closes the line without a failed mark
 	// only when every id it carries is here.
 	AckedIDs []string `json:"acked_ids,omitempty"`
+}
+
+// typedText is what was typed into the input line: Typed where it is set, else the line.
+func (s *Sent) typedText() string {
+	if s.Typed != "" {
+		return s.Typed
+	}
+
+	return s.Line
 }
 
 // Posted is a line posted to a role's inbox socket: the message's id, and the session it went to.

@@ -1503,6 +1503,11 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 		s.cardClose(name, head, ClosedLanded, "a slash command: waited for by its time, not by a status", typedAt)
 	} else {
 		rs.Sent, rs.TypedAt = &Sent{Line: head, At: typedAt, IDs: ids}, now
+
+		// A line typed behind its mark is looked for in the input line as it was typed.
+		if typed != head {
+			rs.Sent.Typed = typed
+		}
 	}
 
 	return "typed into " + name + ": " + head

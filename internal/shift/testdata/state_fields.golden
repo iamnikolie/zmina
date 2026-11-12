@@ -1,7 +1,7 @@
 # The JSON fields of state.json (everything reachable from shift.State) and the schema number they were
 # recorded under. Written by TestStateFieldsGolden -update; do not edit by hand. A change to the fields
 # needs a higher stateVersion in state.go first (see state_schema_test.go).
-schema 3
+schema 4
 . object
 acceptance_notified map
 acceptance_notified.* time
@@ -193,6 +193,7 @@ roles.*.sent.parts[].notes[] string
 roles.*.sent.parts[].sent time
 roles.*.sent.parts[].signal string
 roles.*.sent.tries number
+roles.*.sent.typed string
 roles.*.skip_noted string
 roles.*.slash_at time
 roles.*.started time

@@ -122,17 +122,21 @@ func (s *Shift) joinRun(name string) []string {
 // is accepted. A post that never started is tried again as a line's is (typeTries beats); one whose write broke is
 // followed as posted (post); any other failure keeps the first line as failed, as when it goes alone, and leaves the
 // others waiting. marks are the marks the lines carry (crossing.go), each in step with its line: they are in the text that
-// goes out, and on the cards of the lines, and nowhere else.
+// goes out and in its event, and on the cards of the lines, and nowhere else: the record of the post is the numbered lines.
 func (s *Shift) postJoined(name string, sess *registry.Session, lines []string, marks []*crossMark, b *bell, now time.Time) string {
 	rs := s.State.Role(name)
-	text := numberedMarked(lines, marks)
-	what := strconv.Itoa(len(lines)) + " lines joined: " + text
+
+	// What goes out carries the marks; the record of the post, which every later step acts on, holds the numbered lines as
+	// they were written.
+	sent := numberedMarked(lines, marks)
+	text := numbered(lines)
+	what := strconv.Itoa(len(lines)) + " lines joined: " + sent
 
 	if b != nil {
-		text, what = b.text, bellWhat(len(lines), b.text)
+		sent, text, what = b.text, b.text, bellWhat(len(lines), b.text)
 	}
 
-	if err := s.postAs(name, sess, text, what, now); err != nil {
+	if err := s.postText(name, sess, sent, text, what, now); err != nil {
 		rs.Attempts++
 		rs.TriedAt = now
 		s.log(name, "post-failed", "", fmt.Sprintf("try %d: %s: %s", rs.Attempts, what, err))
