@@ -101,6 +101,11 @@ func queueFacts(c *shift.Card) string {
 		parts = append(parts, "accepted "+at(a.At)+" "+a.How)
 	}
 
+	// A line that crossed a newer line of its reader's on its task, and was delivered behind a mark that says so.
+	if x := c.Crossed; x != nil {
+		parts = append(parts, "crossed ("+x.Kind+")")
+	}
+
 	// A line that went in a doorbell says so, and whether its body was fetched: the bell shown is not the line seen.
 	switch b, s := c.Bell, c.Seen; {
 	case b != nil && s != nil && s.By == shift.SeenFetch:

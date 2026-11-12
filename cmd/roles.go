@@ -869,11 +869,14 @@ func (a *app) awaitOwnTurn(name string, own shift.Own, deadline time.Time) error
 }
 
 func (a *app) sendCommand() *cobra.Command {
-	var whenIdle bool
+	var (
+		whenIdle bool
+		taskID   string
+	)
 
 	c := &cobra.Command{
 		Use:   "send <role> <text>",
-		Short: "Type one line into a role's prompt and press Enter (--when-idle: queued; it goes at once when the role can take it, else with the ticker)",
+		Short: "Type one line into a role's prompt and press Enter (--when-idle: queued; it goes at once when the role can take it, else with the ticker; --task: the task it is about)",
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			text := strings.Join(args[1:], " ")
@@ -882,8 +885,21 @@ func (a *app) sendCommand() *cobra.Command {
 			}
 
 			return a.withState(func(s *shift.Shift) error {
+				// The task a line is about is what its sender says here, never read from its words: it is kept on the line's
+				// card, and a line that crossed a newer line of its reader's on that task is delivered with a mark that says so.
+				facts := shift.Facts{}
+
+				if taskID != "" {
+					t, err := s.Tasks.Get(taskID)
+					if err != nil {
+						return err
+					}
+
+					facts.Task = t.ID
+				}
+
 				if whenIdle {
-					id, err := s.QueueTracked(args[0], text)
+					id, err := s.QueueTrackedFrom(args[0], text, facts)
 					if err != nil {
 						return err
 					}
@@ -913,12 +929,13 @@ func (a *app) sendCommand() *cobra.Command {
 					return nil
 				}
 
-				return s.Send(args[0], text)
+				return s.SendFrom(args[0], text, facts)
 			})
 		},
 	}
 
 	c.Flags().BoolVar(&whenIdle, "when-idle", false, "queue the line: it goes at once when the role is up and can take it, else the ticker types it once the role is idle")
+	c.Flags().StringVar(&taskID, "task", "", "the task the line is about (T-n, must exist): the line says so on its card, and when it was written before its reader's last line to you on that task, or before you had read it, it reaches the reader behind a [written …] mark")
 
 	return c
 }
