@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -135,6 +136,29 @@ func (t *Tree) Dirty() (string, error) {
 	out, err := gitCtx(t.ctx(), t.Path, "status", "--short")
 
 	return strings.TrimSpace(out), err
+}
+
+// Head is the commit the worktree stands at.
+func (t *Tree) Head() (string, error) {
+	out, err := gitCtx(t.ctx(), t.Path, "rev-parse", "--verify", "HEAD")
+
+	return strings.TrimSpace(out), err
+}
+
+// Ahead is how many commits the worktree has beyond its base (git rev-list --count <base>..HEAD): none for a branch
+// nothing was committed on, or one whose work its base already has.
+func (t *Tree) Ahead() (int, error) {
+	out, err := gitCtx(t.ctx(), t.Path, "rev-list", "--count", t.Base+"..HEAD")
+	if err != nil {
+		return 0, err
+	}
+
+	n, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil {
+		return 0, fmt.Errorf("git rev-list: %q is not a count", strings.TrimSpace(out))
+	}
+
+	return n, nil
 }
 
 // Merged reports whether every commit of the branch is in its base. A branch that no longer exists has nothing to
