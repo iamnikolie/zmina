@@ -260,6 +260,9 @@ func TestAckFailedDeliveryKeepsTheQueuedID(t *testing.T) {
 	assert.Empty(t, f.s.PendingBrief("dispatcher", false), "a queued line is not one waiting for an ack after a compaction")
 
 	p.err = nil
+	assert.Empty(t, f.s.deliver(*f.now), "not again within retryGap of the failed post")
+
+	*f.now = f.now.Add(retryGap)
 	assert.Equal(t, "[zmina] S-1 dev: T-5 result ready (zmina S-1)", f.s.deliver(*f.now))
 }
 

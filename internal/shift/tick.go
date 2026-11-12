@@ -794,7 +794,14 @@ func (s *Shift) atPrompt(name string, now time.Time) bool {
 		return false
 	}
 
-	if turn, err := s.registryFor(name).Last(sess.SessionID); err != nil || !turn.Ended {
+	turn, err := s.registryFor(name).Last(sess.SessionID)
+	if err != nil || !turn.Ended {
+		return false
+	}
+
+	// The line typed last has taken: the role is busy with it, though the transcript, which does not show it yet,
+	// still ends in the turn before it. That turn is not this role's last (typedSettle).
+	if rs := s.State.Role(name); within(now, rs.TypedAt, typedSettle) && !turn.At.After(rs.TypedAt) {
 		return false
 	}
 
@@ -809,8 +816,10 @@ func (s *Shift) atPrompt(name string, now time.Time) bool {
 func (s *Shift) deliverOnce(now time.Time) string {
 	d := s.Crew.Dispatcher
 
-	// A slash command was just typed into it (a trim's): its queue waits as any role's does (slashSettle).
-	if s.State.Role(d).settling(now) {
+	// A slash command was just typed into it (a trim's): its queue waits as any role's does (slashSettle). So does
+	// a post or a typed line that failed a moment ago (retryGap): a caller that comes every few seconds must not try
+	// again, and log again, each time.
+	if rs := s.State.Role(d); rs.settling(now) || rs.dispatchTriedLately(now) {
 		return ""
 	}
 
@@ -1026,6 +1035,7 @@ func (s *Shift) postDispatcher(d string, sess *registry.Session, local, remote, 
 	text := strings.Join(lines, "\n")
 
 	if err := s.post(d, sess, text, now); err != nil {
+		rs.dispatchTried(now)
 		s.log(d, "post-failed", "", err.Error())
 
 		for _, id := range fresh {
@@ -1100,12 +1110,10 @@ func (s *Shift) boundLine(name, line string, limit int) (string, error) {
 		store = &inbox.Store{Dir: s.Crew.Layout().Inbox(), Now: s.Now}
 	}
 
-	id, err := inbox.NewID()
-	if err == nil {
-		err = store.Put(inbox.Entry{ID: id, From: "queue " + name, Body: body})
-	}
-
-	if err != nil {
+	// The entry is known by the role and the text, so a post that fails and is tried again stores it over itself: one
+	// entry for the line, not one for each try.
+	id := inbox.IDOf("queue " + name + "\x00" + body)
+	if err := store.Put(inbox.Entry{ID: id, From: "queue " + name, Body: body}); err != nil {
 		return "", err
 	}
 
@@ -1215,6 +1223,8 @@ func (s *Shift) typeDispatcher(d string, local, remote, notes []string, now time
 	line := "[zmina] " + strings.Join(parts, " · ") + ackTail(ids)
 
 	if err := s.typeLine(d, line); err != nil {
+		s.State.Role(d).dispatchTried(now)
+
 		for _, id := range fresh {
 			delete(s.State.Acks, id)
 		}
@@ -1222,7 +1232,7 @@ func (s *Shift) typeDispatcher(d string, local, remote, notes []string, now time
 		return ""
 	}
 
-	s.State.Role(d).Sent = &Sent{Line: line, At: now, IDs: ids, Parts: kept}
+	s.State.Role(d).Sent, s.State.Role(d).TypedAt = &Sent{Line: line, At: now, IDs: ids, Parts: kept}, now
 	s.delivered(ids, now)
 	s.stageIDs(ids, "submitted")
 
@@ -1310,7 +1320,7 @@ func IsRemote(signal string) bool { return strings.HasPrefix(signal, "remote ") 
 func (s *Shift) Deliver() string { return s.deliver(s.Now()) }
 
 // deliverInbox types a role's first waiting line when it is up, booted and idle; one line per pass, so the role
-// reads each before the next. A line tmux refuses is tried typeTries times, at least retryGap apart, then moves to
+// reads each before the next. A line tmux refuses is tried typeTries times, at least countedGap apart, then moves to
 // the failed list (zmina queue), so it never blocks the lines after it. Nothing goes to a role a slash command was
 // just typed into (slashSettle). It returns a line for the log.
 func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
@@ -1393,7 +1403,7 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 	if strings.HasPrefix(head, "/") {
 		rs.SlashAt = now
 	} else {
-		rs.Sent = &Sent{Line: head, At: now, IDs: ids}
+		rs.Sent, rs.TypedAt = &Sent{Line: head, At: now, IDs: ids}, now
 	}
 
 	return "typed into " + name + ": " + head
@@ -1440,9 +1450,20 @@ func (s *Shift) postInbox(name string, sess *registry.Session, now time.Time) st
 	return "posted to " + name + ": " + head
 }
 
-// triedLately reports whether the role's first queued line failed a try less than retryGap ago.
+// triedLately reports whether the role's first queued line failed a try less than countedGap ago.
 func (rs *RoleState) triedLately(now time.Time) bool {
-	return rs.Attempts > 0 && within(now, rs.TriedAt, retryGap)
+	return rs.Attempts > 0 && within(now, rs.TriedAt, countedGap)
+}
+
+// dispatchTried notes that a post or a typed line to the dispatcher failed now, so the next try waits retryGap
+// (dispatchTriedLately). It counts nothing: the dispatcher's signals and notes stay queued however often it fails, and
+// no line moves to the failed list for it. The stamp is its own, apart from the one a queued line's count keeps
+// (TriedAt), so neither moves for a failure the other saw.
+func (rs *RoleState) dispatchTried(now time.Time) { rs.DispatchTriedAt = now }
+
+// dispatchTriedLately reports whether a post or a typed line to the dispatcher failed less than retryGap ago.
+func (rs *RoleState) dispatchTriedLately(now time.Time) bool {
+	return within(now, rs.DispatchTriedAt, retryGap)
 }
 
 // settling reports whether a slash command was typed into the role less than slashSettle ago.

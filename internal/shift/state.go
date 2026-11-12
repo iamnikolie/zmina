@@ -151,9 +151,15 @@ type RoleState struct {
 	Inbox    []string `json:"inbox,omitempty"`
 	Attempts int      `json:"attempts,omitempty"`
 	// TriedAt is when the try Attempts last counted failed: a failed first line is neither tried nor counted again
-	// within retryGap, so passes seconds apart (a command's delivery, then the beat) are one try. It means something
+	// within countedGap, so passes seconds apart (a command's delivery, then the beat) are one try. It means something
 	// only while Attempts is above zero.
 	TriedAt time.Time `json:"tried_at,omitzero"`
+	// DispatchTriedAt is when a post or a typed line of signals and notes to the dispatcher last failed. Nothing is
+	// counted there; the next try only waits retryGap (dispatchTriedLately).
+	DispatchTriedAt time.Time `json:"dispatch_tried_at,omitzero"`
+	// TypedAt is when a line for the conversation was last typed into the role's input line. The line after it waits
+	// for the transcript to show a turn after it, or for typedSettle (atPrompt).
+	TypedAt time.Time `json:"typed_at,omitzero"`
 	// SlashAt is when a slash command (/compact, /clear, /rename) was last typed into the role. It leaves no Sent
 	// record to wait for, so nothing is delivered to the role until slashSettle has passed.
 	SlashAt time.Time `json:"slash_at,omitzero"`
@@ -327,6 +333,27 @@ func LockAs(dir string, opts LockOpts) (*Locked, error) {
 		return nil, err
 	}
 
+	return readLocked(dir, f)
+}
+
+// ErrLockHeld is TryLockAs finding the lock held by another process.
+var ErrLockHeld = errors.New("state: locked by another zmina")
+
+// TryLockAs is LockAs that does not wait: when another process holds the lock it returns ErrLockHeld at once, having
+// written nothing and logged nothing (no lock-wait event, no holder record, the state file not read). All it may
+// make is what taking the lock needs: the state directory (acquire runs MkdirAll) and a lock file that did not exist
+// yet, empty.
+func TryLockAs(dir string, opts LockOpts) (*Locked, error) {
+	f, err := tryTakeLock(dir, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	return readLocked(dir, f)
+}
+
+// readLocked reads the state under the lock just taken; a state that cannot be read lets the lock go.
+func readLocked(dir string, f *hold) (*Locked, error) {
 	l := &Locked{path: crew.Layout{Dir: dir}.State(), lock: f}
 
 	raw, err := os.ReadFile(l.path)
@@ -404,7 +431,12 @@ func stateError(path string, err error) error {
 }
 
 // takeLock opens and locks the lock file in dir, waiting up to LockWait, and writes this pid into it.
-func takeLock(dir string, opts LockOpts) (*hold, error) {
+func takeLock(dir string, opts LockOpts) (*hold, error) { return acquire(dir, opts, true) }
+
+// tryTakeLock is takeLock that makes one try: a lock another process holds is ErrLockHeld, with nothing written.
+func tryTakeLock(dir string, opts LockOpts) (*hold, error) { return acquire(dir, opts, false) }
+
+func acquire(dir string, opts LockOpts, wait bool) (*hold, error) {
 	if err := fsx.MkdirAll(dir, 0o700); err != nil {
 		return nil, fmt.Errorf("state: %w", err)
 	}
@@ -429,6 +461,12 @@ func takeLock(dir string, opts LockOpts) (*hold, error) {
 			_ = f.Close()
 
 			return nil, fmt.Errorf("state: lock: %w", err)
+		}
+
+		if !wait {
+			_ = f.Close()
+
+			return nil, ErrLockHeld
 		}
 
 		w.poll()

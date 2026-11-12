@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/events"
 )
 
@@ -243,6 +244,75 @@ func TestAShortWaitLogsNothing(t *testing.T) {
 	require.NoError(t, err)
 	l.Release()
 
+	assert.Empty(t, log.evs)
+}
+
+// A try takes a free lock as a command does, and finds a held one at once: nothing slept, written or logged, and the
+// state is not read.
+func TestATryNeverWaitsForAHeldLock(t *testing.T) {
+	c := fakeLockClock(t)
+	c.onSleep = func() { t.Error("a try never sleeps") }
+
+	dir := t.TempDir()
+
+	var log logged
+
+	free, err := TryLockAs(dir, LockOpts{Verb: "tick --deliver", Log: log.add})
+	require.NoError(t, err)
+
+	h, ok := readHolder(dir)
+	require.True(t, ok, "the lock it took has its holder record")
+	assert.Equal(t, os.Getpid(), h.PID)
+	assert.Equal(t, "tick --deliver", h.Verb)
+
+	free.Role("dev").Up = true
+	require.NoError(t, free.Save())
+
+	_, err = os.Stat(holderPath(dir))
+	assert.ErrorIs(t, err, os.ErrNotExist, "cleared with the lock")
+
+	// Another command holds the lock now.
+	holder, err := LockAs(dir, LockOpts{Verb: "tick"})
+	require.NoError(t, err)
+	holder.Mark("roles", "dev")
+
+	state := crew.Layout{Dir: dir}.State()
+	lock := crew.Layout{Dir: dir}.Lock()
+	require.NoError(t, os.WriteFile(lock, []byte("99999\n"), 0o600), "a pid no try may overwrite")
+
+	stateBefore, err := os.ReadFile(state)
+	require.NoError(t, err)
+
+	// A state file that does not read would fail a try that took the lock: this one must not even look.
+	require.NoError(t, os.WriteFile(state, []byte("not json"), 0o600))
+
+	got, err := TryLockAs(dir, LockOpts{Verb: "tick --deliver", Log: log.add})
+	require.ErrorIs(t, err, ErrLockHeld)
+	assert.Nil(t, got)
+	assert.Empty(t, log.evs, "no lock-wait event")
+
+	h, ok = readHolder(dir)
+	require.True(t, ok)
+	assert.Equal(t, "tick", h.Verb, "the holder's record is the holder's")
+	assert.Equal(t, "roles", h.Phase)
+
+	pid, err := os.ReadFile(lock)
+	require.NoError(t, err)
+	assert.Equal(t, "99999\n", string(pid), "the lock file is not written")
+
+	raw, err := os.ReadFile(state)
+	require.NoError(t, err)
+	assert.Equal(t, "not json", string(raw), "the state file is not read or written")
+
+	require.NoError(t, os.WriteFile(state, stateBefore, 0o600))
+
+	// The holder lets go: the next try takes it.
+	holder.Release()
+
+	again, err := TryLockAs(dir, LockOpts{Verb: "tick --deliver", Log: log.add})
+	require.NoError(t, err)
+	assert.True(t, again.Role("dev").Up, "it reads the state the holder left")
+	again.Release()
 	assert.Empty(t, log.evs)
 }
 

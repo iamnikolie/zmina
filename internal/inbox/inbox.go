@@ -5,6 +5,7 @@ package inbox
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -47,6 +48,14 @@ func NewID() (string, error) {
 	}
 
 	return "in-" + hex.EncodeToString(b[:]), nil
+}
+
+// IDOf is the id of an entry known by its key: the same key, the same id, so a text stored again under it replaces
+// the first copy (Put) instead of adding another.
+func IDOf(key string) string {
+	sum := sha256.Sum256([]byte(key))
+
+	return "in-" + hex.EncodeToString(sum[:6])
 }
 
 // Store is one crew's inbox directory.
