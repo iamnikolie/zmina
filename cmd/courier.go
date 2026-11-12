@@ -32,8 +32,16 @@ const (
 	roleBackoffMin = time.Second
 	roleBackoffMax = 15 * time.Second
 	// errBackoffMin and errBackoffMax bound the wait, for the whole courier, after a pass that failed.
-	errBackoffMin = 5 * time.Second
-	errBackoffMax = time.Minute
+	// A pass that failed may have given a line its state does not show (a save that failed), and the next gives it
+	// again: so the first wait is the beat's minute, not less, and the courier never repeats a line faster than the
+	// beat alone would.
+	errBackoffMin = time.Minute
+	errBackoffMax = 5 * time.Minute
+	// slowFactor is how many times the time a try took a role waits at least, when the try changed nothing: a tmux
+	// that answers slowly (each call may take its whole timeout, under the state lock) must not have the courier
+	// hold the lock most of the time. slowWaitMax bounds that wait.
+	slowFactor  = 10
+	slowWaitMax = 5 * time.Minute
 	// spinRun is how many passes in a row for one role may each change the state before the next change is taken for
 	// no progress (see roleWait): every change a pass makes is a line given, a try counted or a record settled, none of
 	// which can go on for long, so a run this long is a bug that would otherwise rewrite state.json at the poll's pace.
@@ -292,7 +300,7 @@ func settle(waits map[string]*roleWait, res courierPass, now time.Time) {
 		}
 
 		w.delay = doubled(w.delay, roleBackoffMin, roleBackoffMax)
-		w.due = now.Add(w.delay)
+		w.due = now.Add(max(w.delay, min(slowFactor*t.Took, slowWaitMax)))
 	}
 }
 
@@ -338,7 +346,7 @@ func (a *app) courierCommand() *cobra.Command {
 				parent = context.Background()
 			}
 
-			ctx, stop := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM)
+			ctx, stop := signal.NotifyContext(parent, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 			defer stop()
 
 			// The first signal ends the courier once the pass it is in is done; a second, while that pass still
@@ -522,7 +530,7 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 
 // courierDeliver is one pass of the courier over the roles try allows: zmina tick --deliver (deliverPass) for some of
 // the waiting roles. It takes the state lock the way deliverPass does, without waiting: a lock another zmina holds ends it
-// at once, with nothing read, written or logged. It reads the state first without the lock (state.json is replaced
+// at once, with nothing written or logged and no tmux asked (the state was read, without the lock). It reads the state first without the lock (state.json is replaced
 // whole, so a read never sees half of it) and takes the lock only when a role that may be tried is waiting, so the
 // changes of the state that call for nothing cost the beat and the commands no wait. Under the lock it asks the roles
 // that are due, saves only a state that changed, and starts no role and runs nothing of the beat.
@@ -543,7 +551,11 @@ func (a *app) courierDeliver(base *shift.Shift, try func(role string) bool) (cou
 		return courierPass{Waiting: waiting, Gated: queueGated(&peek, waiting)}, nil
 	}
 
-	l, err := shift.TryLockAs(dir, shift.LockOpts{Verb: a.verb, Log: base.LogEvent})
+	// The pass's own copy takes the lock too: what taking it logs and notes stays the pass's.
+	s := *base
+	s.By = "ticker"
+
+	l, err := shift.TryLockAs(dir, shift.LockOpts{Verb: a.verb, Log: s.LogEvent})
 	if errors.Is(err, shift.ErrLockHeld) {
 		return courierPass{LockHeld: true}, nil
 	}
@@ -551,8 +563,6 @@ func (a *app) courierDeliver(base *shift.Shift, try func(role string) bool) (cou
 	if err != nil {
 		return courierPass{}, err
 	}
-
-	s := *base
 
 	// As deliverPass: the pass leaves CommittedMessageStages and the watches' pruning to the beat on purpose.
 	s.State, s.Flush, s.Mark, s.By = l.State, l.Flush, l.Mark, "ticker"
@@ -578,7 +588,8 @@ func (a *app) courierDeliver(base *shift.Shift, try func(role string) bool) (cou
 // queueGated reports whether a role that is up has something queued that waiting does not name: a line of its own,
 // or, for the dispatcher, a signal or a note. Waiting leaves such a role out only for a time (see gatedLook).
 func queueGated(s *shift.Shift, waiting []string) bool {
-	for name, rs := range s.State.Roles {
+	for _, name := range s.Names() {
+		rs := s.State.Roles[name]
 		if rs == nil || !rs.Up || slices.Contains(waiting, name) {
 			continue
 		}

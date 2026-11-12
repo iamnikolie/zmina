@@ -212,6 +212,24 @@ func TestCourierPassesWhenTheStateChanges(t *testing.T) {
 	assert.Len(t, r.events, 2)
 }
 
+// A role whose try was slow and changed nothing waits ten times what the try took, not the second its backoff says: a
+// tmux that takes its whole timeout must not have the courier hold the state lock most of the time.
+func TestCourierLeavesARoleWhoseTryWasSlowForLonger(t *testing.T) {
+	r := newCourierRig(t)
+	r.pass = func(try func(string) bool) (courierPass, error) {
+		res := courierPass{Waiting: []string{"dev"}}
+		if try("dev") {
+			r.asked["dev"] = append(r.asked["dev"], r.since())
+			res.Tried = []shift.RoleDelivery{{Role: "dev", Took: 20 * time.Second}}
+		}
+
+		return res, nil
+	}
+
+	require.NoError(t, r.run(700*time.Second))
+	assert.Equal(t, secs(0, 200, 400, 600), r.asked["dev"])
+}
+
 // A role that is waiting and cannot take its line is asked again after 1 s, 2 s, 4 s, 8 s and then every 15 s, however
 // often state.json changes meanwhile: a pass that runs for the change leaves the role alone until its wait is over.
 func TestCourierAsksABlockedRoleAfterABackoffWhateverElseChanges(t *testing.T) {
@@ -315,14 +333,14 @@ func TestCourierBacksOffAfterAFailedPassAndResets(t *testing.T) {
 	r.onTick = func(r *courierRig) { r.bump() }
 	r.pass = func(func(string) bool) (courierPass, error) { return courierPass{}, errors.New("not saved: disk full") }
 
-	require.NoError(t, r.run(300*time.Second))
-	assert.Equal(t, secs(0, 5, 15, 35, 75, 135, 195, 255), r.passes, "5 s, 10 s, 20 s, 40 s, then a minute")
-	require.Len(t, r.warns, 8)
-	assert.Equal(t, "not saved: disk full (next try in 5s)", r.warns[0])
-	assert.Equal(t, "not saved: disk full (next try in 10s)", r.warns[1])
-	assert.Equal(t, "not saved: disk full (next try in 1m0s)", r.warns[7])
+	require.NoError(t, r.run(1300*time.Second))
+	assert.Equal(t, secs(0, 60, 180, 420, 720, 1020), r.passes, "a minute, 2, 4, then 5 minutes: never under the beat's")
+	require.Len(t, r.warns, 6)
+	assert.Equal(t, "not saved: disk full (next try in 1m0s)", r.warns[0])
+	assert.Equal(t, "not saved: disk full (next try in 2m0s)", r.warns[1])
+	assert.Equal(t, "not saved: disk full (next try in 5m0s)", r.warns[5])
 
-	// The pass that works resets it: the next failure waits 5 s again, not 20.
+	// The pass that works resets it: the next failure waits a minute again, not four.
 	r = newCourierRig(t)
 	r.onTick = func(r *courierRig) { r.bump() }
 
@@ -336,8 +354,8 @@ func TestCourierBacksOffAfterAFailedPassAndResets(t *testing.T) {
 		return courierPass{}, errors.New("not saved: disk full")
 	}
 
-	require.NoError(t, r.run(21*time.Second))
-	assert.Equal(t, secs(0, 5, 15, 15.25, 20.25), r.passes)
+	require.NoError(t, r.run(250*time.Second))
+	assert.Equal(t, secs(0, 60, 180, 180.25, 240.25), r.passes)
 }
 
 // A state that does not read is a pass that failed like any other: the courier waits, and looks again after the wait
@@ -348,8 +366,8 @@ func TestCourierKeepsGoingOnAStateThatDoesNotRead(t *testing.T) {
 		return courierPass{}, fmt.Errorf("x: %w (bad); nothing was changed", shift.ErrStateBroken)
 	}
 
-	require.NoError(t, r.run(30*time.Second))
-	assert.Equal(t, secs(0, 5, 15), r.passes, "tried again after the wait even though the file did not change")
+	require.NoError(t, r.run(200*time.Second))
+	assert.Equal(t, secs(0, 60, 180), r.passes, "tried again after the wait even though the file did not change")
 	assert.Len(t, r.warns, 3)
 }
 
@@ -716,7 +734,7 @@ func TestCourierBacksOffWhenTheStateCannotBeSaved(t *testing.T) {
 	require.NoError(t, c.run(t))
 
 	assert.Len(t, n.posts, 1, "tried once in the first four seconds: the line is not given at every look")
-	assert.Equal(t, 1, strings.Count(c.errb.String(), "next try in 5s"), c.errb.String())
+	assert.Equal(t, 1, strings.Count(c.errb.String(), "next try in 1m0s"), c.errb.String())
 }
 
 // The crew file is read at the start and again only when it changed; what it warns of is said then and not at every pass.

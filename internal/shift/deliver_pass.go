@@ -109,7 +109,16 @@ type RoleDelivery struct {
 	// Changed is whether trying the role altered the state in any way: a line given, a try counted, a record settled.
 	// A role that is waiting but cannot take its line (busy, a draft, a dialog) changes nothing.
 	Changed bool
+	// Took is how long trying the role took, by the wall clock: tmux, the registry, the post or the typing.
+	Took time.Duration
 }
+
+// slowTry is the time a try may take before the pass ends after it, the roles after it left for the next pass: the
+// pass runs under the state lock, and a tmux that answers slowly must not hold it for one role after another.
+const slowTry = 2 * time.Second
+
+// wallNow is the wall clock a try is timed by (not the shift's Now, which a pass holds still); a test moves it.
+var wallNow = time.Now
 
 // DeliverRoles is DeliverPass for some of the waiting roles only: those of only that Waiting names, in Waiting's order.
 // A name in only that Waiting does not name is skipped, so a list gone stale between the look and the call gives a
@@ -121,7 +130,7 @@ type RoleDelivery struct {
 // cannot take its line yet costs tmux, the registry and a transcript read. Like DeliverPass it starts no role, trims
 // nothing, tells nobody again and sweeps no record; call it under the crew state lock. The error is the one DeliverPass
 // returns, a state that could not be written after a line went: the roles after the one it came on are not tried and
-// not reported.
+// not reported. Nor are the roles after one whose try took over slowTry: they are the next pass's.
 func (s *Shift) DeliverRoles(only []string) ([]RoleDelivery, error) {
 	var names []string
 
@@ -148,15 +157,22 @@ func (s *Shift) DeliverRoles(only []string) ([]RoleDelivery, error) {
 		}
 
 		s.mark("deliver", name)
+
+		began := wallNow()
 		s.DeliverTo(name)
+		took := wallNow().Sub(began)
 
 		after, err := json.Marshal(s.State)
 		if err != nil {
-			return append(out, RoleDelivery{Role: name, Changed: true}), fmt.Errorf("state: %w", err)
+			return append(out, RoleDelivery{Role: name, Changed: true, Took: took}), fmt.Errorf("state: %w", err)
 		}
 
-		out = append(out, RoleDelivery{Role: name, Changed: !bytes.Equal(before, after)})
+		out = append(out, RoleDelivery{Role: name, Changed: !bytes.Equal(before, after), Took: took})
 		before = after
+
+		if took > slowTry {
+			break
+		}
 	}
 
 	return out, s.flushErr

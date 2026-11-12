@@ -362,20 +362,29 @@ type lazyTmux struct {
 	socket string
 	drop   []string
 
-	once sync.Once
-	c    *tmux.Client
-	err  error
+	mu sync.Mutex
+	c  *tmux.Client
 }
 
+// client is the tmux client, made the first time it is found. A tmux that is not found is looked for again at the
+// next call: a process that lives long (the courier) must not keep the failure of its first look.
 func (l *lazyTmux) client() (*tmux.Client, error) {
-	l.once.Do(func() {
-		l.c, l.err = tmux.New(l.socket)
-		if l.c != nil {
-			l.c.Drop = l.drop
-		}
-	})
+	l.mu.Lock()
+	defer l.mu.Unlock()
 
-	return l.c, l.err
+	if l.c != nil {
+		return l.c, nil
+	}
+
+	c, err := tmux.New(l.socket)
+	if err != nil {
+		return nil, err
+	}
+
+	c.Drop = l.drop
+	l.c = c
+
+	return l.c, nil
 }
 
 func (l *lazyTmux) Probe(name string) (tmux.Pane, error) {

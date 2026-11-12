@@ -1875,13 +1875,15 @@ file changed (its own save too), when a role's wait is over, or when the crew fi
 stat changed, its warnings said then, not at every pass). Between those it takes no lock and asks tmux nothing. A role
 that is waiting and cannot take its line (busy, a draft, a dialog) is asked again after 1 s, 2 s, 4 s, up to 15 s, whatever
 else changes the file; a role whose line went starts over. A lock another zmina holds is skipped at once, without a word.
-A pass that fails (a state that could not be saved) backs the whole courier off: 5 s doubling to 60 s. It ends with exit 0
+A role whose try was slow (a tmux that answers slowly) waits at least ten times what the try took, and a try over 2 s ends
+the pass, the lock let go. A pass that fails (a state that could not be saved) backs the whole courier off: a minute
+doubling to 5 minutes, so a line is never repeated faster than the beat alone would. It ends with exit 0
 when the zmina executable on disk is another file than it started from, after `--max-life` (default 6 h; 0: no limit),
-and on SIGINT or SIGTERM; with exit 1 on a state a newer zmina wrote. The start and each end are one event,
+and on SIGINT, SIGTERM or SIGHUP; with exit 1 on a state a newer zmina wrote. The start and each end are one event,
 `courier-start` and `courier-stop` with its reason. One courier runs per crew (`courier.lock` beside the state, not the state
 lock): a second prints that one runs and exits 0. The beat stays what it was and stays the safety net: a line held back by
-a time (the gap after a failed try, the settle time after a slash command) is given by the next change of the state or by
-the beat, whichever comes first.
+a time (the gap after a failed try, the settle time after a slash command) is looked for again every 5 s
+until it can go.
 
 0. Alarms whose time has come ring, once each (see Alarms): a reminder for the owner becomes a check on the todo,
    a parked item comes back to it, a role is started if down and gets its line queued, another crew is told.

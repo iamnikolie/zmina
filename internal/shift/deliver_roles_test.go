@@ -18,7 +18,7 @@ func TestDeliverRolesTriesOnlyTheRolesNamed(t *testing.T) {
 
 	got, err := f.s.DeliverRoles([]string{"harvester"})
 	require.NoError(t, err)
-	assert.Equal(t, []RoleDelivery{{Role: "harvester", Changed: true}}, got)
+	assert.Equal(t, []RoleDelivery{{Role: "harvester", Changed: true}}, untimed(got))
 	assert.Equal(t, []string{"two"}, f.tm.typed["harvester"])
 	assert.Empty(t, f.tm.typed["designer"])
 	assert.Equal(t, []string{"one"}, f.s.State.Role("designer").Inbox, "left as it was")
@@ -36,7 +36,7 @@ func TestDeliverRolesTriesOnlyTheRolesNamed(t *testing.T) {
 	// The one left out goes when it is named, and the one that went is not given again.
 	got, err = f.s.DeliverRoles([]string{"designer", "harvester"})
 	require.NoError(t, err)
-	assert.Equal(t, []RoleDelivery{{Role: "designer", Changed: true}}, got)
+	assert.Equal(t, []RoleDelivery{{Role: "designer", Changed: true}}, untimed(got))
 	assert.Equal(t, []string{"one"}, f.tm.typed["designer"])
 	assert.Equal(t, []string{"two"}, f.tm.typed["harvester"])
 }
@@ -56,14 +56,14 @@ func TestDeliverRolesSaysWhichRoleChangedTheState(t *testing.T) {
 
 	got, err := f.s.DeliverRoles([]string{"designer"})
 	require.NoError(t, err)
-	assert.Equal(t, []RoleDelivery{{Role: "designer", Changed: false}}, got)
+	assert.Equal(t, []RoleDelivery{{Role: "designer", Changed: false}}, untimed(got))
 	assert.NotEmpty(t, calls.calls, "the busy role was asked about")
 	assert.Equal(t, before, stateJSON(t, f.s))
 	assert.Empty(t, p.raw)
 
 	got, err = f.s.DeliverRoles([]string{"harvester", "designer"})
 	require.NoError(t, err)
-	assert.Equal(t, []RoleDelivery{{Role: "designer", Changed: false}, {Role: "harvester", Changed: true}}, got,
+	assert.Equal(t, []RoleDelivery{{Role: "designer", Changed: false}, {Role: "harvester", Changed: true}}, untimed(got),
 		"Waiting's order, each against the state just before it")
 	assert.Len(t, p.posted["sid-harvester"], 1)
 	assert.Empty(t, p.posted["sid-designer"])
@@ -73,7 +73,7 @@ func TestDeliverRolesSaysWhichRoleChangedTheState(t *testing.T) {
 
 	got, err = f.s.DeliverRoles([]string{"designer"})
 	require.NoError(t, err)
-	assert.Equal(t, []RoleDelivery{{Role: "designer", Changed: true}}, got)
+	assert.Equal(t, []RoleDelivery{{Role: "designer", Changed: true}}, untimed(got))
 	assert.Len(t, p.posted["sid-designer"], 1)
 }
 
@@ -89,7 +89,7 @@ func TestDeliverRolesComparesEachRoleWithTheStateJustBeforeIt(t *testing.T) {
 
 	got, err := f.s.DeliverRoles(f.s.Waiting())
 	require.NoError(t, err)
-	assert.Equal(t, []RoleDelivery{{Role: "designer", Changed: true}, {Role: "harvester", Changed: false}}, got)
+	assert.Equal(t, []RoleDelivery{{Role: "designer", Changed: true}, {Role: "harvester", Changed: false}}, untimed(got))
 	assert.Len(t, p.posted["sid-designer"], 1)
 	assert.Empty(t, p.posted["sid-harvester"])
 }
@@ -107,7 +107,7 @@ func TestDeliverRolesCountsAChangeOutsideTheRolesOwnRecord(t *testing.T) {
 
 		got, err := f.s.DeliverRoles([]string{"dispatcher"})
 		require.NoError(t, err)
-		assert.Equal(t, []RoleDelivery{{Role: "dispatcher", Changed: true}}, got)
+		assert.Equal(t, []RoleDelivery{{Role: "dispatcher", Changed: true}}, untimed(got))
 		assert.Empty(t, f.s.State.Signals)
 		assert.Len(t, p.posted["sid-dispatcher"], 1)
 	})
@@ -119,7 +119,7 @@ func TestDeliverRolesCountsAChangeOutsideTheRolesOwnRecord(t *testing.T) {
 
 		got, err := f.s.DeliverRoles([]string{"designer"})
 		require.NoError(t, err)
-		assert.Equal(t, []RoleDelivery{{Role: "designer", Changed: true}}, got)
+		assert.Equal(t, []RoleDelivery{{Role: "designer", Changed: true}}, untimed(got))
 		assert.Equal(t, 1, f.s.State.Role("designer").Attempts)
 	})
 }
@@ -179,7 +179,7 @@ func TestDeliverRolesOverEveryWaitingRoleIsTheDeliverPass(t *testing.T) {
 	got, err := roles.s.DeliverRoles(roles.s.Waiting())
 	require.NoError(t, err)
 	assert.Equal(t, []RoleDelivery{{Role: "dispatcher", Changed: true}, {Role: "designer", Changed: true},
-		{Role: "harvester", Changed: false}}, got)
+		{Role: "harvester", Changed: false}}, untimed(got))
 	assert.Equal(t, stateJSON(t, pass.s), stateJSON(t, roles.s))
 }
 
@@ -194,7 +194,7 @@ func TestDeliverRolesStopsWhenTheStateCannotBeSaved(t *testing.T) {
 
 	got, err := f.s.DeliverRoles(f.s.Waiting())
 	require.ErrorContains(t, err, "disk full")
-	assert.Equal(t, []RoleDelivery{{Role: "designer", Changed: true}}, got)
+	assert.Equal(t, []RoleDelivery{{Role: "designer", Changed: true}}, untimed(got))
 	assert.Empty(t, f.tm.typed["harvester"])
 	assert.Equal(t, []string{"two"}, f.s.State.Role("harvester").Inbox)
 }
@@ -215,10 +215,39 @@ func TestDeliverRolesMarksTheRoleAndMakesNoBeat(t *testing.T) {
 
 	got, err := f.s.DeliverRoles([]string{"dev", "designer"})
 	require.NoError(t, err)
-	assert.Equal(t, []RoleDelivery{{Role: "dev", Changed: true}}, got)
+	assert.Equal(t, []RoleDelivery{{Role: "dev", Changed: true}}, untimed(got))
 	assert.Equal(t, []string{"deliver dev"}, marks)
 	assert.Equal(t, []string{"hello"}, f.tm.typed["dev"], "the line, and no /clear")
 	assert.Equal(t, []string{"dev"}, f.tm.starts, "no role started but the one started above")
 	assert.Equal(t, beat, f.s.State.LastTick)
 	assert.False(t, f.s.State.Role("designer").Up)
+}
+
+// untimed is the deliveries without how long each took.
+func untimed(in []RoleDelivery) []RoleDelivery {
+	out := make([]RoleDelivery, len(in))
+	for i, d := range in {
+		out[i] = RoleDelivery{Role: d.Role, Changed: d.Changed}
+	}
+
+	return out
+}
+
+// A try says how long it took, and one that took over slowTry ends the pass: the roles after it are the next pass's,
+// so a tmux that answers slowly does not hold the state lock for one role after another.
+func TestDeliverRolesEndsThePassAfterASlowTry(t *testing.T) {
+	f := typedFixture(t, crewYAML, "designer", "harvester")
+	require.NoError(t, f.s.Queue("designer", "one"))
+	require.NoError(t, f.s.Queue("harvester", "two"))
+
+	// Each look at the wall clock finds it 3 s on: every try takes 3 s.
+	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	wallNow = func() time.Time { at = at.Add(3 * time.Second); return at }
+
+	t.Cleanup(func() { wallNow = time.Now })
+
+	got, err := f.s.DeliverRoles([]string{"designer", "harvester"})
+	require.NoError(t, err)
+	assert.Equal(t, []RoleDelivery{{Role: "designer", Changed: true, Took: 3 * time.Second}}, got)
+	assert.Len(t, f.s.State.Role("harvester").Inbox, 1, "left for the next pass")
 }
