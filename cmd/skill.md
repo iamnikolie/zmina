@@ -1908,7 +1908,8 @@ the pass, the lock let go. A pass that fails (a state that could not be saved) b
 doubling to 5 minutes, so a line is never repeated faster than the beat alone would. It ends with exit 0
 when the zmina executable on disk is another file than it started from, after `--max-life` (default 6 h; 0: no limit),
 and on SIGINT, SIGTERM or SIGHUP; with exit 1 on a state a newer zmina wrote or a crew file that is not there. The start
-and each end are one event, `courier-start` and `courier-stop` with its reason. One courier runs per crew (`courier.lock` beside the state, not the state
+and each end are one event, `courier-start` and `courier-stop` with its reason, and what its passes log (a line given,
+a try counted) is by `courier`, not by `ticker`: `zmina log` shows `by courier` for it. One courier runs per crew (`courier.lock` beside the state, not the state
 lock): a second prints that one runs and exits 0. The beat stays what it was and stays the safety net: a line held back by
 a time (the gap after a failed try, the settle time after a slash command) is looked for again every 5 s
 until it can go.

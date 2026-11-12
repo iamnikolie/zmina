@@ -21,6 +21,10 @@ import (
 	"github.com/iamnikolie/zmina/internal/shift"
 )
 
+// courierBy is who the events of the courier are by, its own start and stop and what its passes do: the beat's own
+// are by ticker.
+const courierBy = "courier"
+
 const (
 	// courierPoll is how often the courier looks at state.json (one stat) when no flag says otherwise.
 	courierPoll = 250 * time.Millisecond
@@ -555,7 +559,7 @@ func (a *app) newCourierLoop(path string, poll, maxLife time.Duration) *courierL
 
 	l.Event = func(event, detail string) {
 		now := time.Now()
-		if err := log.Add(events.Event{TS: now, Event: event, By: "courier", Detail: detail}); err != nil && !logErr {
+		if err := log.Add(events.Event{TS: now, Event: event, By: courierBy, Detail: detail}); err != nil && !logErr {
 			logErr = true
 
 			warn(fmt.Errorf("event log: %w", err))
@@ -607,7 +611,7 @@ func (a *app) courierDeliver(base *shift.Shift, try func(role string) bool) (cou
 
 	// The pass's own copy takes the lock too: what taking it logs and notes stays the pass's.
 	s := *base
-	s.By = "ticker"
+	s.By = courierBy
 
 	l, err := shift.TryLockAs(dir, shift.LockOpts{Verb: a.verb, Log: s.LogEvent})
 	if errors.Is(err, shift.ErrLockHeld) {
@@ -619,7 +623,7 @@ func (a *app) courierDeliver(base *shift.Shift, try func(role string) bool) (cou
 	}
 
 	// As deliverPass: the pass leaves CommittedMessageStages and the watches' pruning to the beat on purpose.
-	s.State, s.Flush, s.Mark, s.By = l.State, l.Flush, l.Mark, "ticker"
+	s.State, s.Flush, s.Mark, s.By = l.State, l.Flush, l.Mark, courierBy
 
 	out := courierPass{Waiting: s.Waiting()}
 	due := slices.DeleteFunc(slices.Clone(out.Waiting), func(role string) bool { return !try(role) })
