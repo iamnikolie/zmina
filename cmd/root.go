@@ -348,6 +348,10 @@ func (a *app) ledger(s *shift.Shift) *ledger.Ledger {
 		Crew:      s.Crew.Name,
 		Now:       s.Now,
 		Log:       s.Log,
+		// A check runs as a role's tools would: not as a child of the session or terminal this runs in.
+		DoneCheck:  s.Crew.DoneCheck,
+		Dispatcher: s.Crew.Dispatcher,
+		Env:        tmux.CleanEnv(os.Environ(), s.Crew.DropEnv),
 	}
 }
 

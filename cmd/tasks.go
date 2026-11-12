@@ -5,12 +5,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/iamnikolie/zmina/internal/donecheck"
 	"github.com/iamnikolie/zmina/internal/events"
 	"github.com/iamnikolie/zmina/internal/ledger"
 	"github.com/iamnikolie/zmina/internal/shift"
@@ -38,6 +43,7 @@ func (a *app) taskNewCommand() *cobra.Command {
 		asJSON  bool
 		routed  bool
 		because string
+		check   checkFlags
 	)
 
 	c := &cobra.Command{
@@ -54,6 +60,17 @@ func (a *app) taskNewCommand() *cobra.Command {
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			spec, cleared, err := check.spec(cmd)
+			if err != nil {
+				return err
+			}
+
+			if cleared {
+				return errors.New("a new task has no check to clear")
+			}
+
+			n.Check = spec
+
 			return a.withState(func(s *shift.Shift) error {
 				ask.repo, ask.project = n.Repo, n.Project
 
@@ -138,10 +155,43 @@ func (a *app) taskNewCommand() *cobra.Command {
 	c.Flags().StringVar(&because, "because", "", "why this role, when it is not the one the routes name (a role picked by hand)")
 	c.Flags().StringArrayVar(&n.Criteria, "criteria", nil, "what must be true for the task to count as finished, one line; "+
 		"repeat the flag for each criterion (the handoff packet carries them)")
+	check.flags(c)
 	ask.flags(c)
 	c.Flags().BoolVar(&asJSON, "json", false, "JSON output")
 
 	return c
+}
+
+// checkFlags is the flags that give a task its check: --check, with --check-timeout and --check-commit.
+type checkFlags struct {
+	run, timeout string
+	commit       bool
+}
+
+func (f *checkFlags) flags(c *cobra.Command) {
+	c.Flags().StringVar(&f.run, "check", "", "the command closing the task as done runs in its worktree, and it closes "+
+		"only if it exits 0 (the owner and the dispatcher set it; needs a worktree; with set, - clears it)")
+	c.Flags().StringVar(&f.timeout, "check-timeout", "", "how long the check may run (default 10m, at most 30m)")
+	c.Flags().BoolVar(&f.commit, "check-commit", false, "the check also wants a commit on the branch beyond its base")
+}
+
+// spec is the check the flags give: nil when --check was not given, cleared when it was given as - (set only).
+func (f *checkFlags) spec(cmd *cobra.Command) (spec *donecheck.Spec, cleared bool, err error) {
+	given := cmd.Flags().Changed("check")
+	extra := cmd.Flags().Changed("check-timeout") || cmd.Flags().Changed("check-commit")
+
+	switch {
+	case !given && !extra:
+		return nil, false, nil
+	case !given:
+		return nil, false, errors.New("--check-timeout and --check-commit go with --check")
+	case f.run == "-" && extra:
+		return nil, false, errors.New("--check - clears the check: --check-timeout and --check-commit have nothing to go with")
+	case f.run == "-":
+		return nil, true, nil
+	}
+
+	return &donecheck.Spec{Run: f.run, Timeout: f.timeout, Commit: f.commit}, false, nil
 }
 
 // upTaskLine is the command that starts a role on a task recorded for it: a copy (dev#2) is started as its role.
@@ -210,7 +260,12 @@ func (a *app) taskLsCommand() *cobra.Command {
 				fmt.Fprintln(w, "ID\tROLE\tSTATE\tAGE\tPROJECT\tWORK")
 
 				for _, t := range out {
-					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", t.ID, t.Role, t.Status(), age(s.Now().Sub(t.Created)),
+					status := t.Status()
+					if t.Closed != nil && t.Closed.Unchecked != nil {
+						status += " (unchecked)"
+					}
+
+					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", t.ID, t.Role, status, age(s.Now().Sub(t.Created)),
 						dash(t.Where()), clip(t.Headline(), 70))
 				}
 
@@ -302,6 +357,8 @@ func (a *app) taskShowCommand() *cobra.Command {
 					fmt.Fprintf(a.out, "worktree: %s (branch %s from %s)\n", t.Worktree, t.Branch, t.Base)
 				}
 
+				a.printCheck(s, t, full)
+
 				if t.Note != "" {
 					note := t.Note
 					if !full {
@@ -368,6 +425,33 @@ func (a *app) taskShowCommand() *cobra.Command {
 	return c
 }
 
+// printCheck says what closing the task as done runs, for a task still active, and how a closed one was checked: what ran
+// and at which commit, or that it was closed past its check. The tail of the output goes with --full. A check says that
+// its command exited 0 at that commit, which is all it says.
+func (a *app) printCheck(s *shift.Shift, t task.Task, full bool) {
+	if spec, source, ok := a.ledger(s).CheckFor(t); ok && t.State.Active() {
+		fmt.Fprintf(a.out, "check: %s · %s's, run by zmina task done; it passing says the command exited 0, not that the work is right\n",
+			spec, source)
+	}
+
+	if t.Closed == nil {
+		return
+	}
+
+	if c := t.Closed.Check; c != nil {
+		fmt.Fprintf(a.out, "checked: %s · exit %d in %s at %s · %s · %s's check\n", c.Run, c.Exit,
+			c.Duration().Round(time.Millisecond), c.Commit, c.At.Local().Format(time.DateTime), c.Source)
+
+		if full && c.Output != "" {
+			fmt.Fprintln(a.out, "  "+strings.ReplaceAll(c.Tail(), "\n", "\n  "))
+		}
+	}
+
+	if u := t.Closed.Unchecked; u != nil {
+		fmt.Fprintf(a.out, "unchecked: closed by %s past its check (%s), which was not run\n", u.By, u.Run)
+	}
+}
+
 // taskChange is the flags of set, done and drop.
 type taskChange struct {
 	note, role, on      string
@@ -377,12 +461,16 @@ type taskChange struct {
 	// criteria is the values of --criteria; setCriteria the list they make when the flag was given (set only).
 	criteria    []string
 	setCriteria *[]string
+	// check is the check --check gave, clearCheck says --check - (set only).
+	check      *donecheck.Spec
+	clearCheck bool
 }
 
 func (o *taskChange) flags(c *cobra.Command, withRole bool) {
 	c.Flags().StringVar(&o.note, "note", "", "a note on the task")
 	c.Flags().BoolVar(&o.force, "force", false, "close it although its worktree has uncommitted changes, or (done) "+
-		"it has criteria and no result")
+		"it has criteria and no result, or (the owner and the dispatcher) its check was not run or failed: it is then "+
+		"recorded as unchecked")
 
 	if withRole {
 		c.Flags().StringVar(&o.role, "role", "", "hand the task to another role")
@@ -398,15 +486,23 @@ func (o *taskChange) flags(c *cobra.Command, withRole bool) {
 }
 
 func (a *app) taskSetCommand() *cobra.Command {
-	var o taskChange
+	var (
+		o     taskChange
+		check checkFlags
+	)
 
 	c := &cobra.Command{
 		Use: "set <id> [state]",
 		Short: "Change a task: state (open, waiting [--on who], done, dropped), --note, --role, --title, --project, " +
-			"--url, --budget, --criteria",
+			"--url, --budget, --criteria, --check",
 		Args: cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var st task.State
+
+			var err error
+			if o.check, o.clearCheck, err = check.spec(cmd); err != nil {
+				return err
+			}
 
 			if cmd.Flags().Changed("criteria") {
 				list, err := replacementCriteria(o.criteria)
@@ -418,7 +514,6 @@ func (a *app) taskSetCommand() *cobra.Command {
 			}
 
 			if len(args) == 2 {
-				var err error
 				if st, err = task.ParseState(args[1]); err != nil {
 					return err
 				}
@@ -429,6 +524,7 @@ func (a *app) taskSetCommand() *cobra.Command {
 	}
 
 	o.flags(c, true)
+	check.flags(c)
 
 	return c
 }
@@ -463,7 +559,7 @@ func (a *app) taskCloseCommand(use string, st task.State) *cobra.Command {
 // closeRefuses is what closing as st refuses without --force, for the command's short text.
 func closeRefuses(st task.State) string {
 	if st == task.Done {
-		return "a worktree with uncommitted changes, and a task with criteria and no saved result,"
+		return "a worktree with uncommitted changes, a task with criteria and no saved result, and a task whose check fails,"
 	}
 
 	return "a worktree with uncommitted changes"
@@ -525,10 +621,64 @@ func (a *app) taskParkCommand() *cobra.Command {
 	return c
 }
 
+// exitCheckFailed is the exit code of a task done that its check refused: the command failed or timed out, or the
+// commit it asks for is not there.
+const exitCheckFailed = 4
+
+// doneCheck runs the check that closing task id as done needs, before the close takes the state lock, and holds no lock
+// while it runs: it can take minutes, and the ticker and every other command wait for that lock. It reads the task and
+// its worktree, runs the command, and hands the result to the close, which writes it only if the task and its commit
+// are still the ones the check ran against. nil: nothing to run (not a close as done, no check, or --force).
+func (a *app) doneCheck(id string, st task.State, o taskChange) (*ledger.Checked, error) {
+	if st != task.Done || o.force {
+		return nil, nil //nolint:nilnil // no check to run is not an error
+	}
+
+	// The crew file is read here without the lock; its warnings are said once, by the close.
+	quiet := *a
+	quiet.err = io.Discard
+
+	s, err := quiet.newShift()
+	if err != nil {
+		return nil, err
+	}
+
+	l := a.ledger(s)
+
+	plan, err := l.PlanCheck(id)
+	if err != nil || plan == nil {
+		return nil, checkExit(err)
+	}
+
+	fmt.Fprintf(a.err, "zmina: %s: running its check: %s\n", plan.Task.ID, plan.Spec)
+
+	// A check has a process group of its own: an interrupt of this command ends it too.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	checked, err := l.RunCheck(ctx, plan)
+
+	return checked, checkExit(err)
+}
+
+// checkExit gives a refusal by the check its own exit code.
+func checkExit(err error) error {
+	if errors.Is(err, ledger.ErrCheckFailed) {
+		return &exitError{code: exitCheckFailed, msg: err.Error()}
+	}
+
+	return err
+}
+
 func (a *app) setTask(id string, st task.State, o taskChange) error {
 	var closed *task.Task
 
-	err := a.withState(func(s *shift.Shift) error {
+	checked, err := a.doneCheck(id, st, o)
+	if err != nil {
+		return err
+	}
+
+	err = a.withState(func(s *shift.Shift) error {
 		if o.role != "" {
 			if _, err := s.Role(o.role); err != nil {
 				return err
@@ -536,7 +686,8 @@ func (a *app) setTask(id string, st task.State, o taskChange) error {
 		}
 
 		t, err := a.ledger(s).Set(id, ledger.Change{State: st, On: o.on, Note: o.note, Role: o.role, Force: o.force,
-			Title: o.title, Project: o.project, URL: o.url, Budget: o.budget, Criteria: o.setCriteria, By: by()})
+			Title: o.title, Project: o.project, URL: o.url, Budget: o.budget, Criteria: o.setCriteria, By: by(),
+			Check: o.check, ClearCheck: o.clearCheck, Checked: checked})
 		if err != nil {
 			return err
 		}
