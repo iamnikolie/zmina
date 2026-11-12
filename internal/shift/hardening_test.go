@@ -67,7 +67,7 @@ func TestStateV1IsConvertedAndBackedUp(t *testing.T) {
 	assert.Equal(t, stateV1JSON, string(bak), "the original is kept as it was")
 
 	raw, _ := os.ReadFile(filepath.Join(dir, "state.json"))
-	assert.Contains(t, string(raw), `"version": 2`)
+	assert.Contains(t, string(raw), fmt.Sprintf(`"version": %d`, stateVersion))
 
 	l, err = Lock(dir)
 	require.NoError(t, err)

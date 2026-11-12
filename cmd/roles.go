@@ -175,7 +175,7 @@ func (a *app) lsCompact(s *shift.Shift, views []shift.View, all bool) error {
 
 		state := stateCell(v)
 		if v.Status != "" {
-			state += " " + v.Status
+			state += " " + statusCell(v)
 		}
 
 		if v.Prompt {
@@ -297,7 +297,7 @@ func (a *app) lsWide(s *shift.Shift, views []shift.View, now bool) error {
 		}
 
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", role, v.Session, stateCell(v),
-			dash(v.Status), since(v), contextCell(v), dash(strings.Join(v.Tasks, ",")), keep(v), v.About)
+			dash(statusCell(v)), since(v), contextCell(v), dash(strings.Join(v.Tasks, ",")), keep(v), v.About)
 	}
 
 	if err := w.Flush(); err != nil {
@@ -1141,6 +1141,11 @@ func (a *app) tickCommand() *cobra.Command {
 			}
 
 			err := shift.RunTick(a.withState, runWatches, a.rang, a.printTick)
+			if errors.Is(err, shift.ErrStateFuture) {
+				// The state is a newer zmina's: the rest of the beat would run on an empty one.
+				return err
+			}
+
 			a.meshTick()
 			a.budgetTick(time.Now())
 			a.morningTick(time.Now())
@@ -1213,6 +1218,16 @@ func stateCell(v shift.View) string {
 	}
 
 	return out
+}
+
+// statusCell is the role's status and, for one that cannot be read, why: the session file Claude Code keeps for it is
+// empty or cut short (zmina doctor names it, and the role to restart).
+func statusCell(v shift.View) string {
+	if v.StatusError != "" {
+		return v.Status + " (session file unreadable; zmina doctor)"
+	}
+
+	return v.Status
 }
 
 func since(v shift.View) string {

@@ -273,6 +273,11 @@ func (a *app) readState(fn func(s *shift.Shift) error) error {
 	}
 
 	st, err := shift.Read(s.Crew.StateDir())
+	if errors.Is(err, shift.ErrStateFuture) {
+		// A newer zmina wrote it and reads it fine: an empty state shown in its place would pass for the real one.
+		return err
+	}
+
 	if err != nil {
 		// A look still works on an empty state; the writing commands refuse until it is recovered.
 		fmt.Fprintln(a.err, "zmina: warning:", err)
