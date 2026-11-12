@@ -35,7 +35,7 @@ const W = {
   fullView: "open on the whole screen", close: "close", fvNow: "Now", fvAsked: "Asked", fvResult: "Result", fvNoResult: "No result recorded.", fvReported: "Worker report", fvLog: "Timeline", fvMove: "Your move",
   fvDetails: "Details", fvScreen: "Screen", fvHolder: "held by", fvWaits: "waits on", fvProject: "project", fvCrew: "crew",
   fvCreated: "created", fvUpdated: "changed", fvRepo: "repo", fvBranch: "branch", fvWorktree: "worktree", fvLink: "link",
-  fvDown: "not up", fvNoScreen: "the session is not up", fvLoading: "…", fvNoLog: "nothing in the log yet", ctxOf: (n, max) => n + " of " + max + " before compact", ctxPast: " · compacts when idle", move: "your move", roDone: "done today", oldest: "oldest · ", nobody: "nobody",
+  fvDown: "not up", fvNoScreen: "the session is not up", fvLoading: "…", fvNoLog: "nothing in the log yet", ctxOf: (n, max) => n + " of " + max + " before compact", ctxPast: " · compacts when idle", rotating: (x) => "rotating " + x.id + " · " + x.phase + (zero(x.at) ? "" : " " + ago(x.at)), move: "your move", roDone: "done today", oldest: "oldest · ", nobody: "nobody",
   withRec: (n) => n + " with an answer ready", upOf: (u, t) => u + " up of " + t, rolesWorking: (n) => n + (n === 1 ? " role" : " roles") + " working",
   bandCounts: (w, u) => w + " working · " + u + " up", parkedLine: (n, old, back) => "Parked " + n + (old ? " · oldest " + old : "") + (back ? " · " + back + " come back" : ""), noDue: "no due date",
   people: (n) => n + " " + (n === 1 ? "person" : "people"),
@@ -1383,6 +1383,8 @@ function sessionCard(c, r, at) {
   card.dataset.k = "card:" + c.key + "/" + r.role;
   card.addEventListener("click", (e) => openTalk(c.key, r.role, e.currentTarget));
   const tip = r.keep === "always" ? [W.always] : [];
+  // A rotation in flight (a restart whose fresh conversation has not confirmed yet) is in the card's tooltip.
+  if (r.rotation && r.rotation.open) tip.push(W.rotating(r.rotation));
   const h = el("div", "role-h");
   h.append(glyph(r.icon), el("span", "role-n", r.role));
   // Under its crew's head line (D-19 d1) a card names only its machine, and only when the crew lives on more than one.

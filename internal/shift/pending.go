@@ -1,6 +1,7 @@
 package shift
 
 import (
+	"fmt"
 	"time"
 )
 
@@ -8,6 +9,9 @@ import (
 const (
 	pendingRestart = "restart"
 	pendingRelease = "release"
+	// pendingAbort is a zmina rotation abort between its two holds of the lock: Notes is the conversation it goes back to, Dir
+	// where it ran.
+	pendingAbort = "abort"
 )
 
 // PendingDown is what a begun restart or release still has to do once the role has ended: its claim (the Downing it
@@ -50,6 +54,20 @@ func (s *Shift) finishStale(name string, rs *RoleState, now time.Time) string {
 			s.log(name, "restart-late", "", "its beat ended before it finished; finishing it now")
 
 			return s.FinishRestart(p.restartOf(name))
+		case pendingAbort:
+			// The command that began the abort died during its wait. The role is put down for good and left not held, so that a
+			// keep: always role is opened again by the ticker as after a crash; the dispatcher hears it once.
+			if err := s.FinishDown(name); err != nil {
+				return "abort " + name + ": " + err.Error()
+			}
+
+			rs.Held = false
+			s.log(name, "rotation-abort-late", "", p.Why+": its command ended before it finished; the role is down and not held")
+			s.addNotes([]string{fmt.Sprintf("%s: %s ended before it finished (its command died during the wait): the role is down and "+
+				"not held, a keep: always role is opened again by the ticker; zmina --crew %s rotation abort %s again, or %s", name, p.Why,
+				shellWord(s.Crew.Path), shellWord(name), s.resumeCommand(name, p.Notes, false))})
+
+			return name + ": abort finished after its command ended"
 		case pendingRelease:
 			if err := s.FinishDown(name); err != nil {
 				return "release " + name + ": " + err.Error()

@@ -114,12 +114,13 @@ func (s *Shift) ClaimOwnRestart(name string, own Own, fresh, requireContinue, cl
 		return UpOptions{}, false, time.Time{}, err
 	}
 
-	wait, err := s.BeginDown(name, DownOptions{Force: true, Clear: clear})
+	// The rotation of its own restart is opened with the conversation it is on, which it goes on with unless fresh.
+	wait, claim, err := s.BeginRotationDown(name, KindOwn, DownOptions{Force: true, Clear: clear})
 	if err != nil {
 		return UpOptions{}, false, time.Time{}, err
 	}
 
-	return opts, wait, s.State.Role(name).Downing, nil
+	return opts, wait, claim, nil
 }
 
 // FinishOwnRestart ends the down ClaimOwnRestart began and starts the role, in one hold of the lock (the ticker starts
@@ -129,9 +130,10 @@ func (s *Shift) FinishOwnRestart(name string, claim time.Time, opts UpOptions) e
 		return ErrOwnGone
 	}
 
-	if err := s.FinishDown(name); err != nil {
+	rid, err := s.FinishRotationDown(name, claim)
+	if err != nil {
 		return err
 	}
 
-	return s.UpWith(name, opts)
+	return s.StartRotation(name, rid, opts, KindOwn)
 }

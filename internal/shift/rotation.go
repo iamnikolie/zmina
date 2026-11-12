@@ -59,10 +59,18 @@ const (
 	OutcomeRebuilt = "rebuilt"
 	OutcomeLost    = "lost"
 
-	// Kinds of a rotation: the key of the restart that began it.
+	// Kinds of a rotation: the key of the restart that began it, or the way a conversation was changed under zmina's hand:
+	// zmina restart (manual), a role's restart of itself (own_restart), the ticker's reopen of a keep: always role whose session
+	// ended (crash), zmina up of a role that holds tasks (up), and the /compact or /clear context_max types into a role.
 	KindRestartAt   = "restart_at"
 	KindRestartIdle = "restart_idle"
 	KindRestartDone = "restart_done"
+	KindManual      = "manual"
+	KindOwn         = "own_restart"
+	KindCrash       = "crash"
+	KindUp          = "up"
+	KindCompact     = "compact"
+	KindClear       = "clear"
 
 	// What the new conversation did, as evidence names it.
 	EvidenceHookStart   = "hook-start"
@@ -75,6 +83,11 @@ const (
 	// open too long makes.
 	evidenceSession = "session"
 	evidenceSlow    = "slow"
+
+	// What a command did to a rotation, kept as evidence lines of their own: a retry handed its lines again, an abort put the
+	// role back on its old conversation (the closing line of a rotation that was open; for one lost, which closed already, this).
+	EvidenceRetried = "retried"
+	EvidenceAborted = "aborted"
 
 	// rotationReadMax is how much of a role's record a look reads (the newest lines); rotationBeatRead how much the beat
 	// reads to follow an open rotation, which is a few lines at its end.
@@ -114,6 +127,13 @@ type RotationArtifact struct {
 	Result     string `json:"result,omitempty"`
 }
 
+// RotationBefore is a task's delivery as the hand-out of a rotation found it (nil: the task had none), kept so that an abort can
+// put it back as it was.
+type RotationBefore struct {
+	Task     string         `json:"task"`
+	Delivery *task.Delivery `json:"delivery,omitempty"`
+}
+
 // rotationLine is one line of a role's record. Every field but the first three belongs to one phase.
 type rotationLine struct {
 	ID    string    `json:"id"`
@@ -131,8 +151,10 @@ type rotationLine struct {
 	// switching
 	Claim time.Time `json:"claim,omitzero"`
 
-	// started
-	Lines []string `json:"lines,omitempty"`
+	// started: the lines queued for the fresh session, and what it handed: each task's delivery before (Before); Artifacts too
+	// when it handed tasks the prepared line did not name.
+	Lines  []string         `json:"lines,omitempty"`
+	Before []RotationBefore `json:"before,omitempty"`
 
 	// evidence
 	What    string `json:"what,omitempty"`
@@ -183,8 +205,10 @@ type Rotation struct {
 	// Claim is the down this rotation began, the one the restart's job and the role's pending down carry.
 	Claim   time.Time `json:"claim,omitzero"`
 	Started time.Time `json:"started,omitzero"`
-	// Lines are the lines the restart queued for the fresh session (clipped), in queue order.
-	Lines []string `json:"lines,omitempty"`
+	// Lines are the lines the restart queued for the fresh session (clipped), in queue order; Before the deliveries of the tasks
+	// it handed as it found them.
+	Lines  []string         `json:"lines,omitempty"`
+	Before []RotationBefore `json:"before,omitempty"`
 	// Evidence is what the new conversation did before the rotation closed, Late what it did after: a rotation lost
 	// that the conversation then accepted its tasks of.
 	Evidence []RotationEvidence `json:"evidence,omitempty"`
@@ -253,6 +277,27 @@ func (r Rotation) LateRebuilt() bool {
 	return true
 }
 
+// Trim reports a rotation of context_max's /compact or /clear: it has no down and no hand-out, and the ticker's trim closes it
+// (not the beat's reconcile) from what it sees of the conversation.
+func (r Rotation) Trim() bool { return r.Kind == KindCompact || r.Kind == KindClear }
+
+// hasLine reports whether the rotation queued the restart line for its fresh session: every restart of the ticker does, and a
+// start by a command or the reopen after a crash does when it hands tasks over. Without one nothing is shown to wait for.
+func (r Rotation) hasLine() bool {
+	return r.Kind == KindRestartAt || r.Kind == KindRestartIdle || r.Kind == KindRestartDone || len(r.Artifacts) > 0
+}
+
+// Aborted is the evidence that a command put the role back on its old conversation, nil when none did.
+func (r Rotation) Aborted() *RotationEvidence {
+	for _, list := range [][]RotationEvidence{r.Evidence, r.Late} {
+		if i := slices.IndexFunc(list, func(e RotationEvidence) bool { return e.What == EvidenceAborted }); i >= 0 {
+			return &list[i]
+		}
+	}
+
+	return nil
+}
+
 // newRotationID is the eight random characters that name a rotation.
 func newRotationID() string { return strings.ToLower(rand.Text()[:8]) }
 
@@ -318,7 +363,13 @@ func foldRotations(lines []rotationLine) []Rotation {
 			}
 		case PhaseStarted:
 			if r.Started.IsZero() {
-				r.Started, r.Lines = l.At, l.Lines
+				r.Started, r.Lines, r.Before = l.At, l.Lines, l.Before
+
+				// The tasks a start handed are the rotation's: more than its prepared line named when one was assigned
+				// meanwhile, or all of them when it planned none (a resume that fell back to a fresh start).
+				if len(l.Artifacts) > 0 {
+					r.Artifacts = l.Artifacts
+				}
 			}
 		case phaseEvidence:
 			r.foldEvidence(l)
@@ -645,7 +696,8 @@ func RecordRotationEvidence(l crew.Layout, role, what, task, by, session string,
 
 	path := l.Rotations(role)
 
-	rots := foldRotationsOf(role, readRotationTail(path))
+	// A compact or clear typed since is another conversation's business: the evidence is for the rotation that put the role down.
+	rots := slices.DeleteFunc(foldRotationsOf(role, readRotationTail(path)), Rotation.Trim)
 	if len(rots) == 0 {
 		return nil
 	}
@@ -734,8 +786,17 @@ func (s *Shift) rotationOwns(t task.Task) bool {
 			continue
 		}
 
-		// The newest rotation that handed the task decides: a hand-out made after it started is not its own.
-		if queued := t.Delivery.QueuedAt; queued.Before(r.Prepared) || queued.After(r.Started) {
+		// The newest rotation that handed the task decides: a hand-out made after it started is not its own, unless a retry of
+		// the rotation made it: the retry's own line of evidence is the end of the window.
+		end := r.Started
+
+		for _, e := range slices.Concat(r.Evidence, r.Late) {
+			if e.What == EvidenceRetried && e.At.After(end) {
+				end = e.At
+			}
+		}
+
+		if queued := t.Delivery.QueuedAt; queued.Before(r.Prepared) || queued.After(end) {
 			return false
 		}
 
