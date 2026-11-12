@@ -871,7 +871,7 @@ func (s *Shift) start(name string, o UpOptions) error {
 
 	rs.Started, rs.Up, rs.Downing, rs.Pending, rs.Dir = s.Now(), true, time.Time{}, nil, o.Dir
 	rs.Releasing, rs.ReleaseTasks, rs.ReleaseIdle = time.Time{}, nil, 0
-	rs.Sent, rs.NoPrompt, rs.BlockedNoted, rs.Trusted, rs.Booted = nil, time.Time{}, false, false, time.Time{}
+	rs.NoPrompt, rs.BlockedNoted, rs.Trusted, rs.Booted = time.Time{}, false, false, time.Time{}
 	rs.Instance = isInstance(name)
 	rs.RecoverySession, rs.RecoveryContext, rs.RecoveryDrops = "", 0, 0
 	rs.Inbound = s.inbound(r)

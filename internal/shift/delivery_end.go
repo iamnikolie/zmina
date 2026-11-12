@@ -62,7 +62,7 @@ func stillQueued(ch Peer, dir string, p Posted) bool {
 //     only, and a fresh one has its own boot and is not released.
 //   - A typed line (Sent) is dropped with an event, never given back: it went into the pane, whether the session took
 //     it is not known, and a line that may have been taken is not typed again (landed keeps one as failed for
-//     inspection for that reason). start has always cleared it. A tracked line stays in Acks: it is said again
+//     inspection for that reason). start leaves it to this settle. A tracked line stays in Acks: it is said again
 //     (renotify) and listed in the next session's brief (PendingBrief).
 //
 // A post that waits in a Codex bridge's inbox as a file is neither (stillQueued). It does nothing for a role with
