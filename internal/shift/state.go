@@ -338,8 +338,9 @@ func LockAs(dir string, opts LockOpts) (*Locked, error) {
 var ErrLockHeld = errors.New("state: locked by another zmina")
 
 // TryLockAs is LockAs that does not wait: when another process holds the lock it returns ErrLockHeld at once, having
-// written nothing and logged nothing (no lock-wait event, no holder record, the state file not read; only a lock file
-// that did not exist yet is made, empty).
+// written nothing and logged nothing (no lock-wait event, no holder record, the state file not read). All it may
+// make is what taking the lock needs: the state directory (acquire runs MkdirAll) and a lock file that did not exist
+// yet, empty.
 func TryLockAs(dir string, opts LockOpts) (*Locked, error) {
 	f, err := tryTakeLock(dir, opts)
 	if err != nil {

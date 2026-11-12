@@ -70,7 +70,9 @@ func (s *Shift) dispatcherWaits(rs *RoleState, now time.Time) bool {
 // record and writes neither LastTick nor Up; what it cannot give stays queued for the beat. Call it under the crew
 // state lock. changed reports whether it altered the state in any way (a line given, a try counted, a record settled),
 // so a caller that finds nothing changed may let the lock go without a save. The error is a state that could not be
-// written after a line went (see flush): the state on disk no longer says what was done.
+// written after a line went (see flush): the state on disk no longer says what was done. Waiting makes no state of a
+// role that has none, but the delivery can, as the beat's does: a note about a role of the crew file that was never
+// started makes it an empty one (noticeCurrent asks for its session).
 func (s *Shift) DeliverPass() (changed bool, err error) {
 	names := s.Waiting()
 	if len(names) == 0 {
