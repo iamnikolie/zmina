@@ -39,6 +39,9 @@ func (a *app) taskRecordCommand(kind string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if kind == "checkpoint" {
+				noteFetched(s, t)
+			}
 			if asJSON {
 				d, err := record.Load(s.Crew.StateDir(), kind, src, rev)
 				if err != nil {
@@ -59,6 +62,19 @@ func (a *app) taskRecordCommand(kind string) *cobra.Command {
 	c.Flags().BoolVar(&full, "full", false, "every section whole (default: the summary whole, the rest clipped to a line)")
 	return c
 }
+
+// noteFetched tells an open rotation of the task's role that the role read the task's note: run by the role itself (or by
+// a tool of an agent's session that does not say whose it is, as a fetch is), never by the owner's shell or another role.
+// Noted in the role's rotation record with no lock, and never a failure of the read.
+func noteFetched(s *shift.Shift, t task.Task) {
+	who := fetchBy()
+	if who == "hand" || who != "" && who != t.Role {
+		return
+	}
+
+	_ = shift.RecordRotationEvidence(s.Crew.Layout(), t.Role, shift.EvidenceNoteFetched, t.ID, t.Role, callerSession(), s.Now())
+}
+
 func (a *app) saveRecordFile(id, kind, file string, cmd *cobra.Command) error {
 	in := cmd.InOrStdin()
 	if file != "-" {

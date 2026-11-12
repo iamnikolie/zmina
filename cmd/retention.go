@@ -207,6 +207,7 @@ func (p *retentionPass) run() {
 		func() { p.requests(handoff.RestartsDir) },
 		p.messages,
 		p.deliveryCards,
+		p.rotations,
 		p.reads,
 		func() { p.cutLog("tick.log", p.c.Layout().TickLog()) },
 		func() { p.cutLog("courier.log", p.c.Layout().CourierLog()) },
@@ -643,6 +644,38 @@ func (p *retentionPass) deliveryCards() {
 	if n > 0 {
 		p.say("delivery cards (%d cards, fetches or set-aside files past their keep or over the cap)", n)
 		p.moved["delivery cards"] = n
+	}
+}
+
+// rotations removes the rotation records nothing was written to since the cutoff and sets aside, once its newest rotation is
+// closed, a record that grew past what a look reads. A record is appended to without the state lock by a role's own commands,
+// so it is only ever removed or renamed whole; the pass takes the state lock, without waiting, because the shift closes
+// rotations under it and the rename must not meet an open one. A lock another zmina holds leaves them to tomorrow's pass.
+func (p *retentionPass) rotations() {
+	if !p.dry {
+		l, err := shift.TryLockAs(p.dir, shift.LockOpts{Verb: "retention"})
+		if errors.Is(err, shift.ErrLockHeld) {
+			return
+		}
+
+		if err != nil {
+			p.problems = append(p.problems, "retention: rotation records: "+err.Error())
+
+			return
+		}
+
+		defer l.Release()
+	}
+
+	n, err := shift.PruneRotations(p.c.Layout(), p.cutoff, p.dry)
+	if err != nil {
+		p.problems = append(p.problems, "retention: rotation records: "+err.Error())
+	}
+
+	if n > 0 {
+		p.say("rotation records (%d rotations in files nothing was written to since %s, or set aside for their size)", n,
+			p.cutoff.Format("2006-01-02"))
+		p.moved["rotation records"] = n
 	}
 }
 

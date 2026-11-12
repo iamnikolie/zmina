@@ -117,7 +117,8 @@ trust.
 ## When something is off
 
 `zmina doctor` (setup), `zmina ls` (first line: when the ticker last beat), `zmina queue ls`
-(what waits, what failed), `zmina log --since 12h` (what happened), `zmina state recover` (a
+(what waits, what failed), `zmina rotation ls` (how each restart of a role into a fresh
+conversation went), `zmina log --since 12h` (what happened), `zmina state recover` (a
 state file zmina cannot read), `zmina lock` (who holds the state lock while a command hangs),
 `zmina stop` / `zmina start` (the whole shift).
 

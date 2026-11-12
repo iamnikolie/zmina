@@ -251,6 +251,9 @@ func (a *app) taskShowCommand() *cobra.Command {
 					return err
 				}
 
+				// Showing a task is reading its note, for the rotation that handed it to a fresh conversation.
+				noteFetched(s, t)
+
 				if asJSON {
 					return a.printJSON(t)
 				}
