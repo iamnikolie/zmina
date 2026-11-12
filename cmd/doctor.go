@@ -122,6 +122,7 @@ func (a *app) diagnose() []check {
 	}
 	checkToolVersions(c, hasClaude, hasCodex, add)
 	a.checkTicker(c, add)
+	checkCourier(c, add)
 
 	st, err := shift.Read(c.StateDir())
 	if err != nil {

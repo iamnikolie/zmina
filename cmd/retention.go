@@ -30,7 +30,8 @@ import (
 const (
 	// retentionEvery is how often the ticker runs the pass, counted from the start of the last one.
 	retentionEvery = 24 * time.Hour
-	// tickLogMax is the size past which the pass cuts tick.log down to its last tickLogKeep bytes.
+	// tickLogMax is the size past which the pass cuts tick.log, and courier.log with it, down to its last tickLogKeep
+	// bytes.
 	tickLogMax  = 5 << 20
 	tickLogKeep = 1 << 20
 )
@@ -100,9 +101,9 @@ func lockRetention(dir string) (func(), error) {
 }
 
 // retentionBeat is the ticker's daily pass: finished work older than the crew's retention span (30 days, or the key's
-// days) is moved to archive/retention/<yyyy-mm>/, tick.log is cut to its tail and old meter lines are archived. It
-// runs after the beat's locked phases and holds no state lock; the lock it takes is its own file's. It fails nothing:
-// a problem is a line in the beat's output, and the next pass is tomorrow's.
+// days) is moved to archive/retention/<yyyy-mm>/, tick.log and courier.log are cut to their tails and old meter
+// lines are archived. It runs after the beat's locked phases and holds no state lock; the lock it takes is its own
+// file's. It fails nothing: a problem is a line in the beat's output, and the next pass is tomorrow's.
 func (a *app) retentionBeat(now time.Time) {
 	path := a.crewPath()
 	if !readRetentionStamp(filepath.Dir(path)).due(now) {
@@ -182,7 +183,7 @@ type retentionPass struct {
 	cutoff time.Time
 	dry    bool
 
-	moved    map[string]int // by what: handoffs, results, ... counted in directories, files or lines; tick.log 1 when cut
+	moved    map[string]int // by what: handoffs, results, ... counted in directories, files or lines; tick.log and courier.log 1 when cut
 	said     []string       // each thing moved (or, dry, that would be)
 	problems []string       // what went wrong, and what was left out and why
 	stopped  bool           // the deadline came
@@ -205,7 +206,8 @@ func (p *retentionPass) run() {
 		func() { p.requests(handoff.RestartsDir) },
 		p.messages,
 		p.reads,
-		p.tickLog,
+		func() { p.cutLog("tick.log", p.c.Layout().TickLog()) },
+		func() { p.cutLog("courier.log", p.c.Layout().CourierLog()) },
 	}
 
 	for _, step := range steps {
@@ -248,8 +250,8 @@ func movedText(moved map[string]int) string {
 
 	for _, k := range slices.Sorted(maps.Keys(moved)) {
 		switch k {
-		case "tick.log":
-			parts = append(parts, "tick.log cut")
+		case "tick.log", "courier.log":
+			parts = append(parts, k+" cut")
 		case "reads.jsonl":
 			parts = append(parts, fmt.Sprintf("reads.jsonl %d lines", moved[k]))
 		default:
@@ -602,31 +604,29 @@ func (p *retentionPass) reads() {
 	}
 }
 
-// tickLog cuts tick.log to its last tickLogKeep bytes once it passes tickLogMax. The ticker's output goes there
-// through the service's own append-mode file, so the file is cut in place, not replaced.
-func (p *retentionPass) tickLog() {
-	path := p.c.Layout().TickLog()
-
+// cutLog cuts a service's log (tick.log, courier.log) to its last tickLogKeep bytes once it passes tickLogMax. The
+// service's output goes there through its own append-mode file, so the file is cut in place, not replaced.
+func (p *retentionPass) cutLog(name, path string) {
 	info, err := os.Stat(path)
 	if err != nil || info.Size() <= tickLogMax {
 		return
 	}
 
-	p.say("tick.log (%s, keeps its last %s)", sizeText(info.Size()), sizeText(tickLogKeep))
+	p.say("%s (%s, keeps its last %s)", name, sizeText(info.Size()), sizeText(tickLogKeep))
 
 	if p.dry {
-		p.moved["tick.log"] = 1
+		p.moved[name] = 1
 
 		return
 	}
 
 	if err := trimTail(path, tickLogKeep, "[zmina retention "+p.now.UTC().Format("2006-01-02")+": older lines of this log were cut]\n"); err != nil {
-		p.problems = append(p.problems, "retention: tick.log: "+err.Error())
+		p.problems = append(p.problems, "retention: "+name+": "+err.Error())
 
 		return
 	}
 
-	p.moved["tick.log"] = 1
+	p.moved[name] = 1
 }
 
 // trimTail leaves of the file at path its last keep bytes from a line start, after the note line. The file is opened

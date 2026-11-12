@@ -14,7 +14,7 @@ scheduled roles and types health notes into it. Work handed to roles is kept in 
 ```
 zmina init                # ~/.zmina/crew.yaml
 zmina up dispatcher
-zmina ticker install      # the ticker, every minute
+zmina ticker install      # the ticker, every minute, and the courier that delivers between beats
 zmina doctor              # check the setup
 zmina ls
 zmina task new dev --repo api --worktree "fix the login"

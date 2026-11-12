@@ -655,6 +655,63 @@ func TestCourierGivesALineWhenTheRoleCanTakeItAndAsksNothingAfter(t *testing.T) 
 	assert.Equal(t, 1, countOf(evs, "courier-start"))
 	assert.Equal(t, 1, countOf(evs, "courier-stop"))
 	assert.Empty(t, c.errb.String())
+
+	// What the pass logged between the courier's start and stop is by the courier, not by the ticker: a line given
+	// between beats reads as such in zmina log.
+	var passEvents []eventBy
+
+	inside := false
+
+	for _, e := range eventsBy(t, file) {
+		switch {
+		case e.name == "courier-start":
+			inside = true
+		case e.name == "courier-stop":
+			inside = false
+		case inside:
+			passEvents = append(passEvents, e)
+		}
+	}
+
+	require.NotEmpty(t, passEvents, "the line that went is one of them")
+
+	for _, e := range passEvents {
+		assert.Equal(t, "courier", e.by, e.name)
+	}
+
+	for _, e := range eventsBy(t, file) {
+		if strings.HasPrefix(e.name, "courier-") {
+			assert.Equal(t, "courier", e.by, e.name)
+		}
+	}
+}
+
+// eventBy is an event's name and who it is by, with when it was logged.
+type eventBy struct {
+	name, by string
+	at       time.Time
+}
+
+// eventsBy reads the crew's event log for who each event is by.
+func eventsBy(t *testing.T, file string) []eventBy {
+	t.Helper()
+
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(file), "events.jsonl"))
+	require.NoError(t, err)
+
+	var out []eventBy
+
+	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+		var e struct {
+			Event, By string
+			TS        time.Time
+		}
+
+		require.NoError(t, json.Unmarshal([]byte(line), &e))
+		out = append(out, eventBy{name: e.Event, by: e.By, at: e.TS})
+	}
+
+	return out
 }
 
 func countOf(list []string, s string) int {

@@ -39,7 +39,7 @@ func tickerBackend() (backend, error) {
 func (a *app) tickerCommand() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "ticker",
-		Short: "The ticker that runs 'zmina tick' every minute: a launchd agent on macOS, a systemd user timer on Linux",
+		Short: "The ticker that runs 'zmina tick' every minute, and the courier beside it: launchd agents on macOS, systemd user units on Linux",
 	}
 
 	c.AddCommand(a.tickerSubs(tickerBackend)...)
@@ -78,11 +78,11 @@ func (a *app) tickerSubs(find func() (backend, error)) []*cobra.Command {
 	}
 
 	return []*cobra.Command{
-		sub("install", "Run 'zmina tick' every minute, with this shell's PATH",
+		sub("install", "Run 'zmina tick' every minute and keep the courier running beside it (courier: off in the crew file skips it), with this shell's PATH",
 			func(b backend) tickerOp { return b.install }, nil),
-		sub("uninstall", "Stop the ticker; the roles that are up stay up",
+		sub("uninstall", "Stop the ticker and the courier; the roles that are up stay up",
 			func(b backend) tickerOp { return b.uninstall }, nil),
-		sub("status", "Whether the ticker runs, when it last beat, the end of tick.log",
+		sub("status", "Whether the ticker and the courier run, when it last beat, the end of tick.log",
 			func(b backend) tickerOp { return b.status }, a.beatReport),
 	}
 }
@@ -143,3 +143,44 @@ func (a *app) beatReport(c *crew.Crew) {
 
 // tickLog is where the ticker's output goes: tick.log next to the crew file.
 func tickLog(c *crew.Crew) string { return c.Layout().TickLog() }
+
+// courierLog is where the courier's output goes when its service runs it: courier.log next to the crew file. The
+// retention pass cuts it as it cuts tick.log.
+func courierLog(c *crew.Crew) string { return c.Layout().CourierLog() }
+
+// courierRestartSeconds is the least time between two starts of the courier by its supervisor (launchd's
+// ThrottleInterval, systemd's RestartSec): launchd's own default, said out loud. A courier that ends at once
+// (a second one finds the first's lock; a crew file not there yet) is started again this often, each time one line in
+// courier.log; and one that ended for a new binary is back within it, the beat delivering meanwhile.
+const courierRestartSeconds = 10
+
+// courierOffSaid is what the ticker's install says of the courier when the crew file has courier: off.
+func courierOffSaid(removed bool) string {
+	if removed {
+		return "courier: off in the crew file; the one that was installed is removed"
+	}
+
+	return "courier: off in the crew file; none installed"
+}
+
+// courierNotLoaded is what 'ticker status' says of a courier its service manager does not know: there says whether
+// its unit file is on disk.
+func courierNotLoaded(c *crew.Crew, there bool) string {
+	switch {
+	case !c.CourierOn() && there:
+		return "courier: off in the crew file, but its unit is still installed: zmina ticker install removes it"
+	case !c.CourierOn():
+		return "courier: off in the crew file"
+	case there:
+		return "courier: installed but not loaded: zmina ticker install loads it"
+	}
+
+	return "courier: not installed: zmina ticker install adds it"
+}
+
+// fileExists reports whether something is at path.
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+
+	return err == nil
+}

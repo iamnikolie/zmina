@@ -47,3 +47,17 @@ func TestStarterMentionsWorktreeGC(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, c.WorktreeGCOn())
 }
+
+// The starter names courier commented out; uncommented, it turns the courier off and the file still loads.
+func TestStarterMentionsCourier(t *testing.T) {
+	body := strings.Replace(Starter(t.TempDir()), "dir: "+defaultDir, "dir: "+t.TempDir(), 1)
+	require.Contains(t, body, "\n# courier: off ")
+
+	c, err := LoadStrict(write(t, body))
+	require.NoError(t, err)
+	assert.True(t, c.CourierOn(), "on unless the owner takes the comment away")
+
+	c, err = LoadStrict(write(t, strings.Replace(body, "\n# courier: off", "\ncourier: off", 1)))
+	require.NoError(t, err)
+	assert.False(t, c.CourierOn())
+}

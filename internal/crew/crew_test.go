@@ -546,6 +546,66 @@ func TestWorktreeGCKey(t *testing.T) {
 	}
 }
 
+// courier is on unless the crew file says off; anything else is refused naming the two words.
+func TestCourierKey(t *testing.T) {
+	const roles = "namespace: /ns\nroles:\n  dispatcher:\n"
+
+	for body, want := range map[string]bool{
+		"":                   true,
+		"courier: on\n":      true,
+		"courier: off\n":     false,
+		"courier: \"off\"\n": false,
+		"courier: \"\"\n":    true,
+	} {
+		c, err := Load(write(t, body+roles))
+		require.NoError(t, err, body)
+		assert.Equal(t, want, c.CourierOn(), body)
+		assert.Empty(t, c.Warnings, body)
+	}
+
+	for _, bad := range []string{"false", "no", "true", "Off", "never"} {
+		_, err := Load(write(t, "courier: "+bad+"\n"+roles))
+		require.ErrorContains(t, err, "courier is on or off", bad)
+	}
+}
+
+// The courier's unit and label belong to its crew alone: they differ from every crew's ticker unit and label, whatever
+// the crews are named (a crew called courier, one that ends in -courier), and the default crew's carry no name.
+func TestCourierNamesAreNobodysTickerNames(t *testing.T) {
+	names := []string{"", "courier", "ops", "ops-courier", "courier-ops", "zmina"}
+
+	tickers := map[string]string{}
+	couriers := map[string]string{}
+
+	for _, name := range names {
+		c := &Crew{Name: name}
+
+		for _, n := range []string{c.SystemdUnit(), c.LaunchdLabel()} {
+			tickers[n] = name
+		}
+
+		for _, n := range []string{c.CourierUnit(), c.CourierLabel()} {
+			_, clash := tickers[n]
+			assert.False(t, clash, "the courier name %s of crew %q is a ticker's", n, name)
+			assert.NotContains(t, couriers, n, "two crews share the courier name %s", n)
+			couriers[n] = name
+		}
+	}
+
+	// A ticker named after the couriers were listed does not meet them either.
+	for _, name := range names {
+		c := &Crew{Name: name}
+		assert.NotContains(t, couriers, c.SystemdUnit())
+		assert.NotContains(t, couriers, c.LaunchdLabel())
+	}
+
+	assert.Equal(t, "io.iamnikolie.zmina-courier", (&Crew{}).CourierLabel())
+	assert.Equal(t, "io.iamnikolie.zmina-courier.ops", (&Crew{Name: "ops"}).CourierLabel())
+	assert.Equal(t, "zmina.courier", (&Crew{}).CourierUnit())
+	assert.Equal(t, "zmina-ops.courier", (&Crew{Name: "ops"}).CourierUnit())
+	assert.Equal(t, "courier.log", filepath.Base(Layout{Dir: "/c"}.CourierLog()))
+}
+
 // A session name with '/' is refused naming the form to use: '/' is zmina's <node>/<crew>.
 func TestSessionNameWithASlash(t *testing.T) {
 	dir := t.TempDir()

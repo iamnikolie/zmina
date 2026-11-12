@@ -64,5 +64,8 @@ func (l Layout) Worktrees() string { return filepath.Join(l.Dir, "worktrees") }
 // Watch is one watch's own directory (its cache); its seen file sits beside it.
 func (l Layout) Watch(name string) string { return filepath.Join(l.Dir, "watch", name) }
 
+// CourierLog is where the courier's output goes when a service runs it.
+func (l Layout) CourierLog() string { return filepath.Join(l.Dir, "courier.log") }
+
 // TickLog is where the ticker's output goes.
 func (l Layout) TickLog() string { return filepath.Join(l.Dir, "tick.log") }
