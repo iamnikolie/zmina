@@ -2214,14 +2214,13 @@ until it can go.
    plainly idle again, it goes down (`/exit`) and starts fresh in its first task's worktree, and its first lines say
    why, then hand it each task's packet with the note in it: `[zmina] restarted fresh: context 262k over restart_at
    250k. Your note: T-5 7b2b6944f4c7, in each task's packet that follows.` (what Talk shows as the conversation
-   resets), then `[zmina T-5] Read handoff packet …` to accept as after `up --task`. A new task, a draft, the
+   resets), then `[zmina T-5] Read handoff packet …` to accept as after `up --task` (queued before the start: `zmina skill restart`). A new task, a draft, the
    owner's line or another conversation calls the ask off (`restart-off`; asked again after 30 min; a role that
    closed or parked its last task instead is not paused: after a task, below, applies to that close); no note within
    10 min gives it up for that conversation (`restart-off`, and the dispatcher hears `<role>: wrote no note
    within 10m0s …`), and `context_max` trims it as before; a role that wrote its note and then was not plainly
    idle for those 10 min (a line came as the note's turn ended) is called off, not given up. The log has `restart-due`, `restart-note`, `restart-asked`, `restarted` (with why and
-   the notes' revisions), `restart-off` and `restart-failed` (the dispatcher hears the `up --task … --fresh` that
-   starts it by hand); `zmina usage` counts the restarts. A role asked for its note is not trimmed or released
+   the notes' revisions), `restart-off` and `restart-failed`; `zmina usage` counts the restarts. A role asked for its note is not trimmed or released
    meanwhile. A peer's `SendMessage` that reaches the old session in the seconds between its `/exit` and its end
    is lost with it: the fresh session never sees it (zmina's own lines wait in its queue).
    **After a task** (`restart_done`, default 150k, the role's own, else the crew's; `off`): a role that holds no
@@ -2288,6 +2287,31 @@ watch whose source failed — saves that part. Watches no longer in
 the crew are dropped from it. A role missing from the crew file keeps its state while it is missing for a moment
 (an edit, a merge, a rename and back): the ticker drops it after 10 beats in a row, keeps a copy in
 `pruned/<role>-<time>.json` beside the state and logs `pruned`; a role that comes back starts the count again.
+
+## Restart — hand-out, failed start
+
+What the ticker does once a restart's down is over (item 7, and restart_done after a task):
+
+- **Hand-out first.** The line that says why (`[zmina] restarted fresh: …`) and each task's packet are queued before
+  the fresh session is started, at the head of the role's queue, in that order and then the tasks' order; what was queued
+  for the role while it was down comes after them, in its order (a line the old session was posted and never showed is
+  among that). The start's own save of the state therefore has them: a zmina that dies right after the start leaves a
+  session with its context in its queue, never one with only its boot. The `restarted` event is logged once the start
+  went through, as before.
+- **No room, no restart.** The restart needs room in the role's queue for its line and a packet per task (the bound
+  of 20 lines): without it the restart is not begun, before the old session is put down (`restart-failed` in the log,
+  asked again after 30 min). Lines that come while the role is down are never dropped for it: the hand-out goes in
+  ahead of them whatever their number.
+- **A fresh start that fails** (tmux, a directory that is gone, a task that cannot be read) takes those lines out of
+  the queue again (their cards closed as dropped) and starts the role once more on the conversation it was on, in the
+  directory it ran in. That restart is then given up for that conversation as one called off for want of a note is
+  (`restart-off`; not asked again in it, `context_max` trims it), the task deliveries are as they were, and the
+  dispatcher hears once that the fresh start failed and the role is back on its conversation.
+- **That start fails too.** The role stays down and is not held, so that a role with `keep: always` is opened again
+  by the ticker as after a crash; the dispatcher hears it once, with the `up … --task … --fresh` that starts it by
+  hand. The packets stay in its queue for whichever start comes next (the beat retires a packet whose task the role
+  no longer holds); the line that says "restarted fresh" does not, since the next start may resume. A copy of a role
+  (`dev#2`) is forgotten as any copy that goes down.
 
 ## For the dispatcher
 

@@ -2,8 +2,11 @@ package shift
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/iamnikolie/zmina/internal/chat"
+	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/handoff"
 	"github.com/iamnikolie/zmina/internal/record"
 	"github.com/iamnikolie/zmina/internal/registry"
@@ -973,4 +977,681 @@ func TestRestartWithItsNoteButBusyIsCalledOff(t *testing.T) {
 	f.idle("designer", 280_000, 6*time.Minute)
 	f.s.Tick()
 	assert.Equal(t, 2, f.ev.count("designer", "restart-asked"), "asked again in this conversation")
+}
+
+// startsFailing is the fake tmux whose first fail starts fail, as a tmux that cannot make a session does; the starts
+// after it go through. Every start asked for is kept (dir, command), and onStart runs before it is answered.
+type startsFailing struct {
+	*fakeTmux
+	fail    int
+	asked   []startAsked
+	onStart func()
+}
+
+type startAsked struct {
+	dir  string
+	argv []string
+}
+
+func (s *startsFailing) Start(n, dir string, env, argv []string) error {
+	s.asked = append(s.asked, startAsked{dir: dir, argv: argv})
+
+	if s.onStart != nil {
+		s.onStart()
+	}
+
+	if s.fail > 0 {
+		s.fail--
+
+		return errors.New("tmux: no server running")
+	}
+
+	return s.fakeTmux.Start(n, dir, env, argv)
+}
+
+// restartBegun is the moment after the ticker put designer down for its restart: its note is there, T-1 is held,
+// the old session is gone and the job waits for FinishRestart. Its starts go through startsFailing.
+func restartBegun(t *testing.T, fail int) (fix, *startsFailing) {
+	t.Helper()
+
+	f := restarting(t, "", 300_000, 10*time.Minute)
+	f.note(t, "T-1", f.now.Add(-10*time.Minute))
+	f.s.Tick()
+	require.Len(t, f.s.Restarts, 1)
+	require.False(t, f.tm.Has("designer"), "put down, the old session is gone")
+	require.Equal(t, "sid-designer", f.s.State.Role("designer").LastSession, "the conversation it was on")
+
+	sf := &startsFailing{fakeTmux: f.tm, fail: fail}
+	f.s.Tmux = sf
+
+	return f, sf
+}
+
+// newSession registers the session of the pane a start made, as the registry does once it runs, idle and past its boot.
+func (f fix) newSession(role, id string) {
+	*f.now = f.now.Add(bootPause)
+	f.rg.byPID[f.tm.up[role]] = &registry.Session{Status: "idle", StatusUpdatedAt: f.now.UnixMilli(), SessionID: id}
+}
+
+// typedAfter ticks the crew until the role has been typed the given number of lines after its start, and returns them:
+// one line a beat, each beat a minute on, the role idle between.
+func (f fix) typedAfter(role, id string, n int) []string {
+	typed := len(f.tm.typed[role])
+
+	for range 3 * n {
+		if len(f.tm.typed[role])-typed >= n {
+			break
+		}
+
+		f.s.Tick()
+		*f.now = f.now.Add(time.Minute)
+		f.rg.byPID[f.tm.up[role]] = &registry.Session{Status: "idle", StatusUpdatedAt: f.now.UnixMilli(), SessionID: id}
+	}
+
+	return f.tm.typed[role][typed:]
+}
+
+// savedStates records every state the shift saved while fn ran, as the file would hold it (the state's own decode).
+func savedStates(t *testing.T, f fix, fn func()) []*State {
+	t.Helper()
+
+	var saved []*State
+
+	f.s.Flush = func() error {
+		raw, err := json.Marshal(f.s.State)
+		require.NoError(t, err)
+
+		st, _, err := decode(raw)
+		require.NoError(t, err)
+
+		saved = append(saved, st)
+
+		return nil
+	}
+
+	fn()
+
+	f.s.Flush = nil
+
+	return saved
+}
+
+// The line its Talk shows and each packet go to the head of the queue, ahead of what waited while the role was down,
+// and reach the fresh session in that order: its context first.
+func TestRestartHandsOutAheadOfWhatWaited(t *testing.T) {
+	f, _ := restartBegun(t, 0)
+	wt := t.TempDir()
+	f.tk.list = append(f.tk.list, task.Task{ID: "T-2", Role: "designer", State: task.Waiting, Worktree: wt})
+	f.note(t, "T-2", f.now.Add(-9*time.Minute))
+	f.s.Restarts[0].Tasks = []string{"T-1", "T-2"}
+	f.s.Restarts[0].Notes = "T-1 a, T-2 b"
+
+	// Lines that came while it was down: a peer's, and one of zmina's own.
+	require.NoError(t, f.s.QueueFrom("designer", "[dev] look at the palette", Facts{From: "dev"}))
+	require.NoError(t, f.s.QueueFrom("designer", "[zmina] FYI the build is green", Facts{From: "zmina"}))
+
+	out := f.finish(t)
+	require.Len(t, out, 1)
+	assert.Contains(t, out[0], "restarted fresh")
+
+	rs := f.s.State.Role("designer")
+	require.Len(t, rs.Inbox, 5, "%v", rs.Inbox)
+	assert.True(t, strings.HasPrefix(rs.Inbox[0], "[zmina] restarted fresh: "), rs.Inbox[0])
+	assert.True(t, strings.HasPrefix(rs.Inbox[1], "[zmina T-1] Read handoff packet "), rs.Inbox[1])
+	assert.True(t, strings.HasPrefix(rs.Inbox[2], "[zmina T-2] Read handoff packet "), rs.Inbox[2])
+	assert.Equal(t, []string{"[dev] look at the palette", "[zmina] FYI the build is green"}, rs.Inbox[3:],
+		"what waited comes after, in its order")
+
+	// And that is the order the session is told them in.
+	f.newSession("designer", "sid-new")
+	typed := f.typedAfter("designer", "sid-new", 5)
+	require.Len(t, typed, 5, "%v", typed)
+	assert.True(t, strings.HasPrefix(typed[0], "[zmina] restarted fresh: "), typed[0])
+	assert.True(t, strings.HasPrefix(typed[1], "[zmina T-1] Read handoff packet "), typed[1])
+	assert.True(t, strings.HasPrefix(typed[2], "[zmina T-2] Read handoff packet "), typed[2])
+	assert.Equal(t, "[dev] look at the palette", typed[3])
+	assert.Equal(t, "[zmina] FYI the build is green", typed[4])
+}
+
+// A line that a session left posted and never showed goes back to the head of the queue when the session is settled: it
+// is settled before the hand-out is queued, so that the hand-out is ahead of it too.
+func TestRestartHandsOutAheadOfALineGivenBack(t *testing.T) {
+	f, _ := restartBegun(t, 0)
+	rs := f.s.State.Role("designer")
+	rs.Inbox = []string{"[dev] waited"}
+	rs.Posted = []Posted{{Line: "[dev] posted, never shown", MsgID: "m1", Session: "sid-designer", At: f.now.Add(-time.Minute)}}
+	f.s.Peer = newFakePeer()
+
+	f.finish(t)
+
+	require.GreaterOrEqual(t, len(rs.Inbox), 3, "%v", rs.Inbox)
+	assert.True(t, strings.HasPrefix(rs.Inbox[0], "[zmina] restarted fresh: "), "%v", rs.Inbox)
+	assert.True(t, strings.HasPrefix(rs.Inbox[1], "[zmina T-1] Read handoff packet "), "%v", rs.Inbox)
+}
+
+// What the start saves already holds the lines: a process that dies after the start finds the fresh session with its
+// restart line and packet in its queue, never with only its boot. No state saved with the fresh session up lacks them.
+func TestRestartSavesTheHandOutWithTheStart(t *testing.T) {
+	f, sf := restartBegun(t, 0)
+	require.NoError(t, f.s.QueueFrom("designer", "[dev] waited", Facts{From: "dev"}))
+
+	// The fake's start looks at the state the shift holds as it asks tmux to make the session: the lines are in
+	// the queue before it, so the flush that follows saves them.
+	var atStart []string
+
+	sf.onStart = func() { atStart = slices.Clone(f.s.State.Role("designer").Inbox) }
+
+	saved := savedStates(t, f, func() { f.finish(t) })
+
+	require.Len(t, atStart, 3, "%v", atStart)
+	assert.True(t, strings.HasPrefix(atStart[0], "[zmina] restarted fresh: "), "%v", atStart)
+	assert.True(t, strings.HasPrefix(atStart[1], "[zmina T-1] Read handoff packet "), "%v", atStart)
+
+	require.NotEmpty(t, saved, "the start saves the state")
+
+	for i, st := range saved {
+		rs := st.Role("designer")
+		if !rs.Up {
+			continue
+		}
+
+		require.Len(t, rs.Inbox, 3, "save %d, up: %v", i, rs.Inbox)
+		assert.True(t, strings.HasPrefix(rs.Inbox[0], "[zmina] restarted fresh: "), "save %d: %v", i, rs.Inbox)
+		assert.True(t, strings.HasPrefix(rs.Inbox[1], "[zmina T-1] Read handoff packet "), "save %d: %v", i, rs.Inbox)
+		assert.Equal(t, "[dev] waited", rs.Inbox[2])
+		assert.Nil(t, rs.Pending, "save %d", i)
+		assert.True(t, rs.Downing.IsZero(), "save %d", i)
+		assert.False(t, rs.Started.IsZero(), "save %d", i)
+	}
+
+	assert.True(t, saved[0].Role("designer").Up, "the first save is the start's own")
+}
+
+// A fresh start that fails does not leave the role down and held: it is started again on the conversation it was on,
+// the restart is given up for that conversation as a called-off one is, and the dispatcher hears it once.
+func TestRestartFailedStartGoesBackToItsConversation(t *testing.T) {
+	f, sf := restartBegun(t, 1)
+	wt := t.TempDir()
+	f.s.Restarts[0].Opts.Dir = wt
+	require.NoError(t, f.s.QueueFrom("designer", "[dev] waited", Facts{From: "dev"}))
+
+	before, err := f.tk.Get("T-1")
+	require.NoError(t, err)
+
+	out := f.finish(t)
+	require.Len(t, out, 1)
+	assert.Contains(t, out[0], "tmux: no server running")
+	assert.Contains(t, out[0], "back on its conversation")
+
+	require.Len(t, sf.asked, 2, "the fresh start, then the old conversation")
+	assert.Equal(t, wt, sf.asked[0].dir, "the fresh start was meant for the task's worktree")
+	assert.NotContains(t, sf.asked[0].argv, "--resume")
+	assert.Contains(t, sf.asked[1].argv, "--resume")
+	assert.Contains(t, sf.asked[1].argv, "sid-designer", "the conversation it was on")
+	assert.NotEqual(t, wt, sf.asked[1].dir, "in the directory it ran in")
+	assert.Equal(t, "sid-designer", f.s.Resumed("designer"))
+	assert.True(t, f.tm.Has("designer"))
+
+	rs := f.s.State.Role("designer")
+	assert.True(t, rs.Up)
+	assert.False(t, rs.Held)
+	assert.Nil(t, rs.Pending)
+	assert.True(t, rs.Downing.IsZero())
+	assert.Equal(t, []string{"[dev] waited"}, rs.Inbox, "the restart's line and packet are out again; what waited stays")
+	assert.Equal(t, "sid-designer", rs.RestartGaveUp, "given up for that conversation")
+	assert.False(t, rs.RestartOff.IsZero())
+
+	assert.False(t, f.ev.has("designer", "restarted"), "nothing was restarted")
+	assert.True(t, f.ev.has("designer", "restart-failed"))
+	assert.True(t, f.ev.has("designer", "restart-off"))
+	assert.Equal(t, 1, countNotes(f, "designer: restart for its context failed"), "%v", f.s.State.Notes)
+	assert.Contains(t, strings.Join(f.s.State.Notes, "|"), "it is back on its conversation")
+
+	// The task's delivery is what it was: the old conversation's, not a hand-out that never went.
+	after, err := f.tk.Get("T-1")
+	require.NoError(t, err)
+	assert.Equal(t, before.Delivery, after.Delivery)
+
+	// The cards of the lines that came out are closed as dropped, with the reason.
+	f.s.FlushCards()
+
+	var dropped []string
+
+	for _, c := range cardsOn(f, "designer") {
+		if c.Closed != nil && c.Closed.How == ClosedDropped {
+			assert.Contains(t, c.Closed.Why, "fresh start", c.Head)
+			dropped = append(dropped, c.Head)
+		}
+	}
+
+	require.Len(t, dropped, 2, "%v", dropped)
+	assert.True(t, strings.HasPrefix(dropped[0], "[zmina] restarted fresh: "), "%v", dropped)
+	assert.True(t, strings.HasPrefix(dropped[1], "[zmina T-1] Read handoff packet "), "%v", dropped)
+
+	// Not rotated again in that conversation, however long it is past restart_at: the restart is given up for it.
+	f.newSession("designer", "sid-designer")
+
+	for range 3 {
+		*f.now = f.now.Add(trimPause + time.Minute)
+		f.idle("designer", 310_000, 10*time.Minute)
+		f.rg.byPID[f.tm.up["designer"]] = &registry.Session{Status: "idle", StatusUpdatedAt: f.now.Add(-10 * time.Minute).UnixMilli(),
+			SessionID: "sid-designer"}
+		f.s.Tick()
+		assert.Empty(t, f.s.Restarts)
+	}
+
+	assert.Zero(t, f.ev.count("designer", "restart-asked"), "no note asked for: it was given up")
+	assert.Len(t, sf.asked, 2, "no start after the second")
+	assert.Equal(t, 1, countNotes(f, "designer: restart for its context failed"), "told once")
+}
+
+func countNotes(f fix, prefix string) int {
+	n := 0
+
+	for _, note := range f.s.State.Notes {
+		if strings.HasPrefix(note, prefix) {
+			n++
+		}
+	}
+
+	return n
+}
+
+// Both starts fail, the fresh one and the one on the old conversation: the role is left down and not held, so that
+// a role with keep: always is opened again by the ticker as after a crash, and the dispatcher hears it once. The
+// packets stay queued for whoever starts it next; the restart's own line, which says "restarted fresh", does not.
+func TestRestartBothStartsFailLeaveTheRoleOpenable(t *testing.T) {
+	f, sf := restartBegun(t, 2)
+	f.s.Crew.Roles["designer"].Keep = crew.KeepAlways
+	require.NoError(t, f.s.QueueFrom("designer", "[dev] waited", Facts{From: "dev"}))
+
+	out := f.finish(t)
+	require.Len(t, out, 1)
+	assert.Contains(t, out[0], "tmux: no server running")
+	assert.Len(t, sf.asked, 2)
+
+	rs := f.s.State.Role("designer")
+	assert.False(t, f.tm.Has("designer"), "down")
+	assert.False(t, rs.Up)
+	assert.False(t, rs.Held, "not held: the ticker may open it")
+	assert.Nil(t, rs.Pending)
+	assert.True(t, rs.Downing.IsZero())
+	assert.Empty(t, rs.RestartGaveUp, "no conversation it is back on")
+	assert.False(t, f.ev.has("designer", "restarted"))
+
+	require.Len(t, rs.Inbox, 2, "%v", rs.Inbox)
+	assert.True(t, strings.HasPrefix(rs.Inbox[0], "[zmina T-1] Read handoff packet "),
+		"the packet is kept, the line that says restarted fresh is not: %v", rs.Inbox)
+	assert.Equal(t, "[dev] waited", rs.Inbox[1])
+
+	tk, err := f.tk.Get("T-1")
+	require.NoError(t, err)
+	require.NotNil(t, tk.Delivery)
+	assert.Equal(t, rs.Inbox[0], tk.Delivery.Line, "the task's delivery is the packet that waits")
+
+	assert.Equal(t, 1, countNotes(f, "designer: restart for its context failed"), "%v", f.s.State.Notes)
+	assert.Contains(t, strings.Join(f.s.State.Notes, "|"), "starting it on its conversation failed too")
+	assert.Contains(t, strings.Join(f.s.State.Notes, "|"), "up 'designer' --task T-1 --fresh")
+
+	// The ticker opens it again as after a crash, and the packet that waited is its context.
+	*f.now = f.now.Add(reopenPause)
+	did := f.s.Tick()
+	assert.Contains(t, did, "started designer")
+	assert.True(t, f.tm.Has("designer"))
+	assert.Empty(t, f.s.Resumed("designer"), "fresh")
+	assert.Len(t, sf.asked, 3)
+
+	f.newSession("designer", "sid-new")
+	typed := f.typedAfter("designer", "sid-new", 2)
+	require.Len(t, typed, 2, "%v", typed)
+	assert.True(t, strings.HasPrefix(typed[0], "[zmina T-1] Read handoff packet "), typed[0])
+	assert.Equal(t, "[dev] waited", typed[1])
+}
+
+// A role with no conversation of its own known has nothing to go back to: the one start failed, the role is left down
+// and not held, and the note says so.
+func TestRestartWithNoConversationToGoBackTo(t *testing.T) {
+	f, sf := restartBegun(t, 1)
+	f.s.State.Role("designer").LastSession = ""
+
+	f.finish(t)
+
+	assert.Len(t, sf.asked, 1, "no second start")
+
+	rs := f.s.State.Role("designer")
+	assert.False(t, rs.Up)
+	assert.False(t, rs.Held)
+	assert.Contains(t, strings.Join(f.s.State.Notes, "|"), "no conversation of its own is known to go back to")
+}
+
+// With no room for its line and a packet per task the restart is not begun, before the old session is put down.
+func TestRestartNotBegunWithAFullQueue(t *testing.T) {
+	f := restarting(t, "", 300_000, 10*time.Minute)
+	f.note(t, "T-1", f.now.Add(-10*time.Minute))
+
+	rs := f.s.State.Role("designer")
+	for i := range inboxMax {
+		rs.Inbox = append(rs.Inbox, fmt.Sprintf("[dev] line %d", i))
+	}
+
+	// plainIdle lets only an empty queue through, so the begin is called as the gates would for a role whose tasks
+	// alone fill the queue.
+	line := f.s.beginRestart("designer", f.s.heldTasks("designer"), "context 300k over restart_at 250k", "")
+
+	assert.Contains(t, line, "20 lines already wait for it and its restart needs room for 2 more")
+	assert.Empty(t, f.s.Restarts)
+	assert.NotContains(t, f.tm.typed["designer"], "/exit", "the old session was not put down")
+	assert.True(t, f.tm.Has("designer"))
+	assert.True(t, rs.Up)
+	assert.True(t, rs.Downing.IsZero())
+	assert.Nil(t, rs.Pending)
+	assert.Len(t, rs.Inbox, inboxMax, "nothing lost")
+	assert.True(t, f.ev.has("designer", "restart-failed"))
+	assert.False(t, rs.RestartOff.IsZero(), "asked again after the usual pause, not at every beat")
+}
+
+// Lines that came while the role was down fill its queue; the restart's hand-out goes in ahead of them and none is
+// dropped to make room.
+func TestRestartHandsOutIntoAQueueThatFilledWhileItWasDown(t *testing.T) {
+	f, _ := restartBegun(t, 0)
+
+	for i := range inboxMax {
+		require.NoError(t, f.s.QueueFrom("designer", fmt.Sprintf("[dev] line %d", i), Facts{From: "dev"}))
+	}
+
+	require.Error(t, f.s.QueueFrom("designer", "[dev] one too many", Facts{From: "dev"}), "full for a sender")
+
+	out := f.finish(t)
+	require.Len(t, out, 1)
+	assert.Contains(t, out[0], "restarted fresh")
+
+	rs := f.s.State.Role("designer")
+	require.Len(t, rs.Inbox, inboxMax+2, "%v", rs.Inbox)
+	assert.True(t, strings.HasPrefix(rs.Inbox[0], "[zmina] restarted fresh: "))
+	assert.True(t, strings.HasPrefix(rs.Inbox[1], "[zmina T-1] Read handoff packet "))
+	assert.Equal(t, "[dev] line 0", rs.Inbox[2])
+	assert.Equal(t, "[dev] line 19", rs.Inbox[inboxMax+1])
+	assert.False(t, f.ev.has("designer", "restart-failed"))
+}
+
+// A restart finished by a later beat, its own having died during the wait, hands out in the same order and rolls back
+// the same way: the conversation it goes back to is the one the state kept, not the dead beat's memory.
+func TestRestartFinishedByALaterBeatHandsOutAndRollsBack(t *testing.T) {
+	for name, fail := range map[string]int{"hands out": 0, "rolls back": 1} {
+		t.Run(name, func(t *testing.T) {
+			f, sf := restartBegun(t, fail)
+			require.NotNil(t, f.s.State.Role("designer").Pending)
+			require.NoError(t, f.s.QueueFrom("designer", "[dev] waited", Facts{From: "dev"}))
+
+			// The beat dies: its in-memory job is gone.
+			f.s.Restarts = nil
+
+			*f.now = f.now.Add(30 * time.Second)
+			f.s.Tick()
+			assert.Empty(t, sf.asked, "inside downingFor the beat that began it may still finish it")
+
+			*f.now = f.now.Add(downingFor)
+			did := f.s.Tick()
+			assert.True(t, f.ev.has("designer", "restart-late"))
+			assert.True(t, f.tm.Has("designer"))
+
+			rs := f.s.State.Role("designer")
+			assert.Nil(t, rs.Pending)
+			assert.True(t, rs.Downing.IsZero())
+
+			if fail == 0 {
+				assert.Contains(t, strings.Join(did, "|"), "designer: restarted fresh")
+				require.GreaterOrEqual(t, len(rs.Inbox), 3, "%v", rs.Inbox)
+				assert.True(t, strings.HasPrefix(rs.Inbox[0], "[zmina] restarted fresh: "), "%v", rs.Inbox)
+				assert.True(t, strings.HasPrefix(rs.Inbox[1], "[zmina T-1] Read handoff packet "), "%v", rs.Inbox)
+				assert.Equal(t, "[dev] waited", rs.Inbox[2])
+
+				return
+			}
+
+			assert.Equal(t, "sid-designer", f.s.Resumed("designer"), "back on its conversation")
+			assert.Equal(t, "sid-designer", rs.RestartGaveUp)
+			assert.Equal(t, []string{"[dev] waited"}, rs.Inbox)
+		})
+	}
+}
+
+// A restart that a later beat or a command finished meanwhile is not done twice: the job in memory finds the role
+// started since it began, hands out nothing and starts nothing.
+func TestRestartSupersededHandsOutNothing(t *testing.T) {
+	f, sf := restartBegun(t, 0)
+	job := f.s.Restarts[0]
+	f.s.Restarts = nil
+
+	*f.now = f.now.Add(downingFor + 30*time.Second)
+	f.s.Tick()
+	require.Len(t, sf.asked, 1, "the later beat finished it")
+
+	rs := f.s.State.Role("designer")
+	inbox := slices.Clone(rs.Inbox)
+	require.Len(t, inbox, 2)
+
+	out := f.s.FinishRestart(job)
+
+	assert.Equal(t, "designer: restart: a later beat or a command started it meanwhile", out)
+	assert.True(t, f.ev.has("designer", "restart-superseded"))
+	assert.Len(t, sf.asked, 1, "no second start")
+	assert.Equal(t, inbox, rs.Inbox, "no second hand-out")
+}
+
+// A restart after a task was done has no packet; a failed fresh start goes back to the conversation as well, and is
+// not asked again for that task (the role's start after the close is later than it).
+func TestRestartAfterTheTaskIsDoneRollsBack(t *testing.T) {
+	f := doneRestarting(t, "", 180_000, 11*time.Minute)
+	f.s.Tick()
+	require.Len(t, f.s.Restarts, 1)
+
+	sf := &startsFailing{fakeTmux: f.tm, fail: 1}
+	f.s.Tmux = sf
+
+	out := f.finish(t)
+	require.Len(t, out, 1)
+	assert.Contains(t, out[0], "back on its conversation")
+
+	rs := f.s.State.Role("designer")
+	assert.True(t, rs.Up)
+	assert.Empty(t, rs.Inbox, "no restart line on the conversation it went back to")
+	assert.Equal(t, "sid-designer", rs.RestartGaveUp)
+	assert.Equal(t, "sid-designer", f.s.Resumed("designer"))
+	assert.Equal(t, 1, countNotes(f, "designer: restart after T-1 was done failed"), "%v", f.s.State.Notes)
+
+	f.newSession("designer", "sid-designer")
+	*f.now = f.now.Add(trimPause + time.Hour)
+	f.idle("designer", 200_000, 20*time.Minute)
+	f.rg.byPID[f.tm.up["designer"]] = &registry.Session{Status: "idle", StatusUpdatedAt: f.now.Add(-20 * time.Minute).UnixMilli(),
+		SessionID: "sid-designer"}
+	f.s.Tick()
+	assert.Empty(t, f.s.Restarts, "no loop")
+	assert.Len(t, sf.asked, 2)
+}
+
+// deliveryOf is the delivery the restart left on T-1.
+func deliveryOf(t *testing.T, f fix) *task.Delivery {
+	t.Helper()
+
+	tk, err := f.tk.Get("T-1")
+	require.NoError(t, err)
+	require.NotNil(t, tk.Delivery)
+
+	return tk.Delivery
+}
+
+// packetLineOf is the line of T-1's packet that waits in the role's queue.
+func packetLineOf(t *testing.T, f fix) string {
+	t.Helper()
+
+	rs := f.s.State.Role("designer")
+	i := slices.IndexFunc(rs.Inbox, func(l string) bool { return strings.HasPrefix(l, "[zmina T-1] Read handoff packet ") })
+	require.GreaterOrEqual(t, i, 0, "%v", rs.Inbox)
+
+	return rs.Inbox[i]
+}
+
+// The packet is handed while the role is down, before its start: its delivery is queued and not sent, so the 5 min of
+// the acceptance alert do not run while it waits; the new session is typed it once; the alert fires 5 min after that
+// and not before, and the packet is not handed again.
+func TestRestartHandOutKeepsTheAcceptanceAlert(t *testing.T) {
+	f, _ := restartBegun(t, 0)
+	f.finish(t)
+
+	d, packet := deliveryOf(t, f), packetLineOf(t, f)
+	assert.Equal(t, packet, d.Line)
+	assert.True(t, d.SentAt.IsZero(), "queued, not sent to any session")
+	assert.Empty(t, d.Session)
+	assert.True(t, d.AcceptedAt.IsZero())
+	assert.False(t, d.QueuedAt.After(f.s.State.Role("designer").Started), "handed before the start")
+
+	// It waits for a booted session; however long, nothing is due: a submission is what the alert counts from.
+	f.newSession("designer", "sid-new")
+	*f.now = f.now.Add(15 * time.Minute)
+	f.rg.byPID[f.tm.up["designer"]] = &registry.Session{Status: "idle", StatusUpdatedAt: f.now.UnixMilli(), SessionID: "sid-new"}
+	tk, err := f.tk.Get("T-1")
+	require.NoError(t, err)
+	assert.False(t, f.s.acceptanceDue(tk), "a waiting packet is no submission")
+
+	typed := f.typedAfter("designer", "sid-new", 2)
+	require.Len(t, typed, 2, "%v", typed)
+	assert.Equal(t, packet, typed[1], "the new session is typed the packet")
+
+	d = deliveryOf(t, f)
+	require.False(t, d.SentAt.IsZero(), "the typing is the submission")
+	assert.Equal(t, "sid-new", d.Session, "to the new session, not the old")
+	sent := d.SentAt
+
+	alerts := func() int { return countNotes(f, "designer: T-1 has no acceptance after 5 min") }
+
+	idle := func(at time.Time) {
+		*f.now = at
+		f.rg.byPID[f.tm.up["designer"]] = &registry.Session{Status: "idle", StatusUpdatedAt: at.UnixMilli(), SessionID: "sid-new"}
+		f.s.Tick()
+	}
+
+	idle(sent.Add(5*time.Minute - time.Second))
+	assert.Zero(t, alerts(), "not before the 5 min")
+
+	idle(sent.Add(5 * time.Minute))
+	assert.Equal(t, 1, alerts(), "%v", f.s.State.Notes)
+
+	idle(sent.Add(8 * time.Minute))
+	assert.Equal(t, 1, alerts(), "once")
+
+	// Nothing was handed twice: one typing of the packet in all, and nothing left in the queue.
+	n := 0
+
+	for _, l := range f.tm.typed["designer"] {
+		if l == packet {
+			n++
+		}
+	}
+
+	assert.Equal(t, 1, n)
+	assert.Empty(t, f.s.State.Role("designer").Inbox)
+}
+
+// The new session accepts the packet it was typed, and no alert follows.
+func TestRestartHandOutIsAcceptedByTheNewSession(t *testing.T) {
+	f, _ := restartBegun(t, 0)
+	f.finish(t)
+	f.newSession("designer", "sid-new")
+	f.typedAfter("designer", "sid-new", 2)
+
+	d := deliveryOf(t, f)
+
+	f.s.By = "designer"
+	require.NoError(t, f.s.AcceptTask("T-1", d.ID))
+	f.s.By = "hand"
+
+	*f.now = f.now.Add(10 * time.Minute)
+	f.rg.byPID[f.tm.up["designer"]] = &registry.Session{Status: "idle", StatusUpdatedAt: f.now.UnixMilli(), SessionID: "sid-new"}
+	f.s.Tick()
+	assert.Zero(t, countNotes(f, "designer: T-1 has no acceptance"), "%v", f.s.State.Notes)
+	assert.True(t, f.ev.has("designer", "accepted"))
+}
+
+// A delivery of the very packet the restart hands out, sent to the conversation that is gone and not accepted, is
+// renewed as a start after it always renewed it: not sent, no session, queued now. Its old session's submission is not the
+// new session's, and the line goes once.
+func TestRestartRenewsADeliveryOfTheSamePacket(t *testing.T) {
+	f, _ := restartBegun(t, 0)
+
+	tk, err := f.tk.Get("T-1")
+	require.NoError(t, err)
+
+	path, err := handoff.Write(f.s.Crew.StateDir(), mustPacket(t, f, tk))
+	require.NoError(t, err)
+
+	r, err := f.s.Role("designer")
+	require.NoError(t, err)
+
+	runtime, home := f.s.runtimeScope(r)
+	queued := f.s.State.Role("designer").Started.Add(time.Minute).UTC()
+	f.tk.list[0].Delivery = &task.Delivery{ID: strings.TrimSuffix(filepath.Base(path), ".json"), Role: "designer",
+		Runtime: runtime, Home: home, Line: "an earlier line", TaskUpdated: tk.Updated, QueuedAt: queued,
+		SentAt: queued.Add(time.Second), Session: "sid-designer", AlertedAt: queued.Add(6 * time.Minute)}
+
+	f.finish(t)
+
+	d, packet := deliveryOf(t, f), packetLineOf(t, f)
+	assert.Equal(t, packet, d.Line)
+	assert.True(t, d.SentAt.IsZero(), "the old session's submission is not the new one's")
+	assert.Empty(t, d.Session)
+	assert.True(t, d.AlertedAt.IsZero())
+	assert.True(t, d.QueuedAt.After(queued))
+
+	n := 0
+
+	for _, l := range f.s.State.Role("designer").Inbox {
+		if l == packet {
+			n++
+		}
+	}
+
+	assert.Equal(t, 1, n, "queued once")
+}
+
+// A copy of a role is forgotten when it goes down, and a restart's down is no exception: the copy whose fresh start fails
+// goes back to its conversation (its state is made anew by that start), and one that cannot start at all is not kept
+// down with a queue, as no copy is.
+func TestRestartACopyWhoseFreshStartFails(t *testing.T) {
+	for name, fail := range map[string]int{"back on its conversation": 1, "cannot start": 2} {
+		t.Run(name, func(t *testing.T) {
+			f := restarting(t, "", 100, time.Minute)
+			f.tk.list = nil
+			require.NoError(t, f.s.Up("designer#2"))
+			*f.now = f.now.Add(5 * time.Minute)
+			f.idle("designer#2", 300_000, 10*time.Minute)
+			f.tk.list = []task.Task{{ID: "T-7", Role: "designer#2", State: task.Open, Title: "draw the icon"}}
+			f.note(t, "T-7", f.now.Add(-10*time.Minute))
+
+			f.s.Tick()
+			require.Len(t, f.s.Restarts, 1)
+
+			sf := &startsFailing{fakeTmux: f.tm, fail: fail}
+			f.s.Tmux = sf
+
+			out := f.finish(t)
+			require.Len(t, out, 1)
+			assert.Len(t, sf.asked, 2, "the fresh start, then the old conversation")
+			assert.Equal(t, 1, countNotes(f, "designer#2: restart for its context failed"), "%v", f.s.State.Notes)
+
+			rs, kept := f.s.State.Roles["designer#2"]
+			if fail == 1 {
+				require.True(t, kept)
+				assert.True(t, rs.Up)
+				assert.Equal(t, "sid-designer#2", f.s.Resumed("designer#2"), "its own conversation")
+				assert.Equal(t, "sid-designer#2", rs.RestartGaveUp)
+				assert.Empty(t, rs.Inbox)
+
+				return
+			}
+
+			assert.False(t, kept, "a copy that is down is not kept")
+			assert.False(t, f.tm.Has("designer#2"))
+		})
+	}
 }
