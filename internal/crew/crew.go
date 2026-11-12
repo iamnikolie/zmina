@@ -20,6 +20,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/iamnikolie/zmina/internal/cron"
+	"github.com/iamnikolie/zmina/internal/donecheck"
 	"github.com/iamnikolie/zmina/internal/route"
 )
 
@@ -348,6 +349,9 @@ type Crew struct {
 	// WorktreeGC is daily or off (the default): daily has the ticker run `zmina task gc` (never --force) once a
 	// day, so the worktrees of closed tasks whose branch is merged do not pile up.
 	WorktreeGC string `yaml:"worktree_gc"`
+	// DoneCheck is the command closing a task as done runs in the task's worktree, unless the task sets its own: a
+	// command line, or run, timeout and commit (see donecheck.Spec). Empty: no check, as before.
+	DoneCheck *donecheck.Spec `yaml:"done_check"`
 	// Courier is on (the default) or off: with the ticker installed, on also installs a resident service that runs
 	// `zmina _courier` for this crew, so a line waits for a role at most a moment instead of up to a beat; off keeps
 	// that service out (and takes an installed one away at the next `ticker install`).
@@ -893,6 +897,12 @@ func (c *Crew) check() error {
 
 	if err := checkWorktreeGC(c.WorktreeGC); err != nil {
 		return err
+	}
+
+	if c.DoneCheck != nil {
+		if err := c.DoneCheck.Validate(); err != nil {
+			return fmt.Errorf("done_check: %w", err)
+		}
 	}
 
 	if err := checkRetention(c.Retention); err != nil {

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/iamnikolie/zmina/internal/donecheck"
 	"github.com/iamnikolie/zmina/internal/fsx"
 	"github.com/iamnikolie/zmina/internal/record"
 )
@@ -127,6 +128,9 @@ type Task struct {
 	// Criteria is what must be true for the task to count as finished, one statement each; the handoff packet
 	// carries them and the worker's result says for each whether it holds. Empty: the worker decides.
 	Criteria []string `json:"criteria,omitempty"`
+	// Check is the command closing the task as done runs, set by the owner or the dispatcher; nil: the crew file's
+	// done_check, when it has one and the task has a worktree. See donecheck.
+	Check *donecheck.Spec `json:"check,omitempty"`
 }
 
 // CleanCriteria checks a list of criteria as given on the command line: each is one non-empty line, its edges
@@ -176,6 +180,17 @@ type Closure struct {
 	At    time.Time `json:"at"`
 	State State     `json:"state"`
 	Note  string    `json:"note,omitempty"`
+	// Check is the check that ran, and passed, before the task was closed as done: what it ran, at which commit, and
+	// the tail of its output. It says that command exited 0 there, not that the work is right.
+	Check *donecheck.Result `json:"check,omitempty"`
+	// Unchecked is set when the task had a check and was closed without it, by force.
+	Unchecked *Unchecked `json:"unchecked,omitempty"`
+}
+
+// Unchecked says who closed a task past its check, and which check it was.
+type Unchecked struct {
+	By  string `json:"by"`
+	Run string `json:"run"`
 }
 
 // titleMax is how much of the asked text stands in for a missing title.
