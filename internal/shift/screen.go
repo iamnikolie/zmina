@@ -375,7 +375,7 @@ func (s *Shift) typeLine(name, line string) error {
 	}
 
 	if err := typ(name, line); err != nil {
-		return err
+		return s.clearPartial(name, line, err)
 	}
 
 	for try := 0; ; try++ {
@@ -395,6 +395,26 @@ func (s *Shift) typeLine(name, line string) error {
 		_ = s.Tmux.Keys(name, "Enter")
 		s.log(name, "pressed-again", "", line)
 	}
+}
+
+// clearPartial is what is left of a line whose typing failed, cleared from the input line, and returns typeErr. Typing
+// goes in pieces, so a failure half way leaves the typed start in the input line, where it would pass for the owner's
+// draft and hold the queue for good. Both callers type only into an input line they read empty, so what sits there now
+// is zmina's own when it is the start of the line it was typing (holds); anything else is the owner's and stays.
+// When the start cannot be cleared, the error says so; the line stays queued and the try counts, as any failed one.
+func (s *Shift) clearPartial(name, line string, typeErr error) error {
+	draft, ok, err := s.Tmux.Prompt(name)
+	if err != nil || !ok || !holds(draft, line) {
+		return typeErr
+	}
+
+	s.clearInput(name, line)
+
+	if draft, ok, err = s.Tmux.Prompt(name); err != nil || !ok || !holds(draft, line) {
+		return typeErr
+	}
+
+	return fmt.Errorf("%w; its start could not be cleared from the input line", typeErr)
 }
 
 // clearInput takes a typed line zmina could not send out of the role's input line: C-e, then C-u (line end, then
