@@ -39,6 +39,9 @@ func (a *app) taskRecordCommand(kind string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if kind == "checkpoint" {
+				noteFetched(s, t)
+			}
 			if asJSON {
 				d, err := record.Load(s.Crew.StateDir(), kind, src, rev)
 				if err != nil {
@@ -59,6 +62,20 @@ func (a *app) taskRecordCommand(kind string) *cobra.Command {
 	c.Flags().BoolVar(&full, "full", false, "every section whole (default: the summary whole, the rest clipped to a line)")
 	return c
 }
+
+// noteFetched tells an open rotation of the task's role that the role read the task's note: run by the role itself, named by
+// its own ZMINA_ROLE. A command that does not say who runs it (a tool of an agent's session with no ZMINA_ROLE, the owner's
+// shell) is not evidence of the role having read it: unlike a doorbell's fetch, which a caller that does not say is taken for
+// the role's, this is a claim about one role's reading. Noted in the role's rotation record with no lock, and never a
+// failure of the read.
+func noteFetched(s *shift.Shift, t task.Task) {
+	if by() != t.Role {
+		return
+	}
+
+	_ = shift.RecordRotationEvidence(s.Crew.Layout(), t.Role, shift.EvidenceNoteFetched, t.ID, t.Role, callerSession(), s.Now())
+}
+
 func (a *app) saveRecordFile(id, kind, file string, cmd *cobra.Command) error {
 	in := cmd.InOrStdin()
 	if file != "-" {

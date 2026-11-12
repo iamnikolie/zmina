@@ -456,9 +456,9 @@ func TestMarksChangeNothingOfTheBeat(t *testing.T) {
 	assert.Equal(t, plain.tm.starts, marked.tm.starts)
 	assert.Equal(t, plain.tm.typed, marked.tm.typed)
 
-	assert.Equal(t, []string{"reconcile", "notices", "alarms", "roles", "notes", "deliver", "trim", "reconcile-end",
-		"reconcile", "notices", "alarms", "roles", "notes", "deliver", "trim", "reconcile-end",
-		"reconcile", "notices", "alarms", "roles", "notes", "deliver", "trim", "reconcile-end"}, phases)
+	assert.Equal(t, []string{"reconcile", "notices", "alarms", "roles", "rotations", "notes", "deliver", "trim", "reconcile-end",
+		"reconcile", "notices", "alarms", "roles", "rotations", "notes", "deliver", "trim", "reconcile-end",
+		"reconcile", "notices", "alarms", "roles", "rotations", "notes", "deliver", "trim", "reconcile-end"}, phases)
 }
 
 func TestTickNamesTheRoleItIsOn(t *testing.T) {

@@ -599,6 +599,7 @@ func (s *Shift) restartRequest(name string, tasks []task.Task, line string) (str
 // in its own dir: the task's worktree may be removed once it is merged.
 func (s *Shift) beginRestart(name string, tasks []task.Task, why, done string) string {
 	rs := s.State.Role(name)
+	asked := rs.RestartAsked
 
 	dir := rs.Dir
 	if done != "" {
@@ -640,12 +641,19 @@ func (s *Shift) beginRestart(name string, tasks []task.Task, why, done string) s
 		return name + ": restart: " + why
 	}
 
+	// The rotation's record opens here, the note being durable and the old session still up: what it is on, what was checked.
+	// It is a report: what it cannot write changes nothing below.
+	rid := s.rotationPrepare(name, tasks, why, done, asked)
+
 	if _, err := s.BeginDown(name, DownOptions{}); err != nil {
 		rs.RestartOff = s.Now()
 		s.log(name, "restart-failed", logTask, err.Error())
+		s.rotationNotDown(name, rid, rs, err)
 
 		return name + ": restart: " + err.Error()
 	}
+
+	s.rotationSwitching(name, rid, rs.Downing)
 
 	job := Restart{Name: name, Claim: rs.Downing, Opts: UpOptions{Fresh: true, Dir: dir}, Tasks: ids, Why: why,
 		Notes: strings.Join(notes, ", "), Done: done}
@@ -680,8 +688,11 @@ func (s *Shift) FinishRestart(job Restart) string {
 		return job.Name + ": restart: another command took it over meanwhile"
 	}
 
+	// The rotation this down belongs to, by its claim: the record is read here and nowhere else decides.
+	rid := s.rotationOf(job.Name, job.Claim)
+
 	if err := s.FinishDown(job.Name); err != nil {
-		return s.restartFailed(job, err)
+		return s.restartFailed(job, rid, err)
 	}
 
 	// The conversation it was on, to go back to if the fresh start fails: what a start changes comes after it.
@@ -697,7 +708,7 @@ func (s *Shift) FinishRestart(job Restart) string {
 	}
 
 	if err != nil {
-		return s.restartRollback(job, back, out, err)
+		return s.restartRollback(job, rid, back, out, err)
 	}
 
 	// The older packets of these tasks that waited in a queue are out now that the role runs on the new ones: before the
@@ -705,6 +716,8 @@ func (s *Shift) FinishRestart(job Restart) string {
 	for _, p := range out.packets {
 		s.replacePackets(p.task, p.head.line)
 	}
+
+	s.rotationStarted(job.Name, rid, out.lines())
 
 	if job.Done != "" {
 		s.log(job.Name, "restarted", job.Done, job.Why)
@@ -759,11 +772,9 @@ func (h handout) lines() []string {
 func (s *Shift) handOut(job Restart) (handout, error) {
 	var out handout
 
-	line := fmt.Sprintf("[zmina] restarted fresh: %s. Your note: %s, in each task's packet that follows.", job.Why,
-		job.Notes)
+	line := restartLineHead + fmt.Sprintf("%s. Your note: %s, in each task's packet that follows.", job.Why, job.Notes)
 	if job.Done != "" {
-		line = fmt.Sprintf("[zmina] restarted fresh: %s. You hold no task; what it ended with: zmina task show %s.",
-			job.Why, job.Done)
+		line = restartLineHead + fmt.Sprintf("%s. You hold no task; what it ended with: zmina task show %s.", job.Why, job.Done)
 	}
 
 	heads := []headLine{{line: line, f: Facts{From: "zmina"}}}
@@ -807,7 +818,7 @@ func (s *Shift) handOut(job Restart) (handout, error) {
 // not: "restarted fresh" is true only of a fresh session, and the next start may be a resume. A packet is a pointer to
 // a task that the role still holds, and is retired by the beat (pruneTaskInbox) once the ledger says it is not its
 // task any more; a session that starts without it has no context at all, which is the failure the hand-out is for.
-func (s *Shift) restartRollback(job Restart, back oldRun, out handout, cause error) string {
+func (s *Shift) restartRollback(job Restart, rid string, back oldRun, out handout, cause error) string {
 	name := job.Name
 	rs := s.State.Role(name)
 	s.log(name, "restart-failed", job.logTask(), cause.Error())
@@ -837,8 +848,9 @@ func (s *Shift) restartRollback(job Restart, back oldRun, out handout, cause err
 		s.restoreDeliveries(name, out)
 		rs.RestartGaveUp = back.session
 		s.restartOff(name, "its fresh start failed; it is back on its conversation")
+		s.rotationEnd(name, rid, OutcomeResumed, fmt.Sprintf("its fresh start failed: %v; back on its conversation", cause), nil, false)
 		s.addNotes([]string{fmt.Sprintf("%s: %s: %v; it is back on its conversation and is not restarted again in it "+
-			"(context_max trims it)", name, what, cause)})
+			"(context_max trims it)%s", name, what, cause, rotationTail(rid))})
 
 		return name + ": restart: " + cause.Error() + "; back on its conversation"
 	}
@@ -879,8 +891,10 @@ func (s *Shift) restartRollback(job Restart, back oldRun, out handout, cause err
 		next = fmt.Sprintf("zmina --crew %s up %s --task %s --fresh", shellWord(s.Crew.Path), shellWord(name), job.Tasks[0])
 	}
 
+	s.rotationEnd(name, rid, OutcomeLost, fmt.Sprintf("no session: its fresh start failed: %v; starting it on its conversation "+
+		"failed too: %v", cause, err), nil, false)
 	s.addNotes([]string{fmt.Sprintf("%s: %s: %v; starting it on its conversation failed too: %v; it is down and not "+
-		"held (the ticker opens a keep: always role again); by hand: %s", name, what, cause, err, next)})
+		"held (the ticker opens a keep: always role again); by hand: %s%s", name, what, cause, err, next, rotationTail(rid))})
 
 	s.forget(name)
 
@@ -933,12 +947,13 @@ func (job Restart) logTask() string {
 	return strings.Join(job.Tasks, ",")
 }
 
-func (s *Shift) restartFailed(job Restart, err error) string {
+func (s *Shift) restartFailed(job Restart, rid string, err error) string {
 	s.log(job.Name, "restart-failed", job.logTask(), err.Error())
+	s.rotationEnd(job.Name, rid, OutcomeLost, "no session: the session it was on could not be removed: "+err.Error(), nil, false)
 
 	if job.Done != "" {
-		s.addNotes([]string{fmt.Sprintf("%s: restart after %s was done failed: %v — zmina --crew %s up %s --fresh",
-			job.Name, job.Done, err, shellWord(s.Crew.Path), shellWord(job.Name))})
+		s.addNotes([]string{fmt.Sprintf("%s: restart after %s was done failed: %v — zmina --crew %s up %s --fresh%s",
+			job.Name, job.Done, err, shellWord(s.Crew.Path), shellWord(job.Name), rotationTail(rid))})
 
 		return job.Name + ": restart: " + err.Error()
 	}
@@ -946,7 +961,7 @@ func (s *Shift) restartFailed(job Restart, err error) string {
 	tasks := strings.Join(job.Tasks, ", ")
 	first, _, _ := strings.Cut(tasks, ",")
 	s.addNotes([]string{fmt.Sprintf("%s: restart for its context failed: %v; it holds %s — zmina --crew %s up %s "+
-		"--task %s --fresh", job.Name, err, tasks, shellWord(s.Crew.Path), shellWord(job.Name), first)})
+		"--task %s --fresh%s", job.Name, err, tasks, shellWord(s.Crew.Path), shellWord(job.Name), first, rotationTail(rid))})
 
 	return job.Name + ": restart: " + err.Error()
 }

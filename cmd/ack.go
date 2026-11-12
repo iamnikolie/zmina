@@ -81,9 +81,19 @@ func (a *app) pendingCommand() *cobra.Command {
 					// The hook a socket role runs at a session's start and after a trim: what it prints goes into the
 					// context. The tag rule only after a trim (a start's boot line names its own tag), and only to
 					// the role itself — another seat could be asked to run this and pass the tag on.
-					rule := trimmed(hookSource(cmd.InOrStdin())) && role != "" && role == os.Getenv("ZMINA_ROLE")
+					hook := readHook(cmd.InOrStdin())
+					self := role != "" && role == os.Getenv("ZMINA_ROLE")
+					rule := trimmed(hook.Source) && self
+
 					if text := s.PendingBrief(role, rule); text != "" {
 						fmt.Fprintln(a.out, text)
+					}
+
+					// The session's start is the evidence a rotation of the role waits for first: noted in its record with no
+					// lock, and never a failure of the hook. Only the role's own hook (a command run by hand, or for another
+					// role, names no session of it).
+					if self && hook.SessionID != "" {
+						_ = shift.RecordRotationEvidence(s.Crew.Layout(), role, shift.EvidenceHookStart, "", role, hook.SessionID, s.Now())
 					}
 
 					return nil

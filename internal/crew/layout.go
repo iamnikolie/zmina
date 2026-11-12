@@ -90,6 +90,19 @@ func (l Layout) DeliveryFetched(role string) string {
 // read before a doorbell is rung. A role with none, or a mark of another start, is sent every line whole.
 func (l Layout) DeliveryBell(role string) string { return filepath.Join(l.Delivery(), role+".bell") }
 
+// RotationsDir is the directory of the rotation records: one append-only file a role (Rotations), the report of each
+// restart of the role into a fresh conversation. A record is read by looks and never decides a restart.
+func (l Layout) RotationsDir() string { return filepath.Join(l.Dir, "rotations") }
+
+// Rotations is one role's rotation records (rotations/<role>.jsonl), one line a step of a rotation. It is appended to by
+// the shift under the state lock and, for what the role itself did, by the role's own commands without it. The role's
+// name is the file's, as the delivery cards' are (a copy is dev#2): two roles never share one.
+func (l Layout) Rotations(role string) string { return filepath.Join(l.RotationsDir(), role+".jsonl") }
+
+// RotationsFailed is where the shift keeps, for each role, when it last told that its rotation record could not be written
+// (a map of role to time), so that a ticker that is a new process every beat tells it once a day and not every beat.
+func (l Layout) RotationsFailed() string { return filepath.Join(l.Dir, "rotations.failed") }
+
 // Worktrees holds the tasks' git worktrees.
 func (l Layout) Worktrees() string { return filepath.Join(l.Dir, "worktrees") }
 
