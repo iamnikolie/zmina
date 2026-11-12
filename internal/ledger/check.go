@@ -82,9 +82,10 @@ type CheckPlan struct {
 // Checked is a check that passed, to close the task on: Set closes only the task it was planned against, with the check
 // it was planned with.
 type Checked struct {
-	// ID is the task it ran for, and Updated its Updated when the check was planned.
+	// ID is the task it ran for, and Updated its Updated and Gen the hand-out it was in when the check was planned.
 	ID      string
 	Updated time.Time
+	Gen     int
 	// Spec is the check that ran, and Result is source and commit as well as how it ended.
 	Spec   donecheck.Spec
 	Result donecheck.Result
@@ -99,6 +100,13 @@ func (l *Ledger) PlanCheck(id string, c Change) (*CheckPlan, error) {
 	t, err := l.Store.Get(id)
 	if err != nil {
 		return nil, err
+	}
+
+	// A session that does not hold the task is refused before anything is run for it, as the close would refuse it.
+	if c.Caller != nil {
+		if st := l.Current(t, *c.Caller); st.Late {
+			return nil, st.Err(t.ID)
+		}
 	}
 
 	spec, source, ok := l.CheckFor(t)
@@ -209,7 +217,7 @@ func (l *Ledger) RunCheck(ctx context.Context, p *CheckPlan) (*Checked, error) {
 
 	l.log(p.Task.Role, "check", p.Task.ID, fmt.Sprintf("passed: %s (%s, exit 0, %s, at %s)", line, p.Source, took, short))
 
-	return &Checked{ID: p.Task.ID, Updated: p.Task.Updated, Spec: p.Spec, Result: res}, nil
+	return &Checked{ID: p.Task.ID, Updated: p.Task.Updated, Gen: handOutOf(p.Task), Spec: p.Spec, Result: res}, nil
 }
 
 // leftFiles refuses a check that passed and left the worktree dirty: it was clean when the check began (PlanCheck refuses
@@ -279,6 +287,12 @@ func (l *Ledger) closeCheck(t task.Task, c Change, preflight bool) (*donecheck.R
 
 	if !c.Checked.Updated.Equal(t.Updated) {
 		return nil, nil, fmt.Errorf("%s: %w: the task was changed; run it again", t.ID, ErrCheckMoved)
+	}
+
+	// A hand-out does not change the task: a check that ran for one is no answer for the next session's.
+	if c.Checked.Gen != handOutOf(t) {
+		return nil, nil, fmt.Errorf("%s: %w: the task was handed out again (hand-out %d, it ran in %d); run it again", t.ID,
+			ErrCheckMoved, handOutOf(t), c.Checked.Gen)
 	}
 
 	if c.Checked.Spec != spec || c.Checked.Result.Source != source {

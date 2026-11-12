@@ -134,6 +134,89 @@ type Task struct {
 	// Check is the command closing the task as done runs, set by the owner or the dispatcher; nil: the crew file's
 	// done_check, when it has one and the task has a worktree. See donecheck.
 	Check *donecheck.Spec `json:"check,omitempty"`
+	// Late is the reports that sessions made on the task after it was handed to another, newest last: what was kept
+	// of each and what was refused. They change nothing else of the task, and its handoff packet does not carry them.
+	Late []Late `json:"late,omitempty"`
+}
+
+// LateMax is how many late reports a task keeps; the older ones go, the event log has them all.
+const LateMax = 20
+
+// Late is a report on a task from a session that did not hold it any more: a result or a checkpoint kept as a revision
+// of the record that is not the task's, or a close or change that was refused (What), by whom, from which conversation,
+// and the hand-out that was current then.
+type Late struct {
+	At       time.Time `json:"at"`
+	What     string    `json:"what"`
+	Revision string    `json:"revision,omitempty"`
+	By       string    `json:"by"`
+	Session  string    `json:"session,omitempty"`
+	Gen      int       `json:"gen"`
+	// Other says the caller's role is not the task's: it never held it. Taken says the revision was saved as the task's own
+	// since, by the session that holds it: it is not late any more.
+	Other bool `json:"other,omitempty"`
+	Taken bool `json:"taken,omitempty"`
+}
+
+// Same reports whether l is the report o already says: one caller on one hand-out doing one thing, a revision of a
+// record being the same record. A repeat of it is not told again.
+func (l Late) Same(o Late) bool {
+	return l.What == o.What && l.Revision == o.Revision && l.By == o.By && l.Session == o.Session && l.Gen == o.Gen
+}
+
+// LateRevision reports whether the revision of a record of kind (result or checkpoint) was kept as a late report and has not
+// become the task's since: it is a revision on disk that is no session's of the hand-out the task is in.
+func (t Task) LateRevision(kind, revision string) bool {
+	ref := t.Result
+	if kind == "checkpoint" {
+		ref = t.Checkpoint
+	}
+
+	if ref != nil && ref.Revision == revision {
+		return false
+	}
+
+	return slices.ContainsFunc(t.Late, func(l Late) bool { return l.What == kind && l.Revision == revision && !l.Taken })
+}
+
+// TakeLate marks the late reports of the revision of a record of kind as taken: a session that holds the task saved the same
+// content, which is the task's now. It reports whether there was one.
+func (t *Task) TakeLate(kind, revision string) bool {
+	taken := false
+
+	for i := range t.Late {
+		if l := &t.Late[i]; l.What == kind && l.Revision == revision && !l.Taken {
+			l.Taken, taken = true, true
+		}
+	}
+
+	return taken
+}
+
+// NextGen is the number of the hand-out a new delivery of the task is: one over the last delivery, and over the
+// generation of the result, the checkpoint, the closing and the late reports it kept, so that a number a rolled-back
+// delivery gave up, or a late report was told for, is not given again to another session's.
+func (t Task) NextGen() int {
+	n := 0
+	if t.Delivery != nil {
+		n = t.Delivery.Gen
+	}
+
+	for _, l := range t.Late {
+		n = max(n, l.Gen)
+	}
+
+	for _, r := range []*record.Ref{t.Result, t.Checkpoint} {
+		if r != nil {
+			n = max(n, r.Gen)
+		}
+	}
+
+	if t.Closed != nil {
+		n = max(n, t.Closed.Gen)
+	}
+
+	return n + 1
 }
 
 // CleanCriteria checks a list of criteria as given on the command line: each is one non-empty line, its edges
@@ -183,6 +266,10 @@ type Closure struct {
 	At    time.Time `json:"at"`
 	State State     `json:"state"`
 	Note  string    `json:"note,omitempty"`
+	// Gen is the hand-out the task was closed under (Delivery.Gen); Unbound says the closing session showed no
+	// identity to tie it to that hand-out (ledger.Current): it was taken for the role's on its name alone.
+	Gen     int  `json:"gen,omitempty"`
+	Unbound bool `json:"unbound,omitempty"`
 	// Check is the check that ran, and passed, before the task was closed as done: what it ran, at which commit, and
 	// the tail of its output. It says that command exited 0 there, not that the work is right.
 	Check *donecheck.Result `json:"check,omitempty"`

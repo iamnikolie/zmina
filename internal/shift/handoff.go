@@ -17,6 +17,7 @@ func (s *Shift) TaskPacket(name string, t task.Task) (handoff.Packet, error) {
 	}
 	shape := s.Crew.HandoffFor(r)
 	t.Delivery = nil // Receipt metadata must not recursively change the packet identity.
+	t.Late = nil     // Nor do the reports sessions made late: they are no part of what the next session is handed.
 	return handoff.Packet{Version: 1, Role: name, Task: t, Shape: shape, Instructions: fmt.Sprintf("Read repository instructions. Run zmina --crew %s task show %s and confirm this task is still assigned to %s; use the latest note before working.\n", shellWord(s.Crew.Path), t.ID, name) + shape.Request("checkpoint or result") + criteriaRule(t) + fmt.Sprintf(ReportRule, shellWord(s.Crew.Path), t.ID)}, nil
 }
 
@@ -92,8 +93,8 @@ type packetHand struct {
 // prepareHand does everything of HandTask but queue the line: the packet is written, the task's delivery is renewed
 // when it has to be, and a line it replaces is taken out of every queue. fresh says the role is about to start a new
 // session (a restart hands out before it starts it): the delivery is then renewed whatever the role's last start, which is
-// of the session that is going, says. The line is the caller's to queue; HandTask puts it at the end of the queue, a
-// restart at the head.
+// of the session that is going, says. A delivery that is renewed is the task's next hand-out (task.Delivery.Gen). The line is
+// the caller's to queue; HandTask puts it at the end of the queue, a restart at the head.
 func (s *Shift) prepareHand(name string, t task.Task, fresh bool) (packetHand, error) {
 	path, id, line, err := s.packetFile(name, t)
 	if err != nil {
@@ -134,7 +135,11 @@ func (s *Shift) prepareHand(name string, t task.Task, fresh bool) (packetHand, e
 	if renew || current.Delivery == nil || current.Delivery.ID != id || current.Delivery.Role != name {
 		r, _ := s.Role(name)
 		runtime, home := s.runtimeScope(r)
-		current.Delivery = &task.Delivery{ID: id, Role: name, Runtime: runtime, Home: home, Line: line, TaskUpdated: current.Updated, QueuedAt: s.Now().UTC()}
+		// A new delivery is a new hand-out, one more than the last: whatever session held that one is a late reporter from
+		// here on (ledger.Current). It is the session the line is submitted to that holds this one (submittedTask); until then
+		// the role's live session does.
+		current.Delivery = &task.Delivery{ID: id, Role: name, Runtime: runtime, Home: home, Line: line, TaskUpdated: current.Updated, QueuedAt: s.Now().UTC(),
+			Gen: current.NextGen()}
 		if err := s.Tasks.Put(current); err != nil {
 			return packetHand{}, err
 		}

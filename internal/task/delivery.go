@@ -4,7 +4,11 @@ import "time"
 
 // Delivery distinguishes a handed task from one explicitly accepted by its live worker.
 type Delivery struct {
-	ID          string    `json:"id"`
+	ID string `json:"id"`
+	// Gen counts the hand-outs of the task: each new delivery is one more than the last (NextGen), 0 for a file made before
+	// it was kept. A task whose delivery has one tells the session that holds it from one that held it before
+	// (ledger.Current); a delivery put back by a rollback or an abort puts its number back too.
+	Gen         int       `json:"gen,omitempty"`
 	Role        string    `json:"role"`
 	Runtime     string    `json:"runtime"`
 	Home        string    `json:"home"`

@@ -23,6 +23,8 @@ type nowRoles struct {
 	posts  []string
 	// shown is whether the conversation shows what was posted.
 	shown bool
+	// sid is the conversation the role runs ("sid-1" when empty): a test changes it as a /clear in the pane does.
+	sid string
 }
 
 type nowTmux struct{ shift.Tmux }
@@ -35,7 +37,12 @@ func (nowTmux) Prompt(string) (string, bool, error) { return "", true, nil }
 type nowReg struct{ n *nowRoles }
 
 func (r nowReg) ByPID(pid int) (*registry.Session, error) {
-	return &registry.Session{PID: pid, SessionID: "sid-1", Status: r.n.status, StatusUpdatedAt: time.Now().UnixMilli()}, nil
+	sid := r.n.sid
+	if sid == "" {
+		sid = "sid-1"
+	}
+
+	return &registry.Session{PID: pid, SessionID: sid, Status: r.n.status, StatusUpdatedAt: time.Now().UnixMilli()}, nil
 }
 func (nowReg) LiveByName(string) *registry.Session { return nil }
 func (r nowReg) Last(string) (registry.Turn, error) {

@@ -13,11 +13,11 @@ import (
 )
 
 func (a *app) taskRecordCommand(kind string) *cobra.Command {
-	var file, revision string
+	var file, revision, handoff string
 	var asJSON, full bool
 	c := &cobra.Command{Use: kind + " <id>", Short: "Read or save a role-shaped worker " + kind, Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		if file != "" {
-			return a.saveRecordFile(args[0], kind, file, cmd)
+			return a.saveRecordFile(args[0], kind, file, handoff, cmd)
 		}
 		return a.readState(func(s *shift.Shift) error {
 			t, err := s.Tasks.Get(args[0])
@@ -60,6 +60,7 @@ func (a *app) taskRecordCommand(kind string) *cobra.Command {
 	c.Flags().StringVar(&revision, "revision", "", "read a specific immutable revision")
 	c.Flags().BoolVar(&asJSON, "json", false, "read JSON with shape, content and provenance")
 	c.Flags().BoolVar(&full, "full", false, "every section whole (default: the summary whole, the rest clipped to a line)")
+	handoffFlag(c, &handoff)
 	return c
 }
 
@@ -76,7 +77,9 @@ func noteFetched(s *shift.Shift, t task.Task) {
 	_ = shift.RecordRotationEvidence(s.Crew.Layout(), t.Role, shift.EvidenceNoteFetched, t.ID, t.Role, callerSession(), s.Now())
 }
 
-func (a *app) saveRecordFile(id, kind, file string, cmd *cobra.Command) error {
+// saveRecordFile saves a record from a file, and makes it the task's result or checkpoint: unless the session that saves it
+// is not the one the task is handed to now (ledger.Current), whose record is kept as a revision and changes nothing of the task.
+func (a *app) saveRecordFile(id, kind, file, handoff string, cmd *cobra.Command) error {
 	in := cmd.InOrStdin()
 	if file != "-" {
 		f, err := os.Open(file)
@@ -106,6 +109,10 @@ func (a *app) saveRecordFile(id, kind, file string, cmd *cobra.Command) error {
 		if err != nil {
 			return err
 		}
+		t, standing, err := a.hold(s, t, handoff, true)
+		if err != nil {
+			return err
+		}
 		// A lessons section is filed as lessons and leaves the record: its place is the lessons store, and a
 		// lesson the scan refuses must not stay in the record either.
 		var lessonErr error
@@ -121,6 +128,10 @@ func (a *app) saveRecordFile(id, kind, file string, cmd *cobra.Command) error {
 		if err != nil {
 			return err
 		}
+		if standing.Late {
+			return a.lateReport(s, t, kind, ref.Revision, standing)
+		}
+		ref.Gen = standing.Gen
 		previous := t.Result
 		if kind == "checkpoint" {
 			previous = t.Checkpoint
@@ -132,6 +143,11 @@ func (a *app) saveRecordFile(id, kind, file string, cmd *cobra.Command) error {
 				t.Checkpoint = &ref
 				t.HandoffIncomplete = false
 				t.CheckpointTaskUpdated = d.At
+			}
+			// The same content was kept as a late report before: it is the task's now, and the dispatcher is told of it as of
+			// any result, which its late mark kept from.
+			if t.TakeLate(kind, ref.Revision) && kind == "result" {
+				delete(s.State.RecordNotified, "result/"+t.ID+"/"+ref.Revision)
 			}
 			t.Updated = d.At
 			if err := s.Tasks.Put(t); err != nil {
