@@ -218,7 +218,7 @@ type RoleState struct {
 	// RestartAsked is when the ticker asked the role for its note before a restart (restart_at, restart_idle), in
 	// conversation RestartSession, for RestartTasks, and why (RestartWhy). RestartOff is when the last ask was called
 	// off; RestartGaveUp the conversation no note came in, or whose restart could not start fresh (the role went back to
-	// it): it is not asked again, context_max trims it as before.
+	// it, or could not be started at all): it is not asked again, context_max trims it as before.
 	RestartAsked   time.Time `json:"restart_asked,omitzero"`
 	RestartSession string    `json:"restart_session,omitempty"`
 	RestartTasks   []string  `json:"restart_tasks,omitempty"`

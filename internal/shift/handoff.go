@@ -97,7 +97,20 @@ func (s *Shift) prepareHand(name string, t task.Task, fresh bool) (packetHand, e
 		h.before = &before
 	}
 
-	renew := fresh || current.Delivery != nil && s.State.Role(name).Started.After(current.Delivery.QueuedAt)
+	// The role started since the delivery was handed to a session of its own: the one it was queued or sent for is gone.
+	// A delivery that was sent is judged by when it was sent (a submission after the start belongs to this session); one
+	// that never was, by when it was queued. A restart queues its hand-out before it starts the role, so only the
+	// former stays right for the whole life of the fresh session.
+	renew := fresh
+	if d := current.Delivery; d != nil {
+		since := d.QueuedAt
+		if !d.SentAt.IsZero() {
+			since = d.SentAt
+		}
+
+		renew = renew || s.State.Role(name).Started.After(since)
+	}
+
 	if current.Delivery != nil && current.Delivery.ID == id && !current.Delivery.AcceptedAt.IsZero() {
 		live := s.session(name)
 		if !renew && live != nil && live.SessionID == current.Delivery.Session {
@@ -114,7 +127,26 @@ func (s *Shift) prepareHand(name string, t task.Task, fresh bool) (packetHand, e
 		}
 	}
 
-	prefix := "[zmina " + t.ID + "] Read handoff packet "
+	// A restart takes the lines this replaces out once the role has started (replacePackets): a start that fails goes
+	// back to the old conversation, and the lines that waited for it are still what they were.
+	if !fresh {
+		s.replacePackets(t.ID, line)
+	}
+
+	// A line already on its way to the role (posted and not yet seen, typed and not yet landed) is not queued again,
+	// unless the role started since: a command that delivers at once (DeliverTo) takes it out of the queue long
+	// before the beat would have, and the packet must not reach the same session twice. Only a session that lives
+	// has a line on its way: what a dead one was typed is dropped when it is settled, so it is queued for the next.
+	h.queue = !slices.Contains(s.State.Role(name).Inbox, line) && (renew || !s.onItsWay(name, line))
+
+	return h, nil
+}
+
+// replacePackets takes the lines of older packets of a task, whoever's queue they wait in, out of the queues: the packet
+// whose line is given is the newer one.
+func (s *Shift) replacePackets(id, line string) {
+	prefix := "[zmina " + id + "] Read handoff packet "
+
 	for holder, rs := range s.State.Roles {
 		head := ""
 		if len(rs.Inbox) > 0 {
@@ -129,13 +161,6 @@ func (s *Shift) prepareHand(name string, t task.Task, fresh bool) (packetHand, e
 			rs.clearTries()
 		}
 	}
-	// A line already on its way to the role (posted and not yet seen, typed and not yet landed) is not queued again,
-	// unless the role started since: a command that delivers at once (DeliverTo) takes it out of the queue long
-	// before the beat would have, and the packet must not reach the same session twice. Only a session that lives
-	// has a line on its way: what a dead one was typed is dropped when it is settled, so it is queued for the next.
-	h.queue = !slices.Contains(s.State.Role(name).Inbox, line) && (renew || !s.onItsWay(name, line))
-
-	return h, nil
 }
 
 // onItsWay reports whether a line was posted or typed to the role's live conversation and has not yet been seen or

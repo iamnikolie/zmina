@@ -2304,14 +2304,20 @@ What the ticker does once a restart's down is over (item 7, and restart_done aft
   ahead of them whatever their number.
 - **A fresh start that fails** (tmux, a directory that is gone, a task that cannot be read) takes those lines out of
   the queue again (their cards closed as dropped) and starts the role once more on the conversation it was on, in the
-  directory it ran in. That restart is then given up for that conversation as one called off for want of a note is
-  (`restart-off`; not asked again in it, `context_max` trims it), the task deliveries are as they were, and the
-  dispatcher hears once that the fresh start failed and the role is back on its conversation.
+  directory it ran in; a directory that is gone since (a task's worktree) counts as that start failing, since the
+  conversation is found by the directory and no pane is started in another place. The older packets of these tasks
+  that waited in a queue are dropped only once the role runs on the new ones. That restart is then given up for the
+  conversation as one called off for want of a note is (`restart-off`; not asked again in it, `context_max` trims it),
+  the task deliveries are put back as they were, and the dispatcher hears once that the fresh start failed and the role
+  is back on its conversation. The exception: a beat that died after the hand-out and before the start is finished by a
+  later one, which finds the renewed deliveries and puts those back, not the originals.
 - **That start fails too.** The role stays down and is not held, so that a role with `keep: always` is opened again
   by the ticker as after a crash; the dispatcher hears it once, with the `up … --task … --fresh` that starts it by
-  hand. The packets stay in its queue for whichever start comes next (the beat retires a packet whose task the role
-  no longer holds); the line that says "restarted fresh" does not, since the next start may resume. A copy of a role
-  (`dev#2`) is forgotten as any copy that goes down.
+  hand (the ticker's own "down, has not taken" hint for the tasks is not said besides). The restart is given up for the
+  conversation here too, so a role opened again on it (`resume: always`, or by hand) is not asked for its note and
+  restarted at once, round after round; a fresh conversation is another one. The packets stay in its queue for whichever
+  start comes next (the beat retires a packet whose task the role no longer holds); the line that says "restarted
+  fresh" does not, since the next start may resume. A copy of a role (`dev#2`) is forgotten as any copy that goes down.
 
 ## For the dispatcher
 

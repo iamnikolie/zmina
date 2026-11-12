@@ -1276,7 +1276,7 @@ func TestRestartBothStartsFailLeaveTheRoleOpenable(t *testing.T) {
 	assert.False(t, rs.Held, "not held: the ticker may open it")
 	assert.Nil(t, rs.Pending)
 	assert.True(t, rs.Downing.IsZero())
-	assert.Empty(t, rs.RestartGaveUp, "no conversation it is back on")
+	assert.Equal(t, "sid-designer", rs.RestartGaveUp, "given up for the conversation it was on")
 	assert.False(t, f.ev.has("designer", "restarted"))
 
 	require.Len(t, rs.Inbox, 2, "%v", rs.Inbox)
@@ -1654,4 +1654,216 @@ func TestRestartACopyWhoseFreshStartFails(t *testing.T) {
 			assert.False(t, f.tm.Has("designer#2"))
 		})
 	}
+}
+
+// ticking makes the shift's clock go a second on at every look, as the real one does between a hand-out and a start;
+// frozen stops it again. A frozen clock reads the same at the hand-out and at the start, which hides every comparison
+// of the two.
+func (f fix) ticking() {
+	f.s.Now = func() time.Time {
+		*f.now = f.now.Add(time.Second)
+
+		return *f.now
+	}
+}
+
+func (f fix) frozen() { f.s.Now = func() time.Time { return *f.now } }
+
+// packetLines counts the lines of T-1's packet in a role's queue.
+func packetLines(f fix, role string) int {
+	n := 0
+
+	for _, l := range f.s.State.Role(role).Inbox {
+		if strings.HasPrefix(l, "[zmina T-1] Read handoff packet ") {
+			n++
+		}
+	}
+
+	return n
+}
+
+// The hand-out is queued before the start, so the delivery is older than the session's start for the whole life of the
+// session. A hand of the unchanged task again, after the session accepted its packet, is as it was before restarts: no
+// new delivery, the acceptance kept, no second packet line.
+func TestReHandAfterARestartKeepsTheAcceptedPacket(t *testing.T) {
+	f, _ := restartBegun(t, 0)
+	f.ticking()
+	f.finish(t)
+	f.frozen()
+
+	rs := f.s.State.Role("designer")
+	require.True(t, rs.Started.After(deliveryOf(t, f).QueuedAt), "the hand-out is older than the start")
+
+	f.newSession("designer", "sid-new")
+	f.typedAfter("designer", "sid-new", 2)
+
+	d := deliveryOf(t, f)
+	f.s.By = "designer"
+	require.NoError(t, f.s.AcceptTask("T-1", d.ID))
+	f.s.By = "hand"
+
+	accepted := *deliveryOf(t, f)
+	require.False(t, accepted.AcceptedAt.IsZero())
+
+	tk, err := f.tk.Get("T-1")
+	require.NoError(t, err)
+
+	for range 2 {
+		*f.now = f.now.Add(time.Minute)
+		_, err = f.s.HandTask("designer", tk)
+		require.NoError(t, err)
+
+		assert.Equal(t, accepted, *deliveryOf(t, f), "no new delivery: accepted by the live session")
+		assert.Empty(t, f.s.State.Role("designer").Inbox, "no second packet line")
+	}
+
+	// And it is still the session's to accept again.
+	f.s.By = "designer"
+	require.NoError(t, f.s.AcceptTask("T-1", d.ID))
+	f.s.By = "hand"
+}
+
+// A hand of the unchanged task while the packet still waits in the queue, or after it was sent and not accepted, leaves
+// one packet line and nothing for the session to be told twice.
+func TestReHandAfterARestartQueuesNoSecondLine(t *testing.T) {
+	f, _ := restartBegun(t, 0)
+	f.ticking()
+	f.finish(t)
+	f.frozen()
+
+	tk, err := f.tk.Get("T-1")
+	require.NoError(t, err)
+
+	before := slices.Clone(f.s.State.Role("designer").Inbox)
+
+	_, err = f.s.HandTask("designer", tk)
+	require.NoError(t, err)
+	assert.Equal(t, before, f.s.State.Role("designer").Inbox, "still the restart's line, then the one packet")
+	assert.Equal(t, 1, packetLines(f, "designer"))
+
+	f.newSession("designer", "sid-new")
+	typed := f.typedAfter("designer", "sid-new", 2)
+	require.Len(t, typed, 2, "%v", typed)
+
+	n := 0
+
+	for _, l := range f.tm.typed["designer"] {
+		if strings.HasPrefix(l, "[zmina T-1] Read handoff packet ") {
+			n++
+		}
+	}
+
+	assert.Equal(t, 1, n, "told once")
+	assert.Equal(t, "sid-new", deliveryOf(t, f).Session)
+}
+
+// A restart that fails both starts is a restart given up for the conversation too: a role that is opened again on it (resume:
+// always) is not asked for its note and put down again at once, a dispatcher note per round.
+func TestRestartBothStartsFailGiveItUpForTheConversation(t *testing.T) {
+	f, _ := restartBegun(t, 2)
+	f.s.Crew.Roles["designer"].Keep = crew.KeepAlways
+	f.s.Crew.Roles["designer"].Resume = crew.ResumeAlways
+
+	f.finish(t)
+
+	rs := f.s.State.Role("designer")
+	assert.Equal(t, "sid-designer", rs.RestartGaveUp)
+	assert.False(t, rs.RestartOff.IsZero())
+
+	*f.now = f.now.Add(reopenPause)
+	f.s.Tick()
+	require.True(t, f.tm.Has("designer"))
+	assert.Equal(t, "sid-designer", f.s.Resumed("designer"), "on the same conversation")
+
+	f.newSession("designer", "sid-designer")
+	f.typedAfter("designer", "sid-designer", 1)
+
+	for range 3 {
+		*f.now = f.now.Add(trimPause + time.Minute)
+		f.idle("designer", 310_000, 10*time.Minute)
+		f.rg.byPID[f.tm.up["designer"]] = &registry.Session{Status: "idle",
+			StatusUpdatedAt: f.now.Add(-10 * time.Minute).UnixMilli(), SessionID: "sid-designer"}
+		f.s.Tick()
+		assert.Empty(t, f.s.Restarts)
+	}
+
+	assert.Zero(t, f.ev.count("designer", "restart-asked"), "not asked for a note in that conversation")
+	assert.Equal(t, 1, countNotes(f, "designer: restart for its context failed"), "%v", f.s.State.Notes)
+}
+
+// The dispatcher hears of a role that cannot be started once: the next beat's "down, has not taken" hint would be the same
+// news twice, the packet being unaccepted after the hand-out, and the note already says what task it holds and how to
+// start it.
+func TestRestartBothStartsFailTellsTheDispatcherOnce(t *testing.T) {
+	f, _ := restartBegun(t, 2)
+	f.finish(t)
+
+	for range 2 {
+		*f.now = f.now.Add(time.Minute)
+		f.s.Tick()
+	}
+
+	n := 0
+
+	for _, note := range f.s.State.Notes {
+		if strings.HasPrefix(note, "designer: ") {
+			n++
+		}
+	}
+
+	assert.Equal(t, 1, n, "%v", f.s.State.Notes)
+}
+
+// A task's worktree the role ran in may be gone when the restart fails: the old conversation is not resumed in some other
+// place, and the role is left down as when the resume fails.
+func TestRestartRollbackNotInADirectoryThatIsGone(t *testing.T) {
+	f, sf := restartBegun(t, 1)
+	gone := filepath.Join(t.TempDir(), "worktree")
+	f.s.State.Role("designer").Dir = gone
+
+	f.finish(t)
+
+	assert.Len(t, sf.asked, 1, "no start where the conversation did not run")
+
+	rs := f.s.State.Role("designer")
+	assert.False(t, rs.Up)
+	assert.False(t, rs.Held)
+	assert.False(t, f.tm.Has("designer"))
+	assert.Contains(t, strings.Join(f.s.State.Notes, "|"), "the directory it ran in is gone: "+gone)
+	assert.Equal(t, 1, countNotes(f, "designer: restart for its context failed"), "%v", f.s.State.Notes)
+
+	// A directory that is there is resumed in.
+	f2, sf2 := restartBegun(t, 1)
+	here := t.TempDir()
+	f2.s.State.Role("designer").Dir = here
+	f2.finish(t)
+	require.Len(t, sf2.asked, 2)
+	assert.Equal(t, here, sf2.asked[1].dir)
+	assert.True(t, f2.tm.Has("designer"))
+}
+
+// The older packet of a task that waits in a queue is dropped when the role runs on the newer one, not before: a start
+// that fails goes back to the conversation it was for.
+func TestRestartReplacesAnOlderPacketOnlyOnceStarted(t *testing.T) {
+	older := "[zmina T-1] Read handoff packet \"/old.json\"; before work run: zmina task accept T-1 --handoff old"
+
+	t.Run("started", func(t *testing.T) {
+		f, _ := restartBegun(t, 0)
+		require.NoError(t, f.s.QueueFrom("designer", older, Facts{From: "dev", Task: "T-1"}))
+
+		f.finish(t)
+
+		rs := f.s.State.Role("designer")
+		assert.NotContains(t, rs.Inbox, older)
+		assert.Equal(t, 1, packetLines(f, "designer"))
+	})
+
+	t.Run("fails", func(t *testing.T) {
+		f, _ := restartBegun(t, 1)
+		require.NoError(t, f.s.QueueFrom("designer", older, Facts{From: "dev", Task: "T-1"}))
+
+		f.finish(t)
+
+		assert.Equal(t, []string{older}, f.s.State.Role("designer").Inbox, "what waited, as it was")
+	})
 }

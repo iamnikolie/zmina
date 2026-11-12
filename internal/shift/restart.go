@@ -3,6 +3,7 @@ package shift
 import (
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -699,6 +700,12 @@ func (s *Shift) FinishRestart(job Restart) string {
 		return s.restartRollback(job, back, out, err)
 	}
 
+	// The older packets of these tasks that waited in a queue are out now that the role runs on the new ones: before the
+	// start they stay, for a start that fails goes back to the conversation they were for.
+	for _, p := range out.packets {
+		s.replacePackets(p.task, p.head.line)
+	}
+
 	if job.Done != "" {
 		s.log(job.Name, "restarted", job.Done, job.Why)
 
@@ -794,8 +801,9 @@ func (s *Shift) handOut(job Restart) (handout, error) {
 // That works: the restart is given up for that conversation as a called-off ask is (RestartGaveUp, RestartOff: it is not
 // rotated again in it, and context_max handles it as before), and the dispatcher hears it once.
 //
-// That fails too: the role stays down and is not held, so that a role with keep: always is opened again by the ticker
-// as after a crash, and the dispatcher hears it once. The packets stay queued (see below), the restart's own line does
+// That fails too (also when the directory it ran in is gone: no pane is started in another place): the role stays down
+// and is not held, so that a role with keep: always is opened again by the ticker as after a crash, the restart is given
+// up for the conversation as above, and the dispatcher hears it once. The packets stay queued (see below), the restart's own line does
 // not: "restarted fresh" is true only of a fresh session, and the next start may be a resume. A packet is a pointer to
 // a task that the role still holds, and is retired by the beat (pruneTaskInbox) once the ledger says it is not its
 // task any more; a session that starts without it has no context at all, which is the failure the hand-out is for.
@@ -809,9 +817,14 @@ func (s *Shift) restartRollback(job Restart, back oldRun, out handout, cause err
 
 	var err error
 
-	if back.session == "" {
+	switch {
+	case back.session == "":
 		err = errors.New("no conversation of its own is known to go back to")
-	} else {
+	case !dirExists(back.dir):
+		// A task's worktree may be gone by now: the conversation is found by the directory it ran in, and a pane started
+		// in another place is not it.
+		err = fmt.Errorf("the directory it ran in is gone: %s", back.dir)
+	default:
 		err = s.UpWith(name, UpOptions{Resume: back.session, Dir: back.dir})
 	}
 
@@ -831,6 +844,19 @@ func (s *Shift) restartRollback(job Restart, back oldRun, out handout, cause err
 	}
 
 	rs.Held = false
+
+	// Given up for the conversation it was on as a successful way back is: a role opened again on it (resume: always,
+	// or by hand) is not asked for its note and put down again, a note for the dispatcher at each round, until someone
+	// acts. A fresh conversation is another one.
+	rs.RestartGaveUp, rs.RestartOff = back.session, s.Now()
+
+	// The note below already says which tasks it holds and how to start it: the ticker's hint for a down role holding
+	// a task it has not taken (unstarted) would be the same news again, the hand-out having left the delivery unaccepted.
+	for _, id := range job.Tasks {
+		if !slices.Contains(rs.Unstarted, id) {
+			rs.Unstarted = append(rs.Unstarted, id)
+		}
+	}
 
 	// A copy of a role is not a seat: nothing keeps it down or its queue (forget, below).
 	if out.line != "" && !isInstance(name) {
@@ -861,10 +887,23 @@ func (s *Shift) restartRollback(job Restart, back oldRun, out handout, cause err
 	return name + ": restart: " + cause.Error() + "; back on its conversation: " + err.Error()
 }
 
-// restoreDeliveries puts the deliveries a restart renewed back as they were, for each packet whose line is not in the
-// role's queue: a restart that ended with the role on its old conversation did not hand the task over, and that
-// conversation's own delivery (accepted, perhaps) is the one that is still true. A packet whose line waits is left with
-// the delivery it has: the line is the one that delivery is about.
+// dirExists reports whether a directory a role ran in is still there; no directory (the role's own, which a start
+// checks itself) is.
+func dirExists(dir string) bool {
+	if dir == "" {
+		return true
+	}
+
+	info, err := os.Stat(dir)
+
+	return err == nil && info.IsDir()
+}
+
+// restoreDeliveries puts the deliveries a restart renewed back as the hand-out found them, for each packet whose line is
+// not in the role's queue: a restart that ended with the role on its old conversation did not hand the task over, and
+// that conversation's own delivery (accepted, perhaps) is the one that is still true. A restart that a later beat
+// finished, its first run having died after the hand-out, finds the renewed deliveries and keeps those. A packet whose
+// line waits is left with the delivery it has: the line is the one that delivery is about.
 func (s *Shift) restoreDeliveries(name string, out handout) {
 	rs := s.State.Role(name)
 
