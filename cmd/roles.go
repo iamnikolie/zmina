@@ -1129,11 +1129,17 @@ func (a *app) keysCommand() *cobra.Command {
 }
 
 func (a *app) tickCommand() *cobra.Command {
-	return &cobra.Command{
+	var deliver bool
+
+	c := &cobra.Command{
 		Use:   "tick",
 		Short: "One beat of the ticker (zmina ticker runs it every minute)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if deliver {
+				return a.deliverPass()
+			}
+
 			err := shift.RunTick(a.withState, runWatches, a.rang, a.printTick)
 			a.meshTick()
 			a.budgetTick(time.Now())
@@ -1147,6 +1153,11 @@ func (a *app) tickCommand() *cobra.Command {
 			return err
 		},
 	}
+
+	c.Flags().BoolVar(&deliver, "deliver", false, "only the delivery step, for the lines that wait, without waiting for the lock")
+	_ = c.Flags().MarkHidden("deliver")
+
+	return c
 }
 
 func (a *app) printTick(lines []string) {
