@@ -6,6 +6,7 @@ import (
 	"github.com/iamnikolie/zmina/internal/message"
 	"github.com/iamnikolie/zmina/internal/record"
 	"github.com/iamnikolie/zmina/internal/recovery"
+	"github.com/iamnikolie/zmina/internal/task"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -79,10 +80,22 @@ func (s *Shift) RecoveryPack() (string, recovery.Pack, error) {
 		return "", full, err
 	}
 	for id, list := range refs {
+		var held task.Task
+
+		if s.Tasks != nil {
+			held, _ = s.Tasks.Get(id)
+		}
+
 		for _, ref := range list {
 			key := id + "/" + ref.Revision
 			if !state.ReadResults[key] {
-				add("unread_results", key, "Worker-reported result", "zmina task result "+id+" --revision "+ref.Revision, ref)
+				text := "Worker-reported result"
+				if held.LateRevision("result", ref.Revision) {
+					// A session that did not hold the task reported it: it is no result of the task.
+					text = "Late report, kept as a revision (from a session that did not hold the task; not its result)"
+				}
+
+				add("unread_results", key, text, "zmina task result "+id+" --revision "+ref.Revision, ref)
 			}
 		}
 	}

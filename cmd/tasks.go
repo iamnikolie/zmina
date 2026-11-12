@@ -611,7 +611,12 @@ func (a *app) taskParkCommand() *cobra.Command {
 				}
 
 				// A session that does not hold the task does not park it.
-				if st := a.ledger(s).Current(t, *a.caller(s, handoff)); st.Late {
+				t, st, err := a.hold(s, t, handoff, true)
+				if err != nil {
+					return err
+				}
+
+				if st.Late {
 					return a.lateReport(s, t, "park", "", st)
 				}
 
@@ -714,7 +719,7 @@ func checkExit(err error) error {
 func (a *app) changeOf(s *shift.Shift, st task.State, o taskChange) ledger.Change {
 	return ledger.Change{State: st, On: o.on, Note: o.note, Role: o.role, Force: o.force, Title: o.title,
 		Project: o.project, URL: o.url, Budget: o.budget, Criteria: o.setCriteria, By: by(), Check: o.check,
-		ClearCheck: o.clearCheck, Caller: a.caller(s, o.handoff)}
+		ClearCheck: o.clearCheck, Caller: a.caller(s, o.handoff, st == task.Done || st == task.Dropped)}
 }
 
 func (a *app) setTask(id string, st task.State, o taskChange) error {
@@ -742,6 +747,13 @@ func (a *app) setTask(id string, st task.State, o taskChange) error {
 
 		change := a.changeOf(s, st, o)
 		change.Checked = checked
+
+		// A session that is the role's live one holds the hand-out, whatever conversation it was submitted to: moved to it.
+		if held, err := s.Tasks.Get(id); err == nil {
+			if _, _, err := a.hold(s, held, o.handoff, change.Caller.Work); err != nil {
+				return err
+			}
+		}
 
 		t, err := a.ledger(s).Set(id, change)
 		if errors.As(err, &late) {

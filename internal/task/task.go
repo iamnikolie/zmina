@@ -152,6 +152,10 @@ type Late struct {
 	By       string    `json:"by"`
 	Session  string    `json:"session,omitempty"`
 	Gen      int       `json:"gen"`
+	// Other says the caller's role is not the task's: it never held it. Taken says the revision was saved as the task's own
+	// since, by the session that holds it: it is not late any more.
+	Other bool `json:"other,omitempty"`
+	Taken bool `json:"taken,omitempty"`
 }
 
 // Same reports whether l is the report o already says: one caller on one hand-out doing one thing, a revision of a
@@ -160,13 +164,46 @@ func (l Late) Same(o Late) bool {
 	return l.What == o.What && l.Revision == o.Revision && l.By == o.By && l.Session == o.Session && l.Gen == o.Gen
 }
 
+// LateRevision reports whether the revision of a record of kind (result or checkpoint) was kept as a late report and has not
+// become the task's since: it is a revision on disk that is no session's of the hand-out the task is in.
+func (t Task) LateRevision(kind, revision string) bool {
+	ref := t.Result
+	if kind == "checkpoint" {
+		ref = t.Checkpoint
+	}
+
+	if ref != nil && ref.Revision == revision {
+		return false
+	}
+
+	return slices.ContainsFunc(t.Late, func(l Late) bool { return l.What == kind && l.Revision == revision && !l.Taken })
+}
+
+// TakeLate marks the late reports of the revision of a record of kind as taken: a session that holds the task saved the same
+// content, which is the task's now. It reports whether there was one.
+func (t *Task) TakeLate(kind, revision string) bool {
+	taken := false
+
+	for i := range t.Late {
+		if l := &t.Late[i]; l.What == kind && l.Revision == revision && !l.Taken {
+			l.Taken, taken = true, true
+		}
+	}
+
+	return taken
+}
+
 // NextGen is the number of the hand-out a new delivery of the task is: one over the last delivery, and over the
-// generation of the result, the checkpoint and the closing it kept, so that a number a rolled-back delivery gave up is
-// not given again to another session's.
+// generation of the result, the checkpoint, the closing and the late reports it kept, so that a number a rolled-back
+// delivery gave up, or a late report was told for, is not given again to another session's.
 func (t Task) NextGen() int {
 	n := 0
 	if t.Delivery != nil {
 		n = t.Delivery.Gen
+	}
+
+	for _, l := range t.Late {
+		n = max(n, l.Gen)
 	}
 
 	for _, r := range []*record.Ref{t.Result, t.Checkpoint} {

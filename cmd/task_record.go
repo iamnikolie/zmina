@@ -109,7 +109,10 @@ func (a *app) saveRecordFile(id, kind, file, handoff string, cmd *cobra.Command)
 		if err != nil {
 			return err
 		}
-		standing := a.ledger(s).Current(t, *a.caller(s, handoff))
+		t, standing, err := a.hold(s, t, handoff, true)
+		if err != nil {
+			return err
+		}
 		// A lessons section is filed as lessons and leaves the record: its place is the lessons store, and a
 		// lesson the scan refuses must not stay in the record either.
 		var lessonErr error
@@ -140,6 +143,11 @@ func (a *app) saveRecordFile(id, kind, file, handoff string, cmd *cobra.Command)
 				t.Checkpoint = &ref
 				t.HandoffIncomplete = false
 				t.CheckpointTaskUpdated = d.At
+			}
+			// The same content was kept as a late report before: it is the task's now, and the dispatcher is told of it as of
+			// any result, which its late mark kept from.
+			if t.TakeLate(kind, ref.Revision) && kind == "result" {
+				delete(s.State.RecordNotified, "result/"+t.ID+"/"+ref.Revision)
 			}
 			t.Updated = d.At
 			if err := s.Tasks.Put(t); err != nil {

@@ -2,6 +2,7 @@ package shift
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -170,4 +171,119 @@ func TestLateReportsAreBounded(t *testing.T) {
 	require.Len(t, got.Late, task.LateMax)
 	assert.Equal(t, fmt.Sprintf("sid-%d", task.LateMax+4), got.Late[task.LateMax-1].Session)
 	assert.Equal(t, "sid-5", got.Late[0].Session)
+}
+
+// A role that never held the task is told as that: the note does not say a session held it before.
+func TestLateReportOfAnotherRoleIsToldAsOneThatNeverHeldTheTask(t *testing.T) {
+	f := lateFixture(t)
+	tk, err := f.tk.Get("T-1")
+	require.NoError(t, err)
+
+	_, err = f.s.RecordLate(tk, task.Late{What: "done", By: "harvester", Session: "sid-h", Gen: 3, Other: true})
+	require.NoError(t, err)
+
+	require.Len(t, f.s.State.Signals, 1)
+	assert.Contains(t, f.s.State.Signals[0], "T-1 is handed to designer (hand-out 3) and harvester, which does not hold it, tried to report on it: its task done was refused")
+	assert.NotContains(t, f.s.State.Signals[0], "held it before")
+}
+
+// The recovery pack lists a late revision as what it is, not as the task's worker-reported result.
+func TestRecoveryPackMarksALateRevisionAsLate(t *testing.T) {
+	f := lateFixture(t)
+	own := lateResult(t, f, "the task's own")
+	late := lateResult(t, f, "from the old session")
+
+	tk, err := f.tk.Get("T-1")
+	require.NoError(t, err)
+
+	tk.Result = &record.Ref{Task: "T-1", Revision: own, Gen: 3}
+	require.NoError(t, f.tk.Put(tk))
+
+	_, err = f.s.RecordLate(tk, task.Late{What: "result", Revision: late, By: "designer", Session: "sid-old", Gen: 3})
+	require.NoError(t, err)
+
+	_, pack, err := f.s.RecoveryPack()
+	require.NoError(t, err)
+
+	texts := map[string]string{}
+	for _, e := range pack.Entries["unread_results"] {
+		texts[e.ID] = e.Text
+	}
+
+	assert.Equal(t, "Worker-reported result", texts["T-1/"+own])
+	assert.Contains(t, texts["T-1/"+late], "Late report, kept as a revision")
+	assert.NotContains(t, texts["T-1/"+late], "Worker-reported")
+}
+
+// The conversation of a running role changed (its own /clear): the delivery goes to the one it runs now, with its hand-out
+// number, its acceptance and the task as they were, one event, and nobody is told. The conversation it left is late.
+func TestRebindMovesTheDeliveryToTheLiveConversationAndNothingElse(t *testing.T) {
+	f := settled(t)
+	old := heldAsHandOut(t, f, 2)
+	before, err := f.tk.Get("T-1")
+	require.NoError(t, err)
+
+	f.rg.byPID[f.tm.up["designer"]].SessionID = "sid-cleared"
+
+	st := f.who(t, "sid-cleared")
+	require.False(t, st.Late)
+	require.True(t, st.Rebind)
+	assert.False(t, f.who(t, "sid-designer").Late, "the delivery still names it: only the live session decides who holds it")
+	notes, signals := slices.Clone(f.s.State.Notes), slices.Clone(f.s.State.Signals)
+
+	got, err := f.s.RebindDelivery(before, "sid-cleared")
+	require.NoError(t, err)
+	assert.Equal(t, "sid-cleared", got.Delivery.Session)
+
+	kept, err := f.tk.Get("T-1")
+	require.NoError(t, err)
+
+	want := old
+	want.Session = "sid-cleared"
+	assert.Equal(t, want, *kept.Delivery, "number, packet and acceptance are as they were")
+	assert.Equal(t, before.Updated, kept.Updated)
+	assert.Equal(t, before.State, kept.State)
+	assert.Empty(t, kept.Late)
+
+	assert.Equal(t, 1, countEvents(f, "designer", "rebound"))
+	assert.Equal(t, signals, f.s.State.Signals)
+	assert.Equal(t, notes, f.s.State.Notes, "nobody is told")
+
+	// The conversation it left is late now, the live one holds it with nothing to move.
+	assert.True(t, f.who(t, "sid-designer").Late)
+	assert.False(t, f.who(t, "sid-cleared").Late)
+	assert.False(t, f.who(t, "sid-cleared").Rebind)
+
+	again, err := f.s.RebindDelivery(kept, "sid-cleared")
+	require.NoError(t, err)
+	assert.Equal(t, kept, again)
+	assert.Equal(t, 1, countEvents(f, "designer", "rebound"), "once")
+
+	// A delivery not submitted to a session yet has nothing to move: its session is the live one's by itself.
+	unsent := kept
+	unsent.Delivery = &task.Delivery{ID: "pkt", Role: "designer", Gen: 3}
+	same, err := f.s.RebindDelivery(unsent, "sid-cleared")
+	require.NoError(t, err)
+	assert.Empty(t, same.Delivery.Session)
+}
+
+// An abort whose rotation record kept no Before (an older one) re-binds the delivery to the old conversation: the old session
+// holds the task again and the fresh one does not, the number staying the fresh hand-out's.
+func TestAbortOfARecordThatKeptNoBeforeBindsTheOldSessionAgain(t *testing.T) {
+	f := settled(t)
+	heldAsHandOut(t, f, 2)
+
+	_, err := f.restartByHand(t, UpOptions{Fresh: true})
+	require.NoError(t, err)
+	bootedFresh(f)
+	require.Len(t, f.typedAfter("designer", "sid-new", 2), 2)
+	require.Equal(t, 3, deliveryOf(t, f).Gen)
+
+	dropBefore(t, f, "designer")
+	require.NoError(t, abort(t, f))
+	f.newSession("designer", "sid-designer")
+
+	assert.False(t, f.who(t, "sid-designer").Late, "the old conversation holds it again")
+	assert.True(t, f.who(t, "sid-new").Late)
+	assert.Equal(t, 3, deliveryOf(t, f).Gen)
 }

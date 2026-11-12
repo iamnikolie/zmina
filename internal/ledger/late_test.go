@@ -32,41 +32,53 @@ func standing(t *testing.T, tk task.Task, c Caller) Standing {
 
 func TestCurrentHoldsASessionToTheHandOutItWasMadeFor(t *testing.T) {
 	live := func(string) string { return "sess-live" }
+	other := func(tk task.Task) task.Task {
+		tk.Role, tk.Delivery.Role = "dev#2", "dev#2"
+
+		return tk
+	}
 
 	cases := map[string]struct {
-		tk      task.Task
-		c       Caller
-		late    bool
-		unbound bool
-		why     string
+		tk                         task.Task
+		c                          Caller
+		late, unbound, rebind, oth bool
+		why, next                  string
 	}{
 		"the session it was submitted to": {tk: handedTo(3, "sess-b"), c: Caller{By: "dev", Session: "sess-b"}},
 		"a session that held an earlier hand-out": {tk: handedTo(3, "sess-b"), c: Caller{By: "dev", Session: "sess-a"},
-			late: true, why: "handed out again to another session"},
+			late: true, why: "handed out again to another session", next: "zmina task handoff T-1 --queue"},
 		"not yet submitted: the live session": {tk: handedTo(3, ""), c: Caller{By: "dev", Session: "sess-live", Live: live}},
 		"not yet submitted: not the live session": {tk: handedTo(3, ""), c: Caller{By: "dev", Session: "sess-a", Live: live},
-			late: true, why: "handed out again to another session"},
+			late: true, why: "not the session dev runs now", next: "stop reporting on T-1 from this session"},
 		"not yet submitted, no live session known: no proof": {tk: handedTo(3, ""), c: Caller{By: "dev", Session: "sess-a"},
 			unbound: true},
+		"the conversation changed under the running role: the live one holds it": {tk: handedTo(3, "sess-b"),
+			c: Caller{By: "dev", Session: "sess-live", Live: live}, rebind: true},
+		"another session of the role that is not the live one": {tk: handedTo(3, "sess-b"),
+			c: Caller{By: "dev", Session: "sess-a", Live: live}, late: true, why: "not the session dev runs now"},
+		"the live session is not known: the delivery's decides": {tk: handedTo(3, "sess-b"),
+			c: Caller{By: "dev", Session: "sess-live", Live: func(string) string { return "" }}, late: true,
+			why: "handed out again to another session"},
+		"the live session of another role does not rebind": {tk: handedTo(3, "sess-b"),
+			c: Caller{By: "review", Session: "sess-live", Live: live, Work: true}, late: true, oth: true, why: "handed to dev, not review"},
 		"a role with no session of its own": {tk: handedTo(3, "sess-b"), c: Caller{By: "dev"}, unbound: true},
 		"a typed role names the packet":     {tk: handedTo(3, "sess-b"), c: Caller{By: "dev", Handoff: "pkt-a"}},
 		"a typed role names another packet": {tk: handedTo(3, "sess-b"), c: Caller{By: "dev", Handoff: "pkt-z"}, late: true,
-			why: "packet is not the one"},
+			why: "packet is not the one", next: "zmina task show T-1"},
 		"the session wins over a packet that changed": {tk: handedTo(3, "sess-b"), c: Caller{By: "dev", Session: "sess-b", Handoff: "pkt-z"}},
-		"a copy is not its base": {tk: handedTo(3, "sess-b"), c: Caller{By: "dev#2", Session: "sess-b"}, late: true,
-			why: "handed to dev, not dev#2"},
-		"the base is not its copy": {tk: func() task.Task {
-			x := handedTo(3, "sess-b")
-			x.Role, x.Delivery.Role = "dev#2", "dev#2"
-
-			return x
-		}(), c: Caller{By: "dev", Session: "sess-b"}, late: true, why: "handed to dev#2, not dev"},
-		"another role":                              {tk: handedTo(3, "sess-b"), c: Caller{By: "review", Session: "sess-r"}, late: true, why: "not review"},
-		"the dispatcher is never late":              {tk: handedTo(3, "sess-b"), c: Caller{By: "boss", Session: "sess-x"}},
+		"a copy is not its base, reporting": {tk: handedTo(3, "sess-b"), c: Caller{By: "dev#2", Session: "sess-b", Work: true},
+			late: true, oth: true, why: "handed to dev, not dev#2", next: "zmina task set T-1 --role dev#2"},
+		"a copy editing a field of its base's task": {tk: handedTo(3, "sess-b"), c: Caller{By: "dev#2", Session: "sess-b"}, oth: true},
+		"the base is not its copy": {tk: other(handedTo(3, "sess-b")), c: Caller{By: "dev", Session: "sess-b", Work: true},
+			late: true, oth: true, why: "handed to dev#2, not dev"},
+		"another role, reporting": {tk: handedTo(3, "sess-b"), c: Caller{By: "review", Session: "sess-r", Work: true}, late: true,
+			oth: true, why: "not review"},
+		"another role, a note on it":                {tk: handedTo(3, "sess-b"), c: Caller{By: "review", Session: "sess-r"}, oth: true},
+		"the dispatcher is never late":              {tk: handedTo(3, "sess-b"), c: Caller{By: "boss", Session: "sess-x", Work: true}},
 		"the owner's hand is never late":            {tk: handedTo(3, "sess-b"), c: Caller{By: Hand, Session: "sess-x"}},
 		"the owner's hand naming a packet":          {tk: handedTo(3, "sess-b"), c: Caller{By: Hand, Handoff: "pkt-z"}, late: true, why: "packet"},
-		"a file from before hand-outs were counted": {tk: handedTo(0, "sess-b"), c: Caller{By: "review", Session: "sess-x"}},
-		"a task never handed out":                   {tk: task.Task{ID: "T-1", Role: "dev", State: task.Open}, c: Caller{By: "review", Session: "sess-x"}},
+		"a file from before hand-outs were counted": {tk: handedTo(0, "sess-b"), c: Caller{By: "review", Session: "sess-x", Work: true}},
+		"a task never handed out":                   {tk: task.Task{ID: "T-1", Role: "dev", State: task.Open}, c: Caller{By: "review", Session: "sess-x", Work: true}},
 		"handed to another role than the task names": {tk: func() task.Task {
 			x := handedTo(3, "sess-b")
 			x.Delivery.Role = "review"
@@ -80,14 +92,34 @@ func TestCurrentHoldsASessionToTheHandOutItWasMadeFor(t *testing.T) {
 			got := standing(t, c.tk, c.c)
 			assert.Equal(t, c.late, got.Late, "%+v", got)
 			assert.Equal(t, c.unbound, got.Unbound, "%+v", got)
+			assert.Equal(t, c.rebind, got.Rebind, "%+v", got)
+			assert.Equal(t, c.oth, got.Other, "%+v", got)
 
 			if c.late {
 				assert.Contains(t, got.Why, c.why)
+				assert.Contains(t, got.Next, c.next)
 				assert.Equal(t, c.tk.Delivery.Gen, got.Gen)
 				assert.Equal(t, handedAt, got.Since)
+			} else {
+				assert.Empty(t, got.Why)
+				assert.Empty(t, got.Next)
 			}
 		})
 	}
+}
+
+// The live session is asked only when the delivery cannot say, or the caller is not the one it names.
+func TestCurrentAsksForTheLiveSessionOnlyWhenItHasTo(t *testing.T) {
+	asked := 0
+	live := func(string) string { asked++; return "sess-live" }
+
+	standing(t, handedTo(3, "sess-b"), Caller{By: "dev", Session: "sess-b", Live: live})
+	standing(t, handedTo(3, "sess-b"), Caller{By: "dev", Live: live})
+	standing(t, handedTo(3, "sess-b"), Caller{By: Hand, Session: "sess-x", Live: live})
+	assert.Zero(t, asked)
+
+	standing(t, handedTo(3, "sess-b"), Caller{By: "dev", Session: "sess-a", Live: live})
+	assert.Equal(t, 1, asked, "once, whichever way it is used")
 }
 
 func TestLateErrorSaysWhatWasHandedOutAgain(t *testing.T) {
@@ -108,7 +140,7 @@ func TestSetFromALateSessionRefusesAndChangesNothing(t *testing.T) {
 	tk.Delivery = &task.Delivery{ID: "pkt-a", Role: "dev", Gen: 2, Session: "sess-b", QueuedAt: handedAt}
 	require.NoError(t, l.Store.Put(tk))
 
-	late := &Caller{By: "dev", Session: "sess-a"}
+	late := &Caller{By: "dev", Session: "sess-a", Work: true}
 
 	for _, c := range []Change{{State: task.Done, By: "dev", Caller: late}, {State: task.Dropped, By: "dev", Caller: late},
 		{Note: "mine", By: "dev", Caller: late}, {Role: "review", By: "dev", Caller: late}} {
@@ -209,4 +241,29 @@ func TestCheckThatRanInAnEarlierHandOutClosesNothing(t *testing.T) {
 	done, err := l.Set(tk.ID, Change{State: task.Done, By: "boss", Checked: checked})
 	require.NoError(t, err)
 	assert.Equal(t, 4, done.Closed.Gen)
+}
+
+// Another role than the task's is refused only for what ends or reports the work: its plain edits of a task are as they were.
+func TestAnotherRoleMayEditATaskButNotCloseIt(t *testing.T) {
+	l, _ := fixture(t, "")
+	l.Dispatcher = "boss"
+
+	tk, err := l.New(NewTask{Role: "dev", Asked: "work", By: "boss"})
+	require.NoError(t, err)
+
+	tk.Delivery = &task.Delivery{ID: "pkt-a", Role: "dev", Gen: 2, Session: "sess-b", QueuedAt: handedAt}
+	require.NoError(t, l.Store.Put(tk))
+
+	edit := &Caller{By: "review", Session: "sess-r"}
+
+	got, err := l.Set(tk.ID, Change{Note: "from the reviewer", By: "review", Caller: edit})
+	require.NoError(t, err)
+	assert.Equal(t, "from the reviewer", got.Note)
+
+	_, err = l.Set(tk.ID, Change{State: task.Done, By: "review", Caller: &Caller{By: "review", Session: "sess-r", Work: true}})
+	require.ErrorIs(t, err, ErrLate)
+
+	got, err = l.Store.Get(tk.ID)
+	require.NoError(t, err)
+	assert.Equal(t, task.Open, got.State)
 }

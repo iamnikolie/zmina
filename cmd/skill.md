@@ -2658,30 +2658,42 @@ queue lost, once each. Closed by the owner's hand or by the dispatcher, or by a 
 **Late reports.** Each hand-out of a task is numbered: its delivery has a `gen`, 1 the first time it is handed to a role
 and one more for every new delivery (a packet that changed, a role started since, another role, the hand-out of a
 restart, of `up` and of the reopen of a `keep: always` role, `rotation retry`). A delivery that a failed fresh start or
-`rotation abort` puts back puts its number back, and the number is not given again to another session's. A task file from
-before it has none, and nothing is checked of it until its next hand-out. The session that holds a hand-out is the one its
-line was submitted to (`delivery.session`), before that the role's live one. A role (`$ZMINA_ROLE`, the dispatcher aside)
-that saves a result or checkpoint of a task, or closes, parks or changes it, is held to that: it must be the task's own
-role (a copy is not its base) and, where its conversation (`CLAUDE_CODE_SESSION_ID`, `CODEX_THREAD_ID`) and the
-hand-out's are both known, the same one. The owner's hand and the dispatcher are not held. A report that is not the
-hand-out's (the old session of a restarted role, a previous holder after `task set --role`, a background agent of the
-old conversation) is a late report. A result or checkpoint is saved as a revision of the record (`task result T-1
---revision <hash>` reads it) and is not the task's; a close, a park or a change is refused; nothing else of the task
-moves, `updated` included, so the new hand-out is accepted as it was. The command says `T-1: late report: it was
-handed out again to another session (hand-out 3, to dev, made 14:02); kept as result revision <12 hex>, not the task's
-result, and the task is unchanged` and exits 5; `task done --result` stops at the result. Each late report is a
-`late-report` event and an entry in the task's `late` list (the newest 20; `task show` prints the last 5, `--full`
+`rotation abort` puts back puts its number back, and a number is not given again to another session's, nor to one a late
+report was told under. A task file from before it has none, and nothing is checked of it until its next hand-out. The
+session that holds a hand-out is the one its line was submitted to (`delivery.session`), before that the role's live one.
+A role (`$ZMINA_ROLE`, the dispatcher aside) that saves a result or checkpoint of a task, or closes or parks it, is held
+to that: it must be the task's own role (a copy is not its base) and, where its conversation (`CLAUDE_CODE_SESSION_ID`,
+`CODEX_THREAD_ID`) and the hand-out's are both known, the same one. The task's own role is held to it for any change of
+the task; another role only for what reports or ends the work as the worker does, so a note or another field set on
+someone else's task is as it always was. The owner's hand and the dispatcher are not held. A session of the task's role
+that is the role's live one (the registry's) holds the hand-out by definition: when the conversation changed under the
+running role (its own `/clear`, one in its pane, a `/resume`) its first report moves the delivery to the new
+conversation, as one `rebound` event and no note, with the hand-out, its number and its acceptance as they were, and
+the conversation it left is late from then on; a live session that cannot be read leaves the delivery's the one that
+counts. A report that is not the hand-out's (the old session of a restarted role, a previous holder after `task set
+--role`, a background agent of the old conversation, another role's) is a late report. A result or checkpoint is saved
+as a revision of the record (`task result T-1 --revision <hash>` reads it) and is not the task's; a close, a park or a
+change is refused; nothing else of the task moves, `updated` included, so the new hand-out is accepted as it was. The
+command says why, which hand-out is current and what to do: `T-1: late report: this is not the session dev runs now
+(hand-out 3, to dev, made 14:02); kept as result revision <12 hex>, not the task's result, and the task is unchanged;
+stop reporting on T-1 from this session; …`, and exits 5; `task done --result` stops at the result. Each late report is
+a `late-report` event and an entry in the task's `late` list (the newest 20; `task show` prints the last 5, `--full`
 all). The dispatcher hears one FYI note for each session on a hand-out, however often that session reports again (it
-names `task handoff <id> --queue`, which hands the task to the live session, for a session that should hold it, such as
-one a role started itself with `/clear`), and a late revision gets no result-ready notice. A late `task done` is refused before its check runs. A role with nothing in
-its environment to tell it by (no session id: a typed role) passes on its role alone, and the closing it makes says
-`unbound` in `closed`; `--handoff <packet id>` (the id of its packet line, as `task accept` takes it) on `task result`,
-`checkpoint`, `done`, `drop`, `set` and `park` binds it to a packet instead, and an owner's hand that names one is held
-to it too. A packet id is the same when an unchanged task is handed out again: it tells one state of the task from
-another, not one session from another, so where both sessions are known they decide. `closed.gen` is the hand-out the
-task was closed under and `result.gen` the one a result was saved under. It is a check of who calls, from the caller's
-environment and the task file, as the role itself is: it keeps a stale session from doing harm by mistake, it is not a
-wall.
+names `task handoff <id> --queue`, which hands the task to the live session, for a session that should hold it), and a
+role that never held the task is not said to have; a late revision gets no result-ready notice and is listed as late in
+the recovery pack. If the session that holds the task saves the same content afterwards it is the task's result: the
+dispatcher is told then, and the late entry says it was taken. A late `task done` is refused before its check runs. A
+role with nothing in its environment to tell it by (no session id: a typed role) passes on its role alone, and the
+closing it makes says `unbound` in `closed`; `--handoff <packet id>` (the id of its packet line, as `task accept` takes
+it) on `task result`, `checkpoint`, `done`, `drop`, `set` and `park` binds it to a packet instead, and an owner's hand
+that names one is held to it too. A packet id is the same when an unchanged task is handed out again: it tells one state
+of the task from another, not one session from another, so where both sessions are known they decide. `closed.gen` is
+the hand-out the task was closed under and `result.gen` the one a result was saved under. It is a check of who calls,
+from the caller's environment and the task file, as the role itself is: it keeps a stale session from doing harm by
+mistake, it is not a wall. One place passes by design: a hand-out not yet submitted to a session, while the role's live
+session cannot be read, passes any session of the role, so a stale session's report in a boot window is not told from the
+fresh one's. A Codex sub-agent's thread has an id of its own, which zmina does not follow to the role's thread: when the
+role's live thread is known, a report carrying the child's id is told late.
 
 ### Task conversation memory
 

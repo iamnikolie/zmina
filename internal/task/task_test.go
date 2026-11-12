@@ -292,6 +292,26 @@ func TestNextGenIsNeverAGivenOne(t *testing.T) {
 	assert.Equal(t, 6, Task{Delivery: &Delivery{Gen: 3}, Result: &record.Ref{Gen: 5}}.NextGen())
 	assert.Equal(t, 7, Task{Delivery: &Delivery{Gen: 3}, Checkpoint: &record.Ref{Gen: 6}}.NextGen())
 	assert.Equal(t, 8, Task{Closed: &Closure{Gen: 7}}.NextGen())
+	assert.Equal(t, 5, Task{Delivery: &Delivery{Gen: 3}, Late: []Late{{Gen: 4}}}.NextGen(),
+		"a number a late report was told under is not given again: the told-once check would silence the next hand-out's")
+}
+
+func TestLateRevisionIsOneKeptThatIsNotTheTasksOwn(t *testing.T) {
+	tk := Task{Result: &record.Ref{Revision: "own"}, Late: []Late{{What: "result", Revision: "late", Gen: 2},
+		{What: "result", Revision: "own", Gen: 2}, {What: "checkpoint", Revision: "cp", Gen: 2}}}
+
+	assert.True(t, tk.LateRevision("result", "late"))
+	assert.False(t, tk.LateRevision("result", "own"), "it is the task's result: not late, whatever was said of it")
+	assert.False(t, tk.LateRevision("result", "never-kept"))
+	assert.False(t, tk.LateRevision("result", "cp"), "a checkpoint is no result")
+	assert.True(t, tk.LateRevision("checkpoint", "cp"))
+
+	assert.True(t, tk.TakeLate("result", "late"))
+	assert.False(t, tk.LateRevision("result", "late"), "the session that holds the task saved it: it is the task's now")
+	assert.False(t, tk.TakeLate("result", "late"), "once")
+	assert.False(t, tk.TakeLate("result", "never-kept"))
+	assert.True(t, tk.Late[0].Taken)
+	assert.False(t, tk.Late[2].Taken)
 }
 
 func TestLateReportsAreTheSameOnlyForTheSameCallerOnTheSameHandOut(t *testing.T) {

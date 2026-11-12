@@ -24,16 +24,32 @@ func handoffFlag(c *cobra.Command, into *string) {
 }
 
 // caller is who runs this command and what it can show of the hand-out it reports for: the role it runs as, its
-// conversation, the packet --handoff names, and (asked only when the task's delivery has no session yet) the role's live one.
-func (a *app) caller(s *shift.Shift, handoff string) *ledger.Caller {
-	return &ledger.Caller{By: by(), Session: callerSession(), Handoff: strings.TrimSpace(handoff), Live: s.LiveSession}
+// conversation, the packet --handoff names, and the role's live one, asked when the delivery cannot say. work says the command
+// reports or ends the work as the worker does (a result, a checkpoint, a close, a park).
+func (a *app) caller(s *shift.Shift, handoff string, work bool) *ledger.Caller {
+	return &ledger.Caller{By: by(), Session: callerSession(), Handoff: strings.TrimSpace(handoff), Live: s.LiveSession, Work: work}
+}
+
+// hold says where the caller of this command stands against the hand-out of task t. A session of the task's role that is the
+// role's live one holds it by definition, also when the conversation changed under the running role since the line was
+// submitted (its own /clear, a /resume in its pane): the delivery is moved to it, one `rebound` event and nobody told, and the
+// task it returns is the one to write on from.
+func (a *app) hold(s *shift.Shift, t task.Task, handoff string, work bool) (task.Task, ledger.Standing, error) {
+	st := a.ledger(s).Current(t, *a.caller(s, handoff, work))
+	if !st.Rebind {
+		return t, st, nil
+	}
+
+	t, err := s.RebindDelivery(t, callerSession())
+
+	return t, st, err
 }
 
 // lateReport keeps a late report of this command on task t, tells of it (shift.RecordLate) and ends the command with exitLate.
 // what is what it did (result, checkpoint, done, drop, park, set) and revision the record it saved, when it saved one. The
 // error is partial: the state, which holds the note to the dispatcher, is saved.
 func (a *app) lateReport(s *shift.Shift, t task.Task, what, revision string, st ledger.Standing) error {
-	_, err := s.RecordLate(t, task.Late{What: what, Revision: revision, By: by(), Session: callerSession(), Gen: st.Gen})
+	_, err := s.RecordLate(t, task.Late{What: what, Revision: revision, By: by(), Session: callerSession(), Gen: st.Gen, Other: st.Other})
 	if err != nil {
 		return err
 	}
@@ -41,17 +57,22 @@ func (a *app) lateReport(s *shift.Shift, t task.Task, what, revision string, st 
 	return shift.Partial(&exitError{code: exitLate, msg: lateMessage(t.ID, what, revision, st)})
 }
 
-// lateMessage is what the late caller is told: that the task was handed out again, to whom and when, and what became of
-// what it did.
+// lateMessage is what the late caller is told: why it is late, which hand-out is current and for whom, what became of what it
+// did, and what to do.
 func lateMessage(id, what, revision string, st ledger.Standing) string {
 	msg := st.Err(id).Error()
 
 	if revision == "" {
-		return fmt.Sprintf("%s; task %s refused, the task is unchanged", msg, what)
+		msg += fmt.Sprintf("; task %s refused, the task is unchanged", what)
+	} else {
+		msg += fmt.Sprintf("; kept as %s revision %s, not the task's %s, and the task is unchanged", what, record.Short(nil, revision), what)
 	}
 
-	return fmt.Sprintf("%s; kept as %s revision %s, not the task's %s, and the task is unchanged", msg, what,
-		record.Short(nil, revision), what)
+	if st.Next != "" {
+		msg += "; " + st.Next
+	}
+
+	return msg
 }
 
 // closeWhat is the word a late close or change is told by.
@@ -88,10 +109,20 @@ func (a *app) printLate(t task.Task, full bool) {
 		}
 
 		line += fmt.Sprintf(" · hand-out %d was current", l.Gen)
-		if l.Revision != "" {
-			line += " · kept, not the task's " + l.What
-		} else {
+
+		switch {
+		case l.Revision == "":
 			line += " · refused"
+		case l.Taken:
+			line += " · the same was saved as the task's " + l.What + " since"
+		case sameRevision(t, l):
+			line += " · the same as the task's " + l.What
+		default:
+			line += " · kept, not the task's " + l.What
+		}
+
+		if l.Other {
+			line += " · its role is not the task's"
 		}
 
 		fmt.Fprintln(a.out, line)
@@ -100,6 +131,16 @@ func (a *app) printLate(t task.Task, full bool) {
 	if revs {
 		fmt.Fprintf(a.out, "late: read one with zmina task result|checkpoint %s --revision <revision>\n", t.ID)
 	}
+}
+
+// sameRevision reports whether the late report kept the revision that is the task's own now.
+func sameRevision(t task.Task, l task.Late) bool {
+	ref := t.Result
+	if l.What == "checkpoint" {
+		ref = t.Checkpoint
+	}
+
+	return ref != nil && ref.Revision == l.Revision
 }
 
 // printClosedGen says the hand-out a closed task was closed under, and that no identity tied the closing to it (Unbound).
