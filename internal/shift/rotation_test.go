@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -243,7 +244,15 @@ func TestRotationLostOnItsTimeouts(t *testing.T) {
 		prep   step
 		why    string
 	}{
-		"no boot turn within boot_grace": {
+		"no boot turn within boot_grace and the margin after it": {
+			prep: func(t *testing.T, f fix) {
+				// The beats a role that never finishes a turn gets: its lines are typed at boot_grace, and nothing comes of them.
+				for range 7 {
+					f.idleSince(*f.now)
+					f.s.Tick()
+					*f.now = f.now.Add(time.Minute)
+				}
+			},
 			why: "its boot turn never finished",
 		},
 		"idle without accepting what it was shown": {
@@ -367,7 +376,11 @@ func TestRotationLostToAnAPIErrorSaysSo(t *testing.T) {
 	_, err := RecordFailure(f.s.Crew.Layout(), "designer", []byte(`{"session_id":"sid-new","error":"rate_limit"}`), *f.now)
 	require.NoError(t, err)
 
-	f.s.Tick()
+	for range 8 {
+		f.idleSince(*f.now)
+		f.s.Tick()
+		*f.now = f.now.Add(time.Minute)
+	}
 
 	r := lastRotation(t, f, "designer")
 	require.False(t, r.Open())
@@ -637,25 +650,82 @@ func TestRotationOfADownThatNoRestartFinishesIsLost(t *testing.T) {
 	}
 }
 
-// A rotation open for a role when the next begins is closed lost, superseded by it, once.
+// A rotation open for a role when the next one puts it down is closed, once, with what is true of it, no way back and no
+// note: lost when its fresh conversation did not boot and show its context, rebuilt (before it accepted) when it did.
 func TestRotationSupersededByANewOne(t *testing.T) {
-	f := restarting(t, "", 300_000, 10*time.Minute)
-	f.note(t, "T-1", f.now.Add(-10*time.Minute))
+	for name, c := range map[string]struct {
+		evidence []string
+		outcome  string
+		detail   string
+	}{
+		"nothing was confirmed": {outcome: OutcomeLost, detail: "superseded by rotation %s"},
+		"it booted and was shown its context": {evidence: []string{EvidenceBoot, EvidenceShown}, outcome: OutcomeRebuilt,
+			detail: "superseded by rotation %s, before it accepted its tasks"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := restarting(t, "", 300_000, 10*time.Minute)
+			f.note(t, "T-1", f.now.Add(-10*time.Minute))
+			path := f.s.Crew.Layout().Rotations("designer")
 
-	first := f.s.rotationPrepare("designer", f.s.heldTasks("designer"), "context 300k over restart_at 250k", "", time.Time{})
-	second := f.s.rotationPrepare("designer", f.s.heldTasks("designer"), "context 310k over restart_at 250k", "", time.Time{})
-	require.NotEqual(t, first, second)
+			first := f.s.rotationPrepare("designer", f.s.heldTasks("designer"), "context 300k over restart_at 250k", "", time.Time{})
+			f.s.rotationSwitching("designer", first, *f.now)
+			require.NoError(t, appendRotationLine(path, rotationLine{ID: first, At: *f.now, Phase: PhaseStarted}))
+
+			for _, what := range c.evidence {
+				require.NoError(t, appendRotationLine(path, rotationLine{ID: first, At: *f.now, Phase: phaseEvidence, What: what, By: "designer"}))
+			}
+
+			second := f.s.rotationPrepare("designer", f.s.heldTasks("designer"), "context 310k over restart_at 250k", "", time.Time{})
+			require.NotEqual(t, first, second)
+
+			// Prepared is no down: the first is as it was.
+			assert.True(t, rotationsOn(t, f, "designer")[0].Open())
+
+			f.s.rotationSwitching("designer", second, *f.now)
+
+			rots := rotationsOn(t, f, "designer")
+			require.Len(t, rots, 2)
+			require.False(t, rots[0].Open())
+			assert.Equal(t, c.outcome, rots[0].Closed.Outcome)
+			assert.Equal(t, fmt.Sprintf(c.detail, second), rots[0].Closed.Detail)
+			assert.Empty(t, rots[0].Closed.Back, "the role is being put down: no way back to name")
+			assert.True(t, rots[1].Open())
+			assert.Zero(t, rotationNotes(f), "superseded is silent: %v", f.s.State.Notes)
+
+			assert.False(t, f.s.rotationEnd("designer", first, OutcomeRebuilt, "", nil, false), "a rotation closes once")
+			assert.Equal(t, 1, phaseLines(f, "designer", first, PhaseClosed))
+		})
+	}
+}
+
+// A restart whose down fails does not close the rotation of the session that goes on: it was not superseded, and it is
+// followed as before.
+func TestRotationNotSupersededByARestartThatCannotBeginItsDown(t *testing.T) {
+	f, _ := restartBegun(t, 0)
+	freshSession(t, f, true)
+	older := lastRotation(t, f, "designer")
+	require.True(t, older.Open())
+
+	f.s.State.Role("designer").RestartGaveUp = ""
+	f.tm.probeErr["designer"] = fmt.Errorf("tmux: no server running")
+	f.s.beginRestart("designer", f.s.heldTasks("designer"), "context 310k over restart_at 250k", "")
 
 	rots := rotationsOn(t, f, "designer")
 	require.Len(t, rots, 2)
-	assert.Equal(t, first, rots[0].ID)
-	require.False(t, rots[0].Open())
-	assert.Equal(t, OutcomeLost, rots[0].Closed.Outcome)
-	assert.Equal(t, "superseded by rotation "+second, rots[0].Closed.Detail)
-	assert.True(t, rots[1].Open())
+	assert.True(t, rots[0].Open(), "its session still runs: %+v", rots[0].Closed)
+	assert.Zero(t, rotationNotes(f), "%v", f.s.State.Notes)
+	require.False(t, rots[1].Open())
+	assert.Equal(t, OutcomeResumed, rots[1].Closed.Outcome)
 
-	assert.False(t, f.s.rotationEnd("designer", first, OutcomeRebuilt, "", nil, false), "a rotation closes once")
-	assert.Equal(t, 1, phaseLines(f, "designer", first, PhaseClosed))
+	// And the older one is still followed by the beat, though it is not the newest in the record.
+	delete(f.tm.probeErr, "designer")
+	f.typedAfter("designer", "sid-new", 2)
+	f.s.By = "designer"
+	require.NoError(t, f.s.AcceptTask("T-1", deliveryOf(t, f).ID))
+	f.s.By = "hand"
+	f.s.Tick()
+	assert.False(t, rotationsOn(t, f, "designer")[0].Open())
+	assert.Equal(t, OutcomeRebuilt, rotationsOn(t, f, "designer")[0].Closed.Outcome)
 }
 
 // A fresh start that fails and goes back to the old conversation closes resumed; one that cannot go back closes lost with
@@ -968,19 +1038,29 @@ func TestRecordRotationEvidenceTakesOnlyWhatARotationWaitsFor(t *testing.T) {
 	assert.Empty(t, lastRotation(t, f, "designer").Late)
 }
 
-// A copy of a role has its record under the file name its screens have, and is listed under its own name.
+// A copy of a role has its record under its own name, as its delivery cards do, and never shares one with a role whose name
+// reads like the file's: each is listed under its own name, whichever file a line is in.
 func TestRotationRecordOfACopyIsItsOwn(t *testing.T) {
 	f := restarting(t, "", 100, time.Minute)
 	layout := f.s.Crew.Layout()
-	assert.Equal(t, filepath.Join(layout.RotationsDir(), "designer-2.jsonl"), layout.Rotations("designer#2"))
+	assert.Equal(t, filepath.Join(layout.RotationsDir(), "designer#2.jsonl"), layout.Rotations("designer#2"))
+	assert.NotEqual(t, layout.Rotations("designer-2"), layout.Rotations("designer#2"))
 
 	at := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
 	require.NoError(t, appendRotationLine(layout.Rotations("designer#2"), rotationLine{ID: "r2", At: at, Phase: PhasePrepared,
 		Role: "designer#2"}))
+	require.NoError(t, appendRotationLine(layout.Rotations("designer-2"), rotationLine{ID: "r3", At: at, Phase: PhasePrepared,
+		Role: "designer-2"}))
 
+	assert.Equal(t, "r2", lastRotation(t, f, "designer#2").ID)
+	assert.Equal(t, "r3", lastRotation(t, f, "designer-2").ID)
+	assert.Len(t, rotationsOn(t, f, ""), 2)
+
+	// Every reader filters by the role a rotation names: a line of another role's in a role's file is not its rotation.
+	require.NoError(t, appendRotationLine(layout.Rotations("designer#2"), rotationLine{ID: "r4", At: at.Add(time.Minute),
+		Phase: PhasePrepared, Role: "designer-2"}))
 	assert.Len(t, rotationsOn(t, f, "designer#2"), 1)
-	assert.Empty(t, rotationsOn(t, f, "designer-2"), "another role that names the same file is not it")
-	assert.Len(t, rotationsOn(t, f, ""), 1)
+	assert.Len(t, f.s.rotationsOf("designer#2"), 1)
 }
 
 // PruneRotations removes the files nothing was written to since the cutoff, whole; a file past what a look reads is set
@@ -1048,30 +1128,360 @@ func TestPruneRotations(t *testing.T) {
 	bigRotations := len(foldRotations(readRotationLines(big, rotationReadMax)))
 	require.Positive(t, bigRotations)
 
-	want := 3 + 1 + bigRotations // the old file's three, the aside file's one, the big closed file's
+	// The set-aside file of the big one that an earlier pass left, kept (younger than the cutoff): this pass replaces it.
+	require.NoError(t, os.WriteFile(big+".old", []byte(`{"id":"e1","at":"2026-10-23T12:00:00Z","phase":"prepared","role":"big"}`+"\n"), 0o600))
+	require.NoError(t, os.Chtimes(big+".old", now.AddDate(0, 0, -2), now.AddDate(0, 0, -2)))
 
-	n, err := PruneRotations(layout, now.AddDate(0, 0, -30), true)
+	cutoff := now.AddDate(0, 0, -30)
+	want := []RotationPruned{
+		{File: "big.jsonl", Rotations: bigRotations, HadAside: true, Replaces: 1},
+		{File: "old.jsonl", Rotations: 3, Removed: true},
+		{File: "old.jsonl.old", Rotations: 1, Removed: true},
+	}
+
+	pruned, err := PruneRotations(layout, cutoff, true)
 	require.NoError(t, err)
-	assert.Equal(t, want, n, "dry: counted, nothing moved")
+	assert.Equal(t, want, pruned, "dry: what would go, and what the set aside file replaces")
 	assert.FileExists(t, old)
 	assert.FileExists(t, big)
-	assert.NoFileExists(t, big+".old")
+	assert.Equal(t, 1, len(foldRotations(readRotationLines(big+".old", 1<<20))), "dry: the earlier set aside file stays")
 
-	n, err = PruneRotations(layout, now.AddDate(0, 0, -30), false)
+	pruned, err = PruneRotations(layout, cutoff, false)
 	require.NoError(t, err)
-	assert.Equal(t, want, n)
+	assert.Equal(t, want, pruned)
 	assert.NoFileExists(t, old)
 	assert.NoFileExists(t, oldAside)
 	assert.FileExists(t, fresh)
 	assert.NoFileExists(t, big, "set aside")
-	assert.FileExists(t, big+".old")
+	assert.Equal(t, bigRotations, len(foldRotations(readRotationLines(big+".old", rotationReadMax))), "the new one replaced the old one set aside")
 	assert.FileExists(t, bigOpen, "its newest rotation is open: left where it is")
 	assert.NoFileExists(t, bigOpen+".old")
 
-	n, err = PruneRotations(layout, now.AddDate(0, 0, -30), false)
+	pruned, err = PruneRotations(layout, cutoff, false)
 	require.NoError(t, err)
-	assert.Zero(t, n, "nothing more")
+	assert.Empty(t, pruned, "nothing more")
 
 	_, err = PruneRotations(crew.Layout{Dir: t.TempDir()}, now, false)
 	require.NoError(t, err, "no directory: nothing to do")
+}
+
+// The beat in which a fresh role's boot_grace ends is the one in which its restart line is typed: a rotation is not lost for a
+// boot turn that has not finished before the role was given anything to boot on, nor in the few beats after the line was.
+func TestRotationIsNotLostBeforeTheRoleWasGivenItsContext(t *testing.T) {
+	f, _ := restartBegun(t, 0)
+	freshSession(t, f, false)
+
+	typed := len(f.tm.typed["designer"])
+	f.idleSince(*f.now)
+	f.s.Tick()
+
+	r := lastRotation(t, f, "designer")
+	require.True(t, r.Open(), "closed at the very beat that types its first line: %+v", r.Closed)
+	assert.Zero(t, rotationNotes(f), "%v", f.s.State.Notes)
+
+	line := f.tm.typed["designer"][typed:]
+	require.NotEmpty(t, line, "the restart line is typed at this beat")
+	assert.True(t, strings.HasPrefix(line[0], restartLineHead), line[0])
+
+	// The beats after it, each a minute, inside the margin the line and the turn it starts are given.
+	for range 3 {
+		*f.now = f.now.Add(time.Minute)
+		f.idleSince(*f.now)
+		f.s.Tick()
+	}
+
+	assert.True(t, lastRotation(t, f, "designer").Open(), "inside the margin")
+	assert.Zero(t, rotationNotes(f))
+}
+
+// A role whose restart line cannot be typed (a draft in its input line) is not blamed for a boot turn it was never given.
+func TestRotationOfARoleWhoseLineIsHeldBackStaysOpen(t *testing.T) {
+	f, _ := restartBegun(t, 0)
+	freshSession(t, f, false)
+	f.tm.drafts["designer"] = "half a sentence"
+
+	for range 16 {
+		f.idleSince(*f.now)
+		f.s.Tick()
+		*f.now = f.now.Add(time.Minute)
+	}
+
+	r := lastRotation(t, f, "designer")
+	require.True(t, r.Open(), "its line waits in the queue: %+v", r.Closed)
+	assert.Contains(t, f.s.State.Role("designer").Inbox[0], restartLineHead)
+	assert.Equal(t, 1, rotationNotes(f), "told once that it stays open, not that it was lost: %v", f.s.State.Notes)
+	assert.NotContains(t, strings.Join(f.s.State.Notes, "|"), "lost")
+}
+
+// A role that is booted and idle, holding tasks, whose restart line left its queue and was never seen is lost once it has sat idle
+// for the wait: its context never reached it. While the line is still to be delivered the rotation stays open.
+func TestRotationLostWhenItsContextWasNeverShown(t *testing.T) {
+	f, _ := restartBegun(t, 0)
+	freshSession(t, f, true)
+
+	// The restart line leaves the queue and no card says it was seen (a bell it never fetched, a line given up).
+	rs := f.s.State.Role("designer")
+	rs.Inbox = slices.DeleteFunc(rs.Inbox, func(l string) bool { return strings.HasPrefix(l, restartLineHead) })
+
+	for range 2 {
+		*f.now = f.now.Add(rotationAcceptWait + time.Minute)
+		f.idleSince(f.now.Add(-rotationAcceptWait - 30*time.Second))
+		f.s.Tick()
+
+		r := lastRotation(t, f, "designer")
+		require.False(t, r.Open(), "%+v", r)
+		assert.Equal(t, OutcomeLost, r.Closed.Outcome)
+		assert.Equal(t, "its restart line was never shown to it", r.Closed.Detail)
+		assert.Equal(t, 1, rotationNotes(f), "told once: %v", f.s.State.Notes)
+	}
+}
+
+// The same role with its line still waiting in the queue is not lost, however long it sits idle.
+func TestRotationOfAnIdleRoleWhoseLineWaitsIsNotLostForNotShowingIt(t *testing.T) {
+	f, _ := restartBegun(t, 0)
+	freshSession(t, f, true)
+	f.tm.drafts["designer"] = "half a sentence"
+
+	*f.now = f.now.Add(rotationAcceptWait + 5*time.Minute)
+	f.idleSince(f.now.Add(-rotationAcceptWait - 4*time.Minute))
+	f.s.Tick()
+
+	r := lastRotation(t, f, "designer")
+	require.True(t, r.Open(), "%+v", r.Closed)
+	assert.Contains(t, f.s.State.Role("designer").Inbox[0], restartLineHead)
+}
+
+// A role that runs its old conversation again (a command started it on that after the restart died) has no fresh
+// conversation to follow: the rotation closes resumed, once, and tells nobody; nothing the old conversation does is evidence.
+func TestRotationOfARoleBackOnItsOldConversationIsResumed(t *testing.T) {
+	f, _ := restartBegun(t, 0)
+	f.s.Restarts = nil // the beat that began it dies
+
+	rs := f.s.State.Role("designer")
+	rs.RestartGaveUp = "sid-designer"
+	// The owner ends the stale down and starts the role on its old conversation.
+	rs.Downing, rs.Pending = time.Time{}, nil
+	require.NoError(t, f.s.UpWith("designer", UpOptions{Resume: "sid-designer"}))
+
+	*f.now = f.now.Add(bootPause)
+	f.rg.byPID[f.tm.up["designer"]] = &registry.Session{Status: "idle", StatusUpdatedAt: f.now.UnixMilli(), SessionID: "sid-designer"}
+	f.rg.endedAt["sid-designer"] = f.now.Add(-time.Second)
+
+	for range 2 {
+		f.s.Tick()
+
+		r := lastRotation(t, f, "designer")
+		require.False(t, r.Open(), "%+v", r)
+		assert.Equal(t, OutcomeResumed, r.Closed.Outcome)
+		assert.Contains(t, r.Closed.Detail, "old conversation")
+		assert.Equal(t, 1, phaseLines(f, "designer", r.ID, PhaseClosed))
+		assert.Zero(t, rotationNotes(f), "resumed is silent: %v", f.s.State.Notes)
+		assert.Equal(t, 1, countEvents(f, "designer", "rotation"))
+	}
+
+	// What the old conversation does is not the fresh one's: no evidence, not even a late accept.
+	r := lastRotation(t, f, "designer")
+	require.NoError(t, RecordRotationEvidence(f.s.Crew.Layout(), "designer", EvidenceAccepted, "T-1", "designer", "sid-designer", *f.now))
+	assert.Empty(t, lastRotation(t, f, "designer").Late)
+	assert.Empty(t, r.Evidence)
+}
+
+// A record that can be read and not written holds nothing: the rotation could neither close nor tell, so the acceptance alert is
+// told as it always was, 5 min after the packet was sent.
+func TestRotationThatCannotBeWrittenLeavesTheAcceptanceAlertToItself(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("a file mode does not stop root")
+	}
+
+	f, _ := restartBegun(t, 0)
+	freshSession(t, f, true)
+	f.typedAfter("designer", "sid-new", 2)
+
+	r := lastRotation(t, f, "designer")
+	f.s.cardSeen("designer", r.Lines[0], SeenTranscript, *f.now)
+
+	path := f.s.Crew.Layout().Rotations("designer")
+	require.NoError(t, os.Chmod(path, 0o400))
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+
+	sent := deliveryOf(t, f).SentAt
+	*f.now = sent.Add(6 * time.Minute)
+	f.idleSince(sent)
+	f.s.Tick()
+
+	assert.Equal(t, 1, countNotes(f, "designer: T-1 has no acceptance after 5 min"), "told as on any crew: %v", f.s.State.Notes)
+}
+
+// An open rotation holds the alert only for as long as it can be closing: past its own longest wait and the time the dispatcher
+// is told it stays open, it owns nothing.
+func TestRotationHoldsTheAcceptanceAlertOnlyForItsOwnLongestWait(t *testing.T) {
+	f, _ := restartBegun(t, 0)
+	freshSession(t, f, true)
+	f.typedAfter("designer", "sid-new", 2)
+
+	r := lastRotation(t, f, "designer")
+	require.True(t, r.Open())
+
+	tk, err := f.tk.Get("T-1")
+	require.NoError(t, err)
+
+	*f.now = r.Started.Add(rotationHoldMax)
+	assert.True(t, f.s.rotationOwns(tk), "within it")
+
+	*f.now = r.Started.Add(rotationHoldMax + time.Second)
+	f.s.rotationBook = nil
+	assert.False(t, f.s.rotationOwns(tk), "past it")
+}
+
+// A failure of the record is told once a day for a role, whichever process finds it: the ticker is a new one every beat.
+func TestRotationFailureIsToldOncePerRoleADay(t *testing.T) {
+	f := restarting(t, "", 100, time.Minute)
+	path := f.s.Crew.Layout().Rotations("designer")
+	cause := fmt.Errorf("disk full")
+
+	beat := func() {
+		rotationWarned.Clear() // another process
+		f.s.rotationWarn("designer", path, "not written", cause)
+	}
+
+	for range 3 {
+		beat()
+		*f.now = f.now.Add(time.Minute)
+	}
+
+	assert.Equal(t, 1, countEvents(f, "designer", "rotation-failed"), "once, not at every beat")
+
+	// Another role's failure is its own; the same role's again after a day.
+	rotationWarned.Clear()
+	f.s.rotationWarn("harvester", f.s.Crew.Layout().Rotations("harvester"), "not written", cause)
+	assert.Equal(t, 1, countEvents(f, "harvester", "rotation-failed"))
+
+	*f.now = f.now.Add(25 * time.Hour)
+	beat()
+	assert.Equal(t, 2, countEvents(f, "designer", "rotation-failed"), "a day later")
+}
+
+// An open rotation of a role that is not in the crew any more has no session to follow: it is closed lost, with no way back,
+// no note, and no entry made for the role in the state.
+func TestRotationOfARoleGoneFromTheCrewIsClosed(t *testing.T) {
+	f := restarting(t, "", 100, time.Minute)
+	path := f.s.Crew.Layout().Rotations("ghost")
+	at := *f.now
+
+	for _, l := range []rotationLine{
+		{ID: "g1", At: at, Phase: PhasePrepared, Role: "ghost", Kind: KindRestartAt, Why: "context 300k over restart_at 250k",
+			From: &RotationFrom{Session: "sid-ghost"}},
+		{ID: "g1", At: at, Phase: PhaseSwitching, Claim: at},
+		{ID: "g1", At: at, Phase: PhaseStarted},
+	} {
+		require.NoError(t, appendRotationLine(path, l))
+	}
+
+	for range 2 {
+		f.s.Tick()
+
+		r := lastRotation(t, f, "ghost")
+		require.False(t, r.Open(), "%+v", r)
+		assert.Equal(t, OutcomeLost, r.Closed.Outcome)
+		assert.Equal(t, "the role is gone from the crew", r.Closed.Detail)
+		assert.Empty(t, r.Closed.Back)
+		assert.Equal(t, 1, phaseLines(f, "ghost", "g1", PhaseClosed))
+		assert.Zero(t, rotationNotes(f))
+		assert.NotContains(t, f.s.State.Roles, "ghost")
+	}
+}
+
+// The beat reads the end of a record, as much of it as shows the newest rotation whole, and a record only once in a beat.
+func TestRotationBeatReadsLittleOfARecordAndOnlyOnce(t *testing.T) {
+	f := restarting(t, "", 100, time.Minute)
+	path := f.s.Crew.Layout().Rotations("designer")
+	at := *f.now
+
+	// A long history of closed rotations, then an open one with more evidence than a first read holds.
+	for i := range 3000 {
+		id := fmt.Sprintf("h%04d", i)
+		require.NoError(t, appendRotationLine(path, rotationLine{ID: id, At: at, Phase: PhasePrepared, Role: "designer", Why: strings.Repeat("w", 200)}))
+		require.NoError(t, appendRotationLine(path, rotationLine{ID: id, At: at, Phase: PhaseClosed, Outcome: OutcomeResumed}))
+	}
+
+	st, err := os.Stat(path)
+	require.NoError(t, err)
+	require.Greater(t, st.Size(), int64(rotationBeatRead)*3)
+
+	closed := readRotationTail(path)
+	assert.Less(t, len(closed), 60, "a few KiB of a record whose newest rotation is closed, not all of it")
+	assert.Equal(t, "h2999", foldRotations(closed)[len(foldRotations(closed))-1].ID)
+
+	require.NoError(t, appendRotationLine(path, rotationLine{ID: "open", At: at, Phase: PhasePrepared, Role: "designer"}))
+
+	for i := range 60 {
+		require.NoError(t, appendRotationLine(path, rotationLine{ID: "open", At: at, Phase: phaseEvidence, What: EvidenceNoteFetched,
+			Task: fmt.Sprintf("T-%d", i), Session: strings.Repeat("s", 200)}))
+	}
+
+	rots := foldRotations(readRotationTail(path))
+	last := rots[len(rots)-1]
+	assert.Equal(t, "open", last.ID, "its prepared line is in what was read, though it is further back than a first read goes")
+	assert.True(t, last.Open())
+
+	// Once in a beat: what the beat read stays until the beat ends or the shift appends.
+	first := f.s.rotationsOf("designer")
+	require.NoError(t, appendRotationLine(path, rotationLine{ID: "late", At: at, Phase: PhasePrepared, Role: "designer"}))
+	assert.Equal(t, len(first), len(f.s.rotationsOf("designer")), "not read again in the same beat")
+
+	f.s.Tick()
+	assert.True(t, slices.ContainsFunc(f.s.rotationsOf("designer"), func(r Rotation) bool { return r.ID == "late" }), "the next beat reads it")
+}
+
+// A restart of a pane that was dead when it began has a down with no claim: the restart finds its rotation all the same, and
+// writes its start.
+func TestRotationOfADeadPaneIsFoundByItsRestart(t *testing.T) {
+	f := restarting(t, "", 300_000, 10*time.Minute)
+	f.note(t, "T-1", f.now.Add(-10*time.Minute))
+
+	// The pane died between the gate that chose the restart and the down.
+	f.tm.die("designer")
+	f.s.beginRestart("designer", f.s.heldTasks("designer"), "context 300k over restart_at 250k", "")
+	require.Len(t, f.s.Restarts, 1)
+
+	r := lastRotation(t, f, "designer")
+	require.Equal(t, PhaseSwitching, r.Phase)
+	require.True(t, r.Claim.IsZero(), "a dead pane is no down: nothing to claim")
+
+	f.finish(t)
+
+	r = lastRotation(t, f, "designer")
+	assert.Equal(t, PhaseStarted, r.Phase, "the restart that started it wrote that")
+	assert.Len(t, r.Lines, 2)
+	assert.Len(t, rotationsOn(t, f, "designer"), 1)
+}
+
+// A beat that died after it put the role down for a newer rotation and before it closed the older one leaves both open: the next
+// beat closes the older one, superseded, with no way back and no note.
+func TestRotationSupersededByTheBeatWhenTheNewerOnesBeatDied(t *testing.T) {
+	f := restarting(t, "", 100, time.Minute)
+	path := f.s.Crew.Layout().Rotations("designer")
+	at := *f.now
+
+	for _, l := range []rotationLine{
+		{ID: "old1", At: at, Phase: PhasePrepared, Role: "designer", Kind: KindRestartAt, Why: "context 300k over restart_at 250k",
+			From: &RotationFrom{Session: "sid-a"}},
+		{ID: "old1", At: at, Phase: PhaseSwitching, Claim: at},
+		{ID: "old1", At: at, Phase: PhaseStarted},
+		{ID: "new2", At: at.Add(time.Hour), Phase: PhasePrepared, Role: "designer", Kind: KindRestartAt, Why: "context 310k over restart_at 250k",
+			From: &RotationFrom{Session: "sid-b"}},
+		{ID: "new2", At: at.Add(time.Hour), Phase: PhaseSwitching, Claim: at.Add(time.Hour)},
+	} {
+		require.NoError(t, appendRotationLine(path, l))
+	}
+
+	f.s.Tick()
+
+	rots := rotationsOn(t, f, "designer")
+	require.Len(t, rots, 2)
+	require.False(t, rots[0].Open())
+	assert.Equal(t, OutcomeLost, rots[0].Closed.Outcome)
+	assert.Equal(t, "superseded by rotation new2", rots[0].Closed.Detail)
+	assert.Empty(t, rots[0].Closed.Back)
+	assert.Zero(t, rotationNotes(f), "%v", f.s.State.Notes)
 }

@@ -73,9 +73,20 @@ func (a *app) rotationCommand() *cobra.Command {
 		Short: "One rotation whole, with its phases, its evidence and how it ended: a role's newest, or the one with the id",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			r, err := a.rotationNamed(args[0])
+			r, found, err := a.rotationNamed(args[0])
 			if err != nil {
 				return err
+			}
+
+			if !found {
+				// A role of the crew that was never rotated: nothing to show, which is no error.
+				if asJSON {
+					return a.printJSON(nil)
+				}
+
+				fmt.Fprintf(a.out, "no rotations for %s\n", args[0])
+
+				return nil
 			}
 
 			if asJSON {
@@ -104,27 +115,38 @@ func (a *app) readRotations(role string) ([]shift.Rotation, error) {
 	return shift.ReadRotations(c.Layout(), role)
 }
 
-// rotationNamed is the rotation a word names: the newest of a role, else the one with that id.
-func (a *app) rotationNamed(word string) (shift.Rotation, error) {
-	rots, err := a.readRotations(word)
+// rotationNamed is the rotation a word names: the newest of a role, else the one with that id. A role of the crew with none
+// is not found and no error; a word that is neither a role of the crew nor an id is.
+func (a *app) rotationNamed(word string) (shift.Rotation, bool, error) {
+	c, err := a.loadCrew()
 	if err != nil {
-		return shift.Rotation{}, err
+		return shift.Rotation{}, false, err
+	}
+
+	rots, err := shift.ReadRotations(c.Layout(), word)
+	if err != nil {
+		return shift.Rotation{}, false, err
 	}
 
 	if len(rots) > 0 {
-		return rots[len(rots)-1], nil
+		return rots[len(rots)-1], true, nil
 	}
 
-	all, err := a.readRotations("")
+	all, err := shift.ReadRotations(c.Layout(), "")
 	if err != nil {
-		return shift.Rotation{}, err
+		return shift.Rotation{}, false, err
 	}
 
 	if i := slices.IndexFunc(all, func(r shift.Rotation) bool { return r.ID == word }); i >= 0 {
-		return all[i], nil
+		return all[i], true, nil
 	}
 
-	return shift.Rotation{}, fmt.Errorf("no rotation of a role or with the id %q (zmina rotation ls)", word)
+	base, _, _ := shift.SplitInstance(word)
+	if _, ok := c.Roles[base]; ok {
+		return shift.Rotation{}, false, nil
+	}
+
+	return shift.Rotation{}, false, fmt.Errorf("no role %q in the crew and no rotation with that id (zmina rotation ls)", word)
 }
 
 // rotationState is where a rotation stands, in a word: its outcome, or the phase an open one is in. A rotation lost whose

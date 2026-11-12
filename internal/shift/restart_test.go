@@ -1493,15 +1493,13 @@ func packetLineOf(t *testing.T, f fix) string {
 }
 
 // The packet is handed while the role is down, before its start: its delivery is queued and not sent, so the 5 min of
-// the acceptance alert do not run while it waits; the new session is typed it once; the alert fires 5 min after that
-// and not before, and the packet is not handed again.
-func TestRestartHandOutKeepsTheAcceptanceAlert(t *testing.T) {
+// the acceptance alert do not run while it waits; the new session is typed it once, and the packet is not handed again.
+// What a packet not accepted comes to after that is the restart's rotation to say, once: the alert of the packet is
+// the rotation's while it is open and after it was lost and told, so the dispatcher does not hear it twice (the rotation
+// tests); a packet no rotation handed is told by the alert as ever (TestAcceptanceAlertFiresWhenNoRotationOwnsTheTask).
+func TestRestartHandOutIsQueuedBeforeTheStartAndItsAcceptanceIsTheRotationsToTell(t *testing.T) {
 	f, _ := restartBegun(t, 0)
 	f.finish(t)
-
-	// The restart's rotation record would tell the dispatcher about a packet not accepted, and hold this alert back (the
-	// rotation tests); the record is no part of delivery, and with it gone this is the alert of a packet queued before the start.
-	require.NoError(t, os.RemoveAll(f.s.Crew.Layout().RotationsDir()))
 
 	d, packet := deliveryOf(t, f), packetLineOf(t, f)
 	assert.Equal(t, packet, d.Line)
@@ -1512,7 +1510,7 @@ func TestRestartHandOutKeepsTheAcceptanceAlert(t *testing.T) {
 
 	// It waits for a booted session; however long, nothing is due: a submission is what the alert counts from.
 	f.newSession("designer", "sid-new")
-	*f.now = f.now.Add(15 * time.Minute)
+	*f.now = f.now.Add(3 * time.Minute)
 	f.rg.byPID[f.tm.up["designer"]] = &registry.Session{Status: "idle", StatusUpdatedAt: f.now.UnixMilli(), SessionID: "sid-new"}
 	tk, err := f.tk.Get("T-1")
 	require.NoError(t, err)
@@ -1527,22 +1525,30 @@ func TestRestartHandOutKeepsTheAcceptanceAlert(t *testing.T) {
 	assert.Equal(t, "sid-new", d.Session, "to the new session, not the old")
 	sent := d.SentAt
 
+	// Its boot turn is over, its restart line was shown to it, and it goes idle without accepting.
+	f.rg.endedAt["sid-new"] = sent.Add(-time.Second)
+	f.s.cardSeen("designer", lastRotation(t, f, "designer").Lines[0], SeenTranscript, sent)
+
 	alerts := func() int { return countNotes(f, "designer: T-1 has no acceptance after 5 min") }
 
 	idle := func(at time.Time) {
 		*f.now = at
-		f.rg.byPID[f.tm.up["designer"]] = &registry.Session{Status: "idle", StatusUpdatedAt: at.UnixMilli(), SessionID: "sid-new"}
+		f.rg.byPID[f.tm.up["designer"]] = &registry.Session{Status: "idle", StatusUpdatedAt: sent.UnixMilli(), SessionID: "sid-new"}
 		f.s.Tick()
 	}
 
-	idle(sent.Add(5*time.Minute - time.Second))
-	assert.Zero(t, alerts(), "not before the 5 min")
-
 	idle(sent.Add(5 * time.Minute))
-	assert.Equal(t, 1, alerts(), "%v", f.s.State.Notes)
+	assert.Zero(t, alerts(), "the rotation that handed the packet is open: it tells it, not the alert: %v", f.s.State.Notes)
+	assert.Zero(t, rotationNotes(f))
 
-	idle(sent.Add(8 * time.Minute))
-	assert.Equal(t, 1, alerts(), "once")
+	idle(sent.Add(rotationAcceptWait + time.Minute))
+	assert.Zero(t, alerts(), "%v", f.s.State.Notes)
+	assert.Equal(t, 1, rotationNotes(f), "it is told once, by the rotation: %v", f.s.State.Notes)
+	assert.Contains(t, strings.Join(f.s.State.Notes, "|"), "lost: it did not accept T-1")
+
+	idle(sent.Add(rotationAcceptWait + 4*time.Minute))
+	assert.Zero(t, alerts(), "nor after it was lost and told")
+	assert.Equal(t, 1, rotationNotes(f), "once")
 
 	// Nothing was handed twice: one typing of the packet in all, and nothing left in the queue.
 	n := 0

@@ -204,6 +204,9 @@ type Shift struct {
 	// cards are the delivery cards this shift has loaded and not yet written (FlushCards); never read to decide a delivery,
 	// but for the mark a line carries when it crossed a newer one (crossing.go).
 	cards *cardBook
+	// rotationBook is the rotations each role's record showed this beat, by role (rotationsOf): read once, kept until the beat
+	// ends or the shift appends to the record. Never read to decide anything but what a rotation reports.
+	rotationBook map[string][]Rotation
 
 	warned bool
 	// resumed is the conversation each role of this run was last started on ("" fresh): what up checks it lives.

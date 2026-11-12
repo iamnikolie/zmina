@@ -63,12 +63,13 @@ func (a *app) taskRecordCommand(kind string) *cobra.Command {
 	return c
 }
 
-// noteFetched tells an open rotation of the task's role that the role read the task's note: run by the role itself (or by
-// a tool of an agent's session that does not say whose it is, as a fetch is), never by the owner's shell or another role.
-// Noted in the role's rotation record with no lock, and never a failure of the read.
+// noteFetched tells an open rotation of the task's role that the role read the task's note: run by the role itself, named by
+// its own ZMINA_ROLE. A command that does not say who runs it (a tool of an agent's session with no ZMINA_ROLE, the owner's
+// shell) is not evidence of the role having read it: unlike a doorbell's fetch, which a caller that does not say is taken for
+// the role's, this is a claim about one role's reading. Noted in the role's rotation record with no lock, and never a
+// failure of the read.
 func noteFetched(s *shift.Shift, t task.Task) {
-	who := fetchBy()
-	if who == "hand" || who != "" && who != t.Role {
+	if by() != t.Role {
 		return
 	}
 

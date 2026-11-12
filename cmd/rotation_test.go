@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -146,7 +147,16 @@ func TestRotationShow(t *testing.T) {
 	assert.Equal(t, "bbbb2222", r.ID)
 
 	_, _, err = zm(t, file, "rotation", "show", "nobody")
-	require.ErrorContains(t, err, `no rotation of a role or with the id "nobody"`)
+	require.ErrorContains(t, err, `no role "nobody" in the crew and no rotation with that id`)
+
+	// A role of the crew that was never rotated has none: said so, and no error.
+	out, _, err = zm(t, file, "rotation", "show", "dispatcher")
+	require.NoError(t, err)
+	assert.Equal(t, "no rotations for dispatcher\n", out)
+
+	out, _, err = zm(t, file, "rotation", "show", "dispatcher", "--json")
+	require.NoError(t, err)
+	assert.Equal(t, "null", strings.TrimSpace(out))
 }
 
 // A crew with no record says so, and a record that does not read is no failure of a look.
@@ -244,8 +254,14 @@ func TestReadingATasksNoteIsEvidenceOfARotation(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// The owner's shell, and another role.
+	// The owner's shell, and a tool of an agent's session that does not say whose it is: neither is the role reading it.
 	read("task", "checkpoint", "1")
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "sid-new")
+	read("task", "checkpoint", "1")
+	read("task", "show", "1")
+	assert.Empty(t, evidenceLines(t, path, "aaaa1111"), "a caller that does not name its role is not evidence")
+
+	// Another role.
 	t.Setenv("ZMINA_ROLE", "dispatcher")
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "sid-new")
 	read("task", "checkpoint", "1")
@@ -279,7 +295,8 @@ func TestRetentionRemovesStaleRotationRecords(t *testing.T) {
 
 	out, _, err := zm(t, rc.file, "retention", "--dry-run")
 	require.NoError(t, err)
-	assert.Contains(t, out, "rotation records (1 rotations")
+	assert.Contains(t, out, "rotations/dev.jsonl (1 rotations, nothing written to it since ")
+	assert.NotContains(t, out, "rotations/lead.jsonl")
 	assert.True(t, rc.exists("rotations/dev.jsonl"), "a dry run moves nothing")
 
 	_, _, err = zm(t, rc.file, "retention")
@@ -292,4 +309,35 @@ func TestRetentionRemovesStaleRotationRecords(t *testing.T) {
 	assert.Contains(t, evs[0].Detail, "rotation records 1")
 
 	_ = time.Now
+}
+
+// A record past what a look reads is set aside, and the pass says what it replaces: the set-aside file of an earlier pass that
+// was kept is gone with it, and the dry run tells so before it happens.
+func TestRetentionSaysWhatASetAsideRotationRecordReplaces(t *testing.T) {
+	rc := newRetentionCrew(t, "")
+
+	var big strings.Builder
+
+	for i := 0; big.Len() < 1<<20+4096; i++ {
+		fmt.Fprintf(&big, `{"id":"r%05d","at":"2026-11-01T10:00:00Z","phase":"prepared","role":"dev","why":%q}`+"\n", i, strings.Repeat("w", 300))
+		fmt.Fprintf(&big, `{"id":"r%05d","at":"2026-11-01T10:00:05Z","phase":"closed","outcome":"resumed"}`+"\n", i)
+	}
+
+	rc.put(t, "rotations/dev.jsonl", big.String(), rc.now.Add(-time.Hour))
+	rc.put(t, "rotations/dev.jsonl.old", `{"id":"e1","at":"2026-10-20T10:00:00Z","phase":"prepared","role":"dev"}`+"\n", rc.now.Add(-48*time.Hour))
+
+	out, _, err := zm(t, rc.file, "retention", "--dry-run")
+	require.NoError(t, err)
+	assert.Contains(t, out, "over 1 MiB: set aside as dev.jsonl.old, replacing the one set aside before it, which held 1 rotations and is gone")
+	assert.True(t, rc.exists("rotations/dev.jsonl"), "a dry run moves nothing")
+
+	out, _, err = zm(t, rc.file, "retention")
+	require.NoError(t, err)
+	assert.Contains(t, out, "retention: moved ")
+	assert.False(t, rc.exists("rotations/dev.jsonl"))
+	assert.True(t, rc.exists("rotations/dev.jsonl.old"))
+
+	raw, err := os.ReadFile(rc.path("rotations/dev.jsonl.old"))
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"id":"r00000"`, "the big one is what is kept")
 }

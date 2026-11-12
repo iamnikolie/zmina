@@ -1265,7 +1265,7 @@ read-only, and a note whose files are gone from the archive is an error naming i
 destination or superseded, all envelopes queued, nothing new for the span) from `messages/` to `messages/archive/`,
 where `message show <id>` still finds them. What an open, waiting, parked or recently closed task points at stays, and
 so does everything while a task file does not read. `reads.jsonl` loses the lines older than the span to
-`archive/retention/<yyyy-mm>/reads.jsonl`; `tick.log` and `courier.log` past 5 MB are cut to their last 1 MB; a role's `rotations/<role>.jsonl` (Rotations) goes whole once nothing was written to it for the span, and one past 1 MiB whose newest rotation is closed is set aside as `<role>.jsonl.old`. One `retention` event in
+`archive/retention/<yyyy-mm>/reads.jsonl`; `tick.log` and `courier.log` past 5 MB are cut to their last 1 MB; a role's `rotations/<role>.jsonl` (Rotations) goes whole once nothing was written to it for the span, and one past 1 MiB whose newest rotation is closed is set aside as `<role>.jsonl.old`, replacing the one set aside before it. One `retention` event in
 `zmina log` carries the counts. `zmina retention --dry-run` lists what the next pass would move.
 
 **What the work is.** `--title` is the work in one short plain sentence in the owner's language ("Landing page —
@@ -2324,52 +2324,66 @@ What the ticker does once a restart's down is over (item 7, and restart_done aft
 Each fresh restart the ticker makes (`restart_at`, `restart_idle`, `restart_done`; The ticker, item 7; Restart) is a
 **rotation**: one record from the moment the role's note is durable to the answer to "did the fresh conversation get
 what it needs". It is a report and nothing more: no restart reads it, a record that cannot be written or is gone changes
-no restart and no delivery (one `rotation-failed` event says so), and `rotations/` can be removed at any time. It is not
-a field of `state.json`.
+no restart and no delivery (a `rotation-failed` event says so, once a day for a role), and `rotations/` can be removed at
+any time. It is not a field of `state.json`.
 
-- **The file.** `rotations/<role>.jsonl` next to the crew file (a copy `dev#2` under `dev-2`), append-only, one line a
-  step, folded by id over its newest 1 MiB; a line that does not read is left out. Steps: `prepared` (written before the
-  role is put down: `kind`, `why`, `from` — the conversation it was on: runtime, session, directory, context —, the
-  artifacts checked durable, each held task's checkpoint or, after a task was done, that task's result, and `asked_at`),
-  `switching` (the claim of the down), `started` (the fresh session runs; the lines queued for it), `evidence`,
-  `closed`. A role asked for its note and called off was never rotated: no record. The shift appends under the state
-  lock; what the role itself did is appended by its own commands without it, one line a write, only while a rotation
-  waits for it and only by the fresh session (a command of the old conversation, the owner's shell or another role is no
-  evidence).
+- **The file.** `rotations/<role>.jsonl` next to the crew file (a copy is `rotations/dev#2.jsonl`, as in `delivery/`),
+  append-only, one line a step, folded by id over its newest 1 MiB; a line that does not read is left out, and a rotation a
+  record shows under another role's name is not that role's. Steps: `prepared` (written before the role is put down:
+  `kind`, `why`, `from` — the conversation it was on: runtime, session, directory, context —, the artifacts checked
+  durable, each held task's checkpoint or, after a task was done, that task's result, and `asked_at`), `switching` (the
+  claim of the down; none for a pane that was dead), `started` (the fresh session runs; the lines queued for it),
+  `evidence`, `closed`. A role asked for its note and called off was never rotated: no record. The shift appends under the
+  state lock; what the role itself did is appended by its own commands without it, one line a write, only while a
+  rotation waits for it and only by the fresh session (a command of the old conversation, the owner's shell or another
+  role is no evidence).
 - **Evidence.** `hook-start` (its SessionStart hook, `pending --brief`, ran), `boot` (a turn of the fresh session ended:
   the boot turn is really over, never the `boot_grace` that lets a line go), `shown` (the restart line was seen in the
   conversation, typed and landed, or its doorbell's text fetched), `accepted` (`zmina task accept` of a task of the
-  rotation, in the fresh session), `note-fetched` (the role ran `zmina task checkpoint <id>` or `task show <id>` itself).
+  rotation, in the fresh session), `note-fetched` (the role ran `zmina task checkpoint <id>` or `task show <id>` with its
+  own `ZMINA_ROLE`: a command that names no role, a tool of a session with none included, is not evidence of the role
+  having read it).
 - **Confirmed** is: with tasks, `boot` and every task still held `accepted`; with none (after a task was done, or the
   tasks are gone), `boot` and `shown`. `hook-start` and `note-fetched` are reported when there and never waited for: a
   role may read the note file itself.
 - **Outcome**, once. `rebuilt`: a fresh conversation that confirmed, naming what (`boot, T-5 packet accepted, T-5 note
-  fetched`). `resumed`: the same conversation goes on: the down could not begin, the restart was not begun, or its fresh
-  start failed and the role is back on its old one (the restart's own note, which names the rotation, tells that). `lost`:
-  a fresh conversation with nothing confirmed, or no session; it carries the way back to the old conversation, `zmina
-  down <role> --clear && zmina up <role> --resume=<old session>` (the `up` alone when the role is down). A rotation lost
-  whose conversation then accepts every task it was handed stays lost and shows as `lost → rebuilt (late)`; nobody is told
-  again.
-- **The beat closes it**, once, from what the state and the files show: lost when the fresh session never finished its
-  boot turn within `boot_grace` of its start (the API error of its last turn named when the hook recorded one), when it
-  is booted, was shown its context and has sat idle 10 min without accepting what it was handed (or, with no task,
-  without having been shown why), when its session ended, changed or was started again before it confirmed, or, for a
-  down that no restart finished, when the role has no session past the stale-down limit; resumed when the role was never
-  put down. A role at work is never timed out. A rotation still open 15 min after its start is told to the dispatcher
-  once and stays open. A rotation begun while another is open closes the older one lost, superseded. The beat that finds
-  a start its dead process did not note records it, from the time the state has for it.
+  fetched`). `resumed`: the same conversation goes on: the down could not begin, the restart was not begun, its fresh
+  start failed and the role is back on its old one (the restart's own note, which names the rotation, tells that), or the
+  role runs its old conversation again (a command started it on that, after the restart died). `lost`: a fresh
+  conversation with nothing confirmed, or no session; it carries the way back to the old conversation, `zmina down <role>
+  --clear && zmina up <role> --resume=<old session>` (the `up` alone when the role is down). A rotation lost whose
+  conversation then accepts every task it was handed stays lost and shows as `lost → rebuilt (late)`; nobody is told again.
+- **The beat closes it**, once, from what the state and the files show; a role at work (busy) is never timed out. Lost:
+  - no boot turn over by `boot_grace` and 5 min after the start (and 5 min after its restart line was shown), the line
+    not still waiting in the queue, or posted or typed and not seen yet (the API error of its last turn is named when the
+    hook recorded one);
+  - booted and idle 10 min with its restart line never shown to it, while it is not waiting to be delivered (a line in a
+    doorbell it did not fetch says so);
+  - booted, its context shown, and idle 10 min without accepting what it was handed;
+  - its session ended, changed or was started again before it confirmed;
+  - for a down that no restart finished, no session past the stale-down limit.
+  Resumed when the role was never put down, or runs its old conversation again. A rotation of a role that is not in the
+  crew any more closes lost without a way back or a note. A rotation still open 15 min after its start is told to the
+  dispatcher once and stays open. A rotation closes when a newer one puts the role down (not when the newer one is merely
+  begun: a down that fails changes nothing): rebuilt, "before it accepted its tasks", if it had booted and been shown its
+  context, else lost; no way back, no note. The beat that finds a start its dead process did not note records it, from the
+  time the state has for it.
 - **What is said.** One `rotation` event at each close: `<outcome> <id>: <why>; <what confirmed it, or the reason>`;
   the `restarted` event stays as it was (`usage` counts it). The dispatcher hears `lost` once, with the way back, and
-  a rotation open 15 min; `rebuilt` and `resumed` are silent. A fresh start that fails is told by the restart's note as
-  before (with `; rotation <id>`): no second note. A task a rotation handed out, while that rotation is open or lost
-  and told, gets no "has no acceptance after 5 min" alert besides: the rotation says it.
+  a rotation open 15 min; `rebuilt`, `resumed` and a rotation closed by a newer one are silent. A fresh start that fails is
+  told by the restart's note as before (with `; rotation <id>`): no second note. A task a rotation handed out, while that
+  rotation is open (and can still close: its record can be written to, and it is under 25 min old) or lost and told, gets no
+  "has no acceptance after 5 min" alert besides: the rotation says it. Otherwise that alert is told as on any crew.
 - **Looking.** `zmina rotation ls [role] [--json] [-n 10]` lists the crew's, or one role's, newest first (id, role,
   kind, when, where it stands, then why and what confirmed it or why not; `-n 0` all). `zmina rotation show <role|id>
   [--json]` is one whole: a role's newest, or the one with that id, with each step's time, the evidence, how it closed
-  and the way back. Neither writes.
+  and the way back; for a role of the crew that was never rotated it says `no rotations for <role>`. Neither writes.
 - **Retention.** The daily pass removes a role's file once nothing was written to it for the retention span, and sets
-  one past 1 MiB aside as `<role>.jsonl.old` once its newest rotation is closed (a file is never rewritten: the role's
-  commands append without the lock).
+  one past 1 MiB aside as `<role>.jsonl.old` once its newest rotation is closed, replacing the file an earlier pass set
+  aside (a file is never rewritten: the role's commands append without the lock); `zmina retention --dry-run` names each
+  file and says when a set-aside file would replace one that was kept.
+- **Cost.** The beat lists `rotations/` once, reads the last few KiB of a record (more only while a rotation in them may
+  be open), and a record once a beat.
 
 ## For the dispatcher
 

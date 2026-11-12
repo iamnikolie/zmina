@@ -1,9 +1,6 @@
 package crew
 
-import (
-	"path/filepath"
-	"strings"
-)
+import "path/filepath"
 
 // Layout is where a crew keeps its files: all of them next to the crew file, so a crew is one directory.
 type Layout struct {
@@ -98,11 +95,13 @@ func (l Layout) DeliveryBell(role string) string { return filepath.Join(l.Delive
 func (l Layout) RotationsDir() string { return filepath.Join(l.Dir, "rotations") }
 
 // Rotations is one role's rotation records (rotations/<role>.jsonl), one line a step of a rotation. It is appended to by
-// the shift under the state lock and, for what the role itself did, by the role's own commands without it. A copy of a
-// role (dev#2) is kept under dev-2, as its screens are.
-func (l Layout) Rotations(role string) string {
-	return filepath.Join(l.RotationsDir(), strings.ReplaceAll(role, "#", "-")+".jsonl")
-}
+// the shift under the state lock and, for what the role itself did, by the role's own commands without it. The role's
+// name is the file's, as the delivery cards' are (a copy is dev#2): two roles never share one.
+func (l Layout) Rotations(role string) string { return filepath.Join(l.RotationsDir(), role+".jsonl") }
+
+// RotationsFailed is where the shift keeps, for each role, when it last told that its rotation record could not be written
+// (a map of role to time), so that a ticker that is a new process every beat tells it once a day and not every beat.
+func (l Layout) RotationsFailed() string { return filepath.Join(l.Dir, "rotations.failed") }
 
 // Worktrees holds the tasks' git worktrees.
 func (l Layout) Worktrees() string { return filepath.Join(l.Dir, "worktrees") }

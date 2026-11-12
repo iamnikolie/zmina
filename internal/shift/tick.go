@@ -58,6 +58,7 @@ func (s *Shift) Tick() []string {
 	defer s.FlushCards()
 
 	now := s.Now()
+	s.rotationBook = nil
 	s.mark("reconcile", "")
 	if s.ReconcileMessages != nil {
 		if err := s.ReconcileMessages(s); err != nil && s.Warn != nil {

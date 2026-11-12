@@ -33,9 +33,10 @@ import (
 // The ask is not a step: a role asked for its note and called off was never rotated, and keeps no record (its time is in
 // prepared as asked_at). Like the delivery cards the file is a report and nothing decides from it: the restart never reads
 // it, a file that is missing or unreadable changes no restart and no delivery (the rotation is then simply not told), and a
-// write that fails is told once as an event (rotation-failed) and never fails or delays the restart. The one place it is
-// read to hold a note back is the acceptance alert, which is not delivery: a task handed by a rotation that is open, or was
-// lost and told, is not told a second time (acceptanceDue).
+// write that fails is told as an event (rotation-failed) once a day for a role and never fails or delays the restart. The one
+// place it is read to hold a note back is the acceptance alert, which is not delivery: a task handed by a rotation that is
+// open, or was lost and told, is not told a second time (acceptanceDue); an open rotation whose record cannot be written, or
+// that is older than rotationHoldMax, holds nothing.
 //
 // Appends are one write of one line, so no writer tears another. The shift appends under the state lock; what the role
 // itself did (its SessionStart hook, the commands that read a task's note) is appended by its own commands without it
@@ -380,9 +381,16 @@ func (r Rotation) phase() string {
 // readRotationLines reads the newest max bytes of a record: every line that reads, none for a file that is not there. A
 // line cut at the start of what was read is left out; a line that does not parse is too.
 func readRotationLines(path string, max int64) []rotationLine {
+	lines, _ := readRotationLinesAt(path, max)
+
+	return lines
+}
+
+// readRotationLinesAt is readRotationLines that also says whether what it read is the whole file.
+func readRotationLinesAt(path string, max int64) ([]rotationLine, bool) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil
+		return nil, true
 	}
 
 	defer func() { _ = f.Close() }()
@@ -391,7 +399,7 @@ func readRotationLines(path string, max int64) []rotationLine {
 
 	if st, err := f.Stat(); err == nil && st.Size() > max {
 		if _, err := f.Seek(st.Size()-max, io.SeekStart); err != nil {
-			return nil
+			return nil, false
 		}
 
 		cut = true
@@ -417,7 +425,44 @@ func readRotationLines(path string, max int64) []rotationLine {
 		}
 	}
 
-	return out
+	return out, !cut
+}
+
+// readRotationTail reads as little of the end of a record as shows its open rotations whole: a few KiB, and more only while
+// a line in them belongs to a rotation whose first line is not in them and whose last is not (one that may be open), up
+// to rotationBeatRead. The beat reads every role's record every beat, and a record whose rotations are all closed is the
+// usual one.
+func readRotationTail(path string) []rotationLine {
+	for max := int64(4 << 10); ; max *= 2 {
+		max = min(max, rotationBeatRead)
+		lines, whole := readRotationLinesAt(path, max)
+
+		if whole || max >= rotationBeatRead || rotationsStartOrEnd(lines) {
+			return lines
+		}
+	}
+}
+
+// rotationsStartOrEnd reports whether every rotation that has a line in them has its prepared line or its closing line in
+// them too: a rotation without either is one that was cut at the start of the window and may still be open.
+func rotationsStartOrEnd(lines []rotationLine) bool {
+	seen := map[string]bool{}
+
+	for _, l := range lines {
+		if l.Phase == PhasePrepared || l.Phase == PhaseClosed {
+			seen[l.ID] = true
+		}
+	}
+
+	return !slices.ContainsFunc(lines, func(l rotationLine) bool { return !seen[l.ID] })
+}
+
+// foldRotationsOf folds the lines of a role's record, and leaves out the rotations of another role: a record is the role's by
+// its file name and by the role its rotations name.
+func foldRotationsOf(role string, lines []rotationLine) []Rotation {
+	rots := foldRotations(lines)
+
+	return slices.DeleteFunc(rots, func(r Rotation) bool { return r.Role != "" && r.Role != role })
 }
 
 // appendRotationLine adds one line to a record, in one write: no lock is taken, so a writer that holds none (a role's own
@@ -458,10 +503,7 @@ func ReadRotations(l crew.Layout, role string) ([]Rotation, error) {
 			return nil, nil
 		}
 
-		rots := foldRotations(readRotationLines(l.Rotations(role), rotationReadMax))
-		rots = slices.DeleteFunc(rots, func(r Rotation) bool { return r.Role != "" && r.Role != role })
-
-		return rots, nil
+		return foldRotationsOf(role, readRotationLines(l.Rotations(role), rotationReadMax)), nil
 	}
 
 	entries, err := os.ReadDir(l.RotationsDir())
@@ -488,17 +530,50 @@ func ReadRotations(l crew.Layout, role string) ([]Rotation, error) {
 	return out, nil
 }
 
-// rotationWarned remembers the record failures already told, by file and kind, so that a beat that goes on failing the
-// same way tells it once.
+// rotationWarned remembers the record failures already told, by file and kind, within this process.
 var rotationWarned sync.Map
 
-// rotationWarn tells a record failure once as an event. The restart goes on: the record is a report.
+// rotationWarnEvery is how often a record failure of one role is told: the ticker is a new process every beat, and a
+// record that stays unwritable would otherwise be an event every minute.
+const rotationWarnEvery = 24 * time.Hour
+
+// rotationWarn tells a record failure as an event: once in a process, and once a day for a role, by what the crew's
+// rotations.failed says of it. The restart goes on: the record is a report.
 func (s *Shift) rotationWarn(role, path, what string, err error) {
-	if _, told := rotationWarned.LoadOrStore(path+"\x00"+what, true); told {
+	if _, told := rotationWarned.LoadOrStore(path+"\x00"+what, true); told || !s.rotationWarnDue(role) {
 		return
 	}
 
 	s.log(role, "rotation-failed", "", what+": "+path+": "+err.Error())
+}
+
+// rotationWarnDue reports whether a failure of the role's record was not told within rotationWarnEvery, and notes that it
+// is told now. What cannot be read or written says it is due: a crew directory that cannot keep a marker tells every time,
+// which is no worse than a failure that was never kept.
+func (s *Shift) rotationWarnDue(role string) bool {
+	path := s.Crew.Layout().RotationsFailed()
+	now := s.Now()
+	told := map[string]time.Time{}
+
+	_ = readRecord(path, &told)
+
+	if at, ok := told[role]; ok && now.Sub(at) < rotationWarnEvery && !at.After(now) {
+		return false
+	}
+
+	told[role] = now
+
+	for r, at := range told {
+		if now.Sub(at) > 7*rotationWarnEvery {
+			delete(told, r)
+		}
+	}
+
+	if raw, err := json.Marshal(told); err == nil {
+		_ = fsx.WriteFile(path, append(raw, '\n'), 0o600)
+	}
+
+	return true
 }
 
 // rotationsOn reports whether the shift keeps a record for the role: it has a crew and a clock, and the role is a file
@@ -513,6 +588,7 @@ func (s *Shift) rotationAppend(name string, l rotationLine) bool {
 	}
 
 	path := s.Crew.Layout().Rotations(name)
+	delete(s.rotationBook, name)
 
 	if err := appendRotationLine(path, l); err != nil {
 		s.rotationWarn(name, path, "not written", err)
@@ -523,13 +599,26 @@ func (s *Shift) rotationAppend(name string, l rotationLine) bool {
 	return true
 }
 
-// rotationsOf are the rotations the role's record shows in what the beat reads, oldest first.
+// rotationsOf are the rotations the role's record shows in the end of it, oldest first. A beat reads a record once: what it
+// read is kept until the beat ends (Tick) or the shift appends to the record.
 func (s *Shift) rotationsOf(name string) []Rotation {
 	if !s.rotationsOn(name) {
 		return nil
 	}
 
-	return foldRotations(readRotationLines(s.Crew.Layout().Rotations(name), rotationBeatRead))
+	if rots, ok := s.rotationBook[name]; ok {
+		return rots
+	}
+
+	rots := foldRotationsOf(name, readRotationTail(s.Crew.Layout().Rotations(name)))
+
+	if s.rotationBook == nil {
+		s.rotationBook = map[string][]Rotation{}
+	}
+
+	s.rotationBook[name] = rots
+
+	return rots
 }
 
 // rotationByID is one of the role's rotations.
@@ -556,7 +645,7 @@ func RecordRotationEvidence(l crew.Layout, role, what, task, by, session string,
 
 	path := l.Rotations(role)
 
-	rots := foldRotations(readRotationLines(path, rotationBeatRead))
+	rots := foldRotationsOf(role, readRotationTail(path))
 	if len(rots) == 0 {
 		return nil
 	}
@@ -614,14 +703,23 @@ func (s *Shift) rotationEvidence(name, what, task, session string) {
 		return
 	}
 
+	delete(s.rotationBook, name)
+
 	if err := RecordRotationEvidence(s.Crew.Layout(), name, what, task, name, session, s.Now()); err != nil {
 		s.rotationWarn(name, s.Crew.Layout().Rotations(name), "evidence not written", err)
 	}
 }
 
+// rotationHoldMax is how long after its start an open rotation may hold the acceptance alert back: its own longest wait (a
+// boot, its context shown, ten idle minutes) and the time it is let go before the dispatcher is told it stays open. Past
+// it the rotation is not closing, and the alert is told as it is without one.
+const rotationHoldMax = rotationSlow + rotationAcceptWait
+
 // rotationOwns reports whether the delivery of a task is a rotation's own, which is told as lost by the rotation if the
 // role does not accept it: the packet was queued by a restart that is still open or closed lost. The acceptance alert then
-// says nothing, so that the dispatcher hears one note and not two.
+// says nothing, so that the dispatcher hears one note and not two. It holds only while the rotation can say it: an open one
+// whose record cannot be appended to (it closes by a line and tells by a note, neither of which it could write) or that is
+// older than rotationHoldMax owns nothing, and the alert is told as it always was. A record that cannot be read owns nothing.
 func (s *Shift) rotationOwns(t task.Task) bool {
 	if !s.rotationsOn(t.Role) || t.Delivery == nil || t.Delivery.QueuedAt.IsZero() {
 		return false
@@ -641,30 +739,59 @@ func (s *Shift) rotationOwns(t task.Task) bool {
 			return false
 		}
 
-		return r.Open() || r.Closed.Outcome == OutcomeLost
+		if !r.Open() {
+			return r.Closed.Outcome == OutcomeLost
+		}
+
+		return s.Now().Sub(r.Started) <= rotationHoldMax && rotationWritable(s.Crew.Layout().Rotations(t.Role))
 	}
 
 	return false
 }
 
+// rotationWritable reports whether a record can be appended to now: opened for appending and closed, nothing written.
+func rotationWritable(path string) bool {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		return false
+	}
+
+	return f.Close() == nil
+}
+
+// RotationPruned is one file of the crew's rotation records that the daily pass removes or sets aside: how many rotations are
+// in it and what is done with it.
+type RotationPruned struct {
+	// File is the record's name in rotations/.
+	File string
+	// Rotations is how many rotations the file shows (a look's window of it).
+	Rotations int
+	// Removed is that the file goes whole, nothing having been written to it since the cutoff; else it is set aside as
+	// File.old, and Replaces says how many rotations of an earlier File.old that replaces (zero where there is none).
+	Removed  bool
+	Replaces int
+	HadAside bool
+}
+
 // PruneRotations removes, from the crew's rotation records, the files nothing was written to since the cutoff, and sets
-// a file that grew past what a look reads aside (<role>.jsonl.old, the one before it replaced) once its newest rotation
-// is closed: the record is appended to without the state lock by the role's own commands, so a file is never rewritten, only
-// removed or renamed whole (a line appended at that moment lands in the file that was set aside). It returns how many
-// rotations went. With dry it only counts. Call it under the state lock, which the shift holds when it closes a rotation.
-func PruneRotations(l crew.Layout, cutoff time.Time, dry bool) (int, error) {
+// a file that grew past what a look reads aside (<role>.jsonl.old) once its newest rotation is closed: the record is
+// appended to without the state lock by the role's own commands, so a file is never rewritten, only removed or renamed
+// whole (a line appended at that moment lands in the file that was set aside). A file set aside replaces the one set aside
+// before it, which the result says. It returns each file it removed or set aside. With dry it only says. Call it under the
+// state lock, which the shift holds when it closes a rotation.
+func PruneRotations(l crew.Layout, cutoff time.Time, dry bool) ([]RotationPruned, error) {
 	entries, err := os.ReadDir(l.RotationsDir())
 	if errors.Is(err, os.ErrNotExist) {
-		return 0, nil
+		return nil, nil
 	}
 
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 
 	var (
-		total int
-		errs  []error
+		out  []RotationPruned
+		errs []error
 	)
 
 	for _, e := range entries {
@@ -674,17 +801,16 @@ func PruneRotations(l crew.Layout, cutoff time.Time, dry bool) (int, error) {
 
 		path := filepath.Join(l.RotationsDir(), e.Name())
 
-		info, err := e.Info()
-		if err != nil {
+		// Looked at now and not as the directory was listed: a file set aside earlier in this pass is the newer file by then.
+		info, err := os.Stat(path)
+		if err != nil || !strings.HasSuffix(e.Name(), ".jsonl") && !strings.HasSuffix(e.Name(), ".jsonl.old") {
 			continue
 		}
 
-		if !strings.HasSuffix(e.Name(), ".jsonl") && !strings.HasSuffix(e.Name(), ".jsonl.old") {
-			continue
-		}
+		rots := len(foldRotations(readRotationLines(path, rotationReadMax)))
 
 		if info.ModTime().Before(cutoff) {
-			total += max(len(foldRotations(readRotationLines(path, rotationReadMax))), 1)
+			out = append(out, RotationPruned{File: e.Name(), Rotations: max(rots, 1), Removed: true})
 
 			if !dry {
 				if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -699,12 +825,20 @@ func PruneRotations(l crew.Layout, cutoff time.Time, dry bool) (int, error) {
 			continue
 		}
 
-		rots := foldRotations(readRotationLines(path, rotationReadMax))
-		if len(rots) == 0 || rots[len(rots)-1].Open() {
+		all := foldRotations(readRotationLines(path, rotationReadMax))
+		if len(all) == 0 || all[len(all)-1].Open() {
 			continue
 		}
 
-		total += len(rots)
+		p := RotationPruned{File: e.Name(), Rotations: len(all)}
+
+		// An earlier file set aside that is kept is lost to this one; one the pass removes anyway is not.
+		if aside, err := os.Stat(path + ".old"); err == nil && !aside.ModTime().Before(cutoff) {
+			p.HadAside = true
+			p.Replaces = len(foldRotations(readRotationLines(path+".old", rotationReadMax)))
+		}
+
+		out = append(out, p)
 
 		if !dry {
 			if err := os.Rename(path, path+".old"); err != nil {
@@ -713,7 +847,7 @@ func PruneRotations(l crew.Layout, cutoff time.Time, dry bool) (int, error) {
 		}
 	}
 
-	return total, errors.Join(errs...)
+	return out, errors.Join(errs...)
 }
 
 // clipLines keeps the head of each line a restart queued, as a card does.

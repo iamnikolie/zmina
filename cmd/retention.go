@@ -667,14 +667,28 @@ func (p *retentionPass) rotations() {
 		defer l.Release()
 	}
 
-	n, err := shift.PruneRotations(p.c.Layout(), p.cutoff, p.dry)
+	pruned, err := shift.PruneRotations(p.c.Layout(), p.cutoff, p.dry)
 	if err != nil {
 		p.problems = append(p.problems, "retention: rotation records: "+err.Error())
 	}
 
+	n := 0
+
+	for _, f := range pruned {
+		n += f.Rotations
+
+		switch {
+		case f.Removed:
+			p.say("rotations/%s (%d rotations, nothing written to it since %s)", f.File, f.Rotations, p.cutoff.Format("2006-01-02"))
+		case f.HadAside:
+			p.say("rotations/%s (%d rotations, over 1 MiB: set aside as %s.old, replacing the one set aside before it, which "+
+				"held %d rotations and is gone)", f.File, f.Rotations, f.File, f.Replaces)
+		default:
+			p.say("rotations/%s (%d rotations, over 1 MiB: set aside as %s.old)", f.File, f.Rotations, f.File)
+		}
+	}
+
 	if n > 0 {
-		p.say("rotation records (%d rotations in files nothing was written to since %s, or set aside for their size)", n,
-			p.cutoff.Format("2006-01-02"))
 		p.moved["rotation records"] = n
 	}
 }
