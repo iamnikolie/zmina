@@ -1,6 +1,9 @@
 package shift
 
-import "strings"
+import (
+	"errors"
+	"strings"
+)
 
 // A failed line is one of two kinds. Nothing reached its role: tmux refused it and what it typed was seen cleared from
 // the input line, or it never left the input line; retrying it is safe. Or it is unclear: it may have reached the role
@@ -32,4 +35,22 @@ func (f Failed) Unclear() bool {
 	}
 
 	return false
+}
+
+// typedUnclear is a typeLine error after which the line may have reached the pane: its text opens with UnclearTyping and
+// carries the cause. typeLine returns it for every failure but the two after which nothing of the line is left or was
+// taken (errUnsent, and a start seen in the input line, cleared and read gone).
+type typedUnclear struct{ cause error }
+
+func (e *typedUnclear) Error() string { return UnclearTyping + " (" + e.cause.Error() + ")" }
+func (e *typedUnclear) Unwrap() error { return e.cause }
+
+// unclearTyping marks err as one after which the line may have reached the pane.
+func unclearTyping(err error) error { return &typedUnclear{cause: err} }
+
+// typedMayHaveReached reports a typeLine error after which the line is never typed again by itself.
+func typedMayHaveReached(err error) bool {
+	var u *typedUnclear
+
+	return errors.As(err, &u)
 }

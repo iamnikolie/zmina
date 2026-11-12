@@ -525,6 +525,20 @@ goes over the crew's field by field; a change applies at the role's next start. 
 | `zmina state recover` | an unreadable `state.json` (or one from a newer zmina) is never written over: every writing command refuses until this moves it aside as `state.json.broken-<time>`. |
 | `zmina version` / `--version` | `zmina version <v>` on stdout. `version`, `skill` and `help` need no crew file. |
 
+**Failed lines are of two kinds.** Nothing reached the role: tmux refused the line and what it typed was seen cleared from
+the input line, or the line never left the input line (`typed, never taken`); `queue retry` is safe, and a line tmux refuses
+is tried three times first. Or the line may have reached it: `queue ls`, `ls` and `doctor` say *attention required*, and zmina
+never types it again by itself. That is a typing that broke where the pane cannot say whether any of it landed (the input line
+could not be read, read empty, or still holds a start that could not be cleared: `typing broke and may have reached the
+pane; inspect before a retry`), a line that left the input line with no change of status after it (`typed, acceptance
+unconfirmed`), one posted and never shown in the conversation (`posted to its inbox socket, never seen`), and one typed into a
+session that ended before it landed (`typed into a session that ended before it landed`). Such a line is failed at once, not
+after three tries, and the dispatcher is told once (`delivery failed`). Look at the role (`peek`, its conversation), then
+`queue retry <role> --unclear` says it again, or `queue drop` lets it go. A typed line whose session ended is dropped with an
+event instead when it made sense to that conversation only (a slash command, the boot a clear queued, a release or restart
+request) or is tracked (an id of it still waits for its ack, which says it again and lists it in the next brief, so no
+failed record stands beside it). The kind is read from the text of the failure; no field of the state keeps it.
+
 **A crew that is not the one at work says so.** A retired crew tells it plainly: to every role at boot, as the second
 line of `zmina ls`, on stderr of `task ls`, `task show` and `log` — `This crew is retired since 2026-11-05: its live crew
 is box-ops/ops (zmina ls box-ops/ops; zmina task ls box-ops/ops). Its ledger, log and queues are not current: never
@@ -1902,8 +1916,7 @@ PATH takes hold. The service starts the courier again whenever it ends, whatever
 between two starts, so a courier that ends at once (a crew file not there, a state a newer zmina wrote, another courier
 running) is tried again every 10 s, one line in `courier.log` each time, and one that ended for a new binary or after
 its 6 h is back within 10 s; the beat delivers meanwhile. The service never gives up: launchd `KeepAlive` with
-`ThrottleInterval` 10, systemd `Restart=always`, `RestartSec=10` and `StartLimitIntervalSec=0` (no start-rate limit, so
-a burst of quick ends cannot leave the unit failed for good). The ticker's `AbandonProcessGroup` and `KillMode=process`
+`ThrottleInterval` 10, systemd `Restart=always`, `RestartSec=10` and `StartLimitIntervalSec=0` (no start-rate limit). The ticker's `AbandonProcessGroup` and `KillMode=process`
 are in it too.
 
 - macOS: launchd agent `io.iamnikolie.zmina-courier` (`.<name>` for a named crew), `~/Library/LaunchAgents`.
@@ -1996,8 +2009,8 @@ until it can go.
    starts is not a boot); so its first line goes at the first beat after it read its boot, not minutes later. When the dispatcher is booted and idle, the waiting signals and notes go to it: posted to its
    own channel, everything in one post (see Delivery; its acked lines also into a turn it is in), else typed as one line: `[zmina] mr-watch: !35 … · designer: ended · director: busy for 95 min on
    T-3`. Then each other role that is booted and idle gets its first queued line; a line
-   tmux refuses is tried three times, at least 55 s apart (passes seconds apart count as one try), then
-   kept as failed (`zmina queue`). A slash command typed into a role (a trim's, a queued `/rename`) leaves no line
+   tmux refuses, with nothing of it left in the input line, is tried three times, at least 55 s apart (passes seconds apart
+   count as one try), then kept as failed (`zmina queue`); one that may have reached the pane is failed at once, to be looked at. A slash command typed into a role (a trim's, a queued `/rename`) leaves no line
    to wait for: nothing more goes to that role for 15 s. A typed line is sent or not left
    typed: Claude Code can take a long line typed in one burst, its Enter with it, as a paste and keep it in the
    input line, so a line still there a moment after its Enter gets Enter again (twice), and one that stays is
@@ -2008,8 +2021,8 @@ until it can go.
    after it was typed (its status says busy before its conversation does); after 90 s a line
    still sitting in the input line gets Enter again — even while a background shell keeps the role off idle —
    one gone from it without status confirmation is kept as failed
-   (`typed, acceptance unconfirmed; inspect before retry`) rather than replayed. Inspect the role before
-   `queue retry`; the role may already have read the line. A remaining own draft is kept as failed
+   (`typed, acceptance unconfirmed; inspect before retry`) rather than replayed. Look at the role before
+   `queue retry --unclear`: it may have read the line. A remaining own draft is kept as failed
    (`typed, never taken`) after three tries and taken out of the input line.
    «Idle» here also covers a role at its prompt whose status stays off idle because a background shell or agent it
    started still runs: its transcript's newest line ends a turn (an end_turn reply, the turn's closing system line)
@@ -2216,8 +2229,9 @@ the crew are dropped from it. A role missing from the crew file keeps its state 
   Raw tmux targets are `=name` / `=name:` and need quotes in zsh. zmina itself aims every command at
   the first window's first pane, where claude runs: windows the owner opens while attached do not
   confuse it, close as usual when left, and are killed with the role.
-- A queued line tmux refuses is tried three times, at least 55 s apart (event `type-failed`), then moves to the
-  failed list, so it never blocks the lines after it: `zmina queue ls`, `queue retry`.
+- A queued line tmux refuses, with nothing of it left in the input line, is tried three times, at least 55 s apart
+  (event `type-failed`), then moves to the failed list, so it never blocks the lines after it: `zmina queue ls`,
+  `queue retry`. One that may have reached the pane goes there at once and is not retried without `--unclear`.
 - Nothing here keeps the Mac awake: while it sleeps, the roles are paused, not gone, and a
   schedule that came due runs once on the first beat after waking.
 

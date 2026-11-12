@@ -337,6 +337,15 @@ func (s *Shift) closeTyped(name string) {
 	rs.Sent = nil
 }
 
+// failUnclear keeps a line that may have reached its role as a failed one that needs attention (Failed.Unclear), says so
+// in the log, and tells the dispatcher once (deliveryFailure). It is never queued again by itself.
+func (s *Shift) failUnclear(name string, f Failed) {
+	rs := s.State.Role(name)
+	rs.Failed = append(rs.Failed, f)
+	s.log(name, "type-failed", "", "unclear, kept for a look: "+f.Error+": "+f.Line)
+	s.deliveryFailure(name, f.Line, f.Error)
+}
+
 // deliveryFailure makes a stalled handoff visible without waiting for an idle notice.
 func (s *Shift) deliveryFailure(name, line, reason string) {
 	ids := append([]string(nil), s.held()[name]...)
@@ -402,15 +411,22 @@ func (s *Shift) typeLine(name, line string) error {
 	}
 }
 
-// clearPartial is what is left of a line whose typing failed, cleared from the input line, and returns typeErr. Typing
-// goes in pieces, so a failure half way leaves the typed start in the input line, where it would pass for the owner's
-// draft and hold the queue for good. Both callers type only into an input line they read empty, so what sits there now
-// is zmina's own when it is the start of the line it was typing (holds); anything else is the owner's and stays.
+// clearPartial is what is left of a line whose typing failed, cleared from the input line, and returns typeErr, as it
+// is or marked as unclear. Typing goes in pieces, so a failure half way leaves the typed start in the input line, where
+// it would pass for the owner's draft and hold the queue for good. Both callers type only into an input line they read
+// empty, so what sits there now is zmina's own when it is the start of the line it was typing (holds); anything else is
+// the owner's and stays.
+//
+// Whether any of the line reached the session is known only from the input line. typeErr stays as it is, a failure after
+// which a counted retry is honest, only when the start was seen there, cleared, and the input line read again without
+// it: nothing was sent, and the line is not in the pane. Every other way out is unclear (unclearTyping): the input line
+// could not be read (before or after the clear); it was read without the line at all, which is the picture of a typing
+// that never started and of one that went whole with its Enter; or the start is there and could not be cleared, where
+// any Enter sends it.
 //
 // The line is kept as the role's Partial until the input line is seen without it: the tmux that failed the typing
 // often cannot be read either, and a send-keys that timed out can still reach the pane later, so the delivery that
-// comes next looks again (clearLeftover). When the start is seen and cannot be cleared, the error says so; the line
-// stays queued and the try counts, as any failed one.
+// comes next looks again (clearLeftover). When the start is seen and cannot be cleared, the error says so.
 func (s *Shift) clearPartial(name, line string, typeErr error) error {
 	s.State.Role(name).Partial = line
 
@@ -419,17 +435,21 @@ func (s *Shift) clearPartial(name, line string, typeErr error) error {
 
 	draft, ok, err := s.Tmux.Prompt(name)
 	if err != nil || !ok || !holds(draft, line) {
-		return typeErr
+		return unclearTyping(typeErr)
 	}
 
 	s.clearInput(name, line)
 	s.pause(submitWait)
 
-	if draft, ok, err = s.Tmux.Prompt(name); err != nil || !ok || !holds(draft, line) {
-		return typeErr
+	if draft, ok, err = s.Tmux.Prompt(name); err != nil || !ok {
+		return unclearTyping(typeErr)
 	}
 
-	return fmt.Errorf("%w; its start could not be cleared from the input line", typeErr)
+	if holds(draft, line) {
+		return unclearTyping(fmt.Errorf("%w; its start could not be cleared from the input line", typeErr))
+	}
+
+	return typeErr
 }
 
 // clearLeftover looks again for the start of a line whose typing failed (Partial), before a delivery reads the input

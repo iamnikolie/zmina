@@ -1250,7 +1250,8 @@ func (s *Shift) typeDispatcher(d string, local, remote, notes []string, now time
 
 	line := "[zmina] " + strings.Join(parts, " · ") + ackTail(ids)
 
-	if err := s.typeLine(d, line); err != nil {
+	typeErr := s.typeLine(d, line)
+	if typeErr != nil && !typedMayHaveReached(typeErr) {
 		s.State.Role(d).dispatchTried(now)
 
 		for _, id := range fresh {
@@ -1260,9 +1261,16 @@ func (s *Shift) typeDispatcher(d string, local, remote, notes []string, now time
 		return ""
 	}
 
-	s.State.Role(d).Sent, s.State.Role(d).TypedAt = &Sent{Line: line, At: now, IDs: ids, Parts: kept}, now
-	s.delivered(ids, now)
-	s.stageIDs(ids, "submitted")
+	// A line that may have reached the dispatcher is never typed again by itself: what it was made of leaves the queue
+	// as for a line that went, and waits as a failed line for a look (queue ls, below). Its ids stay with it, so the
+	// dispatcher's ack still closes it.
+	if typeErr != nil {
+		s.delivered(ids, now)
+	} else {
+		s.State.Role(d).Sent, s.State.Role(d).TypedAt = &Sent{Line: line, At: now, IDs: ids, Parts: kept}, now
+		s.delivered(ids, now)
+		s.stageIDs(ids, "submitted")
+	}
 
 	if alone {
 		delete(s.State.SignalSent, remote[0])
@@ -1281,6 +1289,13 @@ func (s *Shift) typeDispatcher(d string, local, remote, notes []string, now time
 		s.State.Signals, s.State.Notes = remote, nil
 		s.State.NoticeMeta = nil
 	}
+
+	if typeErr != nil {
+		s.failUnclear(d, Failed{Line: line, Error: typeErr.Error(), At: now, IDs: ids, Parts: kept})
+
+		return ""
+	}
+
 	s.Told = true
 	s.log(d, "told", "", line)
 
@@ -1406,6 +1421,15 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 	head := rs.Inbox[0]
 
 	if err := s.typeLine(name, head); err != nil {
+		// It may have reached the pane: it is not typed again by itself, on this try or any other.
+		if typedMayHaveReached(err) {
+			s.failUnclear(name, Failed{Line: head, Error: err.Error(), At: now, IDs: s.takeIDs(name, head)})
+			rs.Inbox = rs.Inbox[1:]
+			rs.clearTries()
+
+			return name + ": a queued line may have reached its pane, kept in zmina queue as needing attention: " + head
+		}
+
 		rs.Attempts++
 		rs.TriedAt = now
 		s.deliveryFailure(name, head, err.Error())

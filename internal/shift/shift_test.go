@@ -33,9 +33,12 @@ type fakeTmux struct {
 	starts []string
 	argv   map[string][]string
 	screen string
-	// typeErr makes Type fail.
-	typeErr  error
-	probeErr map[string]error
+	// typeErr makes Type fail, as a send-keys that timed out between two pieces: the start of the line sits in the input
+	// line, where a clearing key takes it out, so that nothing of the line reached the session. typeBlind makes it fail
+	// leaving nothing to see in the input line: the line may have gone whole, or never started.
+	typeErr   error
+	typeBlind bool
+	probeErr  map[string]error
 	// exitSlow keeps a session up after /exit, as a claude that takes a while to end.
 	exitSlow bool
 	attached map[string]bool
@@ -180,6 +183,10 @@ func (f *fakeTmux) TypeLines(n, text string) error {
 
 func (f *fakeTmux) Type(n, text string) error {
 	if f.typeErr != nil && text != "/exit" {
+		if !f.typeBlind {
+			f.drafts[n] = text
+		}
+
 		return f.typeErr
 	}
 
