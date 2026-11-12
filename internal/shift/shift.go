@@ -1510,38 +1510,125 @@ type QueueView struct {
 	// it was accepted and how, when it was seen. Read from the card file, apart from the state; a line has none until it
 	// is queued by a zmina that keeps them.
 	Facts []Card `json:"facts,omitempty"`
+
+	rows rowCards
 }
 
-// cardsOfLines are the cards of the lines this view shows, in the order the lines are shown.
-func (q *QueueView) cardsOfLines(cards []Card) []Card {
-	var lines []string
+// rowCards are the cards under the rows of a queue view, one card for one row at most.
+type rowCards struct {
+	inbox  []*Card
+	sent   *Card
+	posted []*Card
+	failed []*Card
+}
 
-	lines = append(lines, q.Inbox...)
+// InboxFacts is the card of the i-th waiting line, nil when it has none of its own.
+func (q QueueView) InboxFacts(i int) *Card { return rowCard(q.rows.inbox, i) }
 
-	if q.Sent != nil {
-		lines = append(lines, postedLines(q.Sent.Line, q.Sent.Parts)...)
+// SentFacts is the card of the line typed and not yet landed.
+func (q QueueView) SentFacts() *Card { return q.rows.sent }
+
+// PostedFacts is the card of the i-th line posted and not yet seen.
+func (q QueueView) PostedFacts(i int) *Card { return rowCard(q.rows.posted, i) }
+
+// FailedFacts is the card of the i-th failed line.
+func (q QueueView) FailedFacts(i int) *Card { return rowCard(q.rows.failed, i) }
+
+func rowCard(cards []*Card, i int) *Card {
+	if i < 0 || i >= len(cards) {
+		return nil
 	}
 
-	for _, p := range q.Posted {
-		lines = append(lines, postedLines(p.Line, p.Parts)...)
-	}
+	return cards[i]
+}
 
-	for _, f := range q.Failed {
-		lines = append(lines, postedLines(f.Line, f.Parts)...)
-	}
+// resolveCards gives each row of the view the card that is its own, by the kind of the row, the way the delivery picks
+// the card an observation is about (roleCards.pick): the oldest card of the line's words that fits, and none for two rows.
+//
+//   - a failed row: a card in play that needs attention, else the card closed as failed at the moment the line failed;
+//   - a typed or posted row: a card in play that was accepted;
+//   - a waiting row: a card in play that was not accepted and needs no look yet, the k-th such card for the k-th row of
+//     the same words. A waiting row with no card of its own shows nothing, never an older line's.
+//
+// The lines a post to the dispatcher was made of have their cards too (Facts), apart from the row.
+func (q *QueueView) resolveCards(cards []Card) {
+	used := make([]bool, len(cards))
 
-	var out []Card
+	take := func(line string, fits func(*Card) bool) *Card {
+		id := CardID(q.Role, line)
 
-	for _, line := range lines {
-		c := CardOf(cards, q.Role, line)
-		if c == nil || slices.ContainsFunc(out, func(o Card) bool { return o.ID == c.ID && o.Written.Equal(c.Written) }) {
-			continue
+		for i := range cards {
+			if c := &cards[i]; !used[i] && c.ID == id && fits(c) {
+				used[i] = true
+				k := *c
+
+				return &k
+			}
 		}
 
-		out = append(out, *c)
+		return nil
 	}
 
-	return out
+	accepted := func(c *Card) bool { return !c.done() && c.Accepted != nil }
+	waiting := func(c *Card) bool { return !c.done() && c.Accepted == nil && c.Attention == nil }
+
+	var sentExtra, postedExtra, failedExtra []*Card
+
+	// What a record in flight stands for: its row, and the own lines it was made of.
+	record := func(line string, parts []Part, fits func(*Card) bool, extra *[]*Card) *Card {
+		row := take(line, fits)
+
+		for _, l := range postedLines(line, parts) {
+			if l == line {
+				continue
+			}
+
+			if c := take(l, fits); c != nil {
+				*extra = append(*extra, c)
+			}
+		}
+
+		return row
+	}
+
+	q.rows = rowCards{inbox: make([]*Card, len(q.Inbox)), posted: make([]*Card, len(q.Posted)), failed: make([]*Card, len(q.Failed))}
+
+	for i, f := range q.Failed {
+		needsLook := func(c *Card) bool { return !c.done() && c.Attention != nil }
+		closedThen := func(c *Card) bool { return c.Closed != nil && c.Closed.How == ClosedFailed && c.Closed.At.Equal(f.At) }
+
+		q.rows.failed[i] = record(f.Line, f.Parts, func(c *Card) bool { return needsLook(c) || closedThen(c) }, &failedExtra)
+	}
+
+	if q.Sent != nil {
+		q.rows.sent = record(q.Sent.Line, q.Sent.Parts, accepted, &sentExtra)
+	}
+
+	for i, p := range q.Posted {
+		q.rows.posted[i] = record(p.Line, p.Parts, accepted, &postedExtra)
+	}
+
+	for i, line := range q.Inbox {
+		q.rows.inbox[i] = take(line, waiting)
+	}
+
+	var shown []*Card
+
+	shown = append(shown, q.rows.inbox...)
+	shown = append(shown, q.rows.sent)
+	shown = append(shown, sentExtra...)
+	shown = append(shown, q.rows.posted...)
+	shown = append(shown, postedExtra...)
+	shown = append(shown, q.rows.failed...)
+	shown = append(shown, failedExtra...)
+
+	q.Facts = nil
+
+	for _, c := range shown {
+		if c != nil {
+			q.Facts = append(q.Facts, *c)
+		}
+	}
 }
 
 // FailedView is a failed line with its kind: Unclear when it may have reached the role (Failed.Unclear), so that it
@@ -1581,7 +1668,7 @@ func (s *Shift) Queues() []QueueView {
 		}
 
 		if len(q.Inbox)+len(q.Posted)+len(q.Failed)+len(q.Signals)+len(q.Notes) > 0 || q.Sent != nil {
-			q.Facts = q.cardsOfLines(ReadCards(s.Crew.Layout(), name))
+			q.resolveCards(ReadCards(s.Crew.Layout(), name))
 			out = append(out, q)
 		}
 	}

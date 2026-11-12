@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/fsx"
 )
 
@@ -228,7 +229,7 @@ func TestACardIsClosedWhereItsLineLeaves(t *testing.T) {
 		assert.Equal(t, ClosedDropped, c.Closed.How)
 	})
 
-	t.Run("a failed line, dropped or acked later", func(t *testing.T) {
+	t.Run("a failed line, dropped later", func(t *testing.T) {
 		f := typedFixture(t, crewYAML, "designer")
 		require.NoError(t, f.s.Queue("designer", "one"))
 		f.tm.typeErr = errNotTyped("tmux: no server")
@@ -238,14 +239,14 @@ func TestACardIsClosedWhereItsLineLeaves(t *testing.T) {
 			*f.now = f.now.Add(countedGap)
 		}
 
-		require.Equal(t, ClosedFailed, cardOn(t, f, "designer", "one").Closed.How)
+		failed := cardOn(t, f, "designer", "one")
+		require.Equal(t, ClosedFailed, failed.Closed.How)
 
 		_, err := f.s.Drop("designer", false)
 		require.NoError(t, err)
 		f.s.FlushCards()
 
-		c := cardOn(t, f, "designer", "one")
-		assert.Equal(t, ClosedDropped, c.Closed.How, "the end of its failed record is the line's")
+		assert.Equal(t, failed, cardOn(t, f, "designer", "one"), "finished when it failed: the drop closes nothing again")
 	})
 
 	t.Run("acked", func(t *testing.T) {
@@ -562,12 +563,12 @@ func TestCardsArePrunedByAgeAndCap(t *testing.T) {
 			{ID: "kept", Written: *f.now},
 		}))
 
-		n, err := PruneCards(l, *f.now, true)
+		n, err := PruneCards(l, *f.now, nil, true)
 		require.NoError(t, err)
 		assert.Equal(t, 1, n)
 		assert.Len(t, cardsOn(f, "designer"), 2, "a dry run writes nothing")
 
-		n, err = PruneCards(l, *f.now, false)
+		n, err = PruneCards(l, *f.now, nil, false)
 		require.NoError(t, err)
 		assert.Equal(t, 1, n)
 		assert.Equal(t, "kept", cardsOn(f, "designer")[0].ID)
@@ -693,5 +694,405 @@ func TestDeliveryPassesWriteTheirCards(t *testing.T) {
 
 		c := cardOn(t, f, "designer", "[dev] look at T-3")
 		require.NotNil(t, c.Accepted)
+	})
+}
+
+// queueOf is the view of a role's queue a look gets: the state as it is, the cards as the file has them.
+func queueOf(t *testing.T, f fix, role string) QueueView {
+	t.Helper()
+
+	for _, q := range f.s.Queues() {
+		if q.Role == role {
+			return q
+		}
+	}
+
+	require.Fail(t, "nothing waits for "+role)
+
+	return QueueView{}
+}
+
+// Lines of the same words have a card each, and a look gives each row the card that is its own, by the kind of the row, as
+// the delivery picks it: the typed or posted row the card that was accepted, a waiting row one that was not, the k-th
+// waiting row the k-th such card, and no card for two rows.
+func TestALookGivesIdenticalRowsTheirOwnCards(t *testing.T) {
+	t.Run("a typed row and a waiting row", func(t *testing.T) {
+		f := typedFixture(t, crewYAML, "designer")
+		first := *f.now
+		require.NoError(t, f.s.Queue("designer", "same words"))
+
+		*f.now = f.now.Add(time.Minute)
+		second := *f.now
+		require.NoError(t, f.s.Queue("designer", "same words"))
+
+		f.s.deliverInbox("designer", *f.now)
+		f.s.FlushCards()
+
+		q := queueOf(t, f, "designer")
+		require.NotNil(t, q.Sent)
+		require.Len(t, q.Inbox, 1)
+
+		typed := q.SentFacts()
+		require.NotNil(t, typed, "the typed row has the card that was accepted")
+		require.NotNil(t, typed.Accepted)
+		assert.Equal(t, AcceptedTyped, typed.Accepted.How)
+		assert.Equal(t, first, typed.Written)
+
+		waiting := q.InboxFacts(0)
+		require.NotNil(t, waiting, "the waiting row has the other")
+		assert.Nil(t, waiting.Accepted)
+		assert.Equal(t, second, waiting.Written)
+
+		require.Len(t, q.Facts, 2, "--json carries both, none twice")
+	})
+
+	t.Run("a posted row and a waiting row", func(t *testing.T) {
+		f, _ := nativeFixture(t, crewYAML)
+		upNative(t, f, "designer")
+		require.NoError(t, f.s.Queue("designer", "same words"))
+
+		*f.now = f.now.Add(time.Minute)
+		require.NoError(t, f.s.Queue("designer", "same words"))
+
+		require.NotEmpty(t, f.s.deliverInbox("designer", *f.now))
+		f.s.FlushCards()
+
+		q := queueOf(t, f, "designer")
+		require.Len(t, q.Posted, 1)
+		require.Len(t, q.Inbox, 1)
+
+		posted := q.PostedFacts(0)
+		require.NotNil(t, posted)
+		require.NotNil(t, posted.Accepted)
+		assert.Equal(t, AcceptedSocket, posted.Accepted.How)
+
+		waiting := q.InboxFacts(0)
+		require.NotNil(t, waiting)
+		assert.Nil(t, waiting.Accepted)
+		assert.True(t, waiting.Written.After(posted.Written))
+	})
+
+	t.Run("the k-th waiting row has the k-th card", func(t *testing.T) {
+		f := fixtureWith(t, crewYAML)
+
+		var written []time.Time
+
+		for range 3 {
+			written = append(written, *f.now)
+			require.NoError(t, f.s.Queue("designer", "again"))
+			*f.now = f.now.Add(time.Minute)
+		}
+
+		f.s.FlushCards()
+
+		q := queueOf(t, f, "designer")
+		require.Len(t, q.Inbox, 3)
+
+		for i := range written {
+			c := q.InboxFacts(i)
+			require.NotNil(t, c, "row %d", i)
+			assert.Equal(t, written[i], c.Written, "row %d has its own card, never another row's", i)
+		}
+
+		assert.Len(t, q.Facts, 3)
+	})
+
+	t.Run("a failed row, by the moment it failed", func(t *testing.T) {
+		f := typedFixture(t, crewYAML, "designer")
+		rs := f.s.State.Role("designer")
+
+		older, newer := *f.now, f.now.Add(time.Hour)
+
+		// An earlier failure of the same words, long finished, and today's.
+		require.NoError(t, f.s.Queue("designer", "same words"))
+		require.NoError(t, f.s.Queue("designer", "same words"))
+		f.s.addFailed("designer", Failed{Line: "same words", Error: "tmux refused", At: older})
+		f.s.addFailed("designer", Failed{Line: "same words", Error: "tmux refused", At: newer})
+		f.s.FlushCards()
+
+		rs.Failed = []Failed{{Line: "same words", Error: "tmux refused", At: newer}}
+
+		q := queueOf(t, f, "designer")
+		c := q.FailedFacts(0)
+		require.NotNil(t, c)
+		require.NotNil(t, c.Closed)
+		assert.Equal(t, newer, c.Closed.At, "the one closed when this line failed, not an older one's")
+
+		// A failed line with no card of its own of that moment shows nothing.
+		rs.Failed = []Failed{{Line: "same words", Error: "tmux refused", At: newer.Add(time.Hour)}}
+		assert.Nil(t, queueOf(t, f, "designer").FailedFacts(0))
+	})
+}
+
+// A waiting line with no card of its own shows nothing: not the facts of an older line of the same words that was
+// finished long ago. One with a card in play shows it.
+func TestAWaitingLineWithNoCardOfItsOwnShowsNothing(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	l := f.s.Crew.Layout()
+
+	old := Card{ID: CardID("designer", "same words"), From: "dev", Written: f.now.Add(-48 * time.Hour),
+		Accepted: &CardAccepted{At: f.now.Add(-48 * time.Hour), How: AcceptedTyped},
+		Closed:   &CardClosed{At: f.now.Add(-47 * time.Hour), How: ClosedLanded}}
+	require.NoError(t, writeCardFile(l, l.DeliveryCards("designer"), []Card{old}))
+
+	// Queued by a zmina that kept no cards, or its card was pruned: the line is in the state, and no card is its own.
+	f.s.State.Role("designer").Inbox = []string{"same words"}
+
+	q := queueOf(t, f, "designer")
+	assert.Nil(t, q.InboxFacts(0), "nothing, not the older line's facts")
+	assert.Empty(t, q.Facts)
+
+	// Its own card, in play, is shown.
+	require.NoError(t, f.s.Queue("designer", "same words"))
+	f.s.FlushCards()
+
+	q = queueOf(t, f, "designer")
+	require.Len(t, q.Inbox, 2)
+	require.NotNil(t, q.InboxFacts(0))
+	assert.Equal(t, *f.now, q.InboxFacts(0).Written)
+	assert.Nil(t, q.InboxFacts(1), "one card, one row")
+}
+
+// A card finished long ago is never closed again by a line of the same words that has no card in play: what ends now is
+// not that delivery's end.
+func TestALineWithNoCardInPlaceClosesNoOlderCard(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	l := f.s.Crew.Layout()
+
+	seen := Card{ID: CardID("designer", "same words"), Written: f.now.Add(-time.Hour),
+		Seen: &CardSeen{At: f.now.Add(-time.Hour), By: SeenTranscript}}
+	failed := Card{ID: CardID("designer", "same words"), Written: f.now.Add(-time.Hour),
+		Closed: &CardClosed{At: f.now.Add(-time.Hour), How: ClosedFailed}}
+	require.NoError(t, writeCardFile(l, l.DeliveryCards("designer"), []Card{seen, failed}))
+
+	f.s.cardClose("designer", "same words", ClosedAcked, "its reader acked it", *f.now)
+	f.s.cardClose("designer", "same words", ClosedDropped, "queue drop", *f.now)
+	f.s.FlushCards()
+
+	cards := cardsOn(f, "designer")
+	require.Len(t, cards, 2)
+	assert.Nil(t, cards[0].Closed, "seen, not closed: of an earlier delivery")
+	assert.Equal(t, ClosedFailed, cards[1].Closed.How)
+}
+
+// The cards are written with the state each time the state is flushed inside a command, so a command that fails after
+// its flush has saved both; a flush that fails writes nothing, and what is done after the last flush is in neither.
+func TestAStateFlushWritesTheCardsWithIt(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+
+	var flushes int
+
+	f.s.Flush = func() error { flushes++; return nil }
+
+	require.NoError(t, f.s.Queue("designer", "saved with the state"))
+	assert.NoFileExists(t, f.s.Crew.Layout().DeliveryCards("designer"))
+
+	f.s.flush()
+	require.Equal(t, 1, flushes)
+	assert.Len(t, cardsOn(f, "designer"), 1)
+
+	// What the command does after its last flush is left unwritten when it fails.
+	require.NoError(t, f.s.Queue("designer", "after the last flush"))
+	assert.Len(t, cardsOn(f, "designer"), 1)
+
+	// A flush that fails writes no card: the state on disk does not say what the cards would.
+	f.s.Flush = func() error { return errors.New("disk full") }
+	f.s.flush()
+	assert.Len(t, cardsOn(f, "designer"), 1)
+}
+
+// A tracked line whose typing broke unclearly leaves the queue with no failed record: its card says it needs attention,
+// carries the ack ids, and is closed when its reader acks the line.
+func TestAnUnclearTrackedLinesCardIsClosedByItsAck(t *testing.T) {
+	f := typedFixture(t, crewYAML, "designer")
+	f.s.State.Role("designer").Inbound = true
+
+	id, err := f.s.QueueTracked("designer", "[dev] look at T-1")
+	require.NoError(t, err)
+
+	line := f.s.State.Role("designer").Inbox[0]
+
+	f.tm.typeErr = errors.New("tmux: send-keys timed out")
+	f.s.deliverInbox("designer", *f.now)
+	require.Empty(t, f.s.State.Role("designer").Failed, "no record stands beside the ack")
+
+	c := cardOn(t, f, "designer", line)
+	require.NotNil(t, c.Attention)
+	assert.Equal(t, []string{id}, c.Acks)
+	assert.Nil(t, c.Closed)
+
+	*f.now = f.now.Add(time.Minute)
+	acked, warn := f.s.AckLines([]string{id}, false, "designer", "designer")
+	require.Empty(t, warn)
+	require.Equal(t, []string{id}, acked)
+	f.s.FlushCards()
+
+	c = cardOn(t, f, "designer", line)
+	require.NotNil(t, c.Closed)
+	assert.Equal(t, ClosedAcked, c.Closed.How)
+	assert.Equal(t, *f.now, c.Closed.At)
+	assert.NotNil(t, c.Attention, "what it needed stays on the card")
+}
+
+// Said again by its ack, the line is a new card's: the old card stays as the attention it was and is closed as said again,
+// before the new line is written, so that the new delivery is never noted on it.
+func TestAnUnclearTrackedLineSaidAgainHasANewCard(t *testing.T) {
+	f := typedFixture(t, crewYAML, "designer")
+	f.s.State.Role("designer").Inbound = true
+
+	_, err := f.s.QueueTracked("designer", "[dev] look at T-1")
+	require.NoError(t, err)
+
+	line := f.s.State.Role("designer").Inbox[0]
+
+	f.tm.typeErr = errors.New("tmux: send-keys timed out")
+	f.s.deliverInbox("designer", *f.now)
+
+	f.tm.typeErr = nil
+	*f.now = f.now.Add(f.s.Crew.RenotifyD() + time.Minute)
+	f.status("designer", "idle", *f.now)
+	f.s.renotify(*f.now)
+
+	again := f.s.State.Role("designer").Inbox[0]
+	require.NotEqual(t, line, again, "said again with its pending mark")
+	f.s.FlushCards()
+
+	old := cardOn(t, f, "designer", line)
+	require.NotNil(t, old.Attention)
+	require.NotNil(t, old.Closed)
+	assert.Equal(t, ClosedDropped, old.Closed.How)
+	assert.Equal(t, "said again by its ack", old.Closed.Why)
+
+	fresh := cardOn(t, f, "designer", again)
+	assert.Nil(t, fresh.Closed)
+	assert.Nil(t, fresh.Attention)
+	assert.Equal(t, "zmina", fresh.From)
+	assert.Equal(t, *f.now, fresh.Written)
+	assert.Empty(t, fresh.Acks)
+}
+
+// An ack that goes by a way that names no card (evicted past acksMax, dropped) leaves no card open: the next time the
+// role's cards are loaded they are closed, and a finished card is pruned by age like any.
+func TestAnUnclearTrackedLinesCardClosesWhenItsAckIsGoneAndIsPrunedByAge(t *testing.T) {
+	f := typedFixture(t, crewYAML, "designer")
+	f.s.State.Role("designer").Inbound = true
+
+	id, err := f.s.QueueTracked("designer", "[dev] look at T-1")
+	require.NoError(t, err)
+
+	line := f.s.State.Role("designer").Inbox[0]
+
+	f.tm.typeErr = errors.New("tmux: send-keys timed out")
+	f.s.deliverInbox("designer", *f.now)
+	require.NotNil(t, cardOn(t, f, "designer", line).Attention)
+
+	// The ack is gone without anyone naming the card.
+	delete(f.s.State.Acks, id)
+	f.s.cards = nil // a later pass loads the file anew
+	*f.now = f.now.Add(time.Hour)
+
+	require.NoError(t, f.s.Queue("designer", "touches the role's cards"))
+	f.s.FlushCards()
+
+	c := cardOn(t, f, "designer", line)
+	require.NotNil(t, c.Closed)
+	assert.Equal(t, ClosedDropped, c.Closed.How)
+	assert.Equal(t, "its ack is gone", c.Closed.Why)
+
+	// A week on, a write drops it.
+	f.s.cards = nil
+	*f.now = f.now.Add(cardKeep + time.Hour)
+	require.NoError(t, f.s.Queue("designer", "a week later"))
+	f.s.FlushCards()
+
+	assert.Empty(t, CardsOf(cardsOn(f, "designer"), "designer", line))
+}
+
+// The retention pass also removes the card files moved aside as corrupt once they are over a week old, and the card file
+// of a role no longer in the crew once every card in it is past its keep (a card still in play counts from its last fact).
+func TestPruneCardsRemovesOldAsideFilesAndFilesOfRolesGone(t *testing.T) {
+	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.Local)
+	inCrew := func(role string) bool { return role == "designer" }
+
+	setup := func(t *testing.T) crew.Layout {
+		t.Helper()
+
+		l := crew.Layout{Dir: t.TempDir()}
+		require.NoError(t, os.MkdirAll(l.Delivery(), 0o700))
+
+		write := func(role string, cards ...Card) {
+			require.NoError(t, writeCardFile(l, l.DeliveryCards(role), cards))
+		}
+		put := func(name string) {
+			require.NoError(t, os.WriteFile(filepath.Join(l.Delivery(), name), []byte("{"), 0o600))
+		}
+
+		// Moved aside a month ago, and a day ago.
+		put("designer.json.broken-" + now.Add(-30*24*time.Hour).Format("20060102-150405"))
+		put("designer.json.broken-" + now.Add(-24*time.Hour).Format("20060102-150405"))
+
+		// A role in the crew keeps even a card in play for weeks.
+		write("designer", Card{ID: "in-1", Written: now.Add(-60 * 24 * time.Hour)})
+		// A role gone: all past their keep, one finished and one in play from its last fact.
+		write("retired", Card{ID: "in-2", Closed: &CardClosed{At: now.Add(-9 * 24 * time.Hour), How: ClosedLanded}},
+			Card{ID: "in-3", Written: now.Add(-20 * 24 * time.Hour), Attention: &CardAttention{At: now.Add(-8 * 24 * time.Hour), Why: "x"}})
+		// A role gone with a card that is not past its keep: the file stays, and so does that card.
+		write("lately", Card{ID: "in-4", Closed: &CardClosed{At: now.Add(-9 * 24 * time.Hour), How: ClosedLanded}},
+			Card{ID: "in-5", Written: now.Add(-time.Hour)})
+
+		return l
+	}
+
+	names := func(l crew.Layout) []string {
+		entries, err := os.ReadDir(l.Delivery())
+		require.NoError(t, err)
+
+		var out []string
+		for _, e := range entries {
+			out = append(out, e.Name())
+		}
+
+		return out
+	}
+
+	t.Run("a dry run counts and removes nothing", func(t *testing.T) {
+		l := setup(t)
+
+		n, err := PruneCards(l, now, inCrew, true)
+		require.NoError(t, err)
+		assert.Equal(t, 1+2+1, n, "one aside file, the two cards of the role gone, the old card of the other")
+		assert.Len(t, names(l), 5)
+	})
+
+	t.Run("a pass", func(t *testing.T) {
+		l := setup(t)
+
+		n, err := PruneCards(l, now, inCrew, false)
+		require.NoError(t, err)
+		assert.Equal(t, 4, n)
+
+		got := names(l)
+		assert.NotContains(t, got, "retired.json", "every card past its keep: the file goes")
+		assert.Contains(t, got, "lately.json", "one card is not past its keep")
+		assert.Contains(t, got, "designer.json", "in the crew: kept as it is")
+		assert.Contains(t, got, "designer.json.broken-"+now.Add(-24*time.Hour).Format("20060102-150405"), "a day old: kept")
+		assert.NotContains(t, got, "designer.json.broken-"+now.Add(-30*24*time.Hour).Format("20060102-150405"))
+
+		cards, _, err := readCardFile(l.DeliveryCards("lately"))
+		require.NoError(t, err)
+		require.Len(t, cards, 1)
+		assert.Equal(t, "in-5", cards[0].ID)
+
+		cards, _, err = readCardFile(l.DeliveryCards("designer"))
+		require.NoError(t, err)
+		assert.Len(t, cards, 1, "an old card in play of a role in the crew stays")
+	})
+
+	t.Run("without a crew every role is in it", func(t *testing.T) {
+		l := setup(t)
+
+		_, err := PruneCards(l, now, nil, false)
+		require.NoError(t, err)
+		assert.Contains(t, names(l), "retired.json")
 	})
 }

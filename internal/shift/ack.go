@@ -206,6 +206,9 @@ func (s *Shift) renotify(now time.Time) {
 			s.State.Signals = append(s.State.Signals, a.ID+" (still pending since "+s.clock(a.First)+") "+a.Text)
 		} else {
 			line := a.Text + s.lineSuffix(a)
+			// A line whose typing broke unclearly has no record but its card: said again, it is a new card's, and the old
+			// one is finished first, so that the new delivery is never noted on it.
+			s.cardsAckedBy(a.Role, a.ID, ClosedDropped, "said again by its ack", now)
 			s.enqueue(a.Role, line, Facts{From: "zmina"})
 			s.carryIDs(a.Role, line, []string{a.ID})
 		}
@@ -335,6 +338,7 @@ func (s *Shift) AckLines(ids []string, all bool, role, caller string) ([]string,
 		delete(s.State.Acks, id)
 		s.log(a.Role, "acked", "", id+" "+a.Text)
 		s.dropQueued(a)
+		s.cardsAckedBy(a.Role, id, ClosedAcked, "its reader acked it", s.cardNow())
 
 		// A plain tell is read once its line is acked; a report only when the dispatcher says it consumed the
 		// report itself (zmina message read), never by acking the notice that points to it.

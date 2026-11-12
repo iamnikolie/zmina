@@ -1435,7 +1435,7 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 			if s.tracked(ids) {
 				s.delivered(ids, now)
 				s.log(name, "type-unclear", "", "may have reached the pane; its ack says it again: "+head)
-				s.cardAttention(name, head, err.Error(), now)
+				s.cardUnclearTracked(name, head, err.Error(), ids, now)
 
 				return ""
 			}
@@ -1656,7 +1656,13 @@ func (s *Shift) flush() {
 		if s.Warn != nil {
 			s.Warn(fmt.Errorf("state not saved, nothing more typed this beat: %w", err))
 		}
+
+		return
 	}
+
+	// The cards of what the state now says are written with it: a command that fails after this flush has saved both,
+	// and what it did after leaves neither.
+	s.FlushCards()
 }
 
 // deliver types or posts the dispatcher's queue (deliverOnce) and saves at once what it did; after a failed flush

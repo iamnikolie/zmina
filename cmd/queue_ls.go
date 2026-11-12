@@ -109,5 +109,10 @@ func queueFacts(c *shift.Card) string {
 		parts = append(parts, "attention "+at(a.At))
 	}
 
+	// A card shown for a row that is not in play (a failed line's, closed when it failed) says how it ended.
+	if k := c.Closed; k != nil {
+		parts = append(parts, "closed "+k.How+" "+at(k.At))
+	}
+
 	return strings.Join(parts, " · ")
 }

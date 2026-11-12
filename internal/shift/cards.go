@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -76,7 +77,10 @@ type Card struct {
 	Attention *CardAttention `json:"attention,omitempty"`
 	// Back is that the line went back to the head of the queue after it was accepted (its conversation ended before it
 	// showed, a retry): its card stays, the new delivery has its own accepted and seen.
-	Back   *CardBack   `json:"back,omitempty"`
+	Back *CardBack `json:"back,omitempty"`
+	// Acks are the ack ids (S-<n>) of a tracked line whose typing broke where its outcome is unclear: it leaves the queue
+	// with no record, and its ack is what closes its card (cardsAckedBy), or says it again (cardsSaidAgain).
+	Acks   []string    `json:"acks,omitempty"`
 	Closed *CardClosed `json:"closed,omitempty"`
 }
 
@@ -133,6 +137,48 @@ type Facts struct {
 
 // done reports whether delivery of the card's line has ended: it was seen or it was closed.
 func (c *Card) done() bool { return c.Closed != nil || c.Seen != nil }
+
+// lastFact is the latest moment any fact of the card carries: when it was written, accepted, needed a look, went back,
+// was seen or closed.
+func (c *Card) lastFact() time.Time {
+	latest := c.Written
+
+	for _, at := range []*time.Time{accAt(c), attAt(c), backAt(c)} {
+		if at != nil && at.After(latest) {
+			latest = *at
+		}
+	}
+
+	if end := c.last(); end.After(latest) {
+		latest = end
+	}
+
+	return latest
+}
+
+func accAt(c *Card) *time.Time {
+	if c.Accepted == nil {
+		return nil
+	}
+
+	return &c.Accepted.At
+}
+
+func attAt(c *Card) *time.Time {
+	if c.Attention == nil {
+		return nil
+	}
+
+	return &c.Attention.At
+}
+
+func backAt(c *Card) *time.Time {
+	if c.Back == nil {
+		return nil
+	}
+
+	return &c.Back.At
+}
 
 // last is the moment the card stopped changing: when it was closed, else seen; zero for a card still in play.
 func (c *Card) last() time.Time {
@@ -222,25 +268,20 @@ func ReadCards(l crew.Layout, role string) []Card {
 	return cards
 }
 
-// CardOf is the card of a line a look shows: the newest one with the line's id that is still in play, else the newest
-// there is. Nil when the line has no card.
-func CardOf(cards []Card, role, line string) *Card {
+// CardsOf are all the cards a role has for a line, oldest first, in play or finished: no choice among them is made here.
+// A look that shows a card under a row resolves it by the row's kind (QueueView).
+func CardsOf(cards []Card, role, line string) []Card {
 	id := CardID(role, line)
 
-	var found *Card
+	var out []Card
 
-	for i := range cards {
-		c := &cards[i]
-		if c.ID != id {
-			continue
-		}
-
-		if found == nil || !c.done() || found.done() {
-			found = c
+	for _, c := range cards {
+		if c.ID == id {
+			out = append(out, c)
 		}
 	}
 
-	return found
+	return out
 }
 
 // roleCards is one role's cards as loaded in this pass.
@@ -284,6 +325,10 @@ func (s *Shift) cardsOf(name string) *roleCards {
 	if rc == nil {
 		rc = s.loadCards(name)
 		s.cards.roles[name] = rc
+
+		if !rc.off {
+			s.settleAcks(rc)
+		}
 	}
 
 	if rc.off {
@@ -365,10 +410,16 @@ func writeCardFile(l crew.Layout, path string, cards []Card) error {
 	return fsx.WriteFile(path, append(raw, '\n'), 0o600)
 }
 
-// PruneCards drops, in every card file of the crew, the cards past their keep and over the cap, and writes the files
-// that changed; it returns how many cards went. With dry it only counts. Call it under the state lock (the retention
-// pass takes it), since the delivery writes the same files.
-func PruneCards(l crew.Layout, now time.Time, dry bool) (int, error) {
+// asideInfix is what a card file moved aside carries after its name: delivery/<role>.json.broken-<time>.
+const asideInfix = ".json.broken-"
+
+// PruneCards drops, in every card file of the crew, the cards past their keep and over the cap, and writes the files that
+// changed; it removes the files moved aside as corrupt (<role>.json.broken-<time>) once they are older than the keep,
+// and the file of a role known no longer to be in the crew (known says) once every card in it is past its keep — a card
+// still in play counts from its last fact. It returns how many cards and aside files went. With dry it only counts. A
+// nil known takes every role as in the crew. Call it under the state lock (the retention pass takes it), since the
+// delivery writes the same files.
+func PruneCards(l crew.Layout, now time.Time, known func(role string) bool, dry bool) (int, error) {
 	entries, err := os.ReadDir(l.Delivery())
 	if errors.Is(err, os.ErrNotExist) {
 		return 0, nil
@@ -384,8 +435,26 @@ func PruneCards(l crew.Layout, now time.Time, dry bool) (int, error) {
 	)
 
 	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+
+		if i := strings.Index(e.Name(), asideInfix); i > 0 {
+			if asideOld(e, now) {
+				total++
+
+				if !dry {
+					if err := os.Remove(filepath.Join(l.Delivery(), e.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
+						errs = append(errs, err)
+					}
+				}
+			}
+
+			continue
+		}
+
 		role, ok := strings.CutSuffix(e.Name(), ".json")
-		if !ok || e.IsDir() || !hookRole(role) {
+		if !ok || !hookRole(role) {
 			continue
 		}
 
@@ -396,21 +465,49 @@ func PruneCards(l crew.Layout, now time.Time, dry bool) (int, error) {
 			continue
 		}
 
-		kept := pruneCards(slices.Clone(cards), now)
-		if len(kept) == len(cards) {
-			continue
+		gone := known != nil && !known(role)
+
+		kept := slices.Clone(cards)
+		if gone {
+			kept = slices.DeleteFunc(kept, func(c Card) bool { return now.Sub(c.lastFact()) > cardKeep })
 		}
 
-		total += len(cards) - len(kept)
+		kept = pruneCards(kept, now)
 
-		if !dry {
-			if err := writeCardFile(l, path, kept); err != nil {
-				errs = append(errs, err)
+		switch {
+		case gone && len(kept) == 0 && len(cards) > 0:
+			total += len(cards)
+
+			if !dry {
+				if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+					errs = append(errs, err)
+				}
+			}
+		case len(kept) != len(cards):
+			total += len(cards) - len(kept)
+
+			if !dry {
+				if err := writeCardFile(l, path, kept); err != nil {
+					errs = append(errs, err)
+				}
 			}
 		}
 	}
 
 	return total, errors.Join(errs...)
+}
+
+// asideOld reports a card file moved aside as corrupt more than the keep ago: by the time in its name, else by the file's.
+func asideOld(e os.DirEntry, now time.Time) bool {
+	_, stamp, _ := strings.Cut(e.Name(), asideInfix)
+
+	if at, err := time.ParseInLocation("20060102-150405", stamp, time.Local); err == nil {
+		return now.Sub(at) > cardKeep
+	}
+
+	info, err := e.Info()
+
+	return err == nil && now.Sub(info.ModTime()) > cardKeep
 }
 
 // pick is the card an observation is about, by the line's id, oldest first (a queue is read from its head): for a new
@@ -488,35 +585,66 @@ func (s *Shift) cardAttention(name, line, why string, at time.Time) {
 	}
 }
 
-// cardClose notes how the line ended. A line with no card in play is not given one: the card it had was closed, or
-// pruned, and what ended now says nothing a card could keep. A card seen and not yet closed takes it, and so does one
-// closed as failed while its failed record waited for a retry, a drop or an ack: that record's end is the line's.
+// cardClose notes how the line ended, on the oldest card of the line still in play. A line with no card in play is not
+// given one and closes none: the card it had was finished or pruned, and one of an earlier delivery of the same words is
+// not this line's.
 func (s *Shift) cardClose(name, line, how, why string, at time.Time) {
 	rc := s.cardsOf(name)
 	if rc == nil {
 		return
 	}
 
-	id := CardID(name, line)
-
-	c := rc.pick(id, false)
-	if c == nil {
-		for i := len(rc.cards) - 1; i >= 0; i-- {
-			k := &rc.cards[i]
-			if k.ID == id && (k.Seen != nil && k.Closed == nil || how != ClosedFailed && k.Closed != nil && k.Closed.How == ClosedFailed) {
-				c = k
-
-				break
-			}
-		}
-	}
-
+	c := rc.pick(CardID(name, line), false)
 	if c == nil {
 		return
 	}
 
 	c.Closed = &CardClosed{At: at, How: how, Why: why}
 	rc.dirty = true
+}
+
+// cardUnclearTracked notes a tracked line whose typing broke where its outcome is unclear (it counts as delivered, no
+// failed record stands beside it, its ack says it again): attention, and the ack ids that will close the card.
+func (s *Shift) cardUnclearTracked(name, line, why string, ids []string, at time.Time) {
+	if rc := s.cardsOf(name); rc != nil {
+		c := rc.known(name, line, false)
+		c.Attention, c.Acks = &CardAttention{At: at, Why: why}, slices.Clone(ids)
+		rc.dirty = true
+	}
+}
+
+// cardsAckedBy closes, how and why, the cards in play that carry the ack id: the reader of an unclear tracked line acked
+// it, or its ack is said again.
+func (s *Shift) cardsAckedBy(name, ack, how, why string, at time.Time) {
+	rc := s.cardsOf(name)
+	if rc == nil {
+		return
+	}
+
+	for i := range rc.cards {
+		if c := &rc.cards[i]; !c.done() && slices.Contains(c.Acks, ack) {
+			c.Closed = &CardClosed{At: at, How: how, Why: why}
+			rc.dirty = true
+		}
+	}
+}
+
+// settleAcks closes the cards in play whose every ack is gone from the state (acked, dropped, evicted past acksMax) by a
+// way that did not name the card: the ack no longer says anything again. It runs when a role's cards are loaded.
+func (s *Shift) settleAcks(rc *roleCards) {
+	if s.State == nil {
+		return
+	}
+
+	for i := range rc.cards {
+		c := &rc.cards[i]
+		if c.done() || len(c.Acks) == 0 || slices.ContainsFunc(c.Acks, func(id string) bool { return s.State.Acks[id] != nil }) {
+			continue
+		}
+
+		c.Closed = &CardClosed{At: s.Now(), How: ClosedDropped, Why: "its ack is gone"}
+		rc.dirty = true
+	}
 }
 
 // cardBack notes that the line went back to the queue: its card stays, whether it was in play or closed as failed, and
