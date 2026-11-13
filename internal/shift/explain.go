@@ -204,8 +204,46 @@ type LastKnown struct {
 const evidenceMax = 120
 
 // sessionTag is the random tag a role's lines carry ([zmina:<12 characters>]): it is what tells a line from a role's own session
-// from one another session sends, so it is never quoted.
-var sessionTag = regexp.MustCompile(`\[zmina:[A-Za-z0-9]{12}\]`)
+// from one another session sends, so it is never quoted. A terminal wraps a long line anywhere, and a quoted row is folded with a
+// space where the wrap was, so the tag is also read with one space in it, at any place; and a row that ends in the middle of one
+// (sessionTagStart) ends in the start of it.
+var (
+	sessionTag      = regexp.MustCompile(spacedTag())
+	sessionTagStart = regexp.MustCompile(`\[zmina:[A-Za-z0-9 ]{0,13}$`)
+)
+
+// spacedTag is a pattern for the tag whole, or with a single space between any two of its characters.
+func spacedTag() string {
+	parts := []string{`\[`, `z`, `m`, `i`, `n`, `a`, `:`}
+	for range 12 {
+		parts = append(parts, `[A-Za-z0-9]`)
+	}
+
+	parts = append(parts, `\]`)
+
+	alt := []string{strings.Join(parts, "")}
+	for i := 1; i < len(parts); i++ {
+		alt = append(alt, strings.Join(parts[:i], "")+" "+strings.Join(parts[i:], ""))
+	}
+
+	return strings.Join(alt, "|")
+}
+
+const tagMasked = "[zmina:…]"
+
+// maskTags shows each session tag in a text as tagMasked, a partial one at the end of it too.
+func maskTags(text string) string {
+	text = sessionTag.ReplaceAllString(text, tagMasked)
+
+	return sessionTagStart.ReplaceAllStringFunc(text, func(partial string) string {
+		// The start of a tag has at most the 12 characters and one space; any more is words after a bracket.
+		if strings.Count(partial, " ") > 1 || len(strings.ReplaceAll(partial, " ", "")) > len("[zmina:")+12 {
+			return partial
+		}
+
+		return tagMasked
+	})
+}
 
 // Quote is a text as an explanation quotes it, and the one way every quotation of a screen row, a line body, a status or a
 // crew's own words goes out: control characters stripped and white space folded first, so that nothing hides in them, then
@@ -214,7 +252,7 @@ func Quote(text string) string { return quoteN(text, evidenceMax) }
 
 // quoteN is Quote cut to n characters.
 func quoteN(text string, n int) string {
-	return clipRunes(sessionTag.ReplaceAllString(oneLine(text), "[zmina:…]"), n)
+	return clipRunes(maskTags(oneLine(text)), n)
 }
 
 func quote(line string) string { return Quote(line) }

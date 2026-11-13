@@ -613,3 +613,29 @@ func TestExplainBoundsWhatAFileAndAnOverrideSay(t *testing.T) {
 		assert.LessOrEqual(t, len([]rune(w)), 200, w)
 	}
 }
+
+// A tag the terminal wrapped is a tag all the same: the rows are joined with a space where the wrap was, and a row that ends
+// in the middle of one ends in the start of it. Both are masked, wherever the wrap fell.
+func TestQuoteMasksATagTheTerminalWrapped(t *testing.T) {
+	const tag = "[zmina:abcDEF123456]"
+
+	// A single space at every place inside it.
+	for i := 1; i < len(tag); i++ {
+		split := tag[:i] + "\n" + tag[i:]
+		assert.Equal(t, "said [zmina:…] and more", Quote("said "+split+" and more"), "wrapped after %d characters: %q", i, split)
+		assert.Equal(t, "said [zmina:…] and more", Quote("said "+tag[:i]+" "+tag[i:]+" and more"), "%q", tag[:i]+" "+tag[i:])
+	}
+
+	// A row that ends inside it.
+	for i := len("[zmina:"); i <= len(tag)-1; i++ {
+		assert.Equal(t, "said [zmina:…]", Quote("said "+tag[:i]), "cut after %d characters: %q", i, tag[:i])
+	}
+
+	assert.Equal(t, "said [zmina:…]", Quote("said [zmina:abc\nDEF12"), "wrapped, and then cut")
+
+	// What is no tag stays.
+	for _, text := range []string{"[zmina:short] and more", "[zmina:ab cd ef] and more", "zmina:abcDEF123456 and more",
+		"the [zmina: marker] is", "[zmina] and more"} {
+		assert.Equal(t, text, Quote(text))
+	}
+}
