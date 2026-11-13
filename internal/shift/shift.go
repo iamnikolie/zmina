@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -22,6 +21,7 @@ import (
 	"github.com/iamnikolie/zmina/internal/inbox"
 	"github.com/iamnikolie/zmina/internal/later"
 	"github.com/iamnikolie/zmina/internal/registry"
+	"github.com/iamnikolie/zmina/internal/screenrules"
 	"github.com/iamnikolie/zmina/internal/task"
 	"github.com/iamnikolie/zmina/internal/tmux"
 )
@@ -1202,9 +1202,8 @@ func (s *Shift) Down(name string, o DownOptions) error {
 	return s.FinishDown(name)
 }
 
-// exitDialog is Claude Code's question on exit while background work runs. Its "Exit and stop tasks" answer ends
-// the work with the session, so the session ends on its own and its hooks run, instead of the kill after ExitWait.
-var exitDialog = regexp.MustCompile(`(\d)\. Exit and stop tasks`)
+// exitLines is how much of the screen the exit question is read from when no row names a count.
+const exitLines = 15
 
 // answerEvery is how long an answered exit dialog may stay before it is answered again (a lost key).
 const answerEvery = 2 * time.Second
@@ -1234,16 +1233,30 @@ func WaitGone(t Tmux, names []string, timeout time.Duration) {
 	}
 }
 
-// answerExit picks "Exit and stop tasks" when the role's screen asks, and reports whether it did.
+// answerExit picks "Exit and stop tasks" when the role's screen asks, and reports whether it did. That is Claude Code's
+// question on exit while background work runs (claude.exit.stop-tasks): its "Exit and stop tasks" answer ends the work
+// with the session, so the session ends on its own and its hooks run, instead of the kill after ExitWait.
 func answerExit(t Tmux, name string) bool {
-	screen, err := t.Capture(name, 15)
+	rules := screenrules.Active()
+
+	screen, err := t.Capture(name, rules.Window(screenrules.Claude, screenrules.ExitDialog, exitLines))
 	if err != nil {
 		return false
 	}
 
-	m := exitDialog.FindStringSubmatch(screen)
+	key, ok := exitKey(screen)
 
-	return m != nil && t.Keys(name, m[1]) == nil
+	return ok && t.Keys(name, key) == nil
+}
+
+// exitKey is the key of the "Exit and stop tasks" answer on a screen that shows the exit question.
+func exitKey(screen string) (string, bool) {
+	hit, ok := screenrules.Active().Test(screenrules.Claude, screenrules.ExitDialog, screen)
+	if !ok {
+		return "", false
+	}
+
+	return hit.Sub[1], true
 }
 
 // forget drops an instance once it is down: instances are not seats.

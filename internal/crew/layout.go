@@ -58,6 +58,10 @@ func (l Layout) Limits() string { return filepath.Join(l.Dir, "limits") }
 // Screens holds the last screens of ended roles.
 func (l Layout) Screens() string { return filepath.Join(l.Dir, "screens") }
 
+// ScreenRules is the crew's own screen rules (screen-rules.yaml), optional: rows added to, replaced in or disabled in
+// zmina's embedded tables of what it reads on a role's screen (internal/screenrules).
+func (l Layout) ScreenRules() string { return filepath.Join(l.Dir, "screen-rules.yaml") }
+
 // Hooks is the directory of what a role's hooks recorded for zmina to read: one small file a role and kind, replaced by
 // the next record (HookQuestion, HookFailure). A file here is only ever read as a hint, with the session it is about
 // and the time it was written; a role started before a hook existed has none.

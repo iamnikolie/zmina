@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -19,6 +18,7 @@ import (
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/fsx"
 	"github.com/iamnikolie/zmina/internal/ledger"
+	"github.com/iamnikolie/zmina/internal/screenrules"
 	"github.com/iamnikolie/zmina/internal/shift"
 	"github.com/iamnikolie/zmina/internal/task"
 	"github.com/iamnikolie/zmina/internal/tmux"
@@ -1186,12 +1186,12 @@ func footerAt(lines []string) int {
 		body = body[1:]
 	}
 
-	if len(body) == 0 || !strings.HasPrefix(body[0], "❯") || optionRe.MatchString(body[0]) {
+	if len(body) == 0 || !strings.HasPrefix(body[0], "❯") || isOptionLine(body[0]) {
 		return -1
 	}
 
 	for _, l := range body[1:] {
-		if optionRe.MatchString(l) || strings.ContainsAny(l, "❯│┃") {
+		if isOptionLine(l) || strings.ContainsAny(l, "❯│┃") {
 			return -1
 		}
 	}
@@ -1199,39 +1199,45 @@ func footerAt(lines []string) int {
 	return closing
 }
 
-// optionRe is a line that reads as a dialog's option: a number and a dot or bracket, maybe behind a cursor or a box.
-var optionRe = regexp.MustCompile(`^\s*[│┃]?\s*(❯\s*)?\d+[.)]\s`)
+// isOptionLine is a line that reads as a dialog's option: a number and a dot or bracket, maybe behind a cursor or a box
+// (claude.peek.option-line).
+func isOptionLine(l string) bool {
+	_, ok := screenrules.Active().Test(screenrules.Claude, screenrules.FooterOption, l)
 
-// footerHints are the words of Claude Code's own lines under the input box: the mode line and its hints.
-var footerHints = []string{
-	"⏵⏵", "⏸", "? for shortcuts", "shift+tab to cycle", "esc to interrupt", "until auto-compact",
-	"Auto-update failed", "Press Ctrl-C again", "ctrl+t to", "ctrl+o to",
+	return ok
 }
 
 // isFooterLine is a line Claude Code draws under its input box: indented, no box or cursor in it, and either one of
-// its hint lines or — right under the rule — a status line (a path or a [model] in it).
+// its hint lines (claude.peek.hint-*) or — right under the rule — a status line (a path or a [model] in it).
 func isFooterLine(l string, first bool) bool {
 	if strings.TrimSpace(l) == "" {
 		return true
 	}
 
-	if !strings.HasPrefix(l, "  ") || strings.ContainsAny(l, "❯│┃╭╰") || optionRe.MatchString(l) {
+	if !strings.HasPrefix(l, "  ") || strings.ContainsAny(l, "❯│┃╭╰") || isOptionLine(l) {
 		return false
 	}
 
-	for _, h := range footerHints {
-		if strings.Contains(l, h) {
-			return true
-		}
+	rules := screenrules.Active()
+
+	if _, ok := rules.Test(screenrules.Claude, screenrules.FooterHint, l); ok {
+		return true
+	}
+
+	if !first {
+		return false
 	}
 
 	t := strings.TrimSpace(l)
 
-	return first && (strings.HasPrefix(t, "~/") || strings.HasPrefix(t, "/") || modelRe.MatchString(t))
-}
+	if _, ok := rules.Test(screenrules.Claude, screenrules.FooterPath, t); ok {
+		return true
+	}
 
-// modelRe is a status line's model in brackets: [Opus 5.5], [Sonnet], [gpt-6].
-var modelRe = regexp.MustCompile(`\[[A-Za-z][\w .-]*\]`)
+	_, ok := rules.Test(screenrules.Claude, screenrules.FooterModel, t)
+
+	return ok
+}
 
 func (a *app) keysCommand() *cobra.Command {
 	return &cobra.Command{

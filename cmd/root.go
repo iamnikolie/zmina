@@ -211,6 +211,9 @@ func (a *app) loadCrew() (*crew.Crew, error) {
 		fmt.Fprintln(a.err, "zmina: warning:", w)
 	}
 
+	// The crew's own screen rules, when it has any: a file that does not read is ignored (zmina doctor says why).
+	useScreenRules(c)
+
 	// An edit made outside zmina is kept in the crew file's history on the first command that sees it.
 	if raw, err := os.ReadFile(c.Path); err == nil {
 		_ = noticeCrewFile(c.Path, raw)

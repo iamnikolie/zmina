@@ -20,6 +20,7 @@ import (
 	"github.com/iamnikolie/zmina/internal/inbox"
 	"github.com/iamnikolie/zmina/internal/mesh"
 	"github.com/iamnikolie/zmina/internal/registry"
+	"github.com/iamnikolie/zmina/internal/screenrules"
 	"github.com/iamnikolie/zmina/internal/shift"
 	"github.com/iamnikolie/zmina/internal/tmux"
 )
@@ -458,8 +459,6 @@ type dialogOption struct {
 	Current bool
 }
 
-var dialogRow = regexp.MustCompile(`^\s*(❯\s*)?(\d+)\.\s+(?:\[([ ✔])\]\s+)?(.*?)\s*$`)
-
 // activeDialog reads the question dialog at the bottom of the screen: the last place the question starts, its whole
 // text from there, and the numbered rows under it in order. ok is false when that question is not the active one.
 func activeDialog(screen, question string) ([]dialogOption, bool) {
@@ -485,10 +484,12 @@ func activeDialog(screen, question string) ([]dialogOption, bool) {
 	var out []dialogOption
 	current := 0
 	for _, l := range raw[at:] {
-		m := dialogRow.FindStringSubmatch(l)
-		if m == nil {
+		hit, ok := screenrules.Active().Test(screenrules.Claude, screenrules.ChatRow, l)
+		if !ok {
 			continue
 		}
+
+		m := hit.Sub
 		n, _ := strconv.Atoi(m[2])
 		if n == 1 && len(out) > 0 {
 			return nil, false // numbering starts again: another dialog below this text, the active one is not it
@@ -505,15 +506,12 @@ func activeDialog(screen, question string) ([]dialogOption, bool) {
 	return out, len(out) > 0 && current == 1
 }
 
-// dialogBar is the rule Claude Code draws down the left of a question's text (and a box's sides): a frame, not words.
-var dialogBar = regexp.MustCompile(`^\s*[│┃▏▎]\s?|\s*[│┃]\s*$`)
-
 // dialogLines are the screen's lines without the dialog's frame, so a question wrapped inside it reads as its words;
 // one line for each of the screen's, in order.
 func dialogLines(screen string) []string {
 	lines := strings.Split(screen, "\n")
 	for i, l := range lines {
-		lines[i] = dialogBar.ReplaceAllString(l, "")
+		lines[i] = screenrules.Active().Strip(screenrules.Claude, screenrules.ChatFrame, l)
 	}
 	return lines
 }
