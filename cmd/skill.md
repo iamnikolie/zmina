@@ -1919,8 +1919,11 @@ paid for: `Of the cost: cache reads 60%, cache writes 17%, output 18%, input 5%.
   role's own channel that is none of those: another role's `zmina send`, joined lines of several kinds, a
   doorbell), `agent` (a background agent finished), `compact`. A line behind zmina's channel tag
   (`[zmina:<tag>] …`), one, several joined as `1. … 2. …`, or a doorbell, is told by its parts on a Codex role and
-  a Claude role alike: all of one kind keep it, otherwise `delivery`; the owner's own chat line in it makes the
-  turn the owner's. A message that only starts with `1. ` or quotes `[zmina` is the owner's.
+  a Claude role alike: all of one kind keep it, otherwise `delivery`; a chat-shaped part makes the turn `owner`
+  here (usage only: restarts wait on the owner's receipts, never on a delivered line). A message that only starts
+  with `1. ` or quotes `[zmina` is the owner's. Codex turns recorded before this version keep their old trigger, and
+  a running Codex bridge classifies the old way until its role restarts, so the per-trigger series steps at the
+  upgrade.
 - **`--all`**: every crew under `~/.zmina`, and every mesh peer with an address of its own, asked over ssh for its
   crews (`zmina usage --all --local --cells`); one table, crews named `<node>/<crew>`. A peer that does not answer
   (down, or a zmina older than this) is listed under the table as `missing:` with why.

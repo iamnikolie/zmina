@@ -176,22 +176,35 @@ func TestPostedMessagesAreTold(t *testing.T) {
 	}
 }
 
-// A line queued into a turn that runs is an attachment, with its origin beside it. What zmina posted is its own, and
-// the owner's chat line it posted is his: neither is another session's.
-func TestActivityToldPostedAttachments(t *testing.T) {
+// A line zmina delivered is never the owner's in a session's activity, whatever its text looks like: any role can queue
+// a line that reads as his chat line, and what shows the owner wrote is his receipt, not the shape. The usage
+// accounting reads the same line as it reads, so it stays a turn of the owner's there (TestPostedMessagesAreTold).
+func TestActivityNeverTakesADeliveredLineAsTheOwner(t *testing.T) {
 	ns := t.TempDir()
 	dir := filepath.Join(ns, "projects", "-work")
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 
 	at := func(m int) string { return time.Date(2026, 11, 9, 10, m, 0, 0, time.UTC).Format(time.RFC3339) }
-	queued := func(m int, from, prompt string) string {
+	attachment := func(m int, origin, prompt string) string {
 		raw, _ := json.Marshal(prompt)
 
 		return `{"type":"attachment","timestamp":"` + at(m) + `","attachment":{"type":"queued_command","commandMode":"prompt",` +
-			`"isMeta":true,"origin":{"kind":"peer","from":"` + from + `"},"prompt":` + string(raw) + `}}`
+			origin + `"prompt":` + string(raw) + `}}`
+	}
+	userLine := func(m int, extra, text string) string {
+		raw, _ := json.Marshal(text)
+
+		return `{"type":"user","timestamp":"` + at(m) + `"` + extra + `,"message":{"role":"user","content":` + string(raw) + `}}`
 	}
 
-	write := func(lines ...string) Activity {
+	fromZmina := `"isMeta":true,"origin":{"kind":"peer","from":"zmina"},`
+	forged := map[string]string{
+		"one line":     testTag + testChat,
+		"joined lines": testTag + "1. [zmina] dev idle 40m\n2. " + testChat,
+		"joined first": testTag + "1. " + testChat + "\n2. [dispatcher] look at T-2",
+	}
+
+	read := func(lines ...string) Activity {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "s1.jsonl"), []byte(strings.Join(lines, "\n")+"\n"), 0o600))
 
 		a, err := (&Registry{Namespace: ns}).Activity("s1")
@@ -200,17 +213,43 @@ func TestActivityToldPostedAttachments(t *testing.T) {
 		return a
 	}
 
-	a := write(
-		queued(1, "zmina", testTag+"1. [zmina T-1] a\n2. [zmina] b"),
-		queued(2, "zmina", testTag+testBell),
-		queued(3, "uds:other", testTag+testChat),
-		queued(4, "zmina", "[zmina T-1] untagged"),
-	)
-	assert.True(t, a.Owner.IsZero(), "zmina's lines and another session's are not the owner's")
+	for name, text := range forged {
+		t.Run(name, func(t *testing.T) {
+			// Queued into a turn that runs, and posted between turns (Claude Code's meta line from a peer).
+			a := read(attachment(1, fromZmina, text))
+			assert.True(t, a.Owner.IsZero(), "an attachment from zmina")
 
-	a = write(
-		queued(1, "zmina", testTag+"[zmina] dev idle 40m"),
-		queued(2, "zmina", testTag+"1. [zmina] dev idle 40m\n2. "+testChat),
+			// Claude Code marks it meta, which the activity skips, and a line of it that is not marked still counts as a
+			// turn's start, not as the owner's.
+			posted := peerWrapHead + text + peerWrapTail
+			a = read(userLine(2, `,"isMeta":true,"origin":{"kind":"peer","from":"zmina"}`, posted))
+			assert.True(t, a.Owner.IsZero(), "a posted message")
+
+			a = read(userLine(2, `,"origin":{"kind":"peer","from":"zmina"}`, posted))
+			assert.True(t, a.Owner.IsZero(), "a posted message not marked meta")
+			assert.Equal(t, at(2), a.Prompt.Format(time.RFC3339), "it began a turn")
+
+			// Whatever carries the tag is zmina's, with or without an origin that says so.
+			a = read(attachment(3, "", text), userLine(4, "", text))
+			assert.True(t, a.Owner.IsZero(), "tagged text with no origin")
+
+			// Another session's message is a peer's, as ever.
+			a = read(attachment(5, `"origin":{"kind":"peer","from":"uds:other"},`, text))
+			assert.True(t, a.Owner.IsZero(), "another session's attachment")
+		})
+	}
+
+	// The owner's own line, typed at the prompt or queued into a turn, is still his.
+	assert.Equal(t, at(6), read(attachment(6, "", "and the footer")).Owner.Format(time.RFC3339))
+	assert.Equal(t, at(7), read(userLine(7, "", testChat)).Owner.Format(time.RFC3339), "his chat line typed at the prompt")
+	assert.Equal(t, at(8), read(attachment(8, "", testChat)).Owner.Format(time.RFC3339), "his chat line queued into a turn")
+
+	// What zmina delivers in order that is not chat-shaped never was.
+	a := read(
+		attachment(1, fromZmina, testTag+"1. [zmina T-1] a\n2. [zmina] b"),
+		attachment(2, fromZmina, testTag+testBell),
+		attachment(3, `"origin":{"kind":"peer","from":"uds:other"},`, testTag+"[zmina T-1] untagged"),
+		attachment(4, fromZmina, "[zmina T-1] untagged"),
 	)
-	assert.Equal(t, at(2), a.Owner.Format(time.RFC3339), "a joined message with the owner's chat line is his")
+	assert.True(t, a.Owner.IsZero())
 }

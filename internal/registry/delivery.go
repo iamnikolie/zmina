@@ -35,6 +35,13 @@ func cutTag(text string) (rest string, ok bool) {
 	return text[loc[1]:], true
 }
 
+// tagged reports a text that opens with zmina's channel tag: zmina delivered it, whatever it says.
+func tagged(text string) bool {
+	_, ok := cutTag(text)
+
+	return ok
+}
+
 // numberedParts reads a joined delivery: the lines of one post written "1. …" and "2. …", one to a line, numbered in
 // step from 1 (shift.numbered). Nil for a text that is not one: a single part, or numbers out of step, is a text that
 // merely starts with "1. ".
@@ -107,10 +114,12 @@ func lineTrigger(line string) string {
 // doorbell, and else the owner's. A line behind zmina's tag is zmina's whatever it says, and what it says only tells
 // which of its kinds it is; a text without the tag is zmina's only when every line of it opens as one of zmina's (a
 // pasted "[zmina …" in the middle of a message, or a message that starts with "1. ", is the owner's). The owner's own
-// chat line is the owner's wherever it stands, so a joined message that holds one is his turn. Parts of one kind are
-// that kind; parts of several are a delivery.
+// chat line is the owner's wherever it stands, so a joined message that holds one is his turn: this is the usage
+// accounting's reading of a text, and the session's activity does not take it for the owner writing (a delivered line is
+// never his there, since any role can queue one that reads as his chat line). Parts of one kind are that kind; parts of
+// several are a delivery.
 func deliveryTrigger(text string) string {
-	body, tagged := cutTag(text)
+	body, isTagged := cutTag(text)
 
 	parts := numberedParts(body)
 	if parts == nil {
@@ -124,7 +133,7 @@ func deliveryTrigger(text string) string {
 
 		switch {
 		case kinds[i] != "":
-		case tagged:
+		case isTagged:
 			kinds[i] = TriggerDelivery
 		default:
 			return TriggerOwner
@@ -158,7 +167,7 @@ func postedTrigger(from, text string) (trigger string, ok bool) {
 	}
 
 	text = strings.TrimSpace(text)
-	if _, tagged := cutTag(text); !tagged {
+	if !tagged(text) {
 		return "", false
 	}
 

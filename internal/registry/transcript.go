@@ -510,8 +510,17 @@ var fromNameRe = regexp.MustCompile(`^<cross-session-message[^>]*\sfrom-name="([
 // trigger is what a user line that opens a turn says started it; "" for a line that opens none: a tool's
 // result, a skill's text, a reminder. from is the sending session of a peer message.
 func (l *line) trigger() (trigger, from string) {
+	trigger, from, _ = l.classify()
+
+	return trigger, from
+}
+
+// classify is trigger with whether zmina delivered the line: posted to the session's inbox socket, or opening with
+// its channel tag. What the line says (the owner's chat line, say) only tells the kind of turn it started, for the
+// usage accounting: that zmina wrote it is the fact, and the text of a delivered line is whatever any role queued.
+func (l *line) classify() (trigger, from string, delivered bool) {
 	if l.Compact {
-		return TriggerCompact, ""
+		return TriggerCompact, "", false
 	}
 
 	text := ""
@@ -525,7 +534,7 @@ func (l *line) trigger() (trigger, from string) {
 			// A message zmina posted to the session's inbox socket is told by its text behind zmina's tag, as the
 			// same line is on a Codex role, whose bridge has no origin to say who sent it.
 			if t, ok := postedTrigger(l.Origin.From, text); ok {
-				return t, ""
+				return t, "", true
 			}
 
 			if from = l.Origin.Name; from == "" {
@@ -534,17 +543,19 @@ func (l *line) trigger() (trigger, from string) {
 				}
 			}
 
-			return TriggerPeer, from
+			return TriggerPeer, from, false
 		case "task-notification":
-			return TriggerAgent, ""
+			return TriggerAgent, "", false
 		}
 	}
 
 	if l.Meta || l.toolResult() {
-		return "", ""
+		return "", "", false
 	}
 
-	return textTrigger(text)
+	trigger, from = textTrigger(text)
+
+	return trigger, from, tagged(text)
 }
 
 // TextTrigger classifies a prompt without storing its body in accounting records.
