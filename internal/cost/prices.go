@@ -62,6 +62,9 @@ func Builtin() Table {
 	opus55 := r(4, 20, 0.20)
 	opus55.Fast = 2
 
+	fable52 := r(8, 40, 0.20)
+	fable52.Fast = 2
+
 	haiku55 := r(0.10, 0.50, 0.01)
 	haiku55.Above, haiku55.Over = 100_000, &Rates{Input: 0.50, Output: 2.50, Read: 0.05}
 
@@ -77,6 +80,8 @@ func Builtin() Table {
 			"gpt-6.1-terra":     openAIPrice(1, 5, 0.05),
 			"gpt-6-luna":        openAIPrice(0.10, 0.50, 0.01),
 			"gpt-5.6-sol":       openAIPrice(4, 20, 0.40),
+			"claude-fable-5-2":  fable52,
+			"claude-mythos-5-2": fable52,
 			"claude-fable-5-1":  r(10, 50, 0.25),
 			"claude-mythos-5-1": r(10, 50, 0.25),
 			"claude-fable-5":    r(10, 50, 1),
