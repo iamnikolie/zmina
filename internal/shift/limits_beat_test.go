@@ -367,26 +367,33 @@ func TestLimitsHoldEndsByTheClockWhenNoReadingConfirms(t *testing.T) {
 	did := f.s.limitsStep(*f.now)
 	require.Len(t, did, 1)
 	assert.Contains(t, did[0], "claude: 5h window reset time 13:12 passed and no fresh reading has come, so its data is stale; ")
-	assert.Contains(t, did[0], " go: the dispatcher and one role now, the other 2 roles when a fresh reading shows the window under its hold share, or in 10 minutes")
+	assert.Contains(t, did[0], " go: the dispatcher and one role now, the other 2 roles when a fresh reading shows the new period, or in 10 minutes")
 	assert.Empty(t, f.book(t).Holds)
 }
 
-func TestLimitsHoldEndsWhenFreshReadingsShowTheWindowUnderTheShareTwice(t *testing.T) {
+// Another account, or a new window: a fresh reading of a different period (its reset moved past the tolerance, later), drawn after the hold began,
+// ends the hold. A lower figure of the same period does not (TestLimitsAStaleRedrawDoesNotDelayOrFlapAHold).
+func TestLimitsHoldEndsWhenAFreshReadingShowsAnotherPeriod(t *testing.T) {
 	f, _ := heldDesigner(t)
 
-	// Seen once, under the share by more than two points: a candidate, not a release.
+	// The same reset, however low: nothing.
 	*f.now = f.now.Add(5 * time.Minute)
-	f.claudeLimits(90, 10)
+	f.claudeLimits(5, 10)
 	assert.Empty(t, f.s.limitsStep(*f.now))
 	assert.Len(t, f.book(t).Holds, 1)
 
-	// A reading drawn later, on the next beat, under it too: the hold ends.
+	// A reset 90 seconds off is the same period.
 	*f.now = f.now.Add(time.Minute)
-	f.claudeLimits(90, 10)
+	f.claudeLimitsResetting(5, 10, limitsReset5.Add(90*time.Second), limitsReset7)
+	assert.Empty(t, f.s.limitsStep(*f.now))
+
+	// Another reset, later: another account or a new window. The hold ends, and the plan's roles go in turn.
+	*f.now = f.now.Add(time.Minute)
+	f.claudeLimitsResetting(30, 10, limitsReset5.Add(90*time.Minute), limitsReset7)
 
 	did := f.s.limitsStep(*f.now)
 	require.Len(t, did, 1)
-	assert.Contains(t, did[0], "claude: 5h window is at 90%, under its hold share; ")
+	assert.Contains(t, did[0], "claude: 5h window reset, ")
 	assert.Empty(t, f.book(t).Holds)
 
 	_, held := f.s.planHold("designer", *f.now)
@@ -1171,7 +1178,7 @@ func TestLimitsUnconfirmedReleaseLetsOneRoleGoFirst(t *testing.T) {
 
 	did := f.s.limitsStep(*f.now)
 	require.Len(t, did, 1)
-	assert.Contains(t, did[0], "so its data is stale; 4 lines go: the dispatcher and one role now, the other 5 roles when a fresh reading shows the window under its hold share, or in 10 minutes")
+	assert.Contains(t, did[0], "so its data is stale; 4 lines go: the dispatcher and one role now, the other 5 roles when a fresh reading shows the new period, or in 10 minutes")
 
 	assert.False(t, f.s.planHeld("dev3", *f.now), "the one whose line waited longest goes with the dispatcher")
 
@@ -1687,24 +1694,50 @@ func TestLimitsAStaleRedrawDoesNotDelayOrFlapAHold(t *testing.T) {
 	assert.True(t, items[0].Open())
 }
 
-// A genuine drop — the window read lower on two beats, by readings drawn at different times, each two points under the share — does end the hold.
-func TestLimitsAGenuineDropEndsAHoldOnTheSecondBeat(t *testing.T) {
+// A stale session redraws its last figure every few minutes for half an hour — each draw refreshing the file's time (the tap's heartbeat) — and the hold
+// is not ended by it: no release, no note, no item for the owner, no push. An account change with another reset does end it, and `zmina limits
+// release` is the way out when the owner knows better.
+func TestLimitsAStaleHeartbeatForHalfAnHourDoesNotEndAHold(t *testing.T) {
 	f := fixtureWith(t, limitsCrew)
+	store := &asks.Store{Dir: f.s.Crew.Layout().Asks()}
+	f.s.Asks = store
 
 	f.drawFive(t, 98, limitsReset5)
 	require.Len(t, f.beatLimits(t), 1)
 
-	// The plan was changed: the same window reads 40%, drawn after a long silence (the first draw replaces the old reading) and again later.
-	*f.now = f.now.Add(15 * time.Minute)
-	f.drawFive(t, 40, limitsReset5)
-	assert.Empty(t, f.beatLimits(t), "the first sighting")
+	notes, item := len(f.s.State.Notes), f.book(t).Holds[0].Ask
 
-	*f.now = f.now.Add(6 * time.Minute)
-	f.drawFive(t, 40, limitsReset5) // drawn again after the heartbeat: a reading of its own time
+	// Eleven minutes with no real draw, then the stale figure of a session that is held and draws nothing new, redrawn every minute: the file keeps
+	// refreshing its time by the heartbeat.
+	*f.now = f.now.Add(11 * time.Minute)
+
+	for minute := 0; minute < 30; minute++ {
+		f.drawFive(t, float64(minute%3), limitsReset5) // as low as 0%
+		assert.Empty(t, f.beatLimits(t), "minute %d", minute)
+
+		*f.now = f.now.Add(time.Minute)
+	}
+
+	assert.Len(t, f.s.State.Notes, notes, "no note")
+	assert.Zero(t, f.ev.count("", "limit-release"))
+	require.Len(t, f.book(t).Holds, 1)
+	assert.Equal(t, item, f.book(t).Holds[0].Ask)
+
+	items, _, err := store.Scan()
+	require.NoError(t, err)
+	assert.Len(t, items, 1)
+	assert.True(t, items[0].Open())
+
+	// Another account, whose window resets later: a reading of another period, drawn after the hold began.
+	f.drawFive(t, 12, limitsReset5.Add(80*time.Minute))
 	did := f.beatLimits(t)
 	require.Len(t, did, 1)
-	assert.Contains(t, did[0], "claude: 5h window is at 40%, under its hold share; ")
+	assert.Contains(t, did[0], "claude: 5h window reset, ")
 	assert.Empty(t, f.book(t).Holds)
+
+	got, err := store.Get(item)
+	require.NoError(t, err)
+	assert.False(t, got.Open(), "its item closes")
 }
 
 // If recording the id of a hold's todo item in the book fails, the item just made is closed, and the beats after do not make one every time: one

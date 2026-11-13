@@ -47,9 +47,6 @@ type Hold struct {
 	Since  time.Time `json:"since"`
 	Used   float64   `json:"used"`
 	Ask    string    `json:"ask,omitempty"`
-	// Below is when the reading was drawn that first showed the window under the hold share, well under (belowMargin points), since the hold began:
-	// the candidate of a release, which a second such reading, drawn at another time, on the beat after, makes one. Zero when no reading has.
-	Below time.Time `json:"below,omitzero"`
 }
 
 // credible reports whether the hold's reset time can be its window's: no further from the moment the hold began than the window
@@ -86,7 +83,7 @@ type Period struct {
 // Wait is a role of a plan whose hold ended and that gets its lines later than the others: the release is paced, the dispatcher
 // first, then a few roles a minute (Stagger). Until is when it goes. Pending is a wait that waits for more than the clock: a hold
 // that ended by the clock alone, with no fresh reading to say the window rolled over, lets one role go first and keeps the rest until a
-// fresh reading shows the window under its hold share, or Until, ten minutes on.
+// fresh reading of the new period (a reset after After, the reset of the hold that ended), or Until, ten minutes on.
 type Wait struct {
 	Role    string    `json:"role"`
 	Plan    Plan      `json:"plan"`
@@ -94,6 +91,7 @@ type Wait struct {
 	Home    string    `json:"home,omitempty"`
 	Until   time.Time `json:"until"`
 	Pending bool      `json:"pending,omitempty"`
+	After   time.Time `json:"after,omitzero"`
 }
 
 // Postponed is a scheduled run of a role that a hold put off and that was said so once: the role and the time of the run (its NextRun).

@@ -476,7 +476,7 @@ func (s *Shift) linesGo(plan limits.Plan, home string, roles []string, book limi
 			limits.StaggerGroup)
 	}
 
-	return fmt.Sprintf("%s go: the dispatcher and one role now, the other %d %s when a fresh reading shows the window under its hold share, or in %d minutes",
+	return fmt.Sprintf("%s go: the dispatcher and one role now, the other %d %s when a fresh reading shows the new period, or in %d minutes",
 		lines, waiting, plural(waiting, "role", "roles"), int(limits.UnconfirmedWait/time.Minute))
 }
 
@@ -493,8 +493,6 @@ func releaseWhy(a limits.Action, now time.Time, loc *time.Location) releaseText 
 		return releaseText{"hold is turned off in the crew file", "; "}
 	case a.Reason == limits.ReasonBad:
 		return releaseText{"hold had a reset time no such window can have (" + a.Reset.In(loc).Format("2 Jan 15:04") + "), so it is lifted", "; "}
-	case a.Reason == limits.ReasonBelow:
-		return releaseText{fmt.Sprintf("is at %s, under its hold share", percent(a.Used)), "; "}
 	case a.Confirmed:
 		return releaseText{"reset", ", "}
 	}

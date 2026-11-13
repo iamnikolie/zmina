@@ -149,8 +149,8 @@ func ReadClaude(dir string) (*Claude, error) {
 // at the same reset the higher percentage stands (a window only fills, and a lower figure is an older one: a session shows the figure of its last
 // reply). The stored window stays then, and a draw that brought nothing newer than the file leaves it as it is, At included: the file says
 // when its figures were seen, not when an old one was drawn again. A stored window nobody drew for ten minutes yields to any newer reading, a
-// lower figure at the same reset included (Window.latest); the beat does not take such a drop for the window having emptied before it has seen it
-// twice (limits.Evaluate).
+// lower figure at the same reset included (Window.latest); the beat never takes a lower figure of the same period for the window having emptied
+// (limits.Evaluate): only a reset of another period ends a hold.
 func Tap(dir string, raw []byte, now time.Time) (bool, error) {
 	c := ParseStatusline(raw, now)
 	if c == nil {

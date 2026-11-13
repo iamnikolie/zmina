@@ -25,8 +25,6 @@ type Reason string
 const (
 	// ReasonReset: the window's reset time passed (or a reading of a later period showed it rolled over).
 	ReasonReset Reason = "reset"
-	// ReasonBelow: a fresh reading of the same period shows the window under the hold share.
-	ReasonBelow Reason = "below"
 	// ReasonOff: the crew file turned the window's hold share off while the hold was on.
 	ReasonOff Reason = "off"
 	// ReasonBad: the hold's reset time cannot be its window's (further off than the window is long): nothing can end it but this.
@@ -170,9 +168,10 @@ func (r Report) readings() []windowReading {
 // and the clock is the one Now says: the report is judged again by it.
 //
 // A window that is stale (its reset passed since the reading, or the reading is old) triggers nothing and releases
-// nothing: unknown stays unknown. A hold ends only by the clock, at the window's reset time, or when a fresh reading of
-// the same period shows the window under the hold share, or of a later period shows it rolled over; or when the hold share
-// was turned off, which needs no reading; or when its reset time cannot be its window's. A hold is only ever made on a reset
+// nothing: unknown stays unknown. A hold ends only by the clock, at the window's reset time, or when a fresh reading of a later
+// period, drawn after the hold began, shows the window rolled over (a new window, or another account); or when the hold share was
+// turned off, which needs no reading; or when its reset time cannot be its window's; or by hand (Lift). A lower figure of the same period never
+// ends it: usage inside one period only grows, so a lower figure is an old one, a session redrawing what its last reply showed. A hold is only ever made on a reset
 // that lies ahead of Now and within the window's length (MaxReset).
 //
 // In one pass a window asks for the highest threshold it is at and has not asked for (a window found at 98% holds, and does not
@@ -199,21 +198,14 @@ func Evaluate(in Input) Result {
 	released := map[relKey]relInfo{}
 
 	for _, h := range book.Holds {
-		reading, marks := find(h.Plan, h.Window, h.Home), in.Thresholds.For(h.Plan)
-
-		a, ended := release(h, reading, marks, now)
-		if !ended {
-			h, a, ended = judgeBelow(h, reading, marks)
-		}
-
-		if ended {
+		if a, ended := release(h, find(h.Plan, h.Window, h.Home), in.Thresholds.For(h.Plan), now); ended {
 			acts = append(acts, a)
 
 			k := relKey{h.Plan, h.Home}
 
 			ri, seen := released[k]
 			if !seen {
-				ri = relInfo{window: h.Window, confirmed: true}
+				ri = relInfo{window: h.Window, reset: h.Reset, confirmed: true}
 			}
 
 			ri.confirmed = ri.confirmed && a.Confirmed
@@ -274,14 +266,16 @@ func release(h Hold, r *windowReading, marks Shares, now time.Time) (Action, boo
 	case !now.Before(h.Reset):
 		// The clock ends it. A fresh reading of another period says the window did roll over; none says nothing, and the data is stale.
 		// A reading with no reset (the reader dropped it as no window's) says nothing of the window having rolled over.
-		a.Confirmed = fresh && r.w.Resets != nil && !sameReset(*r.w.Resets, h.Reset)
+		a.Confirmed = fresh && r.w.Resets != nil && !sameReset(*r.w.Resets, h.Reset) && r.at.After(h.Since)
 		if fresh {
 			a.Used = r.w.Used
 		}
 
 		return a, true
-	case fresh && r.w.Resets != nil && r.w.Resets.After(h.Reset) && !sameReset(*r.w.Resets, h.Reset):
-		// A later period already: the window rolled over before the time the hold was kept to.
+	case fresh && r.w.Resets != nil && r.w.Resets.After(h.Reset) && !sameReset(*r.w.Resets, h.Reset) && r.at.After(h.Since):
+		// A reading of a later period, drawn after the hold began: the window rolled over before the time the hold was kept to (a new window,
+		// or another account). A lower figure of the same period is no such thing: usage inside one period only grows, so it is an old figure
+		// (a session redrawing the last it saw), and ends nothing; nor does a reading of an earlier period, which is an old input redrawn.
 		a.Confirmed, a.Used = true, r.w.Used
 
 		return a, true
@@ -290,66 +284,37 @@ func release(h Hold, r *windowReading, marks Shares, now time.Time) (Action, boo
 	return a, false
 }
 
-// belowMargin is how many points under the hold share a reading must be to count for the window having fallen: a figure just under it is a
-// reading that wavers, not a window that emptied.
-const belowMargin = 2
-
-// judgeBelow is the release of a hold on a reading of its own period that shows the window well under the hold share. Usage inside one period
-// only grows, so a lower figure is more likely an old one — a session redrawing what its last reply showed — than a window that emptied; it is
-// not believed at once. The first such reading drawn after the hold began is kept in the hold as a candidate; the release is a second one, drawn
-// at another time, on a later beat. A beat that finds the window not under the share (or no fresh reading of it) drops the candidate.
-func judgeBelow(h Hold, r *windowReading, marks Shares) (Hold, Action, bool) {
-	share := float64(marks.HoldOf(h.Window))
-
-	low := r != nil && !r.w.Stale && r.w.Resets != nil && sameReset(*r.w.Resets, h.Reset) && r.at.After(h.Since) && r.w.Used <= share-belowMargin
-
-	switch {
-	case !low:
-		h.Below = time.Time{}
-	case h.Below.IsZero():
-		h.Below = r.at
-	case r.at.After(h.Below):
-		return h, Action{Kind: KindRelease, Plan: h.Plan, Window: h.Window, Home: h.Home, Used: r.w.Used, Reset: h.Reset, Hold: h, Reason: ReasonBelow,
-			Confirmed: true, Seen: r.at}, true
-	}
-
-	return h, Action{}, false
-}
-
 // relKey is a plan's holds of one Codex home (empty for Claude), the unit a release is paced for.
 type relKey struct {
 	plan Plan
 	home string
 }
 
-// relInfo is what the holds of one relKey that ended in one pass have in common: the window of the first, and whether every one of them
-// ended on a fresh reading (or by a person).
+// relInfo is what the holds of one relKey that ended in one pass have in common: the window and the reset of the first, and whether every one of
+// them ended on a fresh reading (or by a person).
 type relInfo struct {
 	window    string
+	reset     time.Time
 	confirmed bool
 }
 
 // pace sets the turns of the roles of a plan whose last hold just ended, and moves on those that wait for more than the clock: a wait
-// that is pending goes when a fresh reading shows its window under the hold share. Waits whose time has passed are dropped.
+// that is pending goes when a fresh reading shows the new period. Waits whose time has passed are dropped.
 func (b *Book) pace(rs []windowReading, released map[relKey]relInfo, in Input, now time.Time) {
-	// Pending waits first: a fresh reading under the share lets those of its plan go on, a group a beat.
+	// Pending waits first: a fresh reading of the new period (a reset after the one of the hold that ended) lets those of its plan go on, a group a
+	// beat. A reading of the same period, or of an earlier one, is no news of the window having rolled over.
 	for _, r := range rs {
-		if r.w.Stale {
+		if r.w.Stale || r.w.Resets == nil {
 			continue
 		}
-
-		share := in.Thresholds.For(r.plan).HoldOf(r.name)
 
 		var open []int
 
 		for i, w := range b.Waits {
-			if w.Pending && w.Plan == r.plan && w.Window == r.name && holds(w.Home, r.home) && now.Before(w.Until) {
+			if w.Pending && w.Plan == r.plan && w.Window == r.name && holds(w.Home, r.home) && now.Before(w.Until) &&
+				r.w.Resets.After(w.After) && !sameReset(*r.w.Resets, w.After) {
 				open = append(open, i)
 			}
-		}
-
-		if len(open) == 0 || (share.On() && r.w.Used >= float64(share)) {
-			continue
 		}
 
 		for n, i := range open {
@@ -377,7 +342,7 @@ func (b *Book) pace(rs []windowReading, released map[relKey]relInfo, in Input, n
 		}
 
 		ri := released[k]
-		b.stagger(in.Order(k.plan, k.home), k.plan, ri.window, k.home, ri.confirmed, now)
+		b.stagger(in.Order(k.plan, k.home), k.plan, ri.window, k.home, ri.reset, ri.confirmed, now)
 	}
 
 	b.Waits = slices.DeleteFunc(b.Waits, func(w Wait) bool { return !now.Before(w.Until) })
@@ -397,11 +362,11 @@ func cmpString(a, b string) int {
 // stagger puts the roles of a plan whose hold ended in their turns, after the dispatcher, who goes at once: a group of StaggerGroup
 // a beat, the role whose oldest line waited longest first. A hold that ended by the clock alone, with no fresh reading, lets one
 // role go with the dispatcher and keeps the others for a fresh reading under the share, or UnconfirmedWait.
-func (b *Book) stagger(roles Roles, plan Plan, window, home string, confirmed bool, now time.Time) {
+func (b *Book) stagger(roles Roles, plan Plan, window, home string, after time.Time, confirmed bool, now time.Time) {
 	b.Waits = slices.DeleteFunc(b.Waits, func(w Wait) bool { return w.Plan == plan && holds(w.Home, home) })
 
 	add := func(role string, until time.Time, pending bool) {
-		b.Waits = append(b.Waits, Wait{Role: role, Plan: plan, Window: window, Home: home, Until: until, Pending: pending})
+		b.Waits = append(b.Waits, Wait{Role: role, Plan: plan, Window: window, Home: home, Until: until, Pending: pending, After: after})
 	}
 
 	for i, role := range roles.Others {
@@ -574,7 +539,7 @@ func Lift(book Book, plan Plan, window string, now time.Time, order func(plan Pl
 	if order != nil {
 		for home := range homes {
 			if _, still := b.HeldUntil(plan, home, now); !still {
-				b.stagger(order(plan, home), plan, window, home, true, now)
+				b.stagger(order(plan, home), plan, window, home, time.Time{}, true, now)
 			}
 		}
 	}

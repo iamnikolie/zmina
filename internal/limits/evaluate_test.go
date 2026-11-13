@@ -218,58 +218,51 @@ func TestAHoldEndsAtTheResetTime(t *testing.T) {
 	assert.Equal(t, 3.0, got.Actions[0].Used)
 }
 
-// A figure under the share is not believed at once: usage inside one period only grows, and a lower figure is more likely an old one. The first
-// reading well under the share (two points) drawn after the hold began is a candidate, and a second one, drawn at another time, on the beat after, ends it.
-func TestAHoldEndsOnTwoReadingsUnderTheShareFromDifferentTimes(t *testing.T) {
+// Inside one period usage only grows: a lower figure at the same reset is an old one, a session redrawing what its last reply showed, and never
+// a reason to end a hold, however low it is, however often it is drawn, whatever time it carries.
+func TestALowerFigureOfTheSamePeriodNeverEndsAHold(t *testing.T) {
 	held := eval(claudeAt(98, 10, at(resetAt), at(weekAt)), Book{}, noon).Book
+	book := held
 
-	low := func(used float64, drawn time.Time) Report {
-		return readAt(claudeAt(used, 10, at(resetAt), at(weekAt)), drawn)
+	for i := 1; i <= 60; i++ {
+		drawn := noon.Add(time.Duration(i) * time.Minute)
+		r := readAt(claudeAt(float64(i%7), 10, at(resetAt), at(weekAt)), drawn)
+
+		got := eval(r, book, drawn)
+		assert.Empty(t, got.Actions, "minute %d", i)
+		assert.False(t, got.Changed, "minute %d: nothing is kept either", i)
+
+		book = got.Book
 	}
 
-	first := eval(low(90, noon.Add(time.Minute)), held, noon.Add(time.Minute))
-	assert.Empty(t, first.Actions, "seen once: a candidate")
-	require.Len(t, first.Book.Holds, 1)
-	assert.True(t, first.Book.Holds[0].Below.Equal(noon.Add(time.Minute)))
-	assert.True(t, first.Changed, "the candidate is kept in the book")
+	assert.Equal(t, held.Holds, book.Holds)
 
-	// The same reading on the next beat is the same time: nothing new.
-	same := eval(low(90, noon.Add(time.Minute)), first.Book, noon.Add(2*time.Minute))
-	assert.Empty(t, same.Actions)
-	assert.False(t, same.Changed)
+	// A reading of an earlier period (an old input redrawn) says nothing, whatever it shows.
+	older := eval(readAt(claudeAt(3, 10, at(resetAt.Add(-time.Hour)), at(weekAt)), noon.Add(time.Minute)), held, noon.Add(time.Minute))
+	assert.Empty(t, older.Actions)
 
-	// Another reading, drawn later, still under: the second sighting.
-	second := eval(low(88, noon.Add(6*time.Minute)), first.Book, noon.Add(6*time.Minute))
-	require.Equal(t, []Kind{KindRelease}, kinds(second))
-	assert.Equal(t, ReasonBelow, second.Actions[0].Reason)
-	assert.True(t, second.Actions[0].Confirmed)
-	assert.Equal(t, 88.0, second.Actions[0].Used)
-	assert.Empty(t, second.Book.Holds)
+	// A hold the crew file's share is raised past stays too: the share is the crew file's, the window's figure only grows.
+	raised := Evaluate(Input{Report: readAt(claudeAt(95, 10, at(resetAt), at(weekAt)), noon.Add(time.Minute)), Thresholds: holdsAlso(PlanClaude, WindowFiveHour, 99),
+		Plans: bothPlans, Book: held, Now: noon.Add(time.Minute)})
+	assert.Empty(t, raised.Actions)
+}
 
-	// A beat that finds the window not under the share, or no fresh reading, drops the candidate: the two must be on beats in a row.
-	for name, r := range map[string]Report{"a higher figure": low(97, noon.Add(3*time.Minute)), "no reading": {}} {
-		cleared := eval(r, first.Book, noon.Add(3*time.Minute))
-		assert.Empty(t, cleared.Actions, name)
-		require.Len(t, cleared.Book.Holds, 1, name)
-		assert.True(t, cleared.Book.Holds[0].Below.IsZero(), name)
+// A book written when a candidate was kept in the hold (`below`) reads: the field is ignored.
+func TestAnOldBelowFieldInAHoldIsIgnoredOnRead(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, HoldsFile), []byte(`{"v":2,"holds":[{"plan":"claude","window":"five_hour",`+
+		`"reset":"2030-01-01T14:00:00Z","since":"2030-01-01T12:00:00Z","used":97,"below":"2030-01-01T12:30:00Z"}]}`), 0o600))
 
-		again := eval(low(88, noon.Add(6*time.Minute)), cleared.Book, noon.Add(6*time.Minute))
-		assert.Empty(t, again.Actions, "%s: the first sighting once more", name)
-	}
+	b, err := ReadBook(dir)
+	require.NoError(t, err)
+	require.Len(t, b.Holds, 1)
 
-	// Not well enough under the share (within two points of it) is no candidate; nor is a reading drawn before the hold began.
-	assert.True(t, eval(low(96, noon.Add(time.Minute)), held, noon.Add(time.Minute)).Book.Holds[0].Below.IsZero())
-	assert.False(t, eval(low(95, noon.Add(time.Minute)), held, noon.Add(time.Minute)).Book.Holds[0].Below.IsZero(), "two points under: it counts")
-	assert.True(t, eval(low(80, noon.Add(-time.Minute)), held, noon.Add(time.Minute)).Book.Holds[0].Below.IsZero(), "drawn before the hold began")
+	got := eval(readAt(claudeAt(10, 10, at(resetAt), at(weekAt)), noon.Add(time.Minute)), b, noon.Add(time.Minute))
+	assert.Empty(t, got.Actions)
 
-	// A reading of another period is no sighting of this one.
-	other := readAt(claudeAt(10, 10, at(resetAt.Add(-time.Hour)), at(weekAt)), noon.Add(time.Minute))
-	assert.True(t, eval(other, held, noon.Add(time.Minute)).Book.Holds[0].Below.IsZero())
-
-	// A hold whose share is raised past a figure that was under it stays: the share is the crew file's, the sighting is of the window.
-	raised := holdsAlso(PlanClaude, WindowFiveHour, 99)
-	r := Evaluate(Input{Report: low(95, noon.Add(time.Minute)), Thresholds: raised, Plans: bothPlans, Book: held, Now: noon.Add(time.Minute)})
-	assert.False(t, r.Book.Holds[0].Below.IsZero(), "97 under a share of 99 by more than two")
+	raw, err := json.Marshal(got.Book)
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "below")
 }
 
 // A fresh reading whose reset is later than the hold's: the window rolled over before the time it was held to.
@@ -280,6 +273,10 @@ func TestAHoldEndsWhenAFreshReadingShowsALaterPeriod(t *testing.T) {
 	require.Equal(t, []Kind{KindRelease}, kinds(got))
 	assert.Equal(t, ReasonReset, got.Actions[0].Reason)
 	assert.True(t, got.Actions[0].Confirmed)
+
+	// A reading drawn before the hold began is no news of it, whatever reset it carries.
+	before := eval(readAt(claudeAt(2, 10, at(resetAt.Add(2*time.Hour)), at(weekAt)), noon.Add(-time.Minute)), held, noon.Add(time.Minute))
+	assert.Empty(t, before.Actions)
 
 	// A reset further off than the window is long is no later period: the reader dropped it, and it says nothing.
 	far := eval(readAt(claudeAt(2, 10, at(resetAt.Add(5*time.Hour)), at(weekAt)), noon.Add(time.Minute)), held, noon.Add(time.Minute))
@@ -656,7 +653,7 @@ func TestAnUnconfirmedReleaseLetsOneRoleGoFirst(t *testing.T) {
 	assert.Equal(t, got.Book.Waits, idle.Book.Waits)
 	assert.False(t, idle.Changed)
 
-	// A fresh reading of the window under its share: they go on in groups, from now.
+	// A fresh reading of the new period (a reset after the old one's): they go on in groups, from now.
 	fresh := readAt(claudeAt(4, 10, at(resetAt.Add(5*time.Hour)), at(weekAt)), resetAt.Add(5*time.Minute))
 	moved := Evaluate(Input{Report: fresh, Thresholds: DefaultThresholds(), Plans: bothPlans, Book: got.Book, Now: resetAt.Add(5 * time.Minute)})
 	assert.Equal(t, map[string]time.Duration{"e": 6 * time.Minute, "f": 6 * time.Minute, "g": 6 * time.Minute, "h": 7 * time.Minute}, waits(moved.Book),
@@ -665,10 +662,14 @@ func TestAnUnconfirmedReleaseLetsOneRoleGoFirst(t *testing.T) {
 		assert.False(t, w.Pending, w.Role)
 	}
 
-	// A fresh reading still at the share changes nothing.
-	still := readAt(claudeAt(98, 10, at(resetAt.Add(5*time.Hour)), at(weekAt)), resetAt.Add(5*time.Minute))
-	assert.Equal(t, got.Book.Waits, Evaluate(Input{Report: still, Thresholds: DefaultThresholds(), Plans: bothPlans, Book: got.Book,
-		Now: resetAt.Add(5 * time.Minute)}).Book.Waits)
+	// A reading of the old period says nothing of the window having rolled over (at the reset it is stale and skipped), nor does one with no reset.
+	for name, r := range map[string]Report{
+		"the old period": readAt(claudeAt(4, 10, at(resetAt), at(weekAt)), resetAt.Add(5*time.Minute)),
+		"no reset":       readAt(claudeAt(4, 10, nil, at(weekAt)), resetAt.Add(5*time.Minute)),
+	} {
+		assert.Equal(t, got.Book.Waits, Evaluate(Input{Report: r, Thresholds: DefaultThresholds(), Plans: bothPlans, Book: got.Book,
+			Now: resetAt.Add(5 * time.Minute)}).Book.Waits, name)
+	}
 
 	// Ten minutes without one: they go, three a minute from then.
 	late := Evaluate(Input{Report: Report{}, Thresholds: DefaultThresholds(), Plans: bothPlans, Book: got.Book, Now: resetAt.Add(10 * time.Minute)})

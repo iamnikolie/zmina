@@ -2142,12 +2142,12 @@ hold     claude 5h window at 97%, until 21:40 (6 roles, 14 lines waiting); the o
     all the same. The owner's own line is the line the owner queued: besides his receipt it must have a delivery card that says it came from him
     and is still queued, so a role that queues the same words after his line has gone waits behind the hold, for a failed turn's hold too.
   - **Release**: the hold ends by the clock at the window's reset time, whether or not a beat has run; or when a fresh
-    reading shows the window of the same period under the hold share, but not on one reading: a lower figure within a period is
-    more likely an old one than a window that emptied, so the first reading drawn after the hold began that is at least 2 points under
-    the share is kept in the hold as a candidate, and a second one, drawn at another time (a later `at`), on the beat after, ends it; a
-    beat that finds the window higher, or reads nothing fresh, drops the candidate (`holds.json`, `below`); or when a fresh reading shows a later period; or when
-    `hold` is turned off for the window in the crew file (no reading needed; the next beat ends it); or when its reset time is one
-    no such window can have. Stale data alone never ends it before its reset time. One note: `claude: 5h window reset, 14 lines go:
+    reading of a **different** period, drawn after the hold began, shows the window rolled over (its reset is later than the hold's by more
+    than two minutes: a new window, or another account); or when `hold` is turned off for the window in the crew file (no reading needed; the next
+    beat ends it); or when its reset time is one no such window can have; or by hand (below). A lower figure of the same period never ends a
+    hold, however low, however often drawn: usage inside one period only grows, so a lower figure is an old one (a session redraws what its
+    last reply showed, and its status line's heartbeat keeps refreshing its time), and a reading of an earlier period is an old input
+    redrawn. Stale data alone never ends it before its reset time. One note: `claude: 5h window reset, 14 lines go:
     the dispatcher now, the other 6 roles 3 at a time, a minute apart` (event `limit-release`; `go now` when no role waits a turn);
     at the reset time with no fresh reading since (a reading whose reset was dropped as no window's counts as none), `reset time
     14:00 passed and no fresh reading has come, so its data is stale`. A pass that ends one hold and, from a fresh reading of the next
@@ -2158,8 +2158,9 @@ hold     claude 5h window at 97%, until 21:40 (6 roles, 14 lines waiting); the o
     oldest waiting line is oldest first, those with nothing waiting last. The book keeps a time each role waits until (`waits`), and
     the delivery, the courier's included, the schedules, the alarms and the ticker's starts hold the role until then exactly as for a hold
     (`ls` says `release: claude plan: 6 roles let go in turn …`). A release by the clock with no fresh reading lets the dispatcher and
-    one role go and keeps the rest until a fresh reading of the window shows it under its hold share, or 10 minutes.
-  - **By hand**: `zmina limits release <plan> [<window>]` (the owner and the dispatcher; a role is refused) lifts the holds of the plan
+    one role go and keeps the rest until a fresh reading of the new period (a reset after the old one's), or 10 minutes.
+  - **By hand**: `zmina limits release <plan> [<window>]` (the owner and the dispatcher; a role is refused) is the way out when the owner
+    knows better than the readings (an account that changed with the same reset, a figure he knows is old): it lifts the holds of the plan
     that are on, those of one window when it is named (`five_hour`, `seven_day`, `week`, or `5h`, `7d`). The period is marked lifted in
     the book: it is not held again, whatever the window reads, and a later period (a later reset) may be. The roles go in turn as after
     any release, roles still waiting their turn go at once, the todo item of the hold closes, the dispatcher is told, and the event is
