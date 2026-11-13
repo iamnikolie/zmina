@@ -1,14 +1,23 @@
 package cmd
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/events"
+	"github.com/iamnikolie/zmina/internal/fsx"
 	"github.com/iamnikolie/zmina/internal/screenrules"
+	"github.com/iamnikolie/zmina/internal/tmux"
 )
 
 // screenRulesTold is the refusals already told in this process, by file and reason.
@@ -21,36 +30,109 @@ const screenRulesEvery = 24 * time.Hour
 // screenRulesEvent is the event a refused screen-rules.yaml leaves in the log.
 const screenRulesEvent = "screen-rules-refused"
 
+// isHookRun reports whether a command is one a role's hooks or its bridge run (the plumbing commands, named with a leading
+// underscore, and the SessionStart hook's `pending --brief`): what they print on the error stream reaches no one who can act on
+// it, and a hook that wrote there would be read as a failure of the hook.
+func isHookRun(c *cobra.Command) bool {
+	if strings.HasPrefix(c.Name(), "_") {
+		return true
+	}
+
+	brief, err := c.Flags().GetBool("brief")
+
+	return c.Name() == "pending" && err == nil && brief
+}
+
+// printableLine is a text as one line of printable characters: control, format and bidirectional characters gone and white
+// space folded. A reason that came out of a file or a path is printed to a terminal, where such a character is a command.
+func printableLine(s string) string { return strings.Join(strings.Fields(tmux.Printable(s)), " ") }
+
+// refusalReason is why a screen-rules.yaml was refused, as one printable line, cut.
+func refusalReason(err error) string { return clip(printableLine(err.Error()), 300) }
+
 // tellRefusedScreenRules says that the crew's screen-rules.yaml was refused and the embedded rules stay in force, outside doctor:
-// once in this process on the command's error stream, as the crew file's warnings are, and as an event in the log, once a day
-// for each distinct reason. The log itself is the record of what was told: no state is kept for it. Nothing here fails a command.
+// once in this process on the command's error stream, as the crew file's warnings are (not for a command a hook runs), and as an
+// event in the log, once a day for each distinct reason, by a small marker beside the crew's other files (ScreenRulesTold): the
+// log is never read for it. Nothing here fails a command.
 func (a *app) tellRefusedScreenRules(c *crew.Crew, o screenrules.Overrides) {
 	if o.Err == nil {
 		return
 	}
 
-	reason := clip(oneLineText(o.Err.Error()), 300)
+	reason, path := refusalReason(o.Err), printableLine(o.Path)
 
-	if _, told := screenRulesTold.LoadOrStore(o.Path+"\x00"+reason, true); told {
+	if _, told := screenRulesTold.LoadOrStore(path+"\x00"+reason, true); told {
 		return
 	}
 
-	fmt.Fprintf(a.err, "zmina: warning: %s is ignored and the embedded screen rules stay in force: %s (zmina doctor)\n", o.Path, reason)
+	if !a.hook {
+		fmt.Fprintf(a.err, "zmina: warning: %s is ignored and the embedded screen rules stay in force: %s (zmina doctor)\n", path, reason)
+	}
 
-	log, now := eventLog(c), time.Now()
-
-	recent, err := log.Read(events.Filter{Since: now.Add(-screenRulesEvery)})
-	if err != nil {
+	now := time.Now()
+	if !screenRulesDue(c.Layout().ScreenRulesTold(), screenRulesKey(path, reason), now) {
 		return
 	}
 
-	for _, e := range recent {
-		if e.Event == screenRulesEvent && e.Detail == reason {
-			return
+	_ = eventLog(c).Add(events.Event{TS: now, Event: screenRulesEvent, By: by(), Detail: reason})
+}
+
+// screenRulesKey names a refusal in the marker: a hash of the file and the reason, so that the marker keeps no words of it.
+func screenRulesKey(path, reason string) string {
+	sum := sha256.Sum256([]byte(path + "\x00" + reason))
+
+	return hex.EncodeToString(sum[:8])
+}
+
+// screenRulesMarkerMax bounds the marker: the reasons told within a day, the newest of them.
+const screenRulesMarkerMax = 16
+
+// screenRulesDue reports whether a refusal was not put in the log within screenRulesEvery, and notes in the marker that it is
+// now. A marker that does not read, or a time in it that is yet to come, says it is due; a directory that cannot keep one tells
+// every time, which is no worse than a refusal that was never kept.
+func screenRulesDue(marker, key string, now time.Time) bool {
+	told := map[string]time.Time{}
+
+	if f, err := os.Open(marker); err == nil {
+		raw, _ := io.ReadAll(io.LimitReader(f, 1<<16))
+		_ = f.Close()
+
+		if json.Unmarshal(raw, &told) != nil {
+			told = map[string]time.Time{}
 		}
 	}
 
-	_ = log.Add(events.Event{TS: now, Event: screenRulesEvent, By: by(), Detail: reason})
+	if at, ok := told[key]; ok && !at.After(now) && now.Sub(at) < screenRulesEvery {
+		return false
+	}
+
+	told[key] = now
+
+	for k, at := range told {
+		if now.Sub(at) >= screenRulesEvery || at.After(now) {
+			delete(told, k)
+		}
+	}
+
+	for len(told) > screenRulesMarkerMax {
+		oldest := ""
+
+		for k, at := range told {
+			if oldest == "" || at.Before(told[oldest]) {
+				oldest = k
+			}
+		}
+
+		delete(told, oldest)
+	}
+
+	told[key] = now
+
+	if raw, err := json.Marshal(told); err == nil {
+		_ = fsx.WriteFile(marker, append(raw, '\n'), 0o600)
+	}
+
+	return true
 }
 
 // checkScreenRules is doctor's line about the crew's screen rules: one line when the file is there, none when it is not.
@@ -60,11 +142,11 @@ func checkScreenRules(c *crew.Crew, add func(name, level, format string, args ..
 	switch {
 	case !o.Present:
 	case o.Err != nil:
-		add("screens", "warn", "%s is ignored and the built-in rules stay in force: %v", o.Path, o.Err)
+		add("screens", "warn", "%s is ignored and the built-in rules stay in force: %s", printableLine(o.Path), refusalReason(o.Err))
 	case o.Count == 0:
-		add("screens", "ok", "overrides in effect: 0 rules (%s lists none)", o.Path)
+		add("screens", "ok", "overrides in effect: 0 rules (%s lists none)", printableLine(o.Path))
 	default:
-		add("screens", "ok", "overrides in effect: %d %s from %s: %s", o.Count, plural(o.Count, "rule", "rules"), o.Path,
+		add("screens", "ok", "overrides in effect: %d %s from %s: %s", o.Count, plural(o.Count, "rule", "rules"), printableLine(o.Path),
 			overrideWords(o))
 	}
 }
@@ -99,16 +181,4 @@ func overrideWords(o screenrules.Overrides) string {
 	}
 
 	return words
-}
-
-// oneLineText folds white space to single spaces and drops control characters: a reason that came out of a file is printed as one
-// line, and a control byte in a terminal is a command.
-func oneLineText(s string) string {
-	return strings.Join(strings.Fields(strings.Map(func(r rune) rune {
-		if r < ' ' && r != '\t' && r != '\n' {
-			return -1
-		}
-
-		return r
-	}, s)), " ")
 }

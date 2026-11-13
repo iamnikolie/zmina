@@ -43,6 +43,9 @@ type app struct {
 	// verb is the command that runs, without its arguments (tick, task set): the state lock's holder record and
 	// events name it.
 	verb string
+	// hook is that the command running is one a role's hooks or its bridge run (isHookRun): it says nothing of a crew's files on the
+	// error stream.
+	hook bool
 	// cockpitPeers reads the mesh's other nodes for zmina ui (nil: the mesh's own; tests set a fake).
 	cockpitPeers *uiPeerCache
 	// uiLogins hands out one-time login codes for zmina ui (nil: none).
@@ -95,6 +98,7 @@ Run 'zmina skill' for the agent reference: its topics and the dispatcher's part;
 	root.SetErr(errw)
 	root.PersistentPreRun = func(cmd *cobra.Command, args []string) {
 		a.verb = strings.TrimPrefix(cmd.CommandPath(), cmd.Root().Name()+" ")
+		a.hook = isHookRun(cmd)
 	}
 	root.PersistentFlags().StringVar(&a.config, "config", "", "crew config to use (subdirectory of ~/.zmina/)")
 	root.PersistentFlags().StringVar(&a.crew, "crew", "", "crew file (default $ZMINA_CREW or ~/.zmina/crew.yaml)")

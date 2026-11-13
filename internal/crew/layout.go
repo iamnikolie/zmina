@@ -62,6 +62,11 @@ func (l Layout) Screens() string { return filepath.Join(l.Dir, "screens") }
 // zmina's embedded tables of what it reads on a role's screen (internal/screenrules).
 func (l Layout) ScreenRules() string { return filepath.Join(l.Dir, "screen-rules.yaml") }
 
+// ScreenRulesTold is where the crew's commands keep when each reason a screen-rules.yaml was refused was last put in the event
+// log (a map of a hash of the reason to the time), so that a ticker that is a new process every beat tells a reason once a day
+// and does not read the log to find out. Nothing decides by it but that.
+func (l Layout) ScreenRulesTold() string { return filepath.Join(l.Dir, "screen-rules.told") }
+
 // Hooks is the directory of what a role's hooks recorded for zmina to read: one small file a role and kind, replaced by
 // the next record (HookQuestion, HookFailure). A file here is only ever read as a hint, with the session it is about
 // and the time it was written; a role started before a hook existed has none.
