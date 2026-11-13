@@ -1541,11 +1541,15 @@ plugins:
 ```
 
 The crew check refuses a name that is not a plain word or is given twice, an event it does not know, a span that is not
-one. The program is `run`'s first word (a name on PATH, or a path; a relative one is read from the crew dir), else
-`zmina-plugin-<name>` on PATH, else `<crew dir>/plugins/<name>`: nowhere else. It must be a regular executable file that is
-not writable by group or others; one that is not is refused, not run, and `zmina doctor` says so. The environment is the
-caller's less zmina's own secrets (`ZMINA_UI_*`), plus `ZMINA_PLUGIN` (its name), `ZMINA_PLUGIN_EVENT` and `ZMINA_CREW`
-(the crew file); its argv is as configured, its directory the crew's `dir`.
+one. The program is, in this order: the path `run`'s first word gives (absolute, or read from the crew dir), else
+`<crew dir>/plugins/<name>` (for a bare word of `run`, `plugins/<word>`), else on PATH `zmina-plugin-<name>` (or `run`'s
+word). Nowhere else. It must be a regular executable file, owned by you or root, that group and others cannot write; one that
+is not is refused (not passed over for another place), not run, and `zmina doctor` says so. Found on PATH it is found on the PATH
+of whoever looks, and the ticker's is the one `zmina ticker install` froze: `plugin ls` shows the absolute path and `(on PATH)`,
+and `doctor` warns; keep it in `plugins/` or give `run` an absolute path. The environment is the caller's less zmina's own secrets
+(`ZMINA_UI_*`), plus `ZMINA_PLUGIN` (its name), `ZMINA_PLUGIN_EVENT` and `ZMINA_CREW` (the crew file); its argv is as configured,
+its directory the crew's `dir`. `ZMINA_PLUGIN*` is dropped from the environment of the tmux server, so no role inherits a
+plugin's name.
 
 **Events.** One JSON object, one line, UTF-8, on stdin; `"v": 1` (fields are added without moving it: ignore what you do
 not know); exit 0 means taken. Every text in it was written by a role or the owner and is **data**: cleaned as zmina cleans
@@ -1577,7 +1581,8 @@ question; `--by` requires `--dialog`. `zmina choose <role> <n>` by hand needs no
 himself. It presses choice n as the arrows and Enter would, only while the session says it waits on a dialog; it is the
 CLI of Chat's `choose`.
 
-**Delivery.** The beat starts `zmina plugin deliver` (hidden) detached, as it starts the lessons run, and never waits for it:
+**Delivery.** The beat starts `zmina plugin deliver --beat` (hidden; a role refuses it: it is the ticker's and the owner's, and the log names who
+ran it) detached, as it starts the lessons run, and never waits for it:
 a plugin may take its whole deadline. It reads the todo and the screens under no state lock and serves the plugins in
 parallel, each one's events one at a time, each in a process group of its own that is killed at `timeout`; one that fails
 is not asked again that beat; at most 10 events per plugin per beat (the rest wait). A delivery that outlasts its beat keeps
@@ -1587,7 +1592,9 @@ one small file a plugin, apart from `state.json` (nothing in the state moved), p
 that holds a role up is told, as `notify_on: blocking` does); `notify_again` has no counterpart: an event goes once. A run
 that fails (non-zero, past the deadline, a program that is not there) is tried again after 1, 5 and 15 minutes, then dropped
 with one event `plugin-failed` in the log; a delivery is `plugin-told` there, each with the plugin's stdout and stderr cut to
-4 KB. An event queued for a retry whose item was closed meanwhile is never sent, and an item is read
+4 KB; what else the delivery has to say (a try that failed and will be repeated, a program that does not resolve, a file that did
+not save) is `plugin-error`, cut. A delivery that holds its plugin's lock longer than `10 × timeout + 2m` looks stuck: `doctor`
+says so. An event queued for a retry whose item was closed meanwhile is never sent, and an item is read
 again right before it is told, so one answered since the look is not paged. A program that does not resolve (not found,
 refused) is a mistake of the setup, not of an event: nothing runs, no try is spent and nothing is dropped; `plugin ls` and
 `doctor` say so, and what waits goes once it resolves. An item dropped after its tries that is still open gets one more go once

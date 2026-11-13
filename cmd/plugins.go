@@ -79,8 +79,9 @@ func pluginRows(c *crew.Crew) ([]pluginRow, []string) {
 			warns = append(warns, err.Error())
 		}
 
+		// What the told file says is data once it is read: quoted as any quotation, however it came to say it.
 		if l := st.Last; l != nil {
-			row.Last = &pluginLast{At: l.At, Event: l.Event, ID: l.ID, OK: l.OK, Error: l.Err}
+			row.Last = &pluginLast{At: l.At, Event: shift.QuoteN(l.Event, 40), ID: shift.QuoteN(l.ID, 80), OK: l.OK, Error: shift.QuoteN(l.Err, 200)}
 		}
 
 		row.Open, row.Waiting, row.Partial = st.Open(), len(st.Queue), shift.QuoteN(st.Partial, 200)
@@ -136,6 +137,8 @@ func (a *app) pluginLsCommand() *cobra.Command {
 				program := r.Program
 				if !r.Found {
 					program = "not found"
+				} else if r.Via == "PATH" {
+					program += " (on PATH)"
 				}
 
 				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.Name, program, strings.Join(r.Events, ","), lastWords(c, r))
@@ -277,15 +280,31 @@ func pluginNames(c *crew.Crew) string {
 // pluginDeliverCommand is what the beat starts to deliver to the plugins (see pluginsBeat): hidden, run by the ticker and by
 // tests. Run by hand it does the beat's delivery once.
 func (a *app) pluginDeliverCommand() *cobra.Command {
+	var beat bool
+
 	c := &cobra.Command{
 		Use:    "deliver",
 		Short:  "Tell the plugins of what is owed them (the ticker starts this after each beat)",
 		Args:   cobra.NoArgs,
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return a.pluginsDeliver(time.Now())
+			// A role has no business telling the owner's plugins of anything: it could stand its own program in their place, or
+			// page him as it likes.
+			if role := os.Getenv("ZMINA_ROLE"); role != "" {
+				return fmt.Errorf("zmina plugin deliver is the ticker's and the owner's; a role (%s) does not run it", role)
+			}
+
+			// The log names who ran it: the beat that started it, or the hand that ran it.
+			caller := by()
+			if beat {
+				caller = "ticker"
+			}
+
+			return a.pluginsDeliver(time.Now(), caller)
 		},
 	}
+
+	c.Flags().BoolVar(&beat, "beat", false, "started by the ticker's beat (the log names the ticker)")
 
 	return c
 }

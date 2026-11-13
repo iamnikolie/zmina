@@ -28,69 +28,77 @@ const ProgramPrefix = "zmina-plugin-"
 
 // Program is a plugin's program as it will run.
 type Program struct {
-	// Path is the executable, Args the rest of its argv (run's other words).
+	// Path is the executable, absolute; Args the rest of its argv (run's other words).
 	Path string
 	Args []string
-	// Via says how it was found: run, PATH or the crew dir.
+	// Via says how it was found: run (a path the crew file gives), crew dir (plugins/<name>) or PATH. A program found on PATH
+	// is found on the PATH of whoever looks: the ticker's is the one `zmina ticker install` froze, and may differ.
 	Via string
 }
 
 // ErrNotFound is a plugin whose program is nowhere it is looked for.
 var ErrNotFound = errors.New("program not found")
 
-// Resolve finds a plugin's program: the first word of run when the crew file gives one (a name looked up on PATH, or a
-// path, which a relative one is read from the crew dir), else zmina-plugin-<name> on PATH, else <crew dir>/plugins/<name>.
-// Nowhere else. What it finds must be a regular executable file that is not writable by group or others; one that is not
-// is refused with why, not passed over for another.
+// Resolve finds a plugin's program, in this order: the path run's first word gives (absolute, or read from the crew dir),
+// <crew dir>/plugins/<name> (or <word> for a bare word of run), and last PATH (the word of run, or zmina-plugin-<name>).
+// Nowhere else. What it finds must be a regular executable file, owned by the user or root, that group and others cannot write;
+// one that is not is refused with why, not passed over for another. The path it returns is absolute.
 func Resolve(p crew.Plugin, crewDir string) (Program, error) {
-	if len(p.Run) > 0 {
-		word := p.Run[0]
+	word := ProgramPrefix + p.Name
+	local := p.Name
 
-		var path string
+	var args []string
+
+	if len(p.Run) > 0 {
+		word, local = p.Run[0], p.Run[0]
+
+		if len(p.Run) > 1 {
+			args = p.Run[1:]
+		}
 
 		if strings.Contains(word, "/") {
-			path = crew.ExpandHome(word)
+			path := crew.ExpandHome(word)
 			if !filepath.IsAbs(path) {
 				path = filepath.Join(crewDir, path)
 			}
-		} else {
-			found, err := exec.LookPath(word)
-			if err != nil {
-				return Program{}, fmt.Errorf("%w: run's %s is not on PATH", ErrNotFound, word)
+
+			if err := Check(path); err != nil {
+				return Program{}, err
 			}
 
-			path = found
+			return Program{Path: path, Args: args, Via: "run"}, nil
 		}
+	}
 
-		if err := Check(path); err != nil {
+	// The crew's own directory comes before PATH: what is kept with the crew is what the owner put there, and what runs does not
+	// change with the PATH of whoever asks.
+	here := filepath.Join(crewDir, "plugins", local)
+	if _, err := os.Stat(here); err == nil {
+		if err := Check(here); err != nil {
 			return Program{}, err
 		}
 
-		return Program{Path: path, Args: p.Run[1:], Via: "run"}, nil
+		return Program{Path: here, Args: args, Via: "crew dir"}, nil
 	}
 
-	if path, err := exec.LookPath(ProgramPrefix + p.Name); err == nil {
-		if err := Check(path); err != nil {
-			return Program{}, err
-		}
-
-		return Program{Path: path, Via: "PATH"}, nil
+	found, err := exec.LookPath(word)
+	if err != nil {
+		return Program{}, fmt.Errorf("%w: %s is not in %s and %s is not on PATH", ErrNotFound, local, filepath.Join(crewDir, "plugins"), word)
 	}
 
-	local := filepath.Join(crewDir, "plugins", p.Name)
-	if _, err := os.Stat(local); err == nil {
-		if err := Check(local); err != nil {
-			return Program{}, err
-		}
-
-		return Program{Path: local, Via: "crew dir"}, nil
+	if abs, err := filepath.Abs(found); err == nil {
+		found = abs
 	}
 
-	return Program{}, fmt.Errorf("%w: %s%s is not on PATH and %s does not exist", ErrNotFound, ProgramPrefix, p.Name, local)
+	if err := Check(found); err != nil {
+		return Program{}, err
+	}
+
+	return Program{Path: found, Args: args, Via: "PATH"}, nil
 }
 
-// Check says a program may be run: a regular file, executable, not writable by group or others (a program anyone could
-// change is a program anyone could speak for the owner through).
+// Check says a program may be run: a regular file, executable, owned by the user or root, and not writable by group or others (a
+// program anyone could change is a program anyone could speak for the owner through).
 func Check(path string) error {
 	fi, err := os.Stat(path)
 	if err != nil {
@@ -106,6 +114,20 @@ func Check(path string) error {
 		return fmt.Errorf("%s is not executable (chmod +x)", path)
 	case mode.Perm()&0o022 != 0:
 		return fmt.Errorf("%s is writable by group or others, so it is not run (chmod go-w)", path)
+	}
+
+	return checkOwner(path, fi, os.Getuid())
+}
+
+// checkOwner refuses a program that is owned by neither the user nor root: whoever owns a file may change it.
+func checkOwner(path string, fi os.FileInfo, uid int) error {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return nil
+	}
+
+	if owner := int(st.Uid); owner != uid && owner != 0 {
+		return fmt.Errorf("%s is owned by uid %d, not by you or root, so it is not run", path, owner)
 	}
 
 	return nil

@@ -98,7 +98,7 @@ func deliver(t *testing.T, file string, at time.Time, seams ...func(s *shift.Shi
 		a.shiftSeams = seams[0]
 	}
 
-	require.NoError(t, a.pluginsDeliver(at))
+	require.NoError(t, a.pluginsDeliver(at, "ticker"))
 }
 
 func askID(t *testing.T, out string) string { return strings.TrimSpace(out) }
@@ -425,6 +425,20 @@ func TestPluginsRetryBackoffAndDrop(t *testing.T) {
 	assert.Contains(t, failed[0].Detail, "given up after 4 tries: exit 1: no route to host")
 	assert.Contains(t, failed[0].Detail, "stderr: no route to host", "what it printed")
 
+	// Each failed try that is not the last is in the log too: the delivery has no terminal to say it on.
+	var errs int
+
+	for _, e := range evs {
+		if e.Event == "plugin-error" {
+			errs++
+
+			assert.Equal(t, "ticker", e.By)
+			assert.Contains(t, e.Detail, "flaky: ask "+id+" failed, tried again later: exit 1: no route to host")
+		}
+	}
+
+	assert.Equal(t, 3, errs, "the three tries before the last")
+
 	// The plugin is not told of the end of what it never got.
 	_, _, err = zm(t, file, "todo", "answer", id, "x")
 	require.NoError(t, err)
@@ -691,7 +705,7 @@ func TestBeatStartsTheDelivery(t *testing.T) {
 	file := pluginCrew(t, "  dev: {}\n", "  - name: pager\n")
 	run(file)
 	require.Len(t, spawned, 1)
-	assert.Equal(t, []string{"--crew", file, "plugin", "deliver"}, spawned[0])
+	assert.Equal(t, []string{"--crew", file, "plugin", "deliver", "--beat"}, spawned[0])
 }
 
 // The delivery's own command runs it once, and works from the command line as the ticker's child does.
@@ -878,5 +892,5 @@ func TestTickStartsThePluginDelivery(t *testing.T) {
 	root.SetArgs([]string{"--crew", file, "tick"})
 	require.NoError(t, root.Execute())
 
-	assert.Contains(t, spawned, []string{"--crew", file, "plugin", "deliver"})
+	assert.Contains(t, spawned, []string{"--crew", file, "plugin", "deliver", "--beat"})
 }

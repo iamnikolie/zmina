@@ -29,7 +29,8 @@ func spec(path string, timeout time.Duration, stdin string, args ...string) Spec
 	return Spec{Program: Program{Path: path, Args: args}, Env: os.Environ(), Stdin: []byte(stdin), Timeout: timeout}
 }
 
-// The program is run's first word, else zmina-plugin-<name> on PATH, else <crew dir>/plugins/<name>: nowhere else.
+// The program is the path run gives, else <crew dir>/plugins/<name>, else PATH (zmina-plugin-<name>, or run's word): nowhere else,
+// and always an absolute path.
 func TestResolveWhereAProgramIsLookedFor(t *testing.T) {
 	crewDir, bin := t.TempDir(), t.TempDir()
 	t.Setenv("PATH", bin)
@@ -37,45 +38,91 @@ func TestResolveWhereAProgramIsLookedFor(t *testing.T) {
 	_, err := Resolve(crew.Plugin{Name: "pager"}, crewDir)
 	require.ErrorIs(t, err, ErrNotFound)
 	assert.ErrorContains(t, err, "zmina-plugin-pager is not on PATH")
-	assert.ErrorContains(t, err, filepath.Join(crewDir, "plugins", "pager"))
+	assert.ErrorContains(t, err, filepath.Join(crewDir, "plugins"))
 
-	// The crew dir's plugins/<name>.
-	local := script(t, mkdir(t, crewDir, "plugins"), "pager", "exit 0\n")
-	p, err := Resolve(crew.Plugin{Name: "pager"}, crewDir)
-	require.NoError(t, err)
-	assert.Equal(t, Program{Path: local, Via: "crew dir"}, p)
-
-	// PATH comes first.
+	// PATH, last.
 	onPath := script(t, bin, "zmina-plugin-pager", "exit 0\n")
-	p, err = Resolve(crew.Plugin{Name: "pager"}, crewDir)
+	p, err := Resolve(crew.Plugin{Name: "pager"}, crewDir)
 	require.NoError(t, err)
 	assert.Equal(t, Program{Path: onPath, Via: "PATH"}, p)
 
-	// run: a name on PATH with its arguments; a path, absolute or from the crew dir.
+	// The crew dir's plugins/<name> comes before it.
+	local := script(t, mkdir(t, crewDir, "plugins"), "pager", "exit 0\n")
+	p, err = Resolve(crew.Plugin{Name: "pager"}, crewDir)
+	require.NoError(t, err)
+	assert.Equal(t, Program{Path: local, Via: "crew dir"}, p)
+
+	// run: a path, absolute or from the crew dir, first of all; a bare word is looked for in plugins/ and then on PATH.
 	other := script(t, bin, "bridge", "exit 0\n")
 	p, err = Resolve(crew.Plugin{Name: "pager", Run: []string{"bridge", "--quiet", "x"}}, crewDir)
 	require.NoError(t, err)
-	assert.Equal(t, Program{Path: other, Args: []string{"--quiet", "x"}, Via: "run"}, p)
+	assert.Equal(t, Program{Path: other, Args: []string{"--quiet", "x"}, Via: "PATH"}, p)
+
+	pinned := script(t, mkdir(t, crewDir, "plugins"), "bridge", "exit 0\n")
+	p, err = Resolve(crew.Plugin{Name: "pager", Run: []string{"bridge", "--quiet"}}, crewDir)
+	require.NoError(t, err)
+	assert.Equal(t, Program{Path: pinned, Args: []string{"--quiet"}, Via: "crew dir"}, p, "the crew's own copy before PATH")
 
 	p, err = Resolve(crew.Plugin{Name: "pager", Run: []string{other}}, crewDir)
 	require.NoError(t, err)
-	assert.Equal(t, other, p.Path)
+	assert.Equal(t, Program{Path: other, Via: "run"}, p, "an absolute path is taken as it is")
 
 	rel := script(t, mkdir(t, crewDir, "tools"), "tell", "exit 0\n")
 	p, err = Resolve(crew.Plugin{Name: "pager", Run: []string{"./tools/tell"}}, crewDir)
 	require.NoError(t, err)
 	assert.Equal(t, rel, p.Path, "a relative path is read from the crew dir")
+	assert.True(t, filepath.IsAbs(p.Path))
 
 	_, err = Resolve(crew.Plugin{Name: "pager", Run: []string{"nothing-like-it"}}, crewDir)
 	require.ErrorIs(t, err, ErrNotFound)
-	assert.ErrorContains(t, err, "run's nothing-like-it is not on PATH")
+	assert.ErrorContains(t, err, "nothing-like-it is not on PATH")
 
 	_, err = Resolve(crew.Plugin{Name: "pager", Run: []string{"/nowhere/at/all"}}, crewDir)
 	require.ErrorIs(t, err, ErrNotFound)
 
 	// With run given, the lookup by name is not made.
-	_, err = Resolve(crew.Plugin{Name: "pager", Run: []string{"nothing-like-it"}}, crewDir)
+	_, err = Resolve(crew.Plugin{Name: "other", Run: []string{"nothing-like-it"}}, crewDir)
 	assert.Error(t, err)
+}
+
+// A PATH with a relative entry still gives an absolute path.
+func TestResolveReturnsAnAbsolutePath(t *testing.T) {
+	crewDir, bin := t.TempDir(), t.TempDir()
+	script(t, bin, "zmina-plugin-rel", "exit 0\n")
+	t.Chdir(bin)
+	t.Setenv("PATH", ".")
+
+	p, err := Resolve(crew.Plugin{Name: "rel"}, crewDir)
+	if err != nil {
+		t.Skipf("this go refuses a relative PATH entry: %v", err)
+	}
+
+	assert.True(t, filepath.IsAbs(p.Path), p.Path)
+}
+
+type ownedFile struct {
+	os.FileInfo
+	uid uint32
+}
+
+func (f ownedFile) Sys() any { return &syscall.Stat_t{Uid: f.uid} }
+
+// A program owned by someone else than the user or root is refused: whoever owns a file may change it.
+func TestCheckRefusesAProgramOwnedBySomeoneElse(t *testing.T) {
+	path := script(t, t.TempDir(), "pager", "exit 0\n")
+	fi, err := os.Stat(path)
+	require.NoError(t, err)
+
+	me := os.Getuid()
+	require.NoError(t, checkOwner(path, ownedFile{fi, uint32(me)}, me), "the user's own")
+	require.NoError(t, checkOwner(path, ownedFile{fi, 0}, me), "root's")
+
+	err = checkOwner(path, ownedFile{fi, uint32(me + 4242)}, me)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "not by you or root")
+	assert.ErrorContains(t, err, strconv.Itoa(me+4242))
+
+	assert.NoError(t, Check(path), "a real file of the user's own")
 }
 
 func mkdir(t *testing.T, parent, name string) string {
@@ -118,21 +165,26 @@ func TestResolveRefusesWhatIsNotSafe(t *testing.T) {
 	_, err = Resolve(crew.Plugin{Name: "pager"}, crewDir)
 	assert.ErrorContains(t, err, "not a regular file")
 
-	// One found on PATH is checked as well, and does not fall through to the crew dir's.
-	require.NoError(t, os.Remove(path))
-	script(t, dir, "pager", "exit 0\n")
-	loose := script(t, bin, "zmina-plugin-pager", "exit 0\n")
+	// One found on PATH is checked as well, and a refused one in the crew dir is not passed over for the one on PATH.
+	require.NoError(t, os.RemoveAll(path))
+	good := script(t, bin, "zmina-plugin-pager", "exit 0\n")
+	loose := script(t, dir, "pager", "exit 0\n")
 	require.NoError(t, os.Chmod(loose, 0o777))
 	_, err = Resolve(crew.Plugin{Name: "pager"}, crewDir)
-	assert.ErrorContains(t, err, "writable by group or others")
+	assert.ErrorContains(t, err, "writable by group or others", "the crew's own is refused, not skipped")
+
+	require.NoError(t, os.Remove(loose))
+	require.NoError(t, os.Chmod(good, 0o777))
+	_, err = Resolve(crew.Plugin{Name: "pager"}, crewDir)
+	assert.ErrorContains(t, err, "writable by group or others", "and the one on PATH too")
 
 	// A symlink is judged by what it points at.
-	require.NoError(t, os.Remove(loose))
+	require.NoError(t, os.Remove(good))
 	target := script(t, t.TempDir(), "real", "exit 0\n")
-	require.NoError(t, os.Symlink(target, loose))
+	require.NoError(t, os.Symlink(target, good))
 	p, err := Resolve(crew.Plugin{Name: "pager"}, crewDir)
 	require.NoError(t, err)
-	assert.Equal(t, loose, p.Path)
+	assert.Equal(t, good, p.Path)
 }
 
 // One JSON line goes on stdin; exit 0 is taken; what it prints is kept, bounded; the exit code is reported.
@@ -276,4 +328,33 @@ func TestExecExitZeroWithAChildOnItsPipesIsTaken(t *testing.T) {
 	res = Exec(spec(bad, 10*time.Second, ""))
 	assert.False(t, res.OK())
 	assert.Equal(t, 2, res.Code)
+}
+
+// The delivery lock is taken by one run at a time; a look at it says who holds it and since when, and holds nothing itself.
+func TestLockAndHolder(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "plugins", "pager.lock")
+	at := time.Date(2026, 11, 13, 12, 0, 0, 0, time.UTC)
+
+	held, _, _ := Holder(path)
+	assert.False(t, held, "no file: no holder")
+
+	release, ok := Lock(path, at)
+	require.True(t, ok)
+
+	_, again := Lock(path, at)
+	assert.False(t, again, "one at a time")
+
+	held, pid, since := Holder(path)
+	assert.True(t, held)
+	assert.Equal(t, os.Getpid(), pid)
+	assert.True(t, since.Equal(at))
+
+	release()
+
+	held, _, _ = Holder(path)
+	assert.False(t, held, "free again, whatever the file still says")
+
+	release2, ok := Lock(path, at)
+	require.True(t, ok, "the look took nothing")
+	release2()
 }

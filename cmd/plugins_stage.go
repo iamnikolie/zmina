@@ -6,13 +6,11 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/iamnikolie/zmina/internal/asks"
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/events"
-	"github.com/iamnikolie/zmina/internal/fsx"
 	"github.com/iamnikolie/zmina/internal/later"
 	"github.com/iamnikolie/zmina/internal/plugin"
 	"github.com/iamnikolie/zmina/internal/shift"
@@ -38,7 +36,7 @@ func (a *app) pluginsBeat(now time.Time) {
 		spawn = spawnDetached
 	}
 
-	_ = spawn([]string{"--crew", c.Path, "plugin", "deliver"})
+	_ = spawn([]string{"--crew", c.Path, "plugin", "deliver", "--beat"})
 }
 
 // pluginWorld is what is open now, read once for every plugin of a beat.
@@ -297,30 +295,12 @@ func closureOf(c *crew.Crew, e plugin.Entry, at time.Time) plugin.Closure {
 
 // lockPlugin takes a plugin's delivery lock without waiting; false when another run holds it. The release is the caller's.
 func lockPlugin(c *crew.Crew, name string) (release func(), ok bool) {
-	if fsx.MkdirAll(c.Layout().Plugins(), 0o700) != nil {
-		return nil, false
-	}
-
-	f, err := os.OpenFile(c.Layout().PluginLock(name), os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, false
-	}
-
-	if syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
-		_ = f.Close()
-
-		return nil, false
-	}
-
-	return func() {
-		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		_ = f.Close()
-	}, true
+	return plugin.Lock(c.Layout().PluginLock(name), time.Now())
 }
 
 // pluginsDeliver is the delivery itself: every plugin of the crew, in parallel, each one's events one at a time. It returns
 // the lines for the output; what could not be done is a line, never an error that stops the others.
-func (a *app) pluginsDeliver(now time.Time) error {
+func (a *app) pluginsDeliver(now time.Time, caller string) error {
 	c, err := a.loadCrew()
 	if err != nil || len(c.Plugins) == 0 {
 		return err
@@ -365,7 +345,7 @@ func (a *app) pluginsDeliver(now time.Time) error {
 			defer wg.Done()
 			defer j.release()
 
-			got := a.pluginDeliverOne(c, j.pl, w, now)
+			got := a.pluginDeliverOne(c, j.pl, w, now, caller)
 
 			mu.Lock()
 			lines = append(lines, got...)
@@ -382,7 +362,7 @@ func (a *app) pluginsDeliver(now time.Time) error {
 // pluginDeliverOne serves one plugin: it notes what is open, plans (plugin.Make), and runs the events one at a time until
 // one fails — a plugin that fails is not asked again this beat — keeping the plugin's told file after each. now is the
 // beat's moment, for what is due; what happened is dated by the clock.
-func (a *app) pluginDeliverOne(c *crew.Crew, pl crew.Plugin, w *pluginWorld, now time.Time) []string {
+func (a *app) pluginDeliverOne(c *crew.Crew, pl crew.Plugin, w *pluginWorld, now time.Time, caller string) []string {
 	path := c.Layout().PluginTold(pl.Name)
 
 	// What happened is dated by the beat's clock carried on by the time the delivery has taken: the beat's moment, and then the
@@ -396,9 +376,16 @@ func (a *app) pluginDeliverOne(c *crew.Crew, pl crew.Plugin, w *pluginWorld, now
 		lines = append(lines, fmt.Sprintf("plugin %s: ", pl.Name)+fmt.Sprintf(format, args...))
 	}
 
+	// The delivery is a process with no terminal: what is not an event told or given up on, and may need looking at, goes to the
+	// event log too, bounded.
+	problem := func(format string, args ...any) {
+		say(format, args...)
+		pluginProblem(c, caller, pl.Name, fmt.Sprintf(format, args...))
+	}
+
 	st, lerr := plugin.Load(path)
 	if lerr != nil {
-		say("%v", lerr)
+		problem("%v", lerr)
 	}
 
 	st.Observe(w.things, now, w.gaps)
@@ -420,7 +407,7 @@ func (a *app) pluginDeliverOne(c *crew.Crew, pl crew.Plugin, w *pluginWorld, now
 		st.Prune(clock(), w.isOpen)
 
 		if err := st.Save(path); err != nil {
-			say("not saved: %v", err)
+			problem("not saved: %v", err)
 		}
 	}
 
@@ -432,7 +419,7 @@ func (a *app) pluginDeliverOne(c *crew.Crew, pl crew.Plugin, w *pluginWorld, now
 	if perr != nil {
 		if st.Problem != perr.Error() {
 			st.Problem = perr.Error()
-			say("%v: nothing is told to it until it is there", perr)
+			problem("%v: nothing is told to it until it is there", perr)
 		}
 
 		plan.Send = nil
@@ -463,7 +450,7 @@ func (a *app) pluginDeliverOne(c *crew.Crew, pl crew.Plugin, w *pluginWorld, now
 		if res.OK() {
 			st.Succeed(d, at)
 			taken = true
-			pluginLog(c, "plugin-told", pl.Name, d, "", res)
+			pluginLog(c, caller, "plugin-told", pl.Name, d, "", res)
 			say("%s %s told", d.Kind, d.Entry.ID)
 			save()
 
@@ -473,10 +460,10 @@ func (a *app) pluginDeliverOne(c *crew.Crew, pl crew.Plugin, w *pluginWorld, now
 		reason := res.Reason(pl.TimeoutD())
 
 		if st.Fail(d, string(line), at, reason) {
-			pluginLog(c, "plugin-failed", pl.Name, d, fmt.Sprintf("given up after %d tries: %s", plugin.MaxTries, reason), res)
+			pluginLog(c, caller, "plugin-failed", pl.Name, d, fmt.Sprintf("given up after %d tries: %s", plugin.MaxTries, reason), res)
 			say("%s %s given up after %d tries: %s", d.Kind, d.Entry.ID, plugin.MaxTries, reason)
 		} else {
-			say("%s %s failed, tried again later: %s", d.Kind, d.Entry.ID, reason)
+			problem("%s %s failed, tried again later: %s", d.Kind, d.Entry.ID, reason)
 		}
 
 		break
@@ -516,7 +503,7 @@ func (w *pluginWorld) line(b plugin.Builder, d plugin.Due, now time.Time) ([]byt
 
 // pluginLog puts what happened to an event in the event log: a delivery (plugin-told) or the giving up (plugin-failed), with
 // what the plugin printed, each stream cut to plugin.OutputMax and cleaned as any quotation: it is data.
-func pluginLog(c *crew.Crew, event, name string, d plugin.Due, note string, res plugin.Result) {
+func pluginLog(c *crew.Crew, caller, event, name string, d plugin.Due, note string, res plugin.Result) {
 	detail := fmt.Sprintf("%s %s %s", name, d.Kind, d.Entry.ID)
 
 	if note != "" {
@@ -529,8 +516,17 @@ func pluginLog(c *crew.Crew, event, name string, d plugin.Due, note string, res 
 		}
 	}
 
-	_ = eventLog(c).Add(events.Event{TS: time.Now(), Event: event, By: "ticker", Task: taskRefOf(d.Entry.ID), Detail: detail})
+	_ = eventLog(c).Add(events.Event{TS: time.Now(), Event: event, By: caller, Task: taskRefOf(d.Entry.ID), Detail: detail})
 }
+
+// pluginProblem puts a line of the delivery that needs looking at in the event log, as the caller it really is, cut.
+func pluginProblem(c *crew.Crew, caller, name, line string) {
+	_ = eventLog(c).Add(events.Event{TS: time.Now(), Event: "plugin-error", By: caller,
+		Detail: name + ": " + shift.QuoteN(line, pluginProblemMax)})
+}
+
+// pluginProblemMax bounds a line of the delivery in the event log.
+const pluginProblemMax = 500
 
 // taskRefOf is the id when it is a task's.
 func taskRefOf(id string) string {
