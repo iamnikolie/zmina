@@ -621,6 +621,8 @@ var DefaultDrop = []string{
 	"CLAUDE_CODE_MESSAGING_*", "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_EXECPATH", "CLAUDE_PID", "CLAUDE_EFFORT",
 	"CLAUDE_CONFIG_DIR", "ZMINA_ROLE", "TMUX", "TMUX_PANE", "CMUX_*", "TERM_SESSION_ID", "ITERM_SESSION_ID",
 	"__CFBundleIdentifier", "CODEX_THREAD_ID", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE", "ZMINA_UI_*",
+	// A plugin's own run names itself (ZMINA_PLUGIN, ZMINA_PLUGIN_EVENT): a role that inherited it would sign for the plugin.
+	"ZMINA_PLUGIN*",
 }
 
 // SecretEnv are the variables that hold a credential of zmina's own (the cockpit's token and code command): a program

@@ -21,7 +21,7 @@ import (
 const OutputMax = 4 << 10
 
 // waitDelay is how long after a plugin ends, or is killed at its deadline, the pipes it left open are waited for.
-const waitDelay = 2 * time.Second
+var waitDelay = 2 * time.Second
 
 // ProgramPrefix is the name a plugin's program has on PATH: zmina-plugin-<name>.
 const ProgramPrefix = "zmina-plugin-"
@@ -201,6 +201,9 @@ func Exec(spec Spec) Result {
 	var ee *exec.ExitError
 
 	switch {
+	case errors.Is(err, exec.ErrWaitDelay) && cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == 0:
+		// It exited 0 and left a child holding its pipes (a plugin that backgrounds a send): it took the event; what the
+		// child prints later is nobody's.
 	case err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded):
 		res.TimedOut, res.Code = true, -1
 	case err == nil:

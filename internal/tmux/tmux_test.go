@@ -248,3 +248,11 @@ func TestProbeNeverTakesAPrefix(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, Up, p.State)
 }
+
+// What names a plugin's run, or holds the cockpit's credential, never reaches a role through the tmux server's environment.
+func TestCleanEnvKeepsAPluginsNameAndTheCockpitsSecretsFromRoles(t *testing.T) {
+	env := CleanEnv([]string{"PATH=/bin", "ZMINA_PLUGIN=pager", "ZMINA_PLUGIN_EVENT=ask", "ZMINA_UI_TOKEN=x", "ZMINA_ROLE=dev",
+		"ZMINA_CREW=/c/crew.yaml"}, nil)
+
+	assert.Equal(t, []string{"PATH=/bin", "ZMINA_CREW=/c/crew.yaml"}, env)
+}

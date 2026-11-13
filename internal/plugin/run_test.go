@@ -252,3 +252,28 @@ func TestReasonIsOneCleanLine(t *testing.T) {
 	assert.Equal(t, "exit 5", Result{Code: 5}.Reason(time.Second))
 	assert.Empty(t, Result{}.Reason(time.Second), "taken: no reason")
 }
+
+// A plugin that exits 0 and leaves a child holding its stdout (a send put in the background) has taken the event: it is no
+// failure, and not retried.
+func TestExecExitZeroWithAChildOnItsPipesIsTaken(t *testing.T) {
+	keep := waitDelay
+	waitDelay = 300 * time.Millisecond
+
+	t.Cleanup(func() { waitDelay = keep })
+
+	dir := t.TempDir()
+	bg := script(t, dir, "bg", "echo sent\nsleep 3 &\nexit 0\n")
+
+	res := Exec(spec(bg, 10*time.Second, ""))
+	assert.True(t, res.OK(), "%+v", res)
+	assert.Zero(t, res.Code)
+	assert.NoError(t, res.Err)
+	assert.False(t, res.TimedOut)
+	assert.Equal(t, "sent\n", res.Stdout)
+
+	// The same with a failing exit is a failure still.
+	bad := script(t, dir, "bgbad", "sleep 3 &\nexit 2\n")
+	res = Exec(spec(bad, 10*time.Second, ""))
+	assert.False(t, res.OK())
+	assert.Equal(t, 2, res.Code)
+}
