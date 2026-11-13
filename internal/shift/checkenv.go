@@ -3,6 +3,7 @@ package shift
 import (
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/iamnikolie/zmina/internal/donecheck"
 	"github.com/iamnikolie/zmina/internal/task"
@@ -42,7 +43,9 @@ func (s *Shift) RecordCheckEnv(t task.Task, by string, res donecheck.Result) (Ch
 		return out, err
 	}
 
-	if slices.Contains(t.CheckEnvTold, res.Fault()) {
+	// Told before, or being told by a run that queued its note and has not marked it yet (two runs of the check at once): the
+	// note waits for the dispatcher in the state, which this run reads under the same lock, so it is folded into that one.
+	if slices.Contains(t.CheckEnvTold, res.Fault()) || s.checkEnvWaiting(t, res) {
 		out.Already = true
 
 		return out, nil
@@ -59,10 +62,20 @@ func (s *Shift) RecordCheckEnv(t task.Task, by string, res donecheck.Result) (Ch
 	return out, nil
 }
 
-// MarkCheckEnvTold records that the dispatcher was told of a cause on task id: it is in the task's set of told causes, the
-// last task.CheckEnvToldMax of them (a cause that comes back is told no more, a ninth distinct one makes the oldest forgotten).
-// Called once the state with the note is saved. A task that is not active any more, or has told it already, is left as it is.
-func (s *Shift) MarkCheckEnvTold(id, cause string) error {
+// checkEnvWaiting reports whether the note for this task and cause is waiting for the dispatcher already.
+func (s *Shift) checkEnvWaiting(t task.Task, res donecheck.Result) bool {
+	head := fmt.Sprintf("%s (%s): its done check could not run, so the work was not judged: %s", t.ID, t.Role, donecheck.Line(res.Fault()))
+
+	return slices.ContainsFunc(s.State.Signals, func(sig string) bool { return strings.Contains(sig, head) })
+}
+
+// MarkCheckEnvTold records that the dispatcher was told of the fault res on task id: its cause is in the task's set of told
+// causes, the last task.CheckEnvToldMax of them (a cause that comes back is told no more, a ninth distinct one makes the oldest
+// forgotten). Called once the state with the note is saved, which is some time after RecordCheckEnv, so it marks only if the
+// fault on the task still is this one (the same check, commit and cause): a task whose check was changed or cleared meanwhile,
+// or whose check has met another fault since, has nothing of this one to mark. A task that is not active any more, or has told
+// the cause already, is left as it is.
+func (s *Shift) MarkCheckEnvTold(id string, res donecheck.Result) error {
 	if s.Tasks == nil {
 		return nil
 	}
@@ -72,7 +85,13 @@ func (s *Shift) MarkCheckEnvTold(id, cause string) error {
 		return err
 	}
 
+	cause := res.Fault()
+
 	if !t.State.Active() || slices.Contains(t.CheckEnvTold, cause) {
+		return nil
+	}
+
+	if c := t.CheckEnv; c == nil || c.Run != res.Run || c.Commit != res.Commit || c.Fault() != cause {
 		return nil
 	}
 

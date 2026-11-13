@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -34,7 +35,7 @@ func told(t *testing.T, f fix, id string, tell CheckEnvTell, res donecheck.Resul
 	t.Helper()
 
 	if tell.Queued {
-		require.NoError(t, f.s.MarkCheckEnvTold(id, res.Fault()))
+		require.NoError(t, f.s.MarkCheckEnvTold(id, res))
 	}
 }
 
@@ -159,32 +160,153 @@ func TestRecordCheckEnvIsNotToldWhenTheNoteCouldNotBeQueued(t *testing.T) {
 }
 
 // The told causes are the last CheckEnvToldMax: a ninth distinct cause makes the oldest forgotten, and a cause marked twice is
-// one entry.
+// one entry. A cause is marked only while it is the fault on the task.
 func TestMarkCheckEnvToldIsBounded(t *testing.T) {
 	f := lateFixture(t)
 
 	for i := range task.CheckEnvToldMax + 3 {
-		require.NoError(t, f.s.MarkCheckEnvTold("T-1", fmt.Sprintf("exit %d: a cause", 100+i)))
-		require.NoError(t, f.s.MarkCheckEnvTold("T-1", fmt.Sprintf("exit %d: a cause", 100+i)))
+		res := envResult(100+i, "")
+		res.Err = ""
+
+		current, err := f.tk.Get("T-1")
+		require.NoError(t, err)
+
+		current.CheckEnv = &res
+		require.NoError(t, f.tk.Put(current))
+
+		require.NoError(t, f.s.MarkCheckEnvTold("T-1", res))
+		require.NoError(t, f.s.MarkCheckEnvTold("T-1", res))
 	}
 
 	got, err := f.tk.Get("T-1")
 	require.NoError(t, err)
 	require.Len(t, got.CheckEnvTold, task.CheckEnvToldMax)
-	assert.Equal(t, "exit 103: a cause", got.CheckEnvTold[0])
-	assert.Equal(t, fmt.Sprintf("exit %d: a cause", 100+task.CheckEnvToldMax+2), got.CheckEnvTold[task.CheckEnvToldMax-1])
+	assert.Equal(t, envResult(103, "").Fault(), got.CheckEnvTold[0])
+	assert.Equal(t, envResult(100+task.CheckEnvToldMax+2, "").Fault(), got.CheckEnvTold[task.CheckEnvToldMax-1])
 
 	// A task closed since is left alone.
 	closed := got
 	closed.State = task.Done
 	require.NoError(t, f.tk.Put(closed))
-	require.NoError(t, f.s.MarkCheckEnvTold("T-1", "exit 1: new"))
+	require.NoError(t, f.s.MarkCheckEnvTold("T-1", *got.CheckEnv))
 
 	after, err := f.tk.Get("T-1")
 	require.NoError(t, err)
 	assert.Equal(t, got.CheckEnvTold, after.CheckEnvTold)
 
-	require.Error(t, f.s.MarkCheckEnvTold("T-9", "x"), "a task that is not there")
+	require.Error(t, f.s.MarkCheckEnvTold("T-9", envResult(127, "")), "a task that is not there")
+}
+
+// The record and the mark are two writes with the state saved between them, and a `task set --check` can come between: the mark
+// is of the fault it was made for. A check that was cleared or changed since, or that has met another fault since, has nothing
+// of this one to mark, and a stale cause is never put in the told set.
+func TestMarkCheckEnvToldOnlyMarksTheFaultThatIsOnTheTask(t *testing.T) {
+	a, other := envResult(127, ""), envResult(126, "")
+	other.Exit = 126
+
+	for name, between := range map[string]func(t *testing.T, f fix){
+		"the check was cleared (task set --check -)": func(t *testing.T, f fix) {
+			got, err := f.tk.Get("T-1")
+			require.NoError(t, err)
+			got.CheckEnv, got.CheckEnvTold = nil, nil
+			require.NoError(t, f.tk.Put(got))
+		},
+		"the check was changed: its command is another": func(t *testing.T, f fix) {
+			got, err := f.tk.Get("T-1")
+			require.NoError(t, err)
+			changed := *got.CheckEnv
+			changed.Run = "make lint"
+			got.CheckEnv = &changed
+			require.NoError(t, f.tk.Put(got))
+		},
+		"the worktree moved to another commit and the check met the same fault": func(t *testing.T, f fix) {
+			got, err := f.tk.Get("T-1")
+			require.NoError(t, err)
+			moved := *got.CheckEnv
+			moved.Commit = "def456"
+			got.CheckEnv = &moved
+			require.NoError(t, f.tk.Put(got))
+		},
+		"the check met another fault since": func(t *testing.T, f fix) {
+			got, err := f.tk.Get("T-1")
+			require.NoError(t, err)
+			got.CheckEnv = &other
+			require.NoError(t, f.tk.Put(got))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := lateFixture(t)
+
+			open, err := f.tk.Get("T-1")
+			require.NoError(t, err)
+
+			tell, err := f.s.RecordCheckEnv(open, "designer", a)
+			require.NoError(t, err)
+			require.True(t, tell.Queued)
+
+			between(t, f)
+
+			require.NoError(t, f.s.MarkCheckEnvTold("T-1", a))
+
+			got, err := f.tk.Get("T-1")
+			require.NoError(t, err)
+			assert.Empty(t, got.CheckEnvTold, "a stale cause is not marked")
+		})
+	}
+
+	t.Run("the fault still on the task is marked", func(t *testing.T) {
+		f := lateFixture(t)
+
+		open, err := f.tk.Get("T-1")
+		require.NoError(t, err)
+
+		_, err = f.s.RecordCheckEnv(open, "designer", a)
+		require.NoError(t, err)
+		require.NoError(t, f.s.MarkCheckEnvTold("T-1", a))
+
+		got, err := f.tk.Get("T-1")
+		require.NoError(t, err)
+		assert.Equal(t, []string{a.Fault()}, got.CheckEnvTold)
+	})
+}
+
+// Two runs of the check at once: the second reads the state after the first queued its note and before the first marked it, and
+// finds the note waiting for the dispatcher: it is folded into it, no second note and no repeat count, and both marks leave one
+// cause in the set.
+func TestTwoRunsOfTheCheckAtOnceTellTheDispatcherOnce(t *testing.T) {
+	f := lateFixture(t)
+
+	first, second := envResult(127, ""), envResult(127, "")
+	second.At = first.At.Add(time.Second)
+	second.Output = "the second run's output"
+
+	open, err := f.tk.Get("T-1")
+	require.NoError(t, err)
+
+	tellFirst, err := f.s.RecordCheckEnv(open, "designer", first)
+	require.NoError(t, err)
+	require.True(t, tellFirst.Queued)
+
+	// The first has not marked yet: the second run's lock comes in between.
+	between, err := f.tk.Get("T-1")
+	require.NoError(t, err)
+
+	tellSecond, err := f.s.RecordCheckEnv(between, "designer", second)
+	require.NoError(t, err)
+	assert.False(t, tellSecond.Queued, "folded into the note that waits")
+	assert.True(t, tellSecond.Already)
+	assert.Equal(t, 1, checkEnvNotes(f), "one note")
+	require.Len(t, f.s.State.Signals, 1)
+	assert.Equal(t, 1, f.s.State.SignalCounts[f.s.State.Signals[0]], "and not one that says it was repeated")
+
+	// The newer run's result is the one on the task; the first's mark is of the same cause, check and commit, and is made.
+	require.NoError(t, f.s.MarkCheckEnvTold("T-1", first))
+	require.NoError(t, f.s.MarkCheckEnvTold("T-1", second))
+
+	got, err := f.tk.Get("T-1")
+	require.NoError(t, err)
+	assert.Equal(t, []string{first.Fault()}, got.CheckEnvTold)
+	assert.Equal(t, "the second run's output", got.CheckEnv.Output)
 }
 
 // A run that is no fault, and a task that is closed since, keep and tell nothing.

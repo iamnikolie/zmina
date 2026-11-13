@@ -1381,7 +1381,7 @@ but a seat the check can run on (the same kind of note a late report is told in)
 only when the note was queued and the state that holds it saved; then the cause is marked told in `check_env_told`, the last 8
 causes of the task, so that a cause that comes back after another (A, B, A) is not told a third time. A note that could not be
 queued is said so (`the dispatcher could not be told`), nothing is marked, and the next run of the check tries again. The same
-fault again is kept, not told again. Closing the task by any path, changing its check, or putting it away takes `check_env`
+fault again is kept, not told again (nor by a second run at once: it folds into the note that waits); a mark is made only while that fault is the one on the task. Closing the task by any path, changing its check, or putting it away takes `check_env`
 and `check_env_told` away. A timeout is still an ordinary failure, and `--force` is as it was. A check that exits 126, 127 or
 its `env_fault_rc` for a reason of its own code, not the environment, is read as the environment's: pick an `env_fault_rc`
 the tests never exit with.

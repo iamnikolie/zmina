@@ -735,7 +735,6 @@ func (a *app) doneCheck(id string, st task.State, o taskChange) (*ledger.Checked
 func (a *app) checkEnvFault(f *ledger.EnvFault) error {
 	var tell shift.CheckEnvTell
 
-	cause := f.Result.Fault()
 	msg := f.Error()
 
 	err := a.withState(func(s *shift.Shift) error {
@@ -758,7 +757,7 @@ func (a *app) checkEnvFault(f *ledger.EnvFault) error {
 	case tell.Already:
 		msg += "\nthe dispatcher was told of this cause already"
 	case tell.Queued:
-		if err := a.withState(func(s *shift.Shift) error { return s.MarkCheckEnvTold(f.ID, cause) }); err != nil {
+		if err := a.withState(func(s *shift.Shift) error { return s.MarkCheckEnvTold(f.ID, f.Result) }); err != nil {
 			msg += "\nthe dispatcher has been told (zmina could not note it on the task, so it may be told again: " + err.Error() + ")"
 		} else {
 			msg += "\nthe dispatcher has been told"
