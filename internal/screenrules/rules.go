@@ -58,7 +58,7 @@ const (
 	// the file may, summed: a beat reads every line of a pane with every row, so what the file costs is its rows added up, not
 	// the largest. The embedded rows (the largest is 200) are held to maxProgram only.
 	maxOverrideProgram = 250
-	maxOverrideBudget  = 2000
+	maxOverrideBudget  = 1000
 	// maxOverrideRows is the most rows an override file lists.
 	maxOverrideRows = 64
 	// maxLineRunes is how much of a line a row reads: its first 512 characters. A pane can be wider than any line a notice is

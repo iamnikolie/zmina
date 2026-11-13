@@ -21,16 +21,16 @@ func TestOverrideProgramsAreBoundedPerRowAndInAll(t *testing.T) {
 
 	var rows strings.Builder
 
-	for i := range 8 {
+	for i := range 4 {
 		rows.WriteString(row(fmt.Sprintf("acme.r%d", i), "claude", "usage_limit", `regexp: '(?:.?){120}Z'`))
 	}
 
-	// Eight of them are 1944 instructions: inside the budget of the file.
+	// Four of them are 972 instructions: inside the budget of the file.
 	accepted(t, rows.String())
 
-	// A ninth is past it, and the file is refused whole, naming the row that crossed it.
-	rows.WriteString(row("acme.r8", "claude", "usage_limit", `regexp: '(?:.?){120}Z'`))
-	refused(t, rows.String(), "acme.r8", "in all")
+	// A fifth is past it, and the file is refused whole, naming the row that crossed it.
+	rows.WriteString(row("acme.r4", "claude", "usage_limit", `regexp: '(?:.?){120}Z'`))
+	refused(t, rows.String(), "acme.r4", "in all")
 }
 
 // A literal costs nothing against the budget, and neither does a row that only disables.
@@ -54,7 +54,7 @@ func TestWorstAcceptedOverrideReadsAScreenInTime(t *testing.T) {
 	effects := []string{UsageLimit, SayMark, ToolCall, SayCont, SayStop, FooterHint, FooterOption, FooterModel}
 
 	for i, effect := range effects {
-		rows.WriteString(row(fmt.Sprintf("acme.worst%d", i), "claude", effect, `regexp: '(?:.?){120}Z'`))
+		rows.WriteString(row(fmt.Sprintf("acme.worst%d", i), "claude", effect, `regexp: '(?:.?){60}Z'`))
 	}
 
 	tb, o := LoadOverrides(Default(), writeOverride(t, "rules:\n"+rows.String()))

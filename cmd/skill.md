@@ -674,7 +674,7 @@ rules:
 
 Rows are bounded, because the file is read over every pane at every beat: a regexp or a literal is at most 512 bytes, a regexp
 of the file compiles to at most 250 instructions once its repeats are unrolled (`(?:a?){200}` is refused) and all its regexps
-together to at most 2000, a file lists at most 64 rows, a row reads only the first 512 characters of each line, `last_lines` is at most 80 (the capture the ticker and `zmina explain` both take), an id is letters, digits, `.`, `-` and `_`
+together to at most 1000, a file lists at most 64 rows, a row reads only the first 512 characters of each line, `last_lines` is at most 80 (the capture the ticker and `zmina explain` both take), an id is letters, digits, `.`, `-` and `_`
 (64 at most). Which fields apply to which flags: `match`, `trim`, `lower`, `skip_prefix` and `priority` to every flag; `scope`
 is the flag's own (`text` for `trust_question` and `exit_dialog`, `line` for the rest) and may be left out; `region.last_lines`
 only to `usage_limit`, `trust_question` and `exit_dialog`; `region.input_box` only to `usage_limit`; a row of the codex table
