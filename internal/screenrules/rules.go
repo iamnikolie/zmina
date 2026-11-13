@@ -102,6 +102,9 @@ type Rule struct {
 	Note string `yaml:"note,omitempty" json:"note,omitempty"`
 	// Disabled, in an override file, takes the embedded row of that id away.
 	Disabled bool `yaml:"disabled,omitempty" json:"-"`
+	// Override is set by LoadOverrides on the rows a crew's file adds or replaces, so that what a reader does with their text can be
+	// stricter than for an embedded row's (a note quotes it). A file cannot say it.
+	Override bool `yaml:"-" json:"-"`
 }
 
 // Match says how a row tests a text: exactly one of Regexp, Contains and Prefix.
@@ -133,6 +136,8 @@ type compiled struct {
 	Rule
 	re               *regexp.Regexp
 	contains, prefix string
+	// skipInput is that the row never matches the input line: set on an override row of a flag whose text reaches a note.
+	skipInput bool
 }
 
 // Hit is a row that matched.
@@ -171,6 +176,9 @@ type effectInfo struct {
 	// lastLines and inputBox are the regions the reader honours: how much of the bottom it captures, and the input box. A
 	// row names no region its reader ignores.
 	lastLines, inputBox bool
+	// note is that the text of a line a row of the effect matches reaches a note or a status zmina shows. An override row of such
+	// an effect never matches the input line, where the owner's own words are, whatever its pattern says or leaves out.
+	note bool
 }
 
 // Effect names: what a row sets. Each is read by one piece of code, named in its doc.
@@ -199,11 +207,11 @@ const (
 
 var effects = map[string]effectInfo{
 	UsageLimit: {doc: "a line of the screen's bottom that tells a usage limit stops the role (the ticker's usage-limit note)",
-		codex: true, lastLines: true, inputBox: true},
-	SayMark:  {doc: "the start of a line the role says in words (NowLine); Rest is what follows"},
+		codex: true, lastLines: true, inputBox: true, note: true},
+	SayMark:  {doc: "the start of a line the role says in words (NowLine); Rest is what follows", note: true},
 	ToolCall: {doc: "the words after a say mark that are a tool call, not words (NowLine skips such a line)"},
-	SayCont:  {doc: "a row wrapped under a say line (NowLine joins it), tested as it stands on the screen"},
-	SayStop:  {doc: "a row that ends the rows wrapped under a say line (NowLine)"},
+	SayCont:  {doc: "a row wrapped under a say line (NowLine joins it), tested as it stands on the screen", note: true},
+	SayStop:  {doc: "a row that ends the rows wrapped under a say line (NowLine)", note: true},
 	TrustQuestion: {keys: true, doc: "the screen asks whether to trust the folder (the answer to it is pressed for a worktree zmina made)",
 		text: true, lastLines: true},
 	TrustOption:   {keys: true, doc: "an answer of the trust question"},
@@ -433,7 +441,7 @@ func compile(r Rule) (*compiled, error) {
 		return fail("match.skip_prefix is longer than %d bytes", maxSkipPrefix)
 	}
 
-	c := &compiled{Rule: r, contains: m.Contains, prefix: m.Prefix}
+	c := &compiled{Rule: r, contains: m.Contains, prefix: m.Prefix, skipInput: r.Override && info.note}
 
 	if m.Lower {
 		c.contains, c.prefix = strings.ToLower(m.Contains), strings.ToLower(m.Prefix)
@@ -679,6 +687,10 @@ func (c *compiled) test(raw string) (Hit, bool) {
 	}
 
 	text = capLines(text)
+
+	if c.skipInput && strings.HasPrefix(strings.TrimSpace(text), promptGlyph) {
+		return Hit{}, false
+	}
 
 	if m.Lower {
 		text = strings.ToLower(text)

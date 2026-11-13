@@ -683,7 +683,7 @@ with its id, like a bad regexp.
 
 What an override can change is the words zmina reads: a usage-limit wording (`usage_limit`), the markers of the role's last words
 (`say_mark`, `tool_call`, `say_cont`, `say_stop`), peek's footer (`footer_hint`, `footer_option`, `footer_model`, `footer_path`).
-It cannot change what zmina presses or types. The rows that decide a key — the exit question's answer (`exit_dialog`), the trust
+It cannot change what zmina presses or types, and the words a row picks out are quoted where they reach a note or a status (one line, cut, control characters stripped, a session tag shown as `[zmina:…]`). A limit notice is told once for as long as it stays on the screen, whatever its words do meanwhile, and again only when the time it resets at is another one or it has gone and comes back. A row of the file for `usage_limit`, `say_mark`, `say_cont` or `say_stop` never matches the input line (a row that starts with `❯`, where the owner's own words are), whatever its pattern says. The rows that decide a key — the exit question's answer (`exit_dialog`), the trust
 question's (`trust_*`) — or the dialog a key is pressed into (`dialog_*`, `chat_dialog_*`) are protected: a file that adds,
 replaces or disables one is refused whole, naming its id. The input line, which gates every line typed into a role, is a
 builtin and cannot be touched. And whatever a row captures, the exit answer is one digit, and the trust answer only moves the
@@ -2441,7 +2441,7 @@ until it can go.
    or `a permission prompt` for `a dialog` likewise). A last turn that ended in an API error →
    `<role>: its last turn ended in an API error: …` (once per failed turn, from its `StopFailure` record or
    transcript; kinds: Failed turns). A usage-limit notice at the
-   bottom of the screen → `<role>: stopped by a usage limit: …` (once per notice). Folder trust in
+   bottom of the screen → `<role>: stopped by a usage limit: …` (once per stretch). Folder trust in
    a role's own task worktree is answered (`trusted` in the log).
 
 The lock file `lock` has a record beside it, `lock.holder`: pid, the command's verb, when it took the lock and the phase

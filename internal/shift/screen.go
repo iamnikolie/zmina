@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -65,7 +66,53 @@ func limitHit(rules *screenrules.Table, engine, screen string) (string, screenru
 		return "", screenrules.Hit{}
 	}
 
+	// What a crew's own row matched goes out as a quotation: one line, cut, controls gone, a session tag masked.
+	if last.Rule.Override {
+		return Quote(last.Line), last
+	}
+
 	return clip(strings.TrimSpace(last.Line)), last
+}
+
+// limitResetSlack is how far a limit's reset time may move between two looks and still be the same limit: a countdown is read
+// anew each beat and rounds to the minute.
+const limitResetSlack = 15 * time.Minute
+
+// limitSep divides the notice from its reset time in what the role's state keeps of the limit last told.
+const limitSep = "\x1f"
+
+// limitNews reports whether the usage-limit notice on the screen is news to the dispatcher, given what was kept of the limit
+// last told (empty: none is on, so this is a new stretch), and what to keep. A limit is told once for the stretch it stays on
+// the screen, whatever its words do meanwhile; it is told again when the time it resets at is another one. The kept text is the
+// notice as told, with its reset time when the words gave one.
+func limitNews(kept, notice string, now time.Time) (string, bool) {
+	reset := parseReset(notice, now)
+
+	key := notice
+	if !reset.IsZero() {
+		key += limitSep + strconv.FormatInt(reset.Unix(), 10)
+	}
+
+	if kept == "" {
+		return key, true
+	}
+
+	// The reset time of the limit told: kept with it, or, for a notice kept before it was, read from its words.
+	var was time.Time
+
+	if at := strings.LastIndex(kept, limitSep); at >= 0 {
+		if n, err := strconv.ParseInt(kept[at+len(limitSep):], 10, 64); err == nil {
+			was = time.Unix(n, 0)
+		}
+	} else {
+		was = parseReset(kept, now)
+	}
+
+	if reset.IsZero() || (!was.IsZero() && reset.Sub(was).Abs() <= limitResetSlack) {
+		return kept, false
+	}
+
+	return key, true
 }
 
 // watchScreen looks at an up role's screen and the end of its transcript: a screen with no input line for
@@ -140,13 +187,15 @@ func (s *Shift) watchScreen(name string, now time.Time) []string {
 	if text, err := s.Tmux.Capture(name, rules.Window(eng, screenrules.UsageLimit, limitLines)); err == nil {
 		limit := limitLine(rules, eng, text)
 
-		if limit != "" && limit != rs.LimitNoted {
+		if limit == "" {
+			// The stretch is over.
+			rs.LimitNoted = ""
+		} else if kept, news := limitNews(rs.LimitNoted, limit, now); news {
 			note := name + ": stopped by a usage limit: " + limit
 			s.log(name, "limit", "", note)
 			notes = append(notes, note)
+			rs.LimitNoted = kept
 		}
-
-		rs.LimitNoted = limit
 	}
 
 	return notes
@@ -176,14 +225,22 @@ func nowLine(rules *screenrules.Table, screen string) string {
 			continue
 		}
 
+		// Words a crew's own row picked out are quoted, where the embedded rows' are clipped.
+		quoted := hit.Rule.Override
+
 		// A long line wraps onto lines indented under it.
 		for _, l := range lines[i+1:] {
-			if _, indented := rules.Test(screenrules.Claude, screenrules.SayCont, l); !indented || strings.TrimSpace(l) == "" ||
-				stopsWrap(rules, l) {
+			cont, indented := rules.Test(screenrules.Claude, screenrules.SayCont, l)
+			if !indented || strings.TrimSpace(l) == "" || stopsWrap(rules, l) {
 				break
 			}
 
+			quoted = quoted || cont.Rule.Override
 			rest += " " + strings.TrimSpace(l)
+		}
+
+		if quoted {
+			return Quote(rest)
 		}
 
 		return clip(spaceRe.ReplaceAllString(rest, " "))

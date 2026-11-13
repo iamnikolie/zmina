@@ -96,3 +96,76 @@ func TestOverrideFileSizeIsCapped(t *testing.T) {
 	assert.Contains(t, o.Err.Error(), "65536")
 	assert.Same(t, Default(), got)
 }
+
+// A row of an override file for a flag whose text reaches a note (the usage-limit notice, the words a role said) never matches
+// the input line: what the owner types is not for a note, whatever the row says or leaves out.
+func TestOverrideRowsOfNoteFlagsNeverMatchTheInputLine(t *testing.T) {
+	// (The embedded rows that read the same lines are taken away, so that it is the crew's rows that answer.)
+	body := "  - id: claude.now.wrap-indent\n    disabled: true\n" +
+		row("acme.limit", "claude", UsageLimit, `regexp: 'typed'`) +
+		row("acme.say", "claude", SayMark, `prefix: '❯'`) +
+		row("acme.cont", "claude", SayCont, `contains: 'typed'`) +
+		row("acme.stop", "claude", SayStop, `contains: 'typed'`) +
+		row("acme.hint", "claude", FooterHint, `contains: 'typed'`)
+
+	tb, o := LoadOverrides(Default(), writeOverride(t, "rules:\n"+body))
+	require.NoError(t, o.Err)
+
+	for _, line := range []string{"❯ words typed here", "  ❯ words typed here", "\t❯ typed"} {
+		for _, effect := range []string{UsageLimit, SayCont, SayStop} {
+			_, ok := tb.Test(Claude, effect, line)
+			assert.False(t, ok, "%s: %q", effect, line)
+		}
+
+		_, ok := tb.Test(Claude, SayMark, line)
+		assert.False(t, ok, "say_mark: %q", line)
+	}
+
+	// The same rows read what is on the screen otherwise.
+	for _, effect := range []string{UsageLimit, SayCont, SayStop} {
+		_, ok := tb.Test(Claude, effect, "⎿ words typed here")
+		assert.True(t, ok, effect)
+	}
+
+	_, ok := tb.Test(Claude, SayMark, "❯ x")
+	assert.False(t, ok)
+
+	// A flag whose text reaches no note is not held to it, and nor are the embedded rows.
+	_, ok = tb.Test(Claude, FooterHint, "❯ words typed here")
+	assert.True(t, ok, "footer_hint")
+
+	table, err := NewTable([]Rule{{ID: "acme.limit", Engine: Claude, Sets: UsageLimit, Means: "m", Match: Match{Regexp: `typed`}}})
+	require.NoError(t, err)
+
+	_, ok = table.Test(Claude, UsageLimit, "❯ words typed here")
+	assert.True(t, ok, "a table built for a test keeps its row as it was written")
+}
+
+// A row an override file adds or replaces says so on its hits, so that a reader can treat what it matched as a crew's words;
+// an embedded row, and a row of a table built for a test, does not, and a file cannot say it.
+func TestRowsOfAnOverrideFileAreMarked(t *testing.T) {
+	tb, o := LoadOverrides(Default(), writeOverride(t, "rules:\n"+
+		row("acme.limit", "claude", UsageLimit, `contains: 'plan exhausted'`)+
+		row("claude.peek.hint-update", "claude", FooterHint, `contains: 'Update failed'`)))
+	require.NoError(t, o.Err)
+
+	hit, ok := tb.Test(Claude, UsageLimit, "plan exhausted")
+	require.True(t, ok)
+	assert.True(t, hit.Rule.Override, "added")
+
+	hit, ok = tb.Test(Claude, FooterHint, "Update failed")
+	require.True(t, ok)
+	assert.True(t, hit.Rule.Override, "replaced")
+
+	hit, ok = tb.Test(Claude, UsageLimit, "You've hit your limit")
+	require.True(t, ok)
+	assert.False(t, hit.Rule.Override, "an embedded row")
+
+	hit, ok = Default().Test(Claude, UsageLimit, "You've hit your limit")
+	require.True(t, ok)
+	assert.False(t, hit.Rule.Override)
+
+	got, o := LoadOverrides(Default(), writeOverride(t, "rules:\n"+row("acme.says", "claude", UsageLimit, `contains: 'x'`, "    override: true\n")))
+	require.Error(t, o.Err, "override is no field of a row")
+	assert.Same(t, Default(), got)
+}

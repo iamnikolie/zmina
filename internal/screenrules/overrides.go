@@ -140,6 +140,8 @@ func apply(base *Table, rows []Rule) (*Table, Overrides, error) {
 	}
 
 	for _, r := range rows {
+		r.Override = true
+
 		if r.ID == "" {
 			return nil, o, errors.New("a row of the override file has no id")
 		}
