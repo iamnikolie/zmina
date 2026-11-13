@@ -3,10 +3,55 @@ package cmd
 import (
 	"fmt"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/iamnikolie/zmina/internal/crew"
+	"github.com/iamnikolie/zmina/internal/events"
 	"github.com/iamnikolie/zmina/internal/screenrules"
 )
+
+// screenRulesTold is the refusals already told in this process, by file and reason.
+var screenRulesTold sync.Map
+
+// screenRulesEvery is how often one reason is put in the event log: the ticker is a new process every beat, and a file that stays
+// wrong would be an event a minute.
+const screenRulesEvery = 24 * time.Hour
+
+// screenRulesEvent is the event a refused screen-rules.yaml leaves in the log.
+const screenRulesEvent = "screen-rules-refused"
+
+// tellRefusedScreenRules says that the crew's screen-rules.yaml was refused and the embedded rules stay in force, outside doctor:
+// once in this process on the command's error stream, as the crew file's warnings are, and as an event in the log, once a day
+// for each distinct reason. The log itself is the record of what was told: no state is kept for it. Nothing here fails a command.
+func (a *app) tellRefusedScreenRules(c *crew.Crew, o screenrules.Overrides) {
+	if o.Err == nil {
+		return
+	}
+
+	reason := clip(oneLineText(o.Err.Error()), 300)
+
+	if _, told := screenRulesTold.LoadOrStore(o.Path+"\x00"+reason, true); told {
+		return
+	}
+
+	fmt.Fprintf(a.err, "zmina: warning: %s is ignored and the embedded screen rules stay in force: %s (zmina doctor)\n", o.Path, reason)
+
+	log, now := eventLog(c), time.Now()
+
+	recent, err := log.Read(events.Filter{Since: now.Add(-screenRulesEvery)})
+	if err != nil {
+		return
+	}
+
+	for _, e := range recent {
+		if e.Event == screenRulesEvent && e.Detail == reason {
+			return
+		}
+	}
+
+	_ = log.Add(events.Event{TS: now, Event: screenRulesEvent, By: by(), Detail: reason})
+}
 
 // checkScreenRules is doctor's line about the crew's screen rules: one line when the file is there, none when it is not.
 func checkScreenRules(c *crew.Crew, add func(name, level, format string, args ...any)) {

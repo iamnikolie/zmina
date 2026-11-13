@@ -235,7 +235,8 @@ func (a *app) newShift() (*shift.Shift, error) {
 
 	// The crew's own screen rules, when it has any, are this shift's and no other's: a file that does not read is ignored (zmina
 	// doctor says why) and the embedded rules stay in force.
-	rules, _ := screenrules.LoadOverrides(screenrules.Default(), c.Layout().ScreenRules())
+	rules, overrides := screenrules.LoadOverrides(screenrules.Default(), c.Layout().ScreenRules())
+	a.tellRefusedScreenRules(c, overrides)
 
 	s := &shift.Shift{
 		Rules:             rules,

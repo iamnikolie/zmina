@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +12,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/iamnikolie/zmina/internal/crew"
+	"github.com/iamnikolie/zmina/internal/events"
 	"github.com/iamnikolie/zmina/internal/screenrules"
 )
 
@@ -71,11 +74,11 @@ func TestBadScreenRulesAreReportedAndIgnored(t *testing.T) {
 	assert.Equal(t, 1, countLines(out, "screens"))
 	assert.NotRegexp(t, `fail +screens`, out, "a warning, never a fail")
 
-	// A command on this crew runs, with nothing said on stderr of the rules, and the embedded rows are in force, the good
+	// A command on this crew runs, saying on stderr that the file is ignored, and the embedded rows are in force, the good
 	// half of the bad file included in nothing.
 	_, errOut, err := zm(t, crewFile, "ls")
 	require.NoError(t, err)
-	assert.NotContains(t, errOut, "screen")
+	assert.Contains(t, errOut, "screen-rules.yaml is ignored")
 
 	s, err := (&app{out: io.Discard, err: io.Discard, crew: crewFile}).newShift()
 	require.NoError(t, err)
@@ -139,4 +142,60 @@ func TestDoctorListsTheRowsAnOverrideChangesUpToAFew(t *testing.T) {
 	assert.Contains(t, line, "acme.limit.11")
 	assert.NotContains(t, line, "acme.limit.12", "twelve ids, then the count of the rest")
 	assert.Contains(t, line, "and 8 more")
+}
+
+// A screen-rules.yaml that is refused is not silent outside doctor: the command says so on its error stream, once in the
+// process, as a crew file's warnings are said, and the event log has one event for the reason a day.
+func TestRefusedScreenRulesAreToldOnTheErrorStreamAndInTheLog(t *testing.T) {
+	crewFile := testCrew(t, "")
+	dir := filepath.Dir(crewFile)
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "screen-rules.yaml"),
+		[]byte("rules:\n  - id: acme.bad\n    engine: claude\n    sets: usage_limit\n    means: m\n    match: {regexp: '('}\n"), 0o600))
+
+	run := func() string {
+		var out, errb bytes.Buffer
+
+		a := &app{out: &out, err: &errb, crew: crewFile}
+		root := newRoot(a)
+		root.SetArgs([]string{"--crew", crewFile, "ls"})
+		require.NoError(t, root.Execute())
+
+		return errb.String()
+	}
+
+	first := run()
+	assert.Contains(t, first, "zmina: warning:")
+	assert.Contains(t, first, "screen-rules.yaml is ignored")
+	assert.Contains(t, first, `rule "acme.bad": bad regexp`)
+	assert.Contains(t, first, "zmina doctor")
+
+	assert.NotContains(t, run(), "screen-rules.yaml", "once in a process")
+
+	evs, err := eventLog(mustCrew(t, crewFile)).Read(events.Filter{})
+	require.NoError(t, err)
+
+	var told []events.Event
+
+	for _, e := range evs {
+		if e.Event == "screen-rules-refused" {
+			told = append(told, e)
+		}
+	}
+
+	require.Len(t, told, 1, "one event for the reason, whatever the number of commands")
+	assert.Contains(t, told[0].Detail, `rule "acme.bad": bad regexp`)
+
+	// A good file says nothing and logs nothing.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "screen-rules.yaml"), []byte("rules: []\n"), 0o600))
+	assert.NotContains(t, run(), "screen-rules")
+}
+
+func mustCrew(t *testing.T, file string) *crew.Crew {
+	t.Helper()
+
+	c, err := crew.Load(file)
+	require.NoError(t, err)
+
+	return c
 }
