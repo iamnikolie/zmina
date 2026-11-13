@@ -165,8 +165,11 @@ func (r Result) Reason(timeout time.Duration) string {
 	return ""
 }
 
+// firstLine is the first line of what a plugin printed, as one clean line: control characters gone (what it printed is data,
+// and goes to the owner's terminal and the log), cut.
 func firstLine(s string) string {
 	line, _, _ := strings.Cut(strings.TrimSpace(s), "\n")
+	line = strings.Join(strings.Fields(tmux.Printable(line)), " ")
 
 	if r := []rune(line); len(r) > 200 {
 		line = string(r[:199]) + "…"

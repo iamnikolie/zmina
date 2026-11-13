@@ -247,3 +247,18 @@ func TestExamplePluginLog(t *testing.T) {
 	assert.Equal(t, "Site name", ev["title"])
 	assert.Nil(t, ev["test"])
 }
+
+// What a plugin prints is data on the owner's terminal too: its lines as they were, with no escape sequence in them, and the
+// reason of a failure is one clean line.
+func TestPluginTestPrintsOutputAsData(t *testing.T) {
+	file := pluginCrew(t, "  dev: {}\n", "  - name: loud\n")
+	recorder(t, file, "loud", `printf 'plain\n\033[2J\033]0;owned\007second line\n'; printf '\033[31mred\033[0m failure\n' >&2; exit 2`)
+
+	out, _, err := zm(t, file, "plugin", "test", "loud")
+	require.Error(t, err)
+	assert.NotContains(t, out, "\x1b")
+	assert.NotContains(t, out, "\x07")
+	assert.Contains(t, out, "stdout:\n  plain\n  [2J]0;owned"+"second line", "the lines, minus what a terminal would act on")
+	assert.Contains(t, out, "failed (exit 2: [31mred[0m failure)")
+	assert.NotContains(t, err.Error(), "\x1b")
+}

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode"
 
 	"github.com/spf13/cobra"
 
@@ -214,8 +215,8 @@ func (a *app) pluginTestCommand() *cobra.Command {
 			fmt.Fprintf(a.out, "program: %s\nexit code: %d\n", prog.Path, res.Code)
 
 			for _, o := range []struct{ label, text string }{{"stdout", res.Stdout}, {"stderr", res.Stderr}} {
-				if strings.TrimSpace(o.text) != "" {
-					fmt.Fprintf(a.out, "%s:\n%s\n", o.label, indent(strings.TrimRight(o.text, "\n")))
+				if text := printable(o.text); strings.TrimSpace(text) != "" {
+					fmt.Fprintf(a.out, "%s:\n%s\n", o.label, indent(strings.TrimRight(text, "\n")))
 				}
 			}
 
@@ -241,6 +242,18 @@ func outcome(r plugin.Result, timeout time.Duration) string {
 }
 
 func indent(s string) string { return "  " + strings.ReplaceAll(s, "\n", "\n  ") }
+
+// printable is what a plugin printed, fit for the owner's terminal: its lines as they were, with every control character but the
+// tab gone (an escape sequence in it is data, not something for the terminal to act on).
+func printable(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' || r == ' ' || unicode.IsGraphic(r) {
+			return r
+		}
+
+		return -1
+	}, s)
+}
 
 func pluginNames(c *crew.Crew) string {
 	var names []string

@@ -240,3 +240,15 @@ func TestEnv(t *testing.T) {
 	res := Exec(s)
 	assert.Equal(t, "pager|ask|/c/crew.yaml|unset\n", res.Stdout, "the last of two values of a name wins")
 }
+
+// The reason a run failed is one clean line of what it printed: no control character, cut.
+func TestReasonIsOneCleanLine(t *testing.T) {
+	r := Result{Code: 1, Stderr: "\x1b[31mred\x1b[0m\tfailure\x07\nsecond line"}
+	assert.Equal(t, "exit 1: [31mred[0m failure", r.Reason(time.Second))
+
+	long := Result{Code: 1, Stdout: strings.Repeat("é", 500)}
+	assert.Len(t, []rune(strings.TrimPrefix(long.Reason(time.Second), "exit 1: ")), 200)
+
+	assert.Equal(t, "exit 5", Result{Code: 5}.Reason(time.Second))
+	assert.Empty(t, Result{}.Reason(time.Second), "taken: no reason")
+}
