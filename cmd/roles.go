@@ -204,6 +204,10 @@ func (a *app) lsCompact(s *shift.Shift, views []shift.View, all bool) error {
 		fmt.Fprintln(a.out, line)
 	}
 
+	for _, line := range holdFooter(s) {
+		fmt.Fprintln(a.out, line)
+	}
+
 	return nil
 }
 
@@ -347,6 +351,10 @@ func (a *app) lsWide(s *shift.Shift, views []shift.View, now bool) error {
 		if last := rotationLast(v, time.Now()); last != "" {
 			fmt.Fprintf(a.out, "%s last rotation: %s\n", v.Role, last)
 		}
+	}
+
+	for _, line := range holdFooter(s) {
+		fmt.Fprintln(a.out, line)
 	}
 
 	if now {
@@ -1270,7 +1278,19 @@ func (a *app) tickCommand() *cobra.Command {
 				return a.deliverPass()
 			}
 
-			err := shift.RunTick(a.withState, runWatches, a.rang, a.printTick)
+			// How full the plans are, read before the lock is taken: the beat judges the crew's thresholds by it.
+			locked := a.withState
+			if snap := a.limitsSnapshot(time.Now()); snap != nil {
+				locked = func(fn func(s *shift.Shift) error) error {
+					return a.withState(func(s *shift.Shift) error {
+						s.Limits = snap
+
+						return fn(s)
+					})
+				}
+			}
+
+			err := shift.RunTick(locked, runWatches, a.rang, a.printTick)
 			if errors.Is(err, shift.ErrStateFuture) {
 				// The state is a newer zmina's: the rest of the beat would run on an empty one.
 				return err
@@ -1380,7 +1400,12 @@ func turnErrorKind(v shift.View) string {
 	c := shift.FailureClass{Kind: shift.FailureKind(v.TurnErrorKind), Reset: v.TurnErrorReset}
 
 	w := c.Words()
-	if w != "" && !v.TurnErrorHeldUntil.IsZero() {
+
+	switch {
+	case w != "" && !v.TurnErrorHeldUntil.IsZero() && !v.PlanHeldUntil.IsZero() && !v.TurnErrorHeldUntil.After(v.PlanHeldUntil):
+		// The plan's hold keeps the queue as long: it is the one said, and the line waits for whichever ends later.
+		w += ", queue held for the " + v.PlanHeld + " until " + v.PlanHeldUntil.Format("15:04 MST")
+	case w != "" && !v.TurnErrorHeldUntil.IsZero():
 		w += ", queue held until " + v.TurnErrorHeldUntil.Format("15:04 MST")
 	}
 

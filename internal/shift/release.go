@@ -38,6 +38,11 @@ func (s *Shift) release(name string, r *crew.Role, now time.Time) (did, note str
 		return "", ""
 	}
 
+	// A release that has tasks to park asks the role for something: it does not begin while the role's plan is held.
+	if rs.Releasing.IsZero() && s.planHeld(name, now) {
+		return "", ""
+	}
+
 	if len(rs.Inbox) > 0 || !rs.RestartAsked.IsZero() || !rs.Downing.IsZero() || !s.ready(name, now) ||
 		!s.landed(name, now) {
 		return "", ""

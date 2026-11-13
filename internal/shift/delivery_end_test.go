@@ -168,6 +168,7 @@ func TestSessionBoundLinesAreThoseZminaWrites(t *testing.T) {
 		fmt.Sprintf(restartLine, "/tmp/request.json"),
 		fmt.Sprintf(fmt.Sprintf(earlyLine, "300k", "400k"), "/tmp/request.json"),
 		recoveryLine("/tmp/pack.md"),
+		limitCheckpointOpening + `the 5h window of your plan is at 91%. Read "/tmp/request.json", save each checkpoint it asks for now`,
 		"/compact",
 		"/rename dev",
 		"the boot a clear queued",

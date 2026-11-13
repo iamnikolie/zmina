@@ -132,6 +132,10 @@ type QueueFacts struct {
 	InFlight *InFlightFact `json:"in_flight,omitempty"`
 	// Held is the failed turn that holds the queue, while one does: why and until when.
 	Held *HoldFact `json:"held,omitempty"`
+	// PlanHold is the hold of the role's plan (a window at the limits: hold share), while one is on: nothing is delivered to the
+	// role until it resets, bar the owner's own line. It supersedes Held for display while it lasts, and Held is still said when it
+	// ends later: the line waits for whichever ends last.
+	PlanHold *PlanHoldFact `json:"plan_hold,omitempty"`
 	// SettlingUntil is when a slash command typed into it has settled; nothing is delivered before.
 	SettlingUntil time.Time `json:"settling_until,omitzero"`
 	// Waits are the other things in the way of a line typed now, in words.
@@ -144,6 +148,17 @@ type QueueFacts struct {
 type InFlightFact struct {
 	Kind   string `json:"kind"`
 	Length int    `json:"length"`
+}
+
+// PlanHoldFact is a queue held because a window of the role's plan is at its hold share.
+type PlanHoldFact struct {
+	// Window is the window in words (`claude 5h window`), Used its share when the hold began, Since when, Until its reset time.
+	Window string    `json:"window"`
+	Used   float64   `json:"used"`
+	Since  time.Time `json:"since"`
+	Until  time.Time `json:"until"`
+	// Why is what is done about it.
+	Why string `json:"why"`
 }
 
 // HoldFact is a queue held for a failed turn.
@@ -591,6 +606,12 @@ func (s *Shift) queueFacts(v View, r Reasoning, rs *RoleState) QueueFacts {
 		c := f.Class()
 		q.Held = &HoldFact{Kind: string(c.Kind), Text: quote(f.Text()), Why: HoldWords(f, s.Crew.Location()),
 			Until: f.holdEnd().In(s.Crew.Location()), At: f.At}
+	}
+
+	// Held because its plan is at the hold share: the test the delivery makes (planHeld), at the moment of this look.
+	if h, held := s.planHold(v.Role, r.At); held {
+		q.PlanHold = &PlanHoldFact{Window: h.Label(), Used: h.Used, Since: h.Since.In(s.Crew.Location()), Until: h.Reset.In(s.Crew.Location()),
+			Why: "nothing is delivered to the plan's roles until it resets; the owner's own line goes through"}
 	}
 
 	if !rs.SlashAt.IsZero() && within(r.At, rs.SlashAt, slashSettle) {

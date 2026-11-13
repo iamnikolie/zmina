@@ -87,9 +87,9 @@ later_sweep: {role: dispatcher, every: 7d, older: 14d, max: 12}  # the ticker ha
 done_check: make test                    # closing a task with a worktree as done runs this there and needs exit 0 (or {run, timeout: 10m, commit: true, env_fault_rc: 3}; off or none: no check, the default; see What checked means)
 courier: off                             # no courier service beside the ticker: a line for a role waits for the beat, up to a minute (on or off; default on; see The ticker)
 retention: 45d                           # how long finished work stays where it is before the ticker's daily pass moves it to archive/ (30d at least, or off; default 30d; see Retention)
-limits:                                  # how the crew spends its plans, in % of the 7-day (Claude) and weekly (Codex) window; see Limits
-  claude: {pinned: 80, stop: 99}         # from pinned only work that needs Claude goes to it, from stop nothing (defaults 80 and 99)
-  codex: {pinned: 80}                    # from pinned only work that needs Codex goes to it (default 80)
+limits:                                  # how the crew spends its plans; pinned and stop in % of the 7-day (Claude) and weekly (Codex) window; see Limits
+  claude: {pinned: 80, stop: 99, warn: 75, checkpoint: 90, hold: 97}   # from pinned only work that needs Claude goes to it, from stop nothing (defaults 80 and 99); warn, checkpoint, hold: % of every window the plan reports, tell the dispatcher / ask for checkpoints / deliver nothing until the reset, each may be off (defaults 75, 90, 97)
+  codex: {pinned: 80, warn: 75, checkpoint: 90, hold: 97}              # from pinned only work that needs Codex goes to it (default 80); the same three marks for its weekly window
 routes:                                  # the dispatcher's routing rules in order, the first that matches and yields a seat wins; see Routes
   - other_crew: {repo_under: ~/work/acme-lg, tell: box/acme}   # a repo under it is another crew's: tell its dispatcher
   - continuation: {fresh_over: 80}       # --after T-n: the seat that did it, a fresh copy once its context is over 80%
@@ -2049,6 +2049,8 @@ spending them. The dispatcher reads it before it routes work by plan; no status 
 claude   5h 12%  7d 41%   5h resets 21:40 · 7d resets Tue 13:15   seen 2m ago
 codex    week 50%         resets Thu 09:00                        seen 3h ago (codex-dev)
 policy   claude: pinned work only from 80%, nothing from 99% · codex: pinned work only from 80%
+marks    claude: warn 75%, checkpoint 90%, hold 97% · codex: warn 75%, checkpoint 90%, hold 97%
+hold     claude 5h window at 97%, until 21:40 (6 roles, 14 lines waiting); the owner's own line passes
 ```
 
 - **Claude** is the 5-hour and the 7-day window as the status line of a Claude role last drew them. The status-line
@@ -2065,13 +2067,67 @@ policy   claude: pinned work only from 80%, nothing from 99% · codex: pinned wo
   unknown: route by the other plan, or ask the owner.
 - **`--json`**: `claude` (`five_hour` and `seven_day`, each with `used` in percent, `resets` and, when stale, `stale`;
   `at`, when it was seen; `source`, `statusline`), `codex` (`week` the same way, `plan`, `at`, `source`, `rollout
-  <seat>`) and `policy`. Times are on the crew's `timezone:`.
+  <seat>`), `policy`, `thresholds` (`warn`, `checkpoint`, `hold` for each plan, a number or `"off"`) and `holds` (the
+  holds that are on, each with `plan`, `window`, `used`, `since`, `reset`, `roles`, `lines`, and `ask` when it opened a
+  todo item). Times are on the crew's `timezone:`.
 - **Policy** is the crew file's `limits:` key, in percent of the 7-day window for Claude and of the weekly window for
   Codex. From `pinned` only work that needs that plan goes to it; from Claude's `stop` nothing does. The defaults are
   the rules the dispatcher has always followed: Claude `pinned: 80`, `stop: 99`, Codex `pinned: 80` (Codex has no
   `stop`). A share is 1 to 100 and Claude's `pinned` may not be above its `stop`; a crew file that breaks this is
   refused. A seat bills the plan of its `runtime:`, so there is no key to name one. A crew file without the key keeps
   the defaults.
+- **Marks: warn, checkpoint, hold.** The same `limits:` key has three more shares, per plan, in percent of **every**
+  window the plan reports (Claude's 5-hour and 7-day, Codex's weekly), each window on its own and judged by its own reset
+  time. Defaults, on for both plans: `warn: 75`, `checkpoint: 90`, `hold: 97`. Each is 1 to 100 or `off`, and where set
+  they must read `warn <= checkpoint <= hold` (a crew file that breaks this, or sets a share outside 1 to 100, is refused; a
+  share left out has its default, so `warn: 95` alone is refused for its default checkpoint of 90). They do not touch
+  `pinned` and `stop`: routing is as it was. A plan no role of the crew bills is not judged.
+
+  ```
+  limits:
+    claude: {pinned: 80, stop: 99, warn: 75, checkpoint: 90, hold: 97}
+    codex:  {pinned: 80, warn: 75, checkpoint: 90, hold: 97}   # or e.g. {hold: off}
+  ```
+
+  The beat reads the limits once (the tap's file, and the Codex rollouts outside the state lock) and acts once per
+  (plan, window, reset time): a window whose reset moves by more than a minute is a new period and fires again. A stale
+  window (its reset passed since the reading, or the reading is over 6 hours old) triggers nothing new and releases
+  nothing; a window found past several marks at once does the highest only (found at 98% it holds, and neither warns nor
+  asks for a checkpoint nobody could take). A window that gives no reset time can warn and ask for a checkpoint, never hold.
+  - **warn**: one note to the dispatcher, `claude 5h window at 76%, resets 14:00 (in 1h12m)` (event `limit-warn`).
+  - **checkpoint**: every role of that plan that is up and holds an active task is asked, now, to save a checkpoint: the
+    request file a restart's note uses (`[zmina] limit checkpoint: … Read "<file>", save each checkpoint it asks for …`),
+    with words that say no restart follows. A role with no task gets nothing. One note says whom it asked (event
+    `limit-checkpoint`, one for each role asked). A role that gets its task after the mark was crossed is not asked in that period.
+  - **hold**: from this share until the window's reset time, zmina delivers nothing to the plan's roles. Their queues stay
+    as they are (no doorbell, no try counted against a line, no post, no typing); a busy role is not interrupted, it
+    finishes its turn and gets nothing more. The ticker also postpones what would call a model for them: a scheduled run
+    (it stays due and goes once when the hold ends), a wake alarm for the role, a `/compact` or `/clear`, a restart or a
+    release that would ask for something (an ask already made starts its 10 minutes again when the hold ends), a role
+    `keep: always` that is down (a start's boot line is a model call), a line said again for want of an ack, the later
+    sweep (a role of the plan) and the day's lessons run (the Claude plan). A start by hand (`zmina up`) is yours. The
+    owner's own line (the cockpit's chat) goes through, as through a failed turn's hold, and a held role's full queue takes it
+    past the bound. One note: `claude: 5h window at 97%, holding its 6 roles until 14:00; lines wait, the owner's pass` (event
+    `limit-hold`). When the dispatcher's own plan is the held one it cannot read that note (it is queued, and goes when the
+    hold ends), so the owner is told as for any other owner alarm: a todo item that blocks the dispatcher, which the crew's
+    notify command pushes (`notify_on: blocking`, the default), closed by zmina when the hold ends; with no todo that
+    can be written, the event and `zmina doctor` say it.
+  - **Release**: the hold ends by the clock at the window's reset time, whether or not a beat has run; or when a fresh
+    reading of the same period shows the window under the hold share (also when `hold` is raised past it); or
+    when a fresh reading shows a later period; or when `hold` is turned off in the crew file (no reading needed; the next
+    beat ends it). Stale data alone never ends it before its reset time. One note: `claude:
+    5h window reset, 14 lines go now` (event `limit-release`); at the reset time with no fresh reading since, `reset time
+    14:00 passed and no fresh reading has come, so its data is stale`. Delivery then goes on in order on the normal beat.
+    Two windows held at once keep the plan until the later reset; the first to end says what still holds it.
+  - **With a failed turn's hold** (see Delivery): a line waits for whichever ends later. What `zmina ls`, `explain` and
+    `doctor` say is the plan hold while it lasts, and the failed turn's too when it ends later.
+  - **Where it is kept**: `limits/holds.json` in the crew's directory (the periods told, the holds on, each with its reset
+    time), written by the beat, whole or not at all, and read by every delivery, the courier's included; it is pruned of
+    periods a day past their reset. It is no part of `state.json`. A file that does not read holds nothing and is warned of.
+  - **Shown**: `zmina limits` (the `marks` and `hold` lines, `thresholds` and `holds` in `--json`), `zmina ls` (a
+    `hold:` footer, `plan_held` and `plan_held_until` in `--json`, and the role's row names the plan hold when it ends later than
+    a failed turn's), `zmina ls --wide`, `zmina queue ls` (`held:` under the role, `plan_held` in `--json`), `zmina explain
+    <role>` (its `queue:` line, `queue.plan_hold` in `--json`) and `zmina doctor` (`holds`, warn).
 - **The tap** is `zmina _limits-tap [-- command...]`, plumbing no one types. Claude Code runs a status line on every redraw
   with a JSON on stdin; the tap reads the limits in it, writes `limits/claude.json` in the crew's directory when a
   figure changed (and, to say the status line is still drawn, at most every 5 minutes when none did), then runs the

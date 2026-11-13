@@ -115,6 +115,18 @@ type Report struct {
 	Claude *Claude `json:"claude"`
 	Codex  *Codex  `json:"codex"`
 	Policy Policy  `json:"policy"`
+	// Thresholds and Holds are what the commands add after Collect: the shares the crew acts on as a window fills, and the
+	// holds that are on (Collect itself reads neither, so routing never waits on them).
+	Thresholds *Thresholds `json:"thresholds,omitempty"`
+	Holds      []HoldInfo  `json:"holds,omitempty"`
+}
+
+// HoldInfo is a hold that is on, with what it keeps: the roles of its plan and the lines waiting for them.
+type HoldInfo struct {
+	Hold
+	Roles []string `json:"roles,omitempty"`
+	// Lines is how many queued lines (and, for the dispatcher's plan, signals and notes) wait for the hold to end.
+	Lines int `json:"lines"`
 }
 
 // Collect reads both plans as of now: Claude's from the tap's file in dir, Codex's from the rollouts under homes.
@@ -161,6 +173,16 @@ func (r Report) In(loc *time.Location) Report {
 		c := *r.Codex
 		c.Week, c.At = window(c.Week), c.At.In(loc)
 		r.Codex = &c
+	}
+
+	if len(r.Holds) > 0 {
+		holds := make([]HoldInfo, len(r.Holds))
+		for i, h := range r.Holds {
+			h.Reset, h.Since = h.Reset.In(loc), h.Since.In(loc)
+			holds[i] = h
+		}
+
+		r.Holds = holds
 	}
 
 	return r

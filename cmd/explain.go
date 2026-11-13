@@ -248,7 +248,12 @@ func writeQueue(w io.Writer, out explainOut) {
 
 	var parts []string
 
-	if h := q.Held; h != nil {
+	if p := q.PlanHold; p != nil {
+		parts = append(parts, fmt.Sprintf("held for the %s at %.0f%% until %s: %s", p.Window, p.Used, p.Until.Format("Mon 15:04 MST"), p.Why))
+	}
+
+	// The plan's hold supersedes a failed turn's while it lasts; the queue waits for whichever ends later.
+	if h := q.Held; h != nil && (q.PlanHold == nil || h.Until.After(q.PlanHold.Until)) {
 		parts = append(parts, fmt.Sprintf("held for a failed turn (%s): %s", clip(h.Text, 80), h.Why))
 	}
 

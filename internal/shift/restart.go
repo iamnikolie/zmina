@@ -89,6 +89,12 @@ func (s *Shift) restart(name string, r *crew.Role, now time.Time, tasks []string
 		return ""
 	}
 
+	// Nothing is asked of a role of a held plan, and no restart begins: the request would wait in its queue, and the note's ten
+	// minutes would run out unread. An ask already made waits too (limitsStep starts its minutes again when the hold ends).
+	if s.planHeld(name, now) {
+		return ""
+	}
+
 	sess := s.session(name)
 	if sess == nil {
 		return ""
@@ -170,7 +176,7 @@ func (s *Shift) restartAtTurnEnd(name string, sess *registry.Session, now time.T
 		return ""
 	}
 
-	if !s.restarts(r) {
+	if !s.restarts(r) || s.planHeld(name, now) {
 		return ""
 	}
 
@@ -573,25 +579,35 @@ const (
 // of role-shaped checkpoint requests, never multiline guidance through the input line. It starts with "[zmina]", a
 // line of zmina's own, never one the owner typed.
 func (s *Shift) restartRequest(name string, tasks []task.Task, line string) (string, error) {
+	path, err := s.checkpointFile(name, tasks, handoff.Restart, func(t task.Task) string {
+		return fmt.Sprintf("Before the restart, write zmina --crew %s task checkpoint %s --file <json-file>: "+
+			"the note your fresh self starts from. Do not park the task.\n", shellWord(s.Crew.Path), t.ID)
+	})
+	if err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf(line, path), nil
+}
+
+// checkpointFile writes the file of role-shaped checkpoint requests for a role's tasks, one packet each, with the words before
+// asks of the task (instructions): the file the restart's request (handoff.Restart) and the limits' checkpoint request
+// (handoff.Checkpoint) point to.
+func (s *Shift) checkpointFile(name string, tasks []task.Task, write func(dir, role string, packets []handoff.Packet) (string, error),
+	instructions func(task.Task) string) (string, error) {
 	packets := make([]handoff.Packet, 0, len(tasks))
+
 	for _, t := range tasks {
 		p, err := s.TaskPacket(name, t)
 		if err != nil {
 			return "", err
 		}
 
-		p.Instructions = fmt.Sprintf("Before the restart, write zmina --crew %s task checkpoint %s --file <json-file>: "+
-			"the note your fresh self starts from. Do not park the task.\n", shellWord(s.Crew.Path), t.ID) +
-			p.Shape.Request("checkpoint")
+		p.Instructions = instructions(t) + p.Shape.Request("checkpoint")
 		packets = append(packets, p)
 	}
 
-	path, err := handoff.Restart(s.Crew.StateDir(), name, packets)
-	if err != nil {
-		return "", err
-	}
-
-	return fmt.Sprintf(line, path), nil
+	return write(s.Crew.StateDir(), name, packets)
 }
 
 // beginRestart puts the role down to start it again fresh (FinishRestart, once it ended): in the worktree of its

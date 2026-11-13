@@ -182,6 +182,11 @@ func (a *app) lookForSweep(s *shift.Shift, now time.Time) sweepCandidate {
 
 	c := sweepCandidate{cfg: *s.Crew.LaterSweep, crew: s.Crew}
 
+	// A sweep is a task handed to a role, a model call: none while the role's plan is held. No marker either: the next beat asks again.
+	if s.PlanHeld(c.cfg.Role, now) {
+		return c
+	}
+
 	if readSweepMarker(c.crew.Layout().LaterSweep()).NotBefore.After(now) {
 		return c
 	}

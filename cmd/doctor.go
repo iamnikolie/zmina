@@ -209,7 +209,8 @@ func (a *app) diagnose() []check {
 	}
 
 	checkHygiene(c, st, time.Now(), add)
-	checkFailureHolds(c, st, failureHolds(c, st, time.Now()), add)
+	checkPlanHolds(c, st, time.Now(), add)
+	checkFailureHolds(c, st, supersededFailureHolds(c, st, failureHolds(c, st, time.Now()), time.Now()), add)
 	checkStores(c, time.Now(), add)
 	checkRotations(c, time.Now(), add)
 	a.checkSockets(c, add)

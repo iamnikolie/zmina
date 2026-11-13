@@ -14,9 +14,9 @@ import (
 // (infoRide), and not one a post or a typed line failed to less than retryGap ago. It reads the loaded state and the
 // clock and nothing else: no tmux, no registry, no inbox socket, no task file, and it makes no state of a role that
 // has none. A role it names may still not take its line (busy, a draft, a dialog): that is for the pass to find out; a
-// role it leaves out has nothing a pass could give. It leaves out, too, a role held after a turn that ended on an API
-// error (failureHeld), bar the owner's own message wherever it stands in its queue: for a role that has something to give it
-// reads that role's small failure record and Claude Code's
+// role it leaves out has nothing a pass could give. It leaves out, too, a role whose plan is held (planHeld: the holds file,
+// read once) and a role held after a turn that ended on an API error (failureHeld), bar the owner's own message wherever it
+// stands in its queue: for a role that has something to give it reads that role's small failure record and Claude Code's
 // session file by the role's session name — still no tmux. The hold ends with no change of state.json, as the other
 // gates do, so a caller that must see the end of it looks again from time to time (queueGated).
 func (s *Shift) Waiting() []string {
@@ -33,7 +33,7 @@ func (s *Shift) Waiting() []string {
 		if name == s.Crew.Dispatcher {
 			// The cheap tests first: a record is read only for a dispatcher that has something to give. Held, it is the owner's
 			// own line, wherever it stands in its queue, that it can still be given.
-			if !rs.dispatchTriedLately(now) && s.dispatcherWaits(rs, now) && (!s.failureHeld(name, now) || s.ownerWaits(name, rs, now)) {
+			if !rs.dispatchTriedLately(now) && s.dispatcherWaits(rs, now) && (!s.deliveryHeld(name, now) || s.ownerWaits(name, rs, now)) {
 				out = append(out, name)
 			}
 
@@ -55,7 +55,7 @@ func (s *Shift) queueWaits(name string, rs *RoleState, now time.Time) bool {
 		return false
 	}
 
-	if !s.failureHeld(name, now) {
+	if !s.deliveryHeld(name, now) {
 		return !rs.triedLately(now)
 	}
 

@@ -78,9 +78,13 @@ func (s *Shift) Tick() []string {
 	s.State.LastTick = now
 	s.pruneAbsent(now)
 
+	// The plans' thresholds before anything is delivered or started: a hold that begins now is on the book for every step below.
+	limited := s.limitsStep(now)
+
 	// Alarms first: a role an alarm starts is up for the rest of the beat.
 	s.mark("alarms", "")
 	did, notes := s.ring(now, stopped)
+	did = append(limited, did...)
 	did = append(did, s.reportUnreadable(now)...)
 
 	// The roles this beat probed up, for the age sweep: a role skipped below (tmux did not answer) is not among them.
@@ -148,8 +152,9 @@ func (s *Shift) Tick() []string {
 			s.settleEnded(name, now)
 		}
 
+		// A role of a held plan is not started: a fresh start's boot line is a model call (planHeld).
 		if !up && !stopped && r.Keep == crew.KeepAlways && !rs.Held && !rs.Broken && s.flushErr == nil &&
-			s.registryFor(name).LiveByName(r.Session) == nil && now.Sub(rs.Started) >= reopenPause {
+			s.registryFor(name).LiveByName(r.Session) == nil && now.Sub(rs.Started) >= reopenPause && !s.planHeld(name, now) {
 			// The conversation it was on, read before the start: the record of the reopen names it, and a fresh start hands the
 			// tasks the role holds.
 			from, tasks := s.rotationFrom(name), s.heldTasks(name)
@@ -299,6 +304,11 @@ func (s *Shift) trim(name string, r *crew.Role, now time.Time, tasks []string) s
 
 	// A role asked for its note before a restart, or being restarted, is left to that.
 	if !rs.RestartAsked.IsZero() || !rs.Downing.IsZero() {
+		return ""
+	}
+
+	// A /compact or a /clear and its boot line are model calls: none while its plan is held.
+	if s.planHeld(name, now) {
 		return ""
 	}
 
@@ -623,6 +633,16 @@ func (s *Shift) schedule(name string, r *crew.Role, now time.Time, tasks []strin
 		return "", "", false
 	}
 
+	// Its plan is held: the run is postponed, not skipped. NextRun stays where it is, so the run is due at every beat and goes
+	// once, when the hold ends, however many times of the schedule passed meanwhile. Said once, in the beat that finds it due.
+	if h, held := s.planHold(name, now); held && !stopped {
+		if now.Sub(rs.NextRun) < 2*time.Minute {
+			s.log(name, "schedule-postponed", "", "its plan is held ("+PlanHoldWords(h, now, s.Crew.Location())+")")
+		}
+
+		return "", "", false
+	}
+
 	rs.NextRun = sched.Next(at)
 
 	if stopped {
@@ -876,8 +896,9 @@ func (s *Shift) deliverOnce(now time.Time) string {
 		return ""
 	}
 
-	// Its last turn ended on an API error a moment ago: nothing goes until the hold is over (failureHeld).
-	if s.failureHeld(d, now) {
+	// Its last turn ended on an API error a moment ago, or a window of its plan is at the hold share: nothing goes until the hold
+	// is over (failureHeld, planHeld).
+	if s.deliveryHeld(d, now) {
 		return ""
 	}
 
@@ -1402,10 +1423,10 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 		return ""
 	}
 
-	// Its last turn ended on an API error a moment ago: no line is posted or typed until the hold is over (failureHeld),
-	// whoever asks, the beat, a pass or a turn's end. The owner's own message is the one thing that goes, wherever it stands:
-	// typed, never posted, and taken to the head only when it is about to be typed (below).
-	held := s.failureHeld(name, now)
+	// Its last turn ended on an API error a moment ago, or a window of its plan is at the hold share: no line is posted or typed
+	// until the hold is over (failureHeld, planHeld), whoever asks, the beat, a pass or a turn's end. The owner's own message is the
+	// one thing that goes, wherever it stands: typed, never posted, and taken to the head only when it is about to be typed (below).
+	held := s.deliveryHeld(name, now)
 	if held && s.ownerLine(name) < 0 {
 		return ""
 	}

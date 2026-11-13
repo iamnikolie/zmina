@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/iamnikolie/zmina/internal/limits"
+	"github.com/iamnikolie/zmina/internal/shift"
 )
 
 func (a *app) limitsCommand() *cobra.Command {
@@ -18,7 +19,7 @@ func (a *app) limitsCommand() *cobra.Command {
 
 	c := &cobra.Command{
 		Use:   "limits",
-		Short: "How full the plans are: Claude's 5h and 7d, Codex's week, how old each reading is, and the crew's policy",
+		Short: "How full the plans are: Claude's 5h and 7d, Codex's week, how old each reading is, the crew's policy, and what it does as a window fills",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, err := a.loadCrew()
@@ -32,6 +33,13 @@ func (a *app) limitsCommand() *cobra.Command {
 			if err != nil {
 				fmt.Fprintln(a.err, "zmina: warning:", err)
 			}
+
+			// What the crew does as a window fills, and the holds that are on: from the crew file, the holds file and the state's queues.
+			marks := c.LimitsThresholds()
+			r.Thresholds = &marks
+
+			st, _ := shift.Read(c.StateDir())
+			r.Holds = planHolds(c, st, now)
 
 			r = r.In(c.Location())
 
@@ -91,6 +99,19 @@ func writeLimits(out io.Writer, r limits.Report, now time.Time) error {
 	}
 
 	fmt.Fprintf(w, "policy\t%s\n", r.Policy)
+
+	// The thresholds say what the crew does as any window of a plan fills, the holds what it is doing now.
+	if t := r.Thresholds; t != nil {
+		if t.Any() {
+			fmt.Fprintf(w, "marks\t%s\n", t)
+		} else {
+			fmt.Fprintln(w, "marks\toff")
+		}
+	}
+
+	for _, h := range r.Holds {
+		fmt.Fprintf(w, "hold\t%s; the owner's own line passes\n", holdWords(h, now))
+	}
 
 	return w.Flush()
 }
