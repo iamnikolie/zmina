@@ -41,6 +41,11 @@ type fakeTrees struct {
 	sinceErr error
 	// dirtyFn, when set, answers Dirty from the worktree's directory (a check that leaves files there is seen).
 	dirtyFn func(path string) string
+	// kept is what Preserve answers for a branch, preserveErr the error it answers when set; calls is every Preserve and
+	// Remove in the order they were asked, "preserve <branch> as <id>" and "remove <branch>".
+	kept        map[string]worktree.Preserved
+	preserveErr error
+	calls       []string
 }
 
 // fakeHead is the commit a fake worktree stands at until a test moves it.
@@ -109,7 +114,14 @@ func (f *fakeTrees) Merged(t worktree.Tree) (bool, error) {
 	return f.merged[t.Branch] || !f.branches[t.Branch], nil
 }
 
+func (f *fakeTrees) Preserve(t worktree.Tree, id string) (worktree.Preserved, error) {
+	f.calls = append(f.calls, "preserve "+t.Branch+" as "+id)
+
+	return f.kept[t.Branch], f.preserveErr
+}
+
 func (f *fakeTrees) Remove(t worktree.Tree, _ bool) error {
+	f.calls = append(f.calls, "remove "+t.Branch)
 	f.removed = append(f.removed, t.Branch)
 	delete(f.branches, t.Branch)
 

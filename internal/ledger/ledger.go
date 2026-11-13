@@ -35,6 +35,9 @@ type Trees interface {
 	Created(t worktree.Tree) (string, error)
 	Merged(t worktree.Tree) (bool, error)
 	Remove(t worktree.Tree, force bool) error
+	// Preserve keeps the work a forced Remove would lose (the commits the base lacks, the uncommitted changes) in git
+	// under id, and says where; nothing to keep is the zero value.
+	Preserve(t worktree.Tree, id string) (worktree.Preserved, error)
 	// Repair re-points the linked worktrees of repo, which has moved, at it (git worktree repair); it says what git
 	// said.
 	Repair(ctx context.Context, repo string) (string, error)
@@ -76,6 +79,9 @@ func (Git) Merged(t worktree.Tree) (bool, error) { return t.Merged() }
 
 // Remove is Tree.Remove.
 func (Git) Remove(t worktree.Tree, force bool) error { return t.Remove(force) }
+
+// Preserve is Tree.Preserve.
+func (Git) Preserve(t worktree.Tree, id string) (worktree.Preserved, error) { return t.Preserve(id) }
 
 // Repair is worktree.Repair.
 func (Git) Repair(ctx context.Context, repo string) (string, error) {
@@ -478,6 +484,12 @@ type Collected struct {
 	Removed bool
 	Kept    string
 	Detail  string
+	// Preserved is where the work the removal would have lost was kept first (GCOptions.Force); Repo is the repository it
+	// is kept in, Path the worktree's directory, for the words that say how to restore it. WouldPreserve is set on a dry
+	// run of a forced removal: the work, if there is any, is kept first.
+	Preserved     worktree.Preserved
+	Repo, Path    string
+	WouldPreserve bool
 	// RepoGone is the repository path the task records when nothing is there any more (moved, or deleted); Kept
 	// says so. Git cannot judge such a task's work, so it stays; GroupMissing makes one line of every repository.
 	RepoGone string
@@ -492,8 +504,11 @@ type Collected struct {
 type GCOptions struct {
 	// DryRun says what would be done and does none of it.
 	DryRun bool
-	// Force also removes a dropped task's unmerged branch and changes.
+	// Force also removes a dropped task's unmerged branch and changes; what it would lose is kept in git first (see
+	// worktree.Tree.Preserve), and a removal whose work cannot be kept is refused unless NoPreserve is set.
 	Force bool
+	// NoPreserve removes a forced task's work without keeping it: for work that is not wanted, or cannot be kept.
+	NoPreserve bool
 	// DropGone drops the worktree record (the task's worktree, branch and base) of a done or dropped task whose
 	// repository and worktree directory are both gone: nothing is left to lose. A directory that still exists is
 	// never touched, and the record of a task whose directory exists stays whatever its repository.
@@ -603,9 +618,32 @@ func (l *Ledger) collect(ctx context.Context, t task.Task, o GCOptions) (Collect
 		c.Kept = fmt.Sprintf("branch %s is not merged into %s", t.Branch, t.Base)
 	case dryRun:
 		c.Removed = true
+		c.WouldPreserve = force && !o.NoPreserve
 	case ctx.Err() != nil:
 		return c, false
 	default:
+		// A forced removal throws away what is not merged and not committed: it is kept in git first, and a removal whose
+		// work could not be kept does not happen.
+		if force && !o.NoPreserve {
+			saved, err := l.Trees.Preserve(tr, strings.ToLower(t.ID))
+			if err != nil {
+				if ctx.Err() != nil {
+					return c, false
+				}
+
+				c.Kept = fmt.Sprintf("its work could not be kept first (%v), so nothing was removed; --no-preserve removes it anyway",
+					err)
+
+				return c, true
+			}
+
+			c.Preserved, c.Repo, c.Path = saved, t.Repo, t.Worktree
+
+			if !saved.Empty() {
+				l.log(t.Role, "task", t.ID, "work kept before removal: "+PreservedWords(saved))
+			}
+		}
+
 		if err := l.Trees.Remove(tr, force); err != nil {
 			c.Kept = err.Error()
 		} else {
@@ -615,6 +653,22 @@ func (l *Ledger) collect(ctx context.Context, t task.Task, o GCOptions) (Collect
 	}
 
 	return c, true
+}
+
+// PreservedWords is where work was kept, in a few words for a log: the branches (with how many commits each holds) and the
+// ref of the uncommitted changes.
+func PreservedWords(p worktree.Preserved) string {
+	var parts []string
+
+	for _, b := range p.Branches {
+		parts = append(parts, fmt.Sprintf("%d commit(s) on branch %s", b.Commits, b.Name))
+	}
+
+	if p.Dirty != "" {
+		parts = append(parts, "uncommitted changes as "+p.Dirty)
+	}
+
+	return strings.Join(parts, "; ")
 }
 
 // missing reports whether nothing is at path (not: it cannot be read).

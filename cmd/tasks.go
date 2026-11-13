@@ -857,15 +857,21 @@ func (a *app) setTask(id string, st task.State, o taskChange) error {
 }
 
 func (a *app) taskGCCommand() *cobra.Command {
-	var dryRun, force, dropGone bool
+	var dryRun, force, dropGone, noPreserve bool
 
 	c := &cobra.Command{
-		Use:   "gc",
-		Short: "Remove the worktrees and branches of closed tasks whose branch is merged (--force: also unmerged dropped ones)",
-		Args:  cobra.NoArgs,
+		Use: "gc",
+		Short: "Remove the worktrees and branches of closed tasks whose branch is merged (--force: also unmerged dropped ones, " +
+			"their work kept in git first)",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if noPreserve && !force {
+				return errors.New("--no-preserve goes with --force: only a forced collection removes work that is not merged")
+			}
+
 			return a.withState(func(s *shift.Shift) error {
-				got, err := a.ledger(s).GCWith(context.Background(), ledger.GCOptions{DryRun: dryRun, Force: force, DropGone: dropGone})
+				got, err := a.ledger(s).GCWith(context.Background(), ledger.GCOptions{DryRun: dryRun, Force: force, DropGone: dropGone,
+					NoPreserve: noPreserve})
 				if err != nil {
 					return err
 				}
@@ -882,7 +888,11 @@ func (a *app) taskGCCommand() *cobra.Command {
 	}
 
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "say what would be removed")
-	c.Flags().BoolVar(&force, "force", false, "also remove dropped tasks' unmerged branches and changes")
+	c.Flags().BoolVar(&force, "force", false, "also remove dropped tasks' unmerged branches and changes; the commits and the "+
+		"uncommitted changes are kept in git first (a zmina-preserve/ branch, a refs/zmina-preserve-dirty/ ref), and a task "+
+		"whose work cannot be kept is not removed")
+	c.Flags().BoolVar(&noPreserve, "no-preserve", false, "with --force: remove the work without keeping it, also when it "+
+		"could not be kept")
 	c.Flags().BoolVar(&dropGone, "drop-gone", false,
 		"also drop the worktree record of a closed task whose repository and worktree directory are both gone")
 
@@ -914,11 +924,17 @@ func (a *app) printCollected(got []ledger.Collected, dryRun, dropGone bool) {
 			removed++
 
 			fmt.Fprintf(a.out, "%s: would remove %s\n", c.ID, c.Detail)
+
+			if c.WouldPreserve {
+				fmt.Fprintf(a.out, "%s: its unmerged commits and uncommitted changes, if it has any, would be kept in git first\n", c.ID)
+			}
 		default:
 			removed++
 
 			fmt.Fprintf(a.out, "%s: removed %s\n", c.ID, c.Detail)
 		}
+
+		a.printPreserved(c)
 	}
 
 	noTree := 0
@@ -954,6 +970,33 @@ func (a *app) printCollected(got []ledger.Collected, dryRun, dropGone bool) {
 	}
 
 	fmt.Fprintf(a.out, "%s, %s %d\n", summary, verb[2], kept)
+}
+
+// printPreserved says where the work of a collected task was kept before its worktree went, and how to get it back: a
+// branch for the commits, a worktree that checks the uncommitted changes out. Nothing for a task that had none.
+func (a *app) printPreserved(c ledger.Collected) {
+	p := c.Preserved
+	if p.Empty() {
+		return
+	}
+
+	repo := quoteCommandArg(c.Repo)
+	dir := "<a new directory>"
+
+	for _, b := range p.Branches {
+		fmt.Fprintf(a.out, "%s: kept %d commit(s) beyond the base on branch %s; restore: git -C %s worktree add %s %s\n", c.ID, b.Commits,
+			b.Name, repo, dir, b.Name)
+	}
+
+	if p.Dirty != "" {
+		over := ""
+		if p.DirtyOver != "" {
+			over = " (a commit over " + p.DirtyOver + ")"
+		}
+
+		fmt.Fprintf(a.out, "%s: kept its uncommitted changes, untracked files included, as %s%s; restore: git -C %s worktree add --detach %s %s\n",
+			c.ID, p.Dirty, over, repo, dir, p.Dirty)
+	}
 }
 
 func (a *app) printJSON(v any) error {
