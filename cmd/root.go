@@ -25,6 +25,7 @@ import (
 	"github.com/iamnikolie/zmina/internal/mesh"
 	"github.com/iamnikolie/zmina/internal/peer"
 	"github.com/iamnikolie/zmina/internal/registry"
+	"github.com/iamnikolie/zmina/internal/screenrules"
 	"github.com/iamnikolie/zmina/internal/shift"
 	"github.com/iamnikolie/zmina/internal/task"
 	"github.com/iamnikolie/zmina/internal/tmux"
@@ -42,6 +43,9 @@ type app struct {
 	// verb is the command that runs, without its arguments (tick, task set): the state lock's holder record and
 	// events name it.
 	verb string
+	// hook is that the command running is one a role's hooks or its bridge run (isHookRun): it says nothing of a crew's files on the
+	// error stream.
+	hook bool
 	// cockpitPeers reads the mesh's other nodes for zmina ui (nil: the mesh's own; tests set a fake).
 	cockpitPeers *uiPeerCache
 	// uiLogins hands out one-time login codes for zmina ui (nil: none).
@@ -94,6 +98,7 @@ Run 'zmina skill' for the agent reference: its topics and the dispatcher's part;
 	root.SetErr(errw)
 	root.PersistentPreRun = func(cmd *cobra.Command, args []string) {
 		a.verb = strings.TrimPrefix(cmd.CommandPath(), cmd.Root().Name()+" ")
+		a.hook = isHookRun(cmd)
 	}
 	root.PersistentFlags().StringVar(&a.config, "config", "", "crew config to use (subdirectory of ~/.zmina/)")
 	root.PersistentFlags().StringVar(&a.crew, "crew", "", "crew file (default $ZMINA_CREW or ~/.zmina/crew.yaml)")
@@ -105,7 +110,7 @@ Run 'zmina skill' for the agent reference: its topics and the dispatcher's part;
 		a.launchdCommand(), a.doctorCommand(), a.usageCommand(), a.limitsCommand(), a.routeCommand(), a.skillCommand(), a.versionCommand(), a.uiCommand(),
 		a.messageCommand(), a.contextCommand(), a.reportCommand(), a.nodeCommand(), a.tellCommand(), a.codexCommand(), a.terminalCommand(),
 		a.ackCommand(), a.pendingCommand(), a.turnEndCommand(), a.permissionRequestCommand(), a.stopFailureCommand(), a.limitsTapCommand(), a.readCommand(), a.grepCommand(), a.readGuardCommand(),
-		a.lockCommand(), a.courierCommand())
+		a.lockCommand(), a.courierCommand(), a.explainCommand())
 	root.AddCommand(a.crewCommand())
 	groupCommands(root)
 
@@ -118,7 +123,7 @@ var commandGroups = []struct {
 	names     []string
 }{
 	{"owner", "For the owner: what waits, who works, what it costs:", []string{"ui", "todo", "later", "remind", "ls", "show",
-		"peek", "attach", "log", "usage", "limits"}},
+		"peek", "explain", "attach", "log", "usage", "limits"}},
 	{"dispatcher", "For the dispatcher: tasks, seats, lines:", []string{"task", "route", "up", "down", "restart", "sleep", "stop",
 		"start", "retire", "seat", "send", "tell", "note", "queue", "rotation"}},
 	{"plumbing", "Plumbing (roles, hooks and the ticker run these):", []string{"ack", "pending", "inbox", "report",
@@ -231,7 +236,14 @@ func (a *app) newShift() (*shift.Shift, error) {
 	if n, err := openNode(); err == nil {
 		node = n.Name
 	}
+
+	// The crew's own screen rules, when it has any, are this shift's and no other's: a file that does not read is ignored (zmina
+	// doctor says why) and the embedded rules stay in force.
+	rules, overrides := screenrules.LoadOverrides(screenrules.Default(), c.Layout().ScreenRules())
+	a.tellRefusedScreenRules(c, overrides)
+
 	s := &shift.Shift{
+		Rules:             rules,
 		Node:              node,
 		ReconcileMessages: a.reconcileMessages,
 		Crew:              c,

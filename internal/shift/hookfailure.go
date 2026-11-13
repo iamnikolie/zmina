@@ -175,32 +175,38 @@ func RecordFailure(l crew.Layout, role string, input []byte, now time.Time) (*Tu
 // failureOf is the failure a role's hook recorded in this session, whatever has happened since; nil when there is none,
 // or it is of another session (before a restart or a /clear).
 func (s *Shift) failureOf(name string, sess *registry.Session) *TurnFailure {
-	if sess == nil || !hookRole(name) {
-		return nil
+	f, _ := s.failureLook(name, sess)
+
+	return f
+}
+
+// failureLook is failureOf with the reason there is none: nothing to read it for, no record, or a record that is not of this
+// session (before a restart or a /clear).
+func (s *Shift) failureLook(name string, sess *registry.Session) (*TurnFailure, string) {
+	switch {
+	case sess == nil:
+		return nil, "the role has no session file to match a record to"
+	case !hookRole(name):
+		return nil, "no hook record is kept under this name"
 	}
 
 	var f TurnFailure
-	if !readRecord(s.Crew.Layout().HookFailure(name), &f) || f.SessionID == "" || f.SessionID != sess.SessionID {
-		return nil
+
+	switch {
+	case !readRecord(s.Crew.Layout().HookFailure(name), &f):
+		return nil, "no record"
+	case f.SessionID == "":
+		return nil, "a record with no session"
+	case f.SessionID != sess.SessionID:
+		return nil, "a record of another session (before a restart or a /clear)"
 	}
 
-	return &f
+	return &f, ""
 }
 
-// failureFor is the failure a role's last turn ended on, while that is still how it stands: the session is idle, and
-// went idle within hookSkew of the moment the hook recorded (a failed turn goes idle as the hook runs; a turn after it
-// goes idle at a later moment, so a record left by an earlier turn is not this one's). Nil otherwise, and for a role
-// with no such hook.
-func (s *Shift) failureFor(name string, sess *registry.Session) *TurnFailure {
-	if f := s.failureOf(name, sess); f.current(sess) {
-		return f
-	}
-
-	return nil
-}
-
-// current reports whether the session is idle since the failed turn this record is of (see failureFor). A nil record is
-// not.
+// current reports whether the record is the failure the role's last turn ended on, while that is still how it stands: the
+// session is idle, and went idle within hookSkew of the moment the hook recorded (a failed turn goes idle as the hook runs; a
+// turn after it goes idle at a later moment, so a record left by an earlier turn is not this one's). A nil record is not.
 func (f *TurnFailure) current(sess *registry.Session) bool {
 	return f != nil && sess != nil && sess.Status == "idle" && sess.StatusUpdatedAt > 0 && near(f.At, sess.StatusSince())
 }
@@ -228,7 +234,7 @@ func HoldWords(f *TurnFailure, loc *time.Location) string {
 
 // failureHeld reports whether the lines queued for a role wait because its last turn ended on an API error that still holds
 // them (TurnFailure.holds: FailHold for a transient one, AccountHold for an account problem, until the reset time for a
-// limit that gave one), a record of the hook that is of its current session and still how it stands (failureFor): a turn the
+// limit that gave one), a record of the hook that is of its current session and still how it stands (TurnFailure.current): a turn the
 // role goes through since ends it, and so does a restart, which takes the record away. A role started anew has no record, and
 // the owner's own message goes as ever (deliverInboxOnce). Delivery of any kind — the beat's, the pass's, a turn end's —
 // leaves the role alone while it holds. It asks no tmux: the role's session is found by its name in Claude Code's session

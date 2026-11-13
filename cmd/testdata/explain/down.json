@@ -1,0 +1,30 @@
+{
+  "status": "",
+  "shows": "down",
+  "role": "dev",
+  "state": "down",
+  "summary": "down: no session",
+  "decided": {
+    "source": "tmux",
+    "kind": "session",
+    "says": "down: no session"
+  },
+  "screen": {
+    "read": false
+  },
+  "queue": {
+    "lines": 0
+  },
+  "context": {
+    "tokens": 0,
+    "context_max": 0,
+    "context_action": "compact",
+    "restart_at": 250000,
+    "restart_done": 150000,
+    "words": "its conversation size is not known; context_max off; restart_at 250k; restart_done 150k"
+  },
+  "restart": {},
+  "last_known": {
+    "words": "never started under this state"
+  }
+}

@@ -116,7 +116,8 @@ trust.
 
 ## When something is off
 
-`zmina doctor` (setup), `zmina ls` (first line: when the ticker last beat), `zmina queue ls`
+`zmina doctor` (setup), `zmina ls` (first line: when the ticker last beat), `zmina explain <role>`
+(why a role's status is what it is: which source decided, what lost, what holds its queue), `zmina queue ls`
 (what waits, what failed), `zmina rotation ls` (how each restart of a role into a fresh
 conversation went; `zmina rotation abort <role>` puts it back on the old one, `zmina rotation retry <role>`
 hands its context again), `zmina log --since 12h` (what happened), `zmina state recover` (a

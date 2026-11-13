@@ -1,0 +1,27 @@
+# What zmina reads on a Codex role's screen. A Codex role runs through zmina's own bridge, which prints a mode marker and
+# keeps a structured status file; zmina reads that status first and the screen only for what the status does not say.
+# See claude.yaml for the fields.
+#
+# Tested against golden screens of the Codex bridge and Codex CLI 0.167.
+
+rules:
+  - id: codex.limit.notice
+    engine: codex
+    sets: usage_limit
+    means: the Codex CLI tells that a usage limit stops the role ("You've hit your usage limit. Try again in …")
+    match:
+      regexp: '(?i)(usage limit reached|usage credit limit|hit your (\w+ )?limit|limit (reached|will reset)|out of extra usage|/rate-limit-options)'
+      trim: true
+      skip_prefix: "❯"
+    region:
+      last_lines: 8
+    priority: 100
+    since: Codex CLI 0.167
+    note: The same words as the Claude row on purpose; a change of the Codex wording is mended here, apart from the Claude one.
+
+  - id: codex.bridge.mode
+    engine: codex
+    kind: builtin
+    means: "the bridge's mode marker, [zmina codex: idle], [zmina codex: busy] or [zmina codex: waiting]: only idle shows an input line, and any other mode is no input line, whatever an older row of the screen shows"
+    since: zmina's own Codex bridge
+    note: procedural, read by internal/tmux with the input line (claude.input.line); the marker is printed by internal/codex

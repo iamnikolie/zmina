@@ -101,6 +101,7 @@ func (a *app) diagnose() []check {
 	}
 
 	checkDisk(c, add)
+	checkScreenRules(c, add)
 
 	hasClaude, hasCodex := false, false
 	for _, r := range c.Roles {

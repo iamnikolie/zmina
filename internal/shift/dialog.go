@@ -4,9 +4,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/iamnikolie/zmina/internal/screenrules"
 )
 
 // Dialog is a question Claude Code shows instead of the input line (AskUserQuestion, a permission prompt): its words and
@@ -28,14 +29,24 @@ type DialogOption struct {
 	Detail string `json:"detail,omitempty"`
 }
 
-var optionLine = regexp.MustCompile(`^\s*(❯\s*)?([1-9])\.\s+(.+?)\s*$`)
+// optionOf reads a screen row as a numbered choice: the row's match with its groups (1 the cursor, 2 the number, 3 the
+// words), nil when it is none. What a choice looks like is the Claude rules' (claude.dialog.option).
+func optionOf(rules *screenrules.Table, line string) []string {
+	hit, ok := rules.Test(screenrules.Claude, screenrules.DialogOption, line)
+	if !ok {
+		return nil
+	}
 
-// freeText are the choices that ask for words, not a pick: the terminal answers them.
-var freeText = []string{"Type something.", "Chat about this"}
+	return hit.Sub
+}
 
-// ParseDialog reads the last numbered list on a screen and the words above it; nil when there is none of two or more
-// choices numbered from 1.
-func ParseDialog(screen string) *Dialog {
+// ParseDialog reads, by this crew's rules, the last numbered list on a screen and the words above it; nil when there is none of two or more
+// choices numbered from 1. The words that mark a choice, the footer that closes a live dialog, the choices that ask for
+// words and the title mark are the Claude rules' (claude.dialog.*); the geometry is this function's
+// (claude.dialog.parse).
+func (s *Shift) ParseDialog(screen string) *Dialog { return parseDialog(s.ScreenRules(), screen) }
+
+func parseDialog(rules *screenrules.Table, screen string) *Dialog {
 	lines := strings.Split(strings.TrimRight(screen, "\n"), "\n")
 
 	first, last := -1, -1
@@ -43,7 +54,7 @@ func ParseDialog(screen string) *Dialog {
 	cursor := 0
 
 	for i := len(lines) - 1; i >= 0; i-- {
-		m := optionLine.FindStringSubmatch(lines[i])
+		m := optionOf(rules, lines[i])
 		if m == nil {
 			if first >= 0 && strings.TrimSpace(lines[i]) != "" && !strings.HasPrefix(lines[i], "     ") {
 				break // the words above the list
@@ -89,7 +100,7 @@ func ParseDialog(screen string) *Dialog {
 		return nil
 	}
 
-	if footerWords := strings.Contains(lines[end], "Enter to select") || strings.Contains(lines[end], "Esc to cancel"); !footerWords {
+	if _, footerWords := rules.Test(screenrules.Claude, screenrules.DialogFooter, lines[end]); !footerWords {
 		return nil
 	}
 
@@ -102,7 +113,7 @@ func ParseDialog(screen string) *Dialog {
 	// Each choice's description: the indented lines under it, up to the next choice or the footer, whatever they say.
 	at := -1
 	for _, l := range lines[first:end] {
-		if m := optionLine.FindStringSubmatch(l); m != nil {
+		if m := optionOf(rules, l); m != nil {
 			n, _ := strconv.Atoi(m[2])
 			at = n - 1
 			continue
@@ -114,12 +125,7 @@ func ParseDialog(screen string) *Dialog {
 
 	d := &Dialog{Cursor: cursor}
 	for _, o := range opts {
-		free := false
-		for _, f := range freeText {
-			free = free || strings.HasPrefix(o.Label, f)
-		}
-
-		if !free {
+		if _, free := rules.Test(screenrules.Claude, screenrules.DialogFree, o.Label); !free {
 			d.Options = append(d.Options, o)
 		}
 	}
@@ -136,8 +142,8 @@ func ParseDialog(screen string) *Dialog {
 			continue
 		}
 
-		if strings.HasPrefix(l, "☐") {
-			q = append([]string{strings.TrimSpace(strings.TrimPrefix(l, "☐"))}, q...)
+		if title, ok := rules.Test(screenrules.Claude, screenrules.DialogTitle, l); ok {
+			q = append([]string{strings.TrimSpace(title.Rest)}, q...)
 
 			break
 		}

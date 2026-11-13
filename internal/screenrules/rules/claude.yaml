@@ -1,0 +1,377 @@
+# What zmina reads on a Claude Code role's screen. One row each: id, what it sets (the flag a reader looks for), what it
+# means, how it matches and where it reads (region: the last N rows the reader captures; none = the rows it was given),
+# its priority (the higher is tried first) and, as free text, the releases it is known to hold for.
+#
+# A crew may add, replace or disable rows by id in screen-rules.yaml next to its crew file (zmina skill, The crew file).
+# A row of kind builtin names logic that stays in Go (geometry, colours, a walk from the bottom up): it is listed so that
+# each way zmina reads a screen has an id, and it cannot be overridden.
+#
+# Tested against golden screens of Claude Code 2.1; zmina doctor lists the releases this build was tried with.
+
+rules:
+  # --- usage limit -------------------------------------------------------------------------------------------------
+  - id: claude.limit.notice
+    engine: claude
+    sets: usage_limit
+    means: Claude Code tells that a usage limit stops the role (5-hour, weekly, credit, extra usage)
+    match:
+      regexp: '(?i)(usage limit reached|usage credit limit|hit your (\w+ )?limit|limit (reached|will reset)|out of extra usage|/rate-limit-options)'
+      trim: true
+      skip_prefix: "❯"
+    region:
+      last_lines: 8
+    priority: 100
+    since: Claude Code 2.1
+    note: >-
+      Read from the bottom rows only, where Claude Code draws the notice; a row that starts with the input line's cursor
+      is the owner's own words and never one. Known gap, pinned by a golden screen: a reply that talks about limits in
+      its last rows, not behind a ❯, reads as the notice.
+
+  # --- what the role says (NowLine) --------------------------------------------------------------------------------
+  - id: claude.now.say-mark
+    engine: claude
+    sets: say_mark
+    means: a row that starts with the mark of the role's own words
+    match:
+      prefix: "⏺"
+      trim: true
+    priority: 100
+    since: Claude Code 2.1
+
+  - id: claude.now.tool-call
+    engine: claude
+    sets: tool_call
+    means: a say row that is a tool call, a search or a subagent line, not words (Bash(…), Read 3 files, mcp (MCP)(…), Stop Task)
+    match:
+      regexp: '^([\w.:-]+\(|.*\(MCP\)|.*ctrl\+o to expand|(Read|Reading|Searched|Searching|Listed|Wrote|Writing|Fetched|Ran|Running|Called|Found|Updated|Updating|Making|Editing|Edited) .*(\d|…)|.*◯|.*↑ [\d.]+k? tokens|(Stop Task|Task Output)\b|Agent ")'
+    priority: 100
+    since: Claude Code 2.1
+
+  - id: claude.now.wrap-indent
+    engine: claude
+    sets: say_cont
+    means: a row indented two spaces under a say row is the rest of its words
+    match:
+      prefix: "  "
+    priority: 100
+    since: Claude Code 2.1
+
+  - id: claude.now.wrap-stop
+    engine: claude
+    sets: say_stop
+    means: a tool result row ends the rows wrapped under a say row
+    match:
+      prefix: "⎿"
+      trim: true
+    priority: 100
+    since: Claude Code 2.1
+
+  # --- the trust question ------------------------------------------------------------------------------------------
+  - id: claude.trust.question
+    engine: claude
+    sets: trust_question
+    means: the screen's last rows speak of trust (the folder-trust question)
+    match:
+      contains: "trust"
+    scope: text
+    region:
+      last_lines: 30
+    priority: 100
+    since: Claude Code 2.1
+
+  - id: claude.trust.option
+    engine: claude
+    sets: trust_option
+    means: an answer of the folder-trust question (yes, I trust; yes, proceed; no, exit), with or without its number and cursor
+    match:
+      regexp: '(?i)^(❯\s*)?(\d\.\s*)?(yes, i trust this folder|yes, proceed|no, exit)'
+      trim: true
+    priority: 100
+    since: Claude Code 2.1
+
+  - id: claude.trust.selected
+    engine: claude
+    sets: trust_selected
+    means: the answer the cursor stands on
+    match:
+      prefix: "❯"
+    priority: 100
+    since: Claude Code 2.1
+
+  - id: claude.trust.yes
+    engine: claude
+    sets: trust_yes
+    means: the answer that says yes
+    match:
+      contains: "yes"
+      lower: true
+    priority: 100
+    since: Claude Code 2.1
+
+  # --- the exit question -------------------------------------------------------------------------------------------
+  - id: claude.exit.stop-tasks
+    engine: claude
+    sets: exit_dialog
+    means: the exit question, while background work runs, offers to stop it with the session; group 1 is the key of that answer
+    match:
+      regexp: '(\d)\. Exit and stop tasks'
+    scope: text
+    region:
+      last_lines: 15
+    priority: 100
+    since: Claude Code 2.1
+
+  # --- a dialog (ParseDialog) --------------------------------------------------------------------------------------
+  - id: claude.dialog.option
+    engine: claude
+    sets: dialog_option
+    means: a numbered choice of a dialog, the cursor ❯ before the one it stands on
+    match:
+      regexp: '^\s*(❯\s*)?([1-9])\.\s+(.+?)\s*$'
+    priority: 100
+    since: Claude Code 2.1
+
+  - id: claude.dialog.footer-select
+    engine: claude
+    sets: dialog_footer
+    means: the footer of a question or a picker
+    match:
+      contains: Enter to select
+    priority: 100
+    since: Claude Code 2.1
+
+  - id: claude.dialog.footer-cancel
+    engine: claude
+    sets: dialog_footer
+    means: the footer of a permission prompt or a confirmation
+    match:
+      contains: Esc to cancel
+    priority: 90
+    since: Claude Code 2.1
+
+  - id: claude.dialog.free-type
+    engine: claude
+    sets: dialog_free_text
+    means: the choice that lets the owner type an answer of their own
+    match:
+      prefix: Type something.
+    priority: 100
+    since: Claude Code 2.1
+
+  - id: claude.dialog.free-chat
+    engine: claude
+    sets: dialog_free_text
+    means: the choice that goes on in the chat instead of picking
+    match:
+      prefix: Chat about this
+    priority: 90
+    since: Claude Code 2.1
+
+  - id: claude.dialog.title
+    engine: claude
+    sets: dialog_title
+    means: the title mark a question is drawn under (☐)
+    match:
+      prefix: "☐"
+      trim: true
+    priority: 100
+    since: Claude Code 2.1
+
+  # --- peek: the footer under the input box ------------------------------------------------------------------------
+  - id: claude.peek.hint-mode
+    engine: claude
+    sets: footer_hint
+    means: the mode line (bypass permissions on)
+    match:
+      contains: "⏵⏵"
+    priority: 100
+    since: Claude Code 2.1
+
+  - id: claude.peek.hint-plan
+    engine: claude
+    sets: footer_hint
+    means: the plan-mode line
+    match:
+      contains: "⏸"
+    priority: 100
+    since: Claude Code 2.1
+
+  - id: claude.peek.hint-shortcuts
+    engine: claude
+    sets: footer_hint
+    means: the shortcuts hint of an empty input
+    match:
+      contains: "? for shortcuts"
+    priority: 100
+    since: Claude Code 2.1
+
+  - id: claude.peek.hint-cycle
+    engine: claude
+    sets: footer_hint
+    means: the hint that shift+tab cycles the mode
+    match:
+      contains: shift+tab to cycle
+    priority: 100
+    since: Claude Code 2.1
+
+  - id: claude.peek.hint-interrupt
+    engine: claude
+    sets: footer_hint
+    means: the hint shown while a turn runs
+    match:
+      contains: esc to interrupt
+    priority: 100
+    since: Claude Code 2.1
+
+  - id: claude.peek.hint-compact
+    engine: claude
+    sets: footer_hint
+    means: the context left before auto-compact
+    match:
+      contains: until auto-compact
+    priority: 100
+    since: Claude Code 2.1
+
+  - id: claude.peek.hint-update
+    engine: claude
+    sets: footer_hint
+    means: the failed auto-update notice
+    match:
+      contains: Auto-update failed
+    priority: 100
+    since: Claude Code 2.1
+
+  - id: claude.peek.hint-exit
+    engine: claude
+    sets: footer_hint
+    means: the second Ctrl-C that exits
+    match:
+      contains: Press Ctrl-C again
+    priority: 100
+    since: Claude Code 2.1
+
+  - id: claude.peek.hint-todos
+    engine: claude
+    sets: footer_hint
+    means: the hint about the todo list
+    match:
+      contains: ctrl+t to
+    priority: 100
+    since: Claude Code 2.1
+
+  - id: claude.peek.hint-expand
+    engine: claude
+    sets: footer_hint
+    means: the hint about expanding output
+    match:
+      contains: ctrl+o to
+    priority: 100
+    since: Claude Code 2.1
+
+  - id: claude.peek.option-line
+    engine: claude
+    sets: footer_option
+    means: a line that reads as a dialog's option (a number and a dot or bracket, maybe behind a cursor or a box), never a footer
+    match:
+      regexp: '^\s*[│┃]?\s*(❯\s*)?\d+[.)]\s'
+    priority: 100
+    since: Claude Code 2.1
+
+  - id: claude.peek.status-model
+    engine: claude
+    sets: footer_model
+    means: the model in brackets on the status line ([Opus 5.5], [gpt-6])
+    match:
+      regexp: '\[[A-Za-z][\w .-]*\]'
+    priority: 100
+    since: Claude Code 2.1
+
+  - id: claude.peek.status-home
+    engine: claude
+    sets: footer_path
+    means: a status line that starts with a path under the home directory
+    match:
+      prefix: "~/"
+    priority: 100
+    since: Claude Code 2.1
+
+  - id: claude.peek.status-root
+    engine: claude
+    sets: footer_path
+    means: a status line that starts with an absolute path
+    match:
+      prefix: "/"
+    priority: 90
+    since: Claude Code 2.1
+
+  # --- the browser chat answering a dialog -------------------------------------------------------------------------
+  - id: claude.chat.dialog-row
+    engine: claude
+    sets: chat_dialog_row
+    means: a numbered row of the active question dialog, with a tick box for a multiple choice
+    match:
+      regexp: '^\s*(❯\s*)?(\d+)\.\s+(?:\[([ ✔])\]\s+)?(.*?)\s*$'
+    priority: 100
+    since: Claude Code 2.1
+
+  - id: claude.chat.dialog-frame
+    engine: claude
+    sets: chat_dialog_frame
+    means: the rule drawn down the left of a question's text and a box's sides, a frame and not words
+    match:
+      regexp: '^\s*[│┃▏▎]\s?|\s*[│┃]\s*$'
+    priority: 100
+    since: Claude Code 2.1
+
+  # --- logic that stays in Go --------------------------------------------------------------------------------------
+  - id: claude.input.line
+    engine: claude
+    kind: builtin
+    means: the input line, read by internal/tmux — a ❯ row right under a rule, its draft and the dim suggestion told by the colours of a capture; a ❯ with no rule above it is a dialog's cursor, and a screen with no input line is a dialog or a screen being drawn
+    since: Claude Code 2.1
+    note: procedural (colour attributes of a coloured capture, walks up and down the screen); a ❯ row, a rule of three ─, SGR dim and reverse
+
+  - id: claude.now.line
+    engine: claude
+    kind: builtin
+    means: the last words the role said (NowLine) — the last say row from the bottom that is not a tool call, with the rows wrapped under it, on one line
+    since: Claude Code 2.1
+    note: procedural walk from the bottom; its markers are the claude.now.* rows
+
+  - id: claude.dialog.parse
+    engine: claude
+    kind: builtin
+    means: a live question on the screen (ParseDialog) — the last numbered list, the footer closing the screen, each choice's description and the words above the list
+    since: Claude Code 2.1
+    note: >-
+      procedural (list numbered from 1, the cursor on a choice, a footer where it stands, indented descriptions, a
+      question read up to twelve rows). Known gap, pinned by a golden screen: a long question whose last row is drawn
+      past a rule of its own reads as no dialog. Its markers are the claude.dialog.* rows.
+
+  - id: claude.trust.answer
+    engine: claude
+    kind: builtin
+    means: the keys that move the cursor to the yes answer of the folder-trust question and take it, pressed once for a worktree zmina made
+    since: Claude Code 2.1
+    note: stateful (once per start, only under the crew's worktrees); its markers are the claude.trust.* rows
+
+  - id: claude.peek.footer
+    engine: claude
+    kind: builtin
+    means: where the footer under the input box starts (footerAt), so that peek can cut it
+    since: Claude Code 2.1
+    note: procedural walk from the bottom up (blank rows, footer rows, the closing rule, the input row, the opening rule); its markers are the claude.peek.* rows
+
+  - id: claude.chat.active-dialog
+    engine: claude
+    kind: builtin
+    means: the question dialog at the bottom of the screen that the browser chat is about to answer, with its numbered rows and the one cursor
+    since: Claude Code 2.1
+    note: procedural; its markers are the claude.chat.* rows
+
+  - id: claude.excerpt
+    engine: claude
+    kind: builtin
+    means: the last few rows with words that a "no input line" note quotes, frames and rules left out
+    since: Claude Code 2.1
+    note: formatting only; it classifies nothing

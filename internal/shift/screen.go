@@ -6,10 +6,12 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
 
+	"github.com/iamnikolie/zmina/internal/screenrules"
 	"github.com/iamnikolie/zmina/internal/tmux"
 )
 
@@ -27,9 +29,91 @@ const (
 	excerptMax = 240
 )
 
-// limitRe finds Claude Code telling that a usage limit stops the role.
-var limitRe = regexp.MustCompile(`(?i)(usage limit reached|usage credit limit|hit your (\w+ )?limit|` +
-	`limit (reached|will reset)|out of extra usage|/rate-limit-options)`)
+// limitLines is how much of the screen's bottom a usage limit notice is read from when no row names a count.
+const limitLines = 8
+
+// engineOf is the CLI whose screen a role's pane shows: the rules that read it are that engine's.
+func (s *Shift) engineOf(name string) string {
+	if s.isCodex(name) {
+		return screenrules.Codex
+	}
+
+	return screenrules.Claude
+}
+
+// limitLine is the usage-limit notice at the bottom of a screen as the engine's rules read it: the last row they match,
+// clipped; empty when none does. Claude Code shows a limit as a notice at the bottom; a reply that talks about limits
+// is further up or sits after a ❯ prompt, which is the rule's own skip.
+func limitLine(rules *screenrules.Table, engine, screen string) string {
+	line, _ := limitHit(rules, engine, screen)
+
+	return line
+}
+
+// limitHit is limitLine with the row that matched.
+func limitHit(rules *screenrules.Table, engine, screen string) (string, screenrules.Hit) {
+	var last screenrules.Hit
+
+	found := false
+
+	for _, h := range rules.Scan(engine, screenrules.UsageLimit, screen) {
+		if h.N >= 0 {
+			last, found = h, true
+		}
+	}
+
+	if !found {
+		return "", screenrules.Hit{}
+	}
+
+	// What a crew's own row matched goes out as a quotation: one line, cut, controls gone, a session tag masked.
+	if last.Rule.Override {
+		return Quote(last.Line), last
+	}
+
+	return clip(strings.TrimSpace(last.Line)), last
+}
+
+// limitResetSlack is how far a limit's reset time may move between two looks and still be the same limit: a countdown is read
+// anew each beat and rounds to the minute.
+const limitResetSlack = 15 * time.Minute
+
+// limitSep divides the notice from its reset time in what the role's state keeps of the limit last told.
+const limitSep = "\x1f"
+
+// limitNews reports whether the usage-limit notice on the screen is news to the dispatcher, given what was kept of the limit
+// last told (empty: none is on, so this is a new stretch), and what to keep. A limit is told once for the stretch it stays on
+// the screen, whatever its words do meanwhile; it is told again when the time it resets at is another one. The kept text is the
+// notice as told, with its reset time when the words gave one.
+func limitNews(kept, notice string, now time.Time) (string, bool) {
+	reset := parseReset(notice, now)
+
+	key := notice
+	if !reset.IsZero() {
+		key += limitSep + strconv.FormatInt(reset.Unix(), 10)
+	}
+
+	if kept == "" {
+		return key, true
+	}
+
+	// The reset time of the limit told: kept with it, or, for a notice kept before it was, read from its words.
+	var was time.Time
+
+	if at := strings.LastIndex(kept, limitSep); at >= 0 {
+		if n, err := strconv.ParseInt(kept[at+len(limitSep):], 10, 64); err == nil {
+			was = time.Unix(n, 0)
+		}
+	} else {
+		was = parseReset(kept, now)
+	}
+
+	if reset.IsZero() || (!was.IsZero() && reset.Sub(was).Abs() <= limitResetSlack) {
+		return kept, false
+	}
+
+	return key, true
+}
 
 // watchScreen looks at an up role's screen and the end of its transcript: a screen with no input line for
 // blockedAfter, a last turn that ended in an API error, a usage limit on screen. Each is told once per stretch.
@@ -50,7 +134,7 @@ func (s *Shift) watchScreen(name string, now time.Time) []string {
 
 	// What the role says it is doing, also while it boots.
 	if text, err := s.Tmux.Capture(name, nowLines); err == nil {
-		if line := NowLine(text); line != "" && line != rs.Now {
+		if line := s.NowLine(text); line != "" && line != rs.Now {
 			rs.Now, rs.NowAt = line, now
 		}
 	}
@@ -98,65 +182,83 @@ func (s *Shift) watchScreen(name string, now time.Time) []string {
 		notes = append(notes, note)
 	}
 
-	// Claude Code shows a limit as a notice at the bottom of the screen; a reply that talks about limits is
-	// further up or sits after a ❯ prompt.
-	if text, err := s.Tmux.Capture(name, 8); err == nil {
-		limit := ""
-		for _, l := range strings.Split(text, "\n") {
-			if l = strings.TrimSpace(l); limitRe.MatchString(l) && !strings.HasPrefix(l, "❯") {
-				limit = clip(l)
-			}
-		}
+	// The usage limit notice: the bottom of the screen, as the engine's rules say how many rows.
+	eng, rules := s.engineOf(name), s.ScreenRules()
+	if text, err := s.Tmux.Capture(name, rules.Window(eng, screenrules.UsageLimit, limitLines)); err == nil {
+		limit := limitLine(rules, eng, text)
 
-		if limit != "" && limit != rs.LimitNoted {
+		if limit == "" {
+			// The stretch is over.
+			rs.LimitNoted = ""
+		} else if kept, news := limitNews(rs.LimitNoted, limit, now); news {
 			note := name + ": stopped by a usage limit: " + limit
 			s.log(name, "limit", "", note)
 			notes = append(notes, note)
+			rs.LimitNoted = kept
 		}
-
-		rs.LimitNoted = limit
 	}
 
 	return notes
 }
 
-// nowLines is how much of the screen NowLine reads.
-const nowLines = 80
+// nowLines is how much of the screen a look captures (NowLine reads it, and zmina explain reads the usage-limit notice out of
+// it): the most any row of a screen rule may read (screenrules.MaxLastLines), so that the ticker's watch, which captures just
+// what its rule asks, and explain, which cuts the same rows out of this capture, cannot see different rows.
+const nowLines = screenrules.MaxLastLines
 
-var (
-	// toolRe matches a ⏺ line that is a tool call rather than words: Bash(…), Update(…), mcp__x__y (MCP)(…),
-	// "Read 3 files (ctrl+o to expand)", "Searched for 2 patterns", a subagent's "main ◯ …" line, "Stop Task".
-	toolRe = regexp.MustCompile(`^([\w.:-]+\(|.*\(MCP\)|.*ctrl\+o to expand|(Read|Reading|Searched|Searching|Listed|` +
-		`Wrote|Writing|Fetched|Ran|Running|Called|Found|Updated|Updating|Making|Editing|Edited) .*(\d|…)|.*◯|` +
-		`.*↑ [\d.]+k? tokens|(Stop Task|Task Output)\b|Agent ")`)
-	spaceRe = regexp.MustCompile(`\s+`)
-)
+var spaceRe = regexp.MustCompile(`\s+`)
 
 // NowLine is the last thing the role said in words on its screen: the last "⏺ …" line that is not a tool call,
-// with the lines it wraps onto, on one line and clipped. Empty when the screen has none.
-func NowLine(screen string) string {
-	lines := strings.Split(screen, "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		rest, ok := strings.CutPrefix(strings.TrimSpace(lines[i]), "⏺")
-		rest = strings.TrimSpace(rest)
+// with the lines it wraps onto, on one line and clipped. Empty when the screen has none. What counts as a line of words, a
+// tool call and a wrapped row is this crew's Claude rules' (claude.now.*); the walk from the bottom is this function's
+// (claude.now.line).
+func (s *Shift) NowLine(screen string) string { return nowLine(s.ScreenRules(), screen) }
 
-		if !ok || rest == "" || toolRe.MatchString(rest) {
+func nowLine(rules *screenrules.Table, screen string) string {
+	lines := strings.Split(screen, "\n")
+
+	for i := len(lines) - 1; i >= 0; i-- {
+		hit, ok := rules.Test(screenrules.Claude, screenrules.SayMark, lines[i])
+		rest := strings.TrimSpace(hit.Rest)
+
+		if !ok || rest == "" || isToolCall(rules, rest) {
 			continue
 		}
 
+		// Words a crew's own row picked out are quoted, where the embedded rows' are clipped.
+		quoted := hit.Rule.Override
+
 		// A long line wraps onto lines indented under it.
 		for _, l := range lines[i+1:] {
-			if !strings.HasPrefix(l, "  ") || strings.TrimSpace(l) == "" || strings.HasPrefix(strings.TrimSpace(l), "⎿") {
+			cont, indented := rules.Test(screenrules.Claude, screenrules.SayCont, l)
+			if !indented || strings.TrimSpace(l) == "" || stopsWrap(rules, l) {
 				break
 			}
 
+			quoted = quoted || cont.Rule.Override
 			rest += " " + strings.TrimSpace(l)
+		}
+
+		if quoted {
+			return Quote(rest)
 		}
 
 		return clip(spaceRe.ReplaceAllString(rest, " "))
 	}
 
 	return ""
+}
+
+func isToolCall(rules *screenrules.Table, words string) bool {
+	_, ok := rules.Test(screenrules.Claude, screenrules.ToolCall, words)
+
+	return ok
+}
+
+func stopsWrap(rules *screenrules.Table, line string) bool {
+	_, ok := rules.Test(screenrules.Claude, screenrules.SayStop, line)
+
+	return ok
 }
 
 // trust answers Claude Code's "trust this folder" for a role zmina started in a task worktree it made itself
@@ -170,15 +272,49 @@ func (s *Shift) trust(name string) bool {
 		return false
 	}
 
-	text, err := s.Tmux.Capture(name, 30)
-	if err != nil || !strings.Contains(text, "trust") {
+	rules := s.ScreenRules()
+
+	text, err := s.Tmux.Capture(name, rules.Window(screenrules.Claude, screenrules.TrustQuestion, trustLines))
+	if err != nil {
 		return false
+	}
+
+	keys := trustKeys(rules, text)
+	if keys == nil {
+		return false
+	}
+
+	if err := s.Tmux.Keys(name, keys...); err != nil {
+		return false
+	}
+
+	rs.Trusted = true
+	s.log(name, "trusted", "", rs.Dir)
+
+	return true
+}
+
+// trustLines is how much of the screen the trust question is read from when no row names a count.
+const trustLines = 30
+
+// trustKeysMax is the most keys the trust answer presses: up to eight moves of the cursor, and Enter. The keys are only ever
+// Down, Up and Enter, counted from where the cursor stands to the answer that says yes.
+const trustKeysMax = 9
+
+// trustKeys is the keys that answer Claude Code's folder-trust question with yes on a screen that shows it: the cursor
+// is moved from the answer it stands on to the one that says yes, and Enter takes it. Nil when the screen shows no such
+// question, or no cursor or no yes in it (claude.trust.answer; the markers are the claude.trust.* rows).
+func trustKeys(rules *screenrules.Table, screen string) []string {
+	if _, ok := rules.Test(screenrules.Claude, screenrules.TrustQuestion, screen); !ok {
+		return nil
 	}
 
 	var opts []string
 
-	for _, l := range strings.Split(text, "\n") {
-		if l = strings.TrimSpace(l); trustOpt.MatchString(l) {
+	for _, l := range strings.Split(screen, "\n") {
+		l = strings.TrimSpace(l)
+
+		if _, ok := rules.Test(screenrules.Claude, screenrules.TrustOption, l); ok {
 			opts = append(opts, l)
 		}
 	}
@@ -186,17 +322,22 @@ func (s *Shift) trust(name string) bool {
 	sel, yes := -1, -1
 
 	for i, o := range opts {
-		if strings.HasPrefix(o, "❯") {
+		if _, ok := rules.Test(screenrules.Claude, screenrules.TrustSelected, o); ok {
 			sel = i
 		}
 
-		if strings.Contains(strings.ToLower(o), "yes") {
+		if _, ok := rules.Test(screenrules.Claude, screenrules.TrustYes, o); ok {
 			yes = i
 		}
 	}
 
 	if sel < 0 || yes < 0 {
-		return false
+		return nil
+	}
+
+	// The cursor moves between a trust question's few answers: a screen that lists more is not the question.
+	if d := yes - sel; d >= trustKeysMax || -d >= trustKeysMax {
+		return nil
 	}
 
 	var keys []string
@@ -209,18 +350,8 @@ func (s *Shift) trust(name string) bool {
 		keys = append(keys, "Up")
 	}
 
-	if err := s.Tmux.Keys(name, append(keys, "Enter")...); err != nil {
-		return false
-	}
-
-	rs.Trusted = true
-	s.log(name, "trusted", "", rs.Dir)
-
-	return true
+	return append(keys, "Enter")
 }
-
-// trustOpt matches the answers of Claude Code's folder-trust question.
-var trustOpt = regexp.MustCompile(`(?i)^(❯\s*)?(\d\.\s*)?(yes, i trust this folder|yes, proceed|no, exit)`)
 
 // excerpt is the last few lines of text on the role's screen, frames and rules left out, as one line.
 func (s *Shift) excerpt(name string) string {

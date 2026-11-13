@@ -379,7 +379,7 @@ func (a *app) sleepCommand() *cobra.Command {
 					return err
 				}
 
-				shift.WaitGone(s.Tmux, []string{name}, shift.ExitWait)
+				s.WaitGone([]string{name}, shift.ExitWait)
 
 				if err := a.withState(func(s *shift.Shift) error { return s.FinishDown(name) }); err != nil {
 					return err

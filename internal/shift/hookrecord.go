@@ -18,7 +18,7 @@ import (
 
 // What a role's hooks record is one small file a role and kind in the crew's hooks directory (crew.Layout.Hooks).
 // A record is a hint, never the truth: it names the session it is about and when it was written, and a view
-// reads it only while the session file of Claude Code agrees it is still current (askedFor, failureFor). Nothing
+// reads it only while the session file of Claude Code agrees it is still current (askedLook, TurnFailure.current). Nothing
 // deletes a record: a stale one is ignored by those two tests, and the next one replaces it. A role started before
 // its hook existed has no record, and everything reads from the screen and the transcript as it always did.
 
@@ -135,34 +135,43 @@ func near(a, b time.Time) bool {
 	return d >= -hookSkew && d <= hookSkew
 }
 
-// askedFor is the question a role's hook recorded, while it is the question on the role's screen: the session file says
-// the session waits on a question (input needed), the record is of that very session, and it was written within
-// hookSkew of the moment that wait began. Anything else — a record of an earlier question, of a session before a
-// /clear, one left from before the role was answered, a permission prompt, a file that does not read — is nil, and the
-// screen is read as before.
-func (s *Shift) askedFor(name string, sess *registry.Session) *AskedQuestion {
+// askedLook is the question a role's hook recorded, and whether it is the question on the role's screen: the session file
+// says the session waits on a question (input needed), the record is of that very session, and it was written within
+// hookSkew of the moment that wait began. Anything else — a record of an earlier question, of a session before a /clear,
+// one left from before the role was answered, a permission prompt, a file that does not read — is not current, and the
+// screen is read as before; why is then said in words. A role that does not wait on a question is not asked about one (no
+// reason). The record is returned whenever there is one of this session.
+func (s *Shift) askedLook(name string, sess *registry.Session) (q *AskedQuestion, current bool, why string) {
 	if sess == nil || !hookRole(name) || waitKind(sess) != WaitQuestion || sess.StatusUpdatedAt <= 0 {
-		return nil
+		return nil, false, ""
 	}
 
-	var q AskedQuestion
-	if !readRecord(s.Crew.Layout().HookQuestion(name), &q) || q.SessionID == "" || q.SessionID != sess.SessionID ||
-		len(q.Questions) == 0 || !near(q.At, sess.StatusSince()) {
-		return nil
+	var rec AskedQuestion
+
+	switch {
+	case !readRecord(s.Crew.Layout().HookQuestion(name), &rec):
+		return nil, false, "no record"
+	case rec.SessionID == "":
+		return nil, false, "a record with no session"
+	case rec.SessionID != sess.SessionID:
+		return nil, false, "a record of another session (before a restart or a /clear)"
+	case len(rec.Questions) == 0:
+		return nil, false, "a record with no question"
+	case !near(rec.At, sess.StatusSince()):
+		return &rec, false, "a record of an earlier question: " + apart(rec.At, sess.StatusSince()) + " the moment the session began waiting"
 	}
 
-	return &q
+	return &rec, true, ""
 }
 
-// dialogFor is the dialog a role shows: the question its hook recorded when that is the one on screen (askedFor),
-// else the one read from the screen (nil when the screen does not read as one).
-func (s *Shift) dialogFor(name string, sess *registry.Session, screen *Dialog) *Dialog {
-	q := s.askedFor(name, sess)
-	if q == nil {
-		return screen
+// apart says how far a moment is from another, in words: "1m0s before".
+func apart(at, from time.Time) string {
+	d := at.Sub(from).Round(time.Second)
+	if d < 0 {
+		return (-d).String() + " before"
 	}
 
-	return askedDialog(q, screen)
+	return d.String() + " after"
 }
 
 // words are the first question as it is shown: its text, then what a Dialog has no place for — that several choices can

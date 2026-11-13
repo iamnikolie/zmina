@@ -20,6 +20,7 @@ import (
 	"github.com/iamnikolie/zmina/internal/inbox"
 	"github.com/iamnikolie/zmina/internal/mesh"
 	"github.com/iamnikolie/zmina/internal/registry"
+	"github.com/iamnikolie/zmina/internal/screenrules"
 	"github.com/iamnikolie/zmina/internal/shift"
 	"github.com/iamnikolie/zmina/internal/tmux"
 )
@@ -343,7 +344,7 @@ func chooseDialog(s *shift.Shift, role, pick string) error {
 	if v := viewOf(s, role); v == nil || v.Status != "waiting" {
 		return errors.New("it is not waiting on a question now")
 	}
-	d := shift.ParseDialog(screen)
+	d := s.ParseDialog(screen)
 	if d == nil {
 		return errors.New("no question on its screen now")
 	}
@@ -458,11 +459,9 @@ type dialogOption struct {
 	Current bool
 }
 
-var dialogRow = regexp.MustCompile(`^\s*(❯\s*)?(\d+)\.\s+(?:\[([ ✔])\]\s+)?(.*?)\s*$`)
-
 // activeDialog reads the question dialog at the bottom of the screen: the last place the question starts, its whole
 // text from there, and the numbered rows under it in order. ok is false when that question is not the active one.
-func activeDialog(screen, question string) ([]dialogOption, bool) {
+func (r screenReader) activeDialog(screen, question string) ([]dialogOption, bool) {
 	flat := func(t string) string { return strings.Join(strings.Fields(t), " ") }
 	q := flat(question)
 	head := []rune(q)
@@ -471,7 +470,7 @@ func activeDialog(screen, question string) ([]dialogOption, bool) {
 	}
 	// The question's text is read without the dialog's frame; its rows are read as drawn: a row inside a box (another
 	// dialog's) is not one of this dialog's.
-	raw, lines := strings.Split(screen, "\n"), dialogLines(screen)
+	raw, lines := strings.Split(screen, "\n"), r.dialogLines(screen)
 	at := -1
 	for i := len(lines) - 1; i >= 0; i-- {
 		if strings.Contains(flat(lines[i]), string(head)) {
@@ -485,10 +484,12 @@ func activeDialog(screen, question string) ([]dialogOption, bool) {
 	var out []dialogOption
 	current := 0
 	for _, l := range raw[at:] {
-		m := dialogRow.FindStringSubmatch(l)
-		if m == nil {
+		hit, ok := r.table().Test(screenrules.Claude, screenrules.ChatRow, l)
+		if !ok {
 			continue
 		}
+
+		m := hit.Sub
 		n, _ := strconv.Atoi(m[2])
 		if n == 1 && len(out) > 0 {
 			return nil, false // numbering starts again: another dialog below this text, the active one is not it
@@ -505,15 +506,12 @@ func activeDialog(screen, question string) ([]dialogOption, bool) {
 	return out, len(out) > 0 && current == 1
 }
 
-// dialogBar is the rule Claude Code draws down the left of a question's text (and a box's sides): a frame, not words.
-var dialogBar = regexp.MustCompile(`^\s*[│┃▏▎]\s?|\s*[│┃]\s*$`)
-
 // dialogLines are the screen's lines without the dialog's frame, so a question wrapped inside it reads as its words;
 // one line for each of the screen's, in order.
-func dialogLines(screen string) []string {
+func (r screenReader) dialogLines(screen string) []string {
 	lines := strings.Split(screen, "\n")
 	for i, l := range lines {
-		lines[i] = dialogBar.ReplaceAllString(l, "")
+		lines[i] = r.table().Strip(screenrules.Claude, screenrules.ChatFrame, l)
 	}
 	return lines
 }
@@ -533,9 +531,9 @@ func dialogMatches(rows []dialogOption, labels []string) bool {
 
 // onScreen reports whether the screen shows the whole question and every one of its options, line breaks and runs
 // of spaces aside: another question that starts alike is not this one.
-func onScreen(screen, want string, options ...string) bool {
+func (r screenReader) onScreen(screen, want string, options ...string) bool {
 	flat := func(t string) string { return strings.Join(strings.Fields(t), " ") }
-	s, w := flat(strings.Join(dialogLines(screen), "\n")), flat(want)
+	s, w := flat(strings.Join(r.dialogLines(screen), "\n")), flat(want)
 	if w == "" || !strings.Contains(s, w) {
 		return false
 	}
@@ -602,12 +600,12 @@ func answerQuestion(s *shift.Shift, role, raw string, snapshot chat.Snapshot) (e
 			}
 			stop := fmt.Errorf("stopped at step %d: the question on its screen is not the one answered; look at Terminal", i+1)
 			if len(step.Options) == 0 {
-				if !onScreen(screen, step.Expect) {
+				if !(screenReader{s.ScreenRules()}).onScreen(screen, step.Expect) {
 					return stop
 				}
 			} else {
 				// The active dialog, at the bottom: this part's whole question and its options by number, in order.
-				rows, ok := activeDialog(screen, step.Expect)
+				rows, ok := screenReader{s.ScreenRules()}.activeDialog(screen, step.Expect)
 				if !ok || !dialogMatches(rows, step.Options) || step.Current > 0 && (len(rows) < step.Current || !rows[step.Current-1].Current) {
 					return stop
 				}
