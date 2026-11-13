@@ -33,6 +33,10 @@ const permissionScreen = ` ☐ Release
 Enter to select · ↑/↓ to navigate
 `
 
+// shipItAsked is the AskUserQuestion call the hook records for permissionScreen's question.
+const shipItAsked = `{"questions":[{"question":"Ship it?","header":"Release","multiSelect":false,"options":[` +
+	`{"label":"Yes","description":"all of it"},{"label":"Only locally"},{"label":"No"}]}]}`
+
 // dialogScreenTmux is a tmux whose role dev stands at a screen: a dialog, or its input line; it records the keys pressed.
 type dialogScreenTmux struct {
 	shift.Tmux
@@ -47,6 +51,9 @@ type dialogScreenTmux struct {
 	// wait began, as the session file has it.
 	waitingFor string
 	since      time.Time
+	// asked is the AskUserQuestion call (its tool_input) the hook records for a wait of a question: it is what a card may press a
+	// question by.
+	asked string
 }
 
 func (f *dialogScreenTmux) Probe(name string) (tmux.Pane, error) {
@@ -91,10 +98,10 @@ func (f *dialogScreenTmux) show(t *testing.T, ns string, dialog bool) {
 	f.mu.Lock()
 	f.input = !dialog
 
-	// A new wait is later than the one before, by what a person takes to answer: more than the moment a hook's record and its
-	// session file are allowed to differ by, or two prompts would be one.
-	if now := time.Now(); now.Before(f.since.Add(2 * time.Second)) {
-		f.since = f.since.Add(2 * time.Second)
+	// A new wait is later than the one before, by what a person takes to answer: more than the span in which a different call makes a
+	// prompt nobody's, or two prompts would be one.
+	if now := time.Now(); now.Before(f.since.Add(10 * time.Second)) {
+		f.since = f.since.Add(10 * time.Second)
 	} else {
 		f.since = now
 	}
@@ -110,6 +117,12 @@ func (f *dialogScreenTmux) show(t *testing.T, ns string, dialog bool) {
 	status := `"status": "idle"`
 	if dialog {
 		status = `"status": "waiting", "waitingFor": "` + waiting + `"`
+	}
+
+	// The hook's record of the question, as it writes it the moment the wait begins.
+	if dialog && waiting == "input needed" && f.asked != "" {
+		input := `{"session_id":"sid-1","hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion","tool_input":` + f.asked + `}`
+		require.NoError(t, shift.RecordQuestion(crew.Layout{Dir: filepath.Dir(ns)}, "dev", []byte(input), since))
 	}
 
 	body := `{"pid": ` + strconv.Itoa(f.pid) + `, "sessionId": "sid-1", ` + status + `, "statusUpdatedAt": ` + strconv.FormatInt(since.UnixMilli(), 10) + `}`
@@ -171,7 +184,7 @@ func dialogWorld(t *testing.T, plugins string) (file string, f *dialogScreenTmux
 
 	file = pluginCrew(t, "  dev: {}\n", plugins)
 	ns = filepath.Join(filepath.Dir(file), "ns")
-	f = &dialogScreenTmux{pid: 4545, screen: permissionScreen}
+	f = &dialogScreenTmux{pid: 4545, screen: permissionScreen, asked: shipItAsked}
 	seams = func(s *shift.Shift) { s.Tmux, s.Reg = f, &registry.Registry{Namespace: ns} }
 
 	return file, f, seams, ns
@@ -575,6 +588,7 @@ func TestPluginsTellOfAMultipleChoiceWithoutAnArgv(t *testing.T) {
 	now := time.Now().Add(-10 * time.Minute)
 
 	f.screen = " ☐ Tabs\n│ Which tabs?\n❯ 1. ☐ Home\n  2. ☐ Talk\n  3. Type something.\nEnter to select · ↑/↓ to navigate · Esc to cancel"
+	f.asked = `{"questions":[{"question":"Which tabs?","header":"Tabs","multiSelect":true,"options":[{"label":"Home"},{"label":"Talk"}]}]}`
 	f.show(t, ns, true)
 	deliver(t, file, now, seams)
 	deliver(t, file, now.Add(time.Minute), seams)

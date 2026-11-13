@@ -1567,7 +1567,7 @@ rest less). Nothing in it is an instruction to the plugin, and a plugin never ev
 |---|---|---|
 | `ask` | a question on the todo: an ask, a decision, a check, a task that waits on the owner | `role`, `title`, `text`, `note` (a waiting task's note, a field of its own), `why` (what it holds up: the role, the task id and title), `reason`, `recommendation`, `options` (`[{n, text}]`), `answer`, `opened` (RFC 3339), `blocking` |
 | `blocking` | the same while it holds a role up; sent **instead of** `ask`, never as well | as `ask`, `blocking: true` |
-| `dialog` | a question on a role's screen that zmina does not answer itself (a permission prompt, AskUserQuestion), once it has stood `dialog_after`, so what the role settles itself never pages. `id` is `<role>:<fingerprint>:<mark>`: the fingerprint is of the question, every choice and, for a permission prompt, the tool call; the mark is this event's one-shot mark | `role`, `question`, `prompt` (`permission` or `question`), `tool`, `subject`, `subject_checked` and `subject_cut` (a permission prompt: what is being approved, the call's command or path; `subject_checked` when the prompt's own block on the screen was compared with it, word for word; `subject_cut` when it is not all of the call), `options` (`[{n, text, detail}]`), `answer`, `needs_terminal`, `task`, `task_title` |
+| `dialog` | a question on a role's screen that zmina does not answer itself (a permission prompt, AskUserQuestion: see below for when), once it has stood `dialog_after`, so what the role settles itself never pages. `id` is `<role>:<fingerprint>:<mark>`: the fingerprint is of the question, every choice and, for a permission prompt, the tool call; the mark is this event's one-shot mark | `role`, `question`, `prompt` (`permission` or `question`), `tool`, `subject`, `subject_checked` and `subject_cut` (a permission prompt: what is being approved, the call's command or path; `subject_checked` when the prompt's own block on the screen was compared with it, word for word; `subject_cut` when it is not all of the call), `options` (`[{n, text, detail}]`), `answer`, `needs_terminal`, `task`, `task_title` |
 | `reminder` | a reminder ringing, a parked item brought back by its alarm (as `notify`'s reminder); a plugin whose `on` lacks `reminder` (the default) is told of it as an `ask` | as `ask`; for a parked item (`L-3`) only `answer.done` |
 | `answered` | an item or dialog the plugin was **told of** is closed, so it can mark its card | `for` (the event it was sent as), `how` (`answered`, `done`, `dropped` — parked or set aside —, `chosen`, `gone`), `by` (`owner`, `plugin <name>`, `role <name>`, empty when zmina closed it), `text` (the answer when there is one), `closed` |
 
@@ -1593,14 +1593,17 @@ permission prompt gets a subject, and a card that presses, **only when the call 
 
 1. *One call.* Claude Code does not write the session file again while a session stays waiting on a permission prompt, so the prompt
    that follows an answered one in a queue (two sub-agents, parallel tool calls) has the first prompt's wait start. So a call is the
-   prompt's only when it is the one call recorded for the role at or after the wait began (the same call twice is one), and recorded
-   within a second of it; any different call recorded since, of any session of the role, makes the prompt nobody's: no subject, nothing
-   told. A card told before such a call was recorded stops matching the moment it is (its fingerprint covers the call): its press is
+   prompt's only when it is the one call recorded for the role from 5 seconds before the wait began on (the same call twice is one),
+   and recorded within a second of it; any different call recorded in that span, of any session of the role, makes the prompt nobody's:
+   no subject, nothing told. So does a hook input that could not be read (cut at the hook's 1 MiB bound, not a call): the file notes a
+   call it lost, and the wait it may have been of is no one's. A card told before such a call was recorded stops matching the moment it is (its fingerprint covers the call): its press is
    refused (`the question on its screen changed`), and it is closed with `answered` / `gone`. So is a call the file may have had to let go
    of.
-2. *A shell call is compared with the screen.* The prompt draws a block under its `Bash command` title and above its question; the
-   call's command (and its description, which the prompt draws under it), folded, must be that block, word for word, with the frame of a box
-   stripped from both: not the head of it somewhere among the last lines, where an earlier call's tool line stands. Wrapped through a word, or
+2. *A shell call is compared with the screen.* The prompt draws a block under its `Bash command` title (the first such line among the
+   last lines: text of a command that looks like a title only makes the block longer, and so fail to match) and above its question; the
+   block must be the call's command, and then its description as lines of their own, word for word, with the frame of a box stripped from
+   both: not the head of it somewhere among the last lines, where an earlier call's tool line stands, and not a command that holds the
+   description's words. Wrapped through a word, or
    cut: the same words, but not comparable as they stand, so `subject_cut` and nothing to press. Another command: no subject.
 3. *Any other tool is told, not pressed.* No golden shows another tool's prompt, so nothing of its screen is compared: the event carries the
    subject (when rule 1 holds), no `subject_checked`, `needs_terminal`, and no argv. A card is made for a tool only with an equally strict
@@ -1613,6 +1616,18 @@ things to run, or that folding changed anything else (a double space, a control 
 and offers no argv, never a working Yes for a call the phone cannot show whole. The subject is in the fingerprint, so two commands never
 share an id. The same identity check runs again when a card is pressed: `choose --by` reads the record and the screen again, and presses
 nothing unless the call is still certainly the prompt's (`answer it in a terminal`) and the fingerprint is the card's.
+
+**A question** (a wait the session file says is of a question: `input needed`) is told and pressed only when the hook's record of the
+question (an AskUserQuestion call) is of this wait and the screen shows that question, words and choices: a prompt that is only the
+screen's reading is not one a card presses, whatever the file says. And not when a call is recorded for the role since the wait began (or
+the file lost or could not read one), nor when the screen has a permission prompt's title (`Bash command`): the file is not written again
+while a session stays waiting, so a permission prompt can follow an answered question under the same words. The same check runs at the
+press.
+
+What remains, by design: between the last check of a press and its keys pass some milliseconds, and a prompt answered at the terminal in
+that instant puts the keys into the next one queued; the same call asked twice in one wait is one call, so a card told for the first presses
+its identical twin (same tool, same input, same words); and a plugin must show an option's `detail` as well as its `text` (a choice such as
+`Yes, and don't ask again for …` carries its scope there when the screen wraps it), for what the owner presses to be what he reads.
 
 A press through a plugin is **one-shot**, and of one wait: the event's id carries a mark kept armed in `plugins/<name>.armed.json` (apart
 from the told file: the delivery and the choose both write it, each under a short lock) together with the moment the wait began, and `choose

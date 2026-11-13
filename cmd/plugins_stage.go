@@ -209,6 +209,12 @@ func standingDialog(s *shift.Shift, c *crew.Crew, v shift.View) (plugin.DialogFa
 
 		prompt = "permission"
 	case shift.WaitQuestion:
+		// Only the question its hook recorded for this wait and the screen shows: a permission prompt can follow an answered question
+		// under the same words, the session file not written again.
+		if !v.Dialog.Asked {
+			return plugin.DialogFacts{}, false, true
+		}
+
 		prompt = "question"
 	default:
 		return plugin.DialogFacts{}, false, true
@@ -222,6 +228,10 @@ func standingDialog(s *shift.Shift, c *crew.Crew, v shift.View) (plugin.DialogFa
 	d := s.DialogOn(v.Role, screen)
 	if d == nil || d.ID != v.Dialog.ID {
 		// Only the file's words, or a screen that moved on between the two looks: nothing a choose could answer.
+		return plugin.DialogFacts{}, false, true
+	}
+
+	if prompt == "question" && s.PermissionHinted(v.Role, v.Since, screen) {
 		return plugin.DialogFacts{}, false, true
 	}
 

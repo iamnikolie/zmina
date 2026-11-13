@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/iamnikolie/zmina/internal/crew"
+	"github.com/iamnikolie/zmina/internal/plugin"
 	"github.com/iamnikolie/zmina/internal/registry"
 	"github.com/iamnikolie/zmina/internal/shift"
 	"github.com/iamnikolie/zmina/internal/tmux"
@@ -338,4 +339,200 @@ func TestAPressThatMayHaveLandedIsNotGivenBack(t *testing.T) {
 
 	_, err = runWith(t, file, seams, "choose", "dev", "1", "--dialog", second, "--by", "pager")
 	require.NoError(t, err, "a definite failure to send gave the mark back")
+}
+
+// forgeCard arms a mark for the dialog the role's view shows now, as a plugin that had been told of it would hold one, and returns the
+// id of the event that would have carried it. It is how the press itself is tried, past everything that decides a card is made.
+func forgeCard(t *testing.T, file string, seams func(s *shift.Shift), pluginName string) string {
+	t.Helper()
+
+	var (
+		id    string
+		since time.Time
+	)
+
+	a := &app{crew: file, out: io.Discard, err: io.Discard, shiftSeams: seams}
+	require.NoError(t, a.readState(func(s *shift.Shift) error {
+		v := viewOf(s, "dev")
+		require.NotNil(t, v)
+		require.NotNil(t, v.Dialog)
+		id, since = v.Dialog.ID, v.Since
+
+		return nil
+	}))
+
+	nonce := plugin.NewNonce()
+	require.NoError(t, armedOf(file, pluginName).Arm(nonce, plugin.DialogID("dev", id), since, time.Now()))
+
+	return plugin.EventDialogID("dev", id, nonce)
+}
+
+// A permission prompt under a wait the session file says is of a question — the file is not written again while a session stays
+// waiting — is not told, and a card for it is refused at the press: a question wait is told and pressed only when the hook's question
+// record is of this wait and the screen shows that question.
+func TestAPermissionPromptUnderAQuestionWaitIsNeitherToldNorPressed(t *testing.T) {
+	file, f, seams, ns := dialogWorld(t, "  - {name: pager, quiet_when_active: off}\n")
+	log := recorder(t, file, "pager", "")
+	now := time.Now().Add(-10 * time.Minute)
+
+	// The review's repro: the file says "input needed", the screen is a shell permission prompt.
+	f.mu.Lock()
+	f.waitingFor = "input needed"
+	f.asked = ""
+	f.screen = " Bash command\n\n   git push --force origin main\n\n Do you want to proceed?\n ❯ 1. Yes\n" +
+		"   2. Yes, and don't ask again for this command\n   3. No, and tell Claude what to do differently (esc)\n\n" +
+		" Esc to cancel · Tab to amend · ctrl+e to explain\n"
+	f.mu.Unlock()
+	f.show(t, ns, true)
+	f.record(t, file, "Bash", `{"command":"git push --force origin main"}`, 0)
+
+	for _, m := range []int{0, 1, 2, 5} {
+		deliver(t, file, now.Add(time.Duration(m)*time.Minute), seams)
+	}
+
+	assert.Empty(t, told(t, log), "no blind card for it")
+
+	// A card that somehow had a mark is refused at the press.
+	card := forgeCard(t, file, seams, "pager")
+	t.Setenv("ZMINA_PLUGIN", "pager")
+
+	_, err := runWith(t, file, seams, "choose", "dev", "1", "--dialog", card, "--by", "pager")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "answer it in a terminal")
+	assert.Empty(t, f.pressed(), "no keys")
+
+	// The same under a question record that does not match the screen (a question asked and answered, and a permission prompt come).
+	f.mu.Lock()
+	f.asked = shipItAsked
+	f.mu.Unlock()
+	f.show(t, ns, true)
+	f.record(t, file, "Bash", `{"command":"git push --force origin main"}`, 0)
+
+	for _, m := range []int{6, 7, 8} {
+		deliver(t, file, now.Add(time.Duration(m)*time.Minute), seams)
+	}
+
+	assert.Empty(t, told(t, log))
+
+	card = forgeCard(t, file, seams, "pager")
+	_, err = runWith(t, file, seams, "choose", "dev", "1", "--dialog", card, "--by", "pager")
+	require.ErrorContains(t, err, "answer it in a terminal")
+	assert.Empty(t, f.pressed())
+}
+
+// Even a question that its record and the screen agree on is not told, nor pressed, when the signs of a permission prompt are there:
+// a call recorded for the role since the wait began, or a permission prompt's title on the screen.
+func TestAQuestionWithTheSignsOfAPermissionPromptIsNeitherToldNorPressed(t *testing.T) {
+	file, f, seams, ns := dialogWorld(t, "  - {name: pager, quiet_when_active: off}\n")
+	log := recorder(t, file, "pager", "")
+	now := time.Now().Add(-10 * time.Minute)
+
+	// A normal question is told (and with no hint, pressable).
+	f.show(t, ns, true)
+	deliver(t, file, now, seams)
+	deliver(t, file, now.Add(time.Minute), seams)
+	require.Len(t, told(t, log), 1)
+	assert.Equal(t, "question", told(t, log)[0].Line["prompt"])
+	assert.NotNil(t, told(t, log)[0].Line["answer"])
+
+	// A permission call is recorded in the same wait: the question card stops being one a press is let through for.
+	card := told(t, log)[0].Line["id"].(string)
+
+	f.record(t, file, "Bash", `{"command":"rm -rf build"}`, 2*time.Second)
+
+	t.Setenv("ZMINA_PLUGIN", "pager")
+	_, err := runWith(t, file, seams, "choose", "dev", "1", "--dialog", card, "--by", "pager")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "answer it in a terminal")
+	assert.Empty(t, f.pressed())
+
+	// And a fresh wait with a permission title above the question is not told at all.
+	f.mu.Lock()
+	f.screen = " Bash command\n\n   rm -rf build\n\n" + f.screen
+	f.mu.Unlock()
+	f.show(t, ns, true)
+
+	for _, m := range []int{2, 3, 4} {
+		deliver(t, file, now.Add(time.Duration(m)*time.Minute), seams)
+	}
+
+	assert.Len(t, told(t, log), 2, "the first card, and its answered: the new wait is not told")
+	assert.Equal(t, "answered", told(t, log)[1].Event)
+}
+
+// A question that no hook recorded for this wait is not told: the screen's reading of a prompt is not what a card may press.
+func TestAQuestionNoHookRecordedIsNotTold(t *testing.T) {
+	file, f, seams, ns := dialogWorld(t, "  - {name: pager, quiet_when_active: off}\n")
+	log := recorder(t, file, "pager", "")
+	now := time.Now().Add(-10 * time.Minute)
+
+	f.mu.Lock()
+	f.asked = ""
+	f.mu.Unlock()
+	f.show(t, ns, true)
+
+	for _, m := range []int{0, 1, 2, 5} {
+		deliver(t, file, now.Add(time.Duration(m)*time.Minute), seams)
+	}
+
+	assert.Empty(t, told(t, log))
+}
+
+// The press itself refuses a permission prompt whose subject is cut, though a card with a mark for it is held: the check at the press
+// is not the card's making.
+func TestThePressRefusesACutSubjectThoughTheCardIsArmed(t *testing.T) {
+	file, f, seams, ns := dialogWorld(t, "  - {name: pager, quiet_when_active: off}\n")
+	f.permissionCall(t, file, ns, "make deploy", `{"command":"make deploy","dangerouslyDisableSandbox":true}`)
+
+	card := forgeCard(t, file, seams, "pager")
+	t.Setenv("ZMINA_PLUGIN", "pager")
+
+	_, err := runWith(t, file, seams, "choose", "dev", "1", "--dialog", card, "--by", "pager")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "answer it in a terminal")
+	assert.Empty(t, f.pressed(), "no keys")
+
+	// By hand the owner presses, as ever.
+	_, err = runWith(t, file, seams, "choose", "dev", "1")
+	require.NoError(t, err)
+	assert.Len(t, f.pressed(), 1)
+}
+
+// A record that changed between the card's telling and its press — replaced by another call, or gone — makes the prompt another one:
+// the press is refused and sends no keys.
+func TestARecordThatChangedBetweenTheTellingAndThePressRefusesIt(t *testing.T) {
+	for name, change := range map[string]func(t *testing.T, file string, f *dialogScreenTmux){
+		"replaced by another call": func(t *testing.T, file string, f *dialogScreenTmux) {
+			require.NoError(t, os.Remove(crew.Layout{Dir: filepath.Dir(file)}.HookPermission("dev")))
+			f.record(t, file, "Bash", `{"command":"git push --force origin main"}`, 0)
+		},
+		"gone": func(t *testing.T, file string, f *dialogScreenTmux) {
+			require.NoError(t, os.Remove(crew.Layout{Dir: filepath.Dir(file)}.HookPermission("dev")))
+		},
+		"the same call, with a switch it did not have": func(t *testing.T, file string, f *dialogScreenTmux) {
+			require.NoError(t, os.Remove(crew.Layout{Dir: filepath.Dir(file)}.HookPermission("dev")))
+			f.record(t, file, "Bash", `{"command":"make deploy","dangerouslyDisableSandbox":true}`, 0)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			file, f, seams, ns := dialogWorld(t, "  - {name: pager, quiet_when_active: off}\n")
+			log := recorder(t, file, "pager", "")
+			now := time.Now().Add(-10 * time.Minute)
+
+			f.permission(t, file, ns, "make deploy")
+			deliver(t, file, now, seams)
+			deliver(t, file, now.Add(time.Minute), seams)
+			require.Len(t, told(t, log), 1)
+
+			card := told(t, log)[0].Line["id"].(string)
+
+			change(t, file, f)
+
+			t.Setenv("ZMINA_PLUGIN", "pager")
+
+			_, err := runWith(t, file, seams, "choose", "dev", "1", "--dialog", card, "--by", "pager")
+			require.Error(t, err)
+			assert.Empty(t, f.pressed(), "no keys")
+		})
+	}
 }

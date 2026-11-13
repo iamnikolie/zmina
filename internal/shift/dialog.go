@@ -31,6 +31,10 @@ type Dialog struct {
 	// permission prompt only when its subject is checked and not cut.
 	SubjectCut     bool `json:"subject_cut,omitempty"`
 	SubjectChecked bool `json:"subject_checked,omitempty"`
+	// Asked: the question is the one its hook recorded for this very wait (an AskUserQuestion call), and the screen shows it: words and
+	// choices. It is what a card may press a question by; a prompt that is only a screen's reading, whatever the session file says it
+	// waits on, is not one a card may press.
+	Asked bool `json:"asked,omitempty"`
 	// Multi: several choices can be ticked, which Enter on one does not settle: it needs the terminal.
 	Multi bool `json:"multi,omitempty"`
 }

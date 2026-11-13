@@ -133,17 +133,30 @@ const (
 )
 
 // RecordPermission reads a PermissionRequest hook's input and, for any tool but AskUserQuestion, adds the call to the role's
-// permission file (the last few calls of the session, under a lock: hooks of parallel requests run at once). Input that is not a
-// tool call records nothing and is no error.
+// permission file (the last few calls of the session, under a lock: hooks of parallel requests run at once). Input that is empty
+// records nothing and is no error; input that is not empty and is not a call it can read — cut at the bound, not JSON, with no tool or
+// session — is noted in the file as a call it lost (Lost), so that the wait it may have been of is no one's.
 func RecordPermission(l crew.Layout, role string, input []byte, now time.Time) error {
+	if !hookRole(role) || len(input) == 0 {
+		return nil
+	}
+
 	var in struct {
 		SessionID string          `json:"session_id"`
 		ToolName  string          `json:"tool_name"`
 		ToolInput json.RawMessage `json:"tool_input"`
 	}
 
-	if !hookRole(role) || json.Unmarshal(input, &in) != nil || in.ToolName == "" || in.ToolName == askTool || in.SessionID == "" {
+	if json.Unmarshal(input, &in) == nil && in.ToolName == askTool {
 		return nil
+	}
+
+	// A call whose input does not read (a hook input over its bound is cut, and does not), or is not a call, may be the very call a
+	// prompt is on the screen for, and leaves no trace of it: what that wait is of is not known, and is no one's.
+	if json.Unmarshal(input, &in) != nil || in.ToolName == "" || in.SessionID == "" {
+		return updatePermissions(l, role, func(have *permissionRecords) {
+			have.Lost = laterOf(have.Lost, now)
+		})
 	}
 
 	// The sum is of the input as data, however it was spaced or ordered: a map marshals with its keys in order.
@@ -161,11 +174,12 @@ func RecordPermission(l crew.Layout, role string, input []byte, now time.Time) e
 	norm := strings.TrimSpace(words)
 
 	// Folded, what is shown is the call only if folding changed nothing but the space at its ends; several lines are several things
-	// to run, and are shown with their breaks, and are not pressed.
+	// to run, and are shown with their breaks, and are not pressed. A mark that is in the words already is not told from a break.
 	shown := oneLine(strings.NewReplacer("\r\n", newlineMark, "\n", newlineMark, "\r", newlineMark).Replace(norm))
 
 	rec := AskedPermission{SessionID: in.SessionID, At: now.UTC(), Tool: oneLine(in.ToolName), Input: clipRunes(shown, permissionInputMax),
-		InputSum: hex.EncodeToString(sum[:8]), Cut: !whole || oneLine(norm) != norm || len([]rune(shown)) > permissionInputMax}
+		InputSum: hex.EncodeToString(sum[:8]), Cut: !whole || oneLine(norm) != norm || len([]rune(shown)) > permissionInputMax ||
+			strings.Contains(norm, strings.TrimSpace(newlineMark))}
 
 	var m map[string]any
 	if json.Unmarshal(in.ToolInput, &m) == nil {
@@ -174,6 +188,32 @@ func RecordPermission(l crew.Layout, role string, input []byte, now time.Time) e
 		}
 	}
 
+	return updatePermissions(l, role, func(have *permissionRecords) {
+		kept := have.Records[:0:0]
+
+		for _, r := range have.Records {
+			if now.Sub(r.At) > permissionAge {
+				have.Lost = laterOf(have.Lost, r.At)
+
+				continue
+			}
+
+			kept = append(kept, r)
+		}
+
+		kept = append(kept, rec)
+
+		for len(kept) > permissionKeep {
+			have.Lost = laterOf(have.Lost, kept[0].At)
+			kept = kept[1:]
+		}
+
+		have.Records = kept
+	})
+}
+
+// updatePermissions changes a role's permission file under its lock (hooks of parallel requests run at once), whole or not at all.
+func updatePermissions(l crew.Layout, role string, change func(have *permissionRecords)) error {
 	if st, err := os.Stat(l.Dir); err != nil || !st.IsDir() {
 		return errors.New("no crew directory to record in")
 	}
@@ -199,26 +239,13 @@ func RecordPermission(l crew.Layout, role string, input []byte, now time.Time) e
 
 	_ = readRecord(l.HookPermission(role), &have)
 
-	kept := have.Records[:0:0]
+	change(&have)
 
-	for _, r := range have.Records {
-		if now.Sub(r.At) > permissionAge {
-			have.Lost = laterOf(have.Lost, r.At)
-
-			continue
-		}
-
-		kept = append(kept, r)
+	if have.Records == nil {
+		have.Records = []AskedPermission{}
 	}
 
-	kept = append(kept, rec)
-
-	for len(kept) > permissionKeep {
-		have.Lost = laterOf(have.Lost, kept[0].At)
-		kept = kept[1:]
-	}
-
-	return writeRecord(l, l.HookPermission(role), permissionRecords{Records: kept, Lost: have.Lost})
+	return writeRecord(l, l.HookPermission(role), have)
 }
 
 func laterOf(a, b time.Time) time.Time {
@@ -342,14 +369,18 @@ func (s *Shift) askedLook(name string, sess *registry.Session) (q *AskedQuestion
 	return &rec, true, ""
 }
 
+// permissionBefore is how long before a wait began a different call of the role still makes the prompt nobody's: a hook that wrote
+// its record late (a loaded machine) and a parallel request that wrote soon after it are two calls within a few seconds of the wait.
+const permissionBefore = 5 * time.Second
+
 // permissionLook is the tool call a role's hook recorded, when it is certainly the one on the role's screen: the session file says the
-// session waits on a permission prompt, and one call, and only one, of that very session was recorded at or after the moment the
-// wait began (a second of slack: the hook and the session file are written within a moment of each other), one of them within that
-// moment of it. Claude Code does not write the session file again while the session stays waiting on a permission prompt, so the
-// prompt that follows an answered one in a queue has the first prompt's wait start: a different call recorded since is
-// the next prompt's, or a parallel request's, and nothing says which of them is on the screen. Then there is nil, and no card, and a
-// card told before the second call was recorded stops matching the moment it is (its fingerprint covers the call). So do no record,
-// one of another session, one of an earlier prompt, and a file that had to let go of a record that may have been of this wait.
+// session waits on a permission prompt, and one call, and only one, was recorded for the role at or after the moment the wait began
+// less a few seconds (the same call twice is one), and that call is of this session and was recorded within a second of the wait's
+// start. Claude Code does not write the session file again while a session stays waiting on a permission prompt, so the prompt
+// that follows an answered one in a queue has the first prompt's wait start: a different call recorded since is the next prompt's, or a
+// parallel request's, and nothing says which of them is on the screen. Then there is nil, and no card, and a card told before the
+// second call was recorded stops matching the moment it is (its fingerprint covers the call). So do no record, one of an earlier
+// prompt, and a file that had to let go of a record that may have been of this wait, or never had it (an input it could not read).
 func (s *Shift) permissionLook(name string, sess *registry.Session) *AskedPermission {
 	if sess == nil || !hookRole(name) || waitKind(sess) != WaitPermission || sess.StatusUpdatedAt <= 0 {
 		return nil
@@ -361,7 +392,7 @@ func (s *Shift) permissionLook(name string, sess *registry.Session) *AskedPermis
 	}
 
 	since := sess.StatusSince()
-	from := since.Add(-hookSkew)
+	from := since.Add(-permissionBefore)
 
 	if !have.Lost.IsZero() && !have.Lost.Before(from) {
 		return nil
@@ -399,6 +430,50 @@ func (s *Shift) permissionLook(name string, sess *registry.Session) *AskedPermis
 	return found
 }
 
+// permissionTitles are the titles a permission prompt draws over the call it asks about; the goldens show the shell call's.
+var permissionTitles = []string{"Bash command"}
+
+// PermissionHinted reports whether a wait that is said to be of a question shows signs of being a permission prompt: a call recorded
+// for the role since the wait began (or one the file lost or could not read), or a permission prompt's title among the last lines of
+// the screen. A question wait is told and pressed only when none of these says otherwise: the session file is not written again while a
+// session stays waiting, so a permission prompt can follow an answered question under the same words.
+func (s *Shift) PermissionHinted(name string, since time.Time, screen string) bool {
+	if hookRole(name) {
+		var have permissionRecords
+
+		if readRecord(s.Crew.Layout().HookPermission(name), &have) {
+			from := since.Add(-permissionBefore)
+
+			if !have.Lost.IsZero() && !have.Lost.Before(from) {
+				return true
+			}
+
+			for _, r := range have.Records {
+				if !r.At.Before(from) {
+					return true
+				}
+			}
+		}
+	}
+
+	lines := strings.Split(screen, "\n")
+	if len(lines) > nowLines {
+		lines = lines[len(lines)-nowLines:]
+	}
+
+	for _, l := range lines {
+		folded := foldFramed(l)
+
+		for _, title := range permissionTitles {
+			if strings.HasPrefix(folded, title) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 // How the prompt on a screen stands to the call a record is of.
 type screenMatch int
 
@@ -420,9 +495,10 @@ var frameChars = strings.NewReplacer("│", " ", "┃", " ", "╭", " ", "╮", 
 func foldFramed(s string) string { return oneLine(frameChars.Replace(s)) }
 
 // checkPermissionScreen says how the prompt on a screen stands to a recorded call. For a shell call it is strict: the prompt draws a
-// block under its "Bash command" title and above its question, and that block, folded, must be the command (and the call's
-// description, which the prompt draws under it) and nothing else: the whole of it, not the head of it somewhere among the last lines,
-// where a tool line of an earlier call stands too. The goldens show the command of a shell call so; they show no other tool, so no
+// block under its "Bash command" title and above its question, and that block must be the command, and the call's description under it
+// as lines of their own, and nothing else: the whole of it, not the head of it somewhere among the last lines, where a tool line of an
+// earlier call stands too. The title is the first one of the screen's last lines: text of a command that looks like a title can only make
+// the block longer, and so make it fail to match. The goldens show the command of a shell call so; they show no other tool, so no
 // other tool is held to a screen check and none is pressed (matchUnchecked).
 func checkPermissionScreen(p *AskedPermission, screen string, d *Dialog) screenMatch {
 	if p.Tool != "Bash" {
@@ -436,8 +512,8 @@ func checkPermissionScreen(p *AskedPermission, screen string, d *Dialog) screenM
 
 	title := -1
 
-	for i := len(lines) - 1; i >= 0; i-- {
-		if strings.HasPrefix(foldFramed(lines[i]), "Bash command") {
+	for i, l := range lines {
+		if strings.HasPrefix(foldFramed(l), "Bash command") {
 			title = i
 
 			break
@@ -463,27 +539,41 @@ func checkPermissionScreen(p *AskedPermission, screen string, d *Dialog) screenM
 		return matchNone
 	}
 
-	block := foldFramed(strings.Join(lines[title+1:end], " "))
+	var block []string
+
+	for _, l := range lines[title+1 : end] {
+		if f := foldFramed(l); f != "" {
+			block = append(block, f)
+		}
+	}
+
 	command := foldFramed(strings.ReplaceAll(p.Input, strings.TrimSpace(newlineMark), " "))
+	desc := foldFramed(p.Desc)
+	cut := strings.HasSuffix(p.Input, "…")
+	best := matchNone
 
-	want := command
-	if p.Desc != "" {
-		want += " " + foldFramed(p.Desc)
+	// The command is the first lines of the block and the description the rest, the boundary between them a line's end: a command and a
+	// description that run together on a line are not the command and the description the record has.
+	for k := 1; k <= len(block); k++ {
+		head, tail := strings.Join(block[:k], " "), strings.Join(block[k:], " ")
+
+		switch {
+		case head == command && tail == desc && !cut:
+			return matchWhole
+		case unspaced(head) == unspaced(command) && unspaced(tail) == unspaced(desc):
+			// The same words, broken through a word: whole, but not word for word.
+			best = matchPartial
+		case cut && tail == desc && strings.HasPrefix(unspaced(head), unspaced(strings.TrimSuffix(command, "…"))):
+			// A command that was cut in the record: the prompt shows more of it than the record has.
+			best = matchPartial
+		}
 	}
 
-	switch {
-	case block == want && !strings.HasSuffix(p.Input, "…"):
-		return matchWhole
-	case strings.ReplaceAll(block, " ", "") == strings.ReplaceAll(want, " ", ""):
-		// The same words, broken through a word: whole, but not word for word.
-		return matchPartial
-	case strings.HasSuffix(p.Input, "…") && strings.HasPrefix(block, strings.TrimSuffix(command, "…")):
-		// A command that was cut in the record: the prompt shows more of it than the record has.
-		return matchPartial
-	}
-
-	return matchNone
+	return best
 }
+
+// unspaced is a text without its spaces: wrapped through a word, it is what it was.
+func unspaced(s string) string { return strings.ReplaceAll(s, " ", "") }
 
 // apart says how far a moment is from another, in words: "1m0s before".
 func apart(at, from time.Time) string {
@@ -560,6 +650,7 @@ func askedDialog(q *AskedQuestion, screen *Dialog) *Dialog {
 	shown.Question = d.Question
 	shown.Options = slices.Clone(screen.Options)
 	shown.Multi = shown.Multi || q.Questions[0].MultiSelect
+	shown.Asked = true
 
 	for i := range shown.Options {
 		if shown.Options[i].Detail == "" {

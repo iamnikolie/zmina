@@ -82,11 +82,12 @@ func TestPermissionRequestHookIsSilentAndRecordsNothingElse(t *testing.T) {
 		stdin   string
 		args    []string
 		records bool
-		// permission: another tool's call is the role's permission record, not a question.
+		// permission: another tool's call is the role's permission record, not a question; an input that cannot be read is noted there
+		// as a call lost.
 		permission bool
 	}{
 		"another tool":     {strings.Replace(permissionAsk, "AskUserQuestion", "Bash", 1), []string{"--role", "dev"}, false, true},
-		"not json":         {"not json", []string{"--role", "dev"}, false, false},
+		"not json":         {"not json", []string{"--role", "dev"}, false, true},
 		"nothing":          {"", []string{"--role", "dev"}, false, false},
 		"no role":          {permissionAsk, nil, false, false},
 		"a path as a role": {permissionAsk, []string{"--role", "../dev"}, false, false},
@@ -114,8 +115,8 @@ func TestPermissionRequestHookIsSilentAndRecordsNothingElse(t *testing.T) {
 	}
 }
 
-// An input too long to be a question is read to its end, so Claude Code writes into no closed pipe, and records
-// nothing.
+// An input too long to be read is read to its end, so Claude Code writes into no closed pipe. It records no call and no question; it
+// notes that a call was lost, at that moment, so that the prompt it may have been for is no one's.
 func TestPermissionRequestHookReadsALongInput(t *testing.T) {
 	crewFile := testCrew(t, "")
 	body := strings.Repeat("x", hookInputMax+(1<<20))
@@ -130,7 +131,14 @@ func TestPermissionRequestHookReadsALongInput(t *testing.T) {
 
 	assert.Zero(t, in.Len(), "stdin read to its end")
 	assert.Empty(t, out.String()+errb.String())
-	assert.NoDirExists(t, filepath.Join(filepath.Dir(crewFile), "hooks"))
+
+	l := crew.Layout{Dir: filepath.Dir(crewFile)}
+	assert.NoFileExists(t, l.HookQuestion("dev"))
+
+	raw, err := os.ReadFile(l.HookPermission("dev"))
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"records":[]`, "no call")
+	assert.Contains(t, string(raw), `"lost":"`, "and the file says it lost one, now")
 }
 
 // A crew whose directory is not there gets no directory made by a hook.

@@ -384,11 +384,25 @@ func pressChoice(s *shift.Shift, role string, n int, id string, check bool, befo
 	if d.ID != v.Dialog.ID {
 		return nil, time.Time{}, errors.New("the question on its screen changed: look again")
 	}
-	// A card presses a permission prompt only when the call it shows is certainly the prompt's: recorded alone for this wait, and its
-	// words the very block the prompt draws. The record and the screen are read again here, whatever the card was told.
-	if before != nil && v.WaitingFor == shift.WaitPermission && (d.Subject == "" || !d.SubjectChecked || d.SubjectCut) {
-		return nil, time.Time{}, errors.New("nothing shows that this permission prompt is the call the card showed, or the card could not show it whole: " +
-			"answer it in a terminal")
+	// A card presses only what it is certainly the card of. A permission prompt: the call it shows is the only one recorded for this
+	// wait and is the very block the prompt draws. A question: the one the hook recorded for this wait, shown on the screen, with no sign
+	// of a permission prompt under the same words (the session file is not written again while a session stays waiting). The record and
+	// the screen are read again here, whatever the card was told.
+	if before != nil {
+		switch v.WaitingFor {
+		case shift.WaitPermission:
+			if d.Subject == "" || !d.SubjectChecked || d.SubjectCut {
+				return nil, time.Time{}, errors.New("nothing shows that this permission prompt is the call the card showed, or the card could not show it " +
+					"whole: answer it in a terminal")
+			}
+		case shift.WaitQuestion:
+			if !v.Dialog.Asked || s.PermissionHinted(role, v.Since, screen) {
+				return nil, time.Time{}, errors.New("nothing shows that this is the question the card showed (it is not the one the role asked, or " +
+					"it looks like a permission prompt): answer it in a terminal")
+			}
+		default:
+			return nil, time.Time{}, errors.New("the session does not say what it waits on: answer it in a terminal")
+		}
 	}
 	if before != nil {
 		if err := before(d, v.Since); err != nil {
