@@ -50,9 +50,11 @@ type pluginRow struct {
 	Timeout         string      `json:"timeout"`
 	DialogAfter     string      `json:"dialog_after"`
 	Last            *pluginLast `json:"last,omitempty"`
-	// Open is what it was told of that is still open, Waiting the events waiting for another try.
-	Open    int `json:"open"`
-	Waiting int `json:"waiting"`
+	// Open is what it was told of that is still open, Waiting the events waiting for another try. Partial is what the last
+	// look could not read, empty when it read all.
+	Open    int    `json:"open"`
+	Waiting int    `json:"waiting"`
+	Partial string `json:"partial,omitempty"`
 }
 
 // pluginRows reads every plugin of the crew: where its program is, and what its told file says of its last run.
@@ -81,7 +83,7 @@ func pluginRows(c *crew.Crew) ([]pluginRow, []string) {
 			row.Last = &pluginLast{At: l.At, Event: l.Event, ID: l.ID, OK: l.OK, Error: l.Err}
 		}
 
-		row.Open, row.Waiting = st.Open(), len(st.Queue)
+		row.Open, row.Waiting, row.Partial = st.Open(), len(st.Queue), shift.QuoteN(st.Partial, 200)
 		rows = append(rows, row)
 	}
 
@@ -173,6 +175,10 @@ func lastWords(c *crew.Crew, r pluginRow) string {
 
 	if r.Waiting > 0 {
 		out += fmt.Sprintf(" · %d waiting for a retry", r.Waiting)
+	}
+
+	if r.Partial != "" {
+		out += " · last look partial: " + r.Partial
 	}
 
 	return out

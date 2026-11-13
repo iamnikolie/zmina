@@ -1,12 +1,15 @@
 package plugin
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/iamnikolie/zmina/internal/fsx"
@@ -56,8 +59,15 @@ type Entry struct {
 	Role   string    `json:"role,omitempty"`
 	Opened time.Time `json:"opened,omitzero"`
 	Told   time.Time `json:"told,omitzero"`
-	// Dropped: every try failed; the plugin was never told, so it is never told of the end.
+	// Dropped: every try failed; the plugin was never told, so it is never told of the end. Revive arms one more go for a
+	// dropped thing that is still open (Revived: it has had it), taken once the plugin has taken another event, so a plugin
+	// that was down is told what it missed, and a thing it cannot take is not tried for ever.
 	Dropped bool `json:"dropped,omitempty"`
+	Revive  bool `json:"revive,omitempty"`
+	Revived bool `json:"revived,omitempty"`
+	// Escalated: it was told as ask and then held a role up, and the plugin has been told once more as blocking, or the try
+	// to was given up.
+	Escalated bool `json:"escalated,omitempty"`
 	// Closed is when its answered went out (or was given up, or the plugin takes none); zero while it is open.
 	Closed time.Time `json:"closed,omitzero"`
 }
@@ -95,11 +105,63 @@ type State struct {
 	Told map[string]*Entry `json:"told,omitempty"`
 	// Queue is the events waiting for another try.
 	Queue []Queued `json:"queue,omitempty"`
-	// Seen is when each question on a role's screen was first seen (DialogKey): it is told once it has stood dialog_after.
-	Seen map[string]time.Time `json:"seen,omitempty"`
+	// Seen is each question on a role's screen when it was first seen (DialogKey): it is told once it has stood dialog_after.
+	Seen map[string]Sight `json:"seen,omitempty"`
+	// Partial is what the last look could not read (Gaps.Words), empty when it read everything; Problem is why the plugin's
+	// program could not be run at the last delivery, empty when it could.
+	Partial string `json:"partial,omitempty"`
+	Problem string `json:"problem,omitempty"`
 	// Last is the newest run, Failed the newest run that failed.
 	Last   *Last `json:"last,omitempty"`
 	Failed *Last `json:"failed,omitempty"`
+}
+
+// Sight is a question on a role's screen as it was first seen: when, and which stand of the role's session it is of (the moment
+// the session began waiting): a role that answers and is asked again within a beat has a new stand, whatever the words.
+type Sight struct {
+	First time.Time `json:"first"`
+	Since time.Time `json:"since,omitzero"`
+	Role  string    `json:"role,omitempty"`
+}
+
+// Gaps is what a look could not read: the ids of items whose files did not read, and the roles whose screens could not be
+// seen. A thing in a gap is not judged ended, nor forgotten: only its own entries wait, and the rest of the look is as good as
+// it was.
+type Gaps struct {
+	Items map[string]bool
+	Roles map[string]bool
+}
+
+// LaterAll is the key of Gaps.Items that stands for every parked item: their files do not say which did not read.
+const LaterAll = "L-*"
+
+// Hides reports whether the look could not see what an entry is about.
+func (g Gaps) Hides(e Entry) bool {
+	if e.Kind == Dialog {
+		return g.Roles[e.Role]
+	}
+
+	return g.Items[e.ID] || strings.HasPrefix(e.ID, "L-") && g.Items[LaterAll]
+}
+
+// Empty reports a look that read everything.
+func (g Gaps) Empty() bool { return len(g.Items) == 0 && len(g.Roles) == 0 }
+
+// Words says what was not read, for doctor and plugin ls: `A-3, role dev`.
+func (g Gaps) Words() string {
+	var out []string
+
+	for id := range g.Items {
+		out = append(out, id)
+	}
+
+	for role := range g.Roles {
+		out = append(out, "role "+role)
+	}
+
+	sort.Strings(out)
+
+	return strings.Join(out, ", ")
 }
 
 // ItemKey names an item for the ledger: its id. A task that waits on the owner a second time has the same id, and is a new
@@ -138,30 +200,37 @@ func Load(path string) (*State, error) {
 	return st, nil
 }
 
-// Save writes the file whole or not at all.
+// Save writes the file whole or not at all, and not at all when it already says the same: a beat that changed nothing writes
+// nothing.
 func (s *State) Save(path string) error {
 	raw, err := json.Marshal(s)
 	if err != nil {
 		return err
 	}
 
+	raw = append(raw, '\n')
+
+	if have, err := os.ReadFile(path); err == nil && bytes.Equal(have, raw) {
+		return nil
+	}
+
 	if err := fsx.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
 
-	return fsx.WriteFile(path, append(raw, '\n'), 0o600)
+	return fsx.WriteFile(path, raw, 0o600)
 }
 
-// Observe notes what a look found open: when the plugin was first looked at, and when each question on a role's screen was
-// first seen. A question seen before and gone, and never told, is forgotten, so one that comes back stands anew. whole is
-// false when the look may not have found everything (a file did not read), and then nothing is forgotten.
-func (s *State) Observe(things []Thing, now time.Time, whole bool) {
+// Observe notes what a look found open: when the plugin was first looked at, and when each question on a role's screen was first
+// seen, and of which stand of its session. A question seen before and gone, and never told, is forgotten, so one that comes
+// back stands anew; so is one whose session left waiting and began again. What a gap hides is not forgotten.
+func (s *State) Observe(things []Thing, now time.Time, gaps Gaps) {
 	if s.Since.IsZero() {
 		s.Since = now.Add(-recent)
 	}
 
 	if s.Seen == nil {
-		s.Seen = map[string]time.Time{}
+		s.Seen = map[string]Sight{}
 	}
 
 	standing := map[string]bool{}
@@ -173,17 +242,13 @@ func (s *State) Observe(things []Thing, now time.Time, whole bool) {
 
 		standing[t.Key] = true
 
-		if _, ok := s.Seen[t.Key]; !ok {
-			s.Seen[t.Key] = now
+		if sight, ok := s.Seen[t.Key]; !ok || !t.Opened.IsZero() && !sight.Since.IsZero() && !t.Opened.Equal(sight.Since) {
+			s.Seen[t.Key] = Sight{First: now, Since: t.Opened, Role: t.Role}
 		}
 	}
 
-	if !whole {
-		return
-	}
-
-	for key := range s.Seen {
-		if !standing[key] {
+	for key, sight := range s.Seen {
+		if !standing[key] && !gaps.Roles[sight.Role] {
 			delete(s.Seen, key)
 		}
 	}
@@ -191,26 +256,37 @@ func (s *State) Observe(things []Thing, now time.Time, whole bool) {
 	// A question the plugin was never told of (every try failed) that has left the screen is not held against the next one that
 	// has the same words.
 	for key, e := range s.Told {
-		if e.Dropped && e.Kind == Dialog && !standing[key] {
+		if e.Dropped && e.Kind == Dialog && !standing[key] && !gaps.Hides(*e) {
 			delete(s.Told, key)
 		}
 	}
 }
 
-// Prune forgets what has been closed or dropped for Keep, and a seen question older than Keep.
-func (s *State) Prune(now time.Time) {
+// Prune forgets what has been closed or dropped for Keep, and a seen question older than Keep. A thing that is still open is
+// never forgotten, however long ago it was dropped: forgotten, it would be told as new.
+func (s *State) Prune(now time.Time, open func(key string) bool) {
 	for key, e := range s.Told {
 		switch {
 		case !e.Closed.IsZero() && now.Sub(e.Closed) > Keep:
 			delete(s.Told, key)
-		case e.Dropped && now.Sub(e.Told) > Keep:
+		case e.Dropped && now.Sub(e.Told) > Keep && (open == nil || !open(key)):
 			delete(s.Told, key)
 		}
 	}
 
-	for key, at := range s.Seen {
-		if now.Sub(at) > Keep {
+	for key, sight := range s.Seen {
+		if now.Sub(sight.First) > Keep {
 			delete(s.Seen, key)
+		}
+	}
+}
+
+// Revive arms one more go for what was dropped and is still open (open says which are): called once the plugin has taken an
+// event, which says it can again. A thing that has had its go and was dropped again stays dropped.
+func (s *State) Revive(open func(key string) bool) {
+	for key, e := range s.Told {
+		if e.Dropped && !e.Revived && !e.Revive && open(key) {
+			e.Revive = true
 		}
 	}
 }
@@ -276,6 +352,9 @@ func (s *State) Fail(d Due, line string, now time.Time, reason string) (dropped 
 			if e, ok := s.Told[d.Key]; ok {
 				e.Closed = now
 			}
+		} else if prev, ok := s.Told[d.Key]; ok && !prev.Dropped && prev.Closed.IsZero() {
+			// A try to tell it once more (as blocking) that failed: what it was told as before stands.
+			prev.Escalated = true
 		} else {
 			e := d.Entry
 			e.Told, e.Dropped = now, true

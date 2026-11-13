@@ -456,23 +456,192 @@ func TestPluginsDeadline(t *testing.T) {
 	assert.Equal(t, "timed out after 1s", st.Last.Err)
 }
 
-// A program that is not there is a failure like any other, retried and dropped; it never stops the beat.
-func TestPluginsMissingProgram(t *testing.T) {
+// A program that is not there is a mistake of the setup, not of an event: no try is spent, nothing is dropped, the problem is
+// said, and what waits goes once the program is there.
+func TestPluginsMissingProgramBurnsNoTries(t *testing.T) {
 	file := pluginCrew(t, "  dev: {}\n", "  - {name: ghost, quiet_when_active: off}\n")
 	now := time.Now()
 
 	deliver(t, file, now)
 
-	_, _, err := zm(t, file, "todo", "add", "Which name?", "--from", "dev")
+	out, _, err := zm(t, file, "todo", "add", "Which name?", "--from", "dev", "--blocks", "dev")
+	require.NoError(t, err)
+	id := askID(t, out)
+
+	// An hour of beats, and more: the events are not dropped.
+	for _, m := range []int{1, 2, 10, 30, 90} {
+		deliver(t, file, now.Add(time.Duration(m)*time.Minute))
+	}
+
+	told := filepath.Join(filepath.Dir(file), "plugins", "ghost.told.json")
+	st, err := plugin.Load(told)
+	require.NoError(t, err)
+	assert.Empty(t, st.Queue, "no try was spent")
+	assert.Empty(t, st.Told, "nothing dropped, nothing told")
+	assert.Contains(t, st.Problem, "program not found")
+
+	evs, err := eventLog(mustCrew(t, file)).Read(events.Filter{})
+	require.NoError(t, err)
+
+	for _, e := range evs {
+		assert.NotEqual(t, "plugin-failed", e.Event)
+	}
+
+	// doctor and plugin ls say it as long as it lasts.
+	dout, _, _ := zm(t, file, "doctor")
+	assert.Regexp(t, `warn +plugins +ghost: program not found`, dout)
+
+	// The program is there now: what waited is told.
+	log := recorder(t, file, "ghost", "")
+	deliver(t, file, now.Add(2*time.Hour))
+	assert.Equal(t, []string{"blocking " + id}, toldIDs(t, log))
+
+	st, err = plugin.Load(told)
+	require.NoError(t, err)
+	assert.Empty(t, st.Problem, "the problem is gone with it")
+}
+
+// What a plugin was given up on while it was down, and is still open, gets one more go once the plugin takes another event; a
+// thing it can never take is not tried for ever.
+func TestPluginsDroppedThingsAreToldAgainWhenThePluginIsBack(t *testing.T) {
+	file := pluginCrew(t, "  dev: {}\n", "  - {name: flaky, quiet_when_active: off}\n")
+	up := filepath.Join(filepath.Dir(file), "up")
+	log := recorder(t, file, "flaky", "[ -f "+up+" ] || exit 1")
+	now := time.Now()
+
+	deliver(t, file, now)
+
+	out, _, err := zm(t, file, "todo", "add", "Which name?", "--from", "dev", "--blocks", "dev")
+	require.NoError(t, err)
+	first := askID(t, out)
+
+	// Down: four tries, then given up.
+	for _, m := range []int{1, 3, 10, 30} {
+		deliver(t, file, now.Add(time.Duration(m)*time.Minute))
+	}
+
+	assert.Len(t, told(t, log), 4)
+
+	st, err := plugin.Load(filepath.Join(filepath.Dir(file), "plugins", "flaky.told.json"))
+	require.NoError(t, err)
+	require.True(t, st.Told[first].Dropped)
+
+	// Back: another ask is taken, and the first, still open, has one more go.
+	require.NoError(t, os.WriteFile(up, nil, 0o600))
+
+	out, _, err = zm(t, file, "todo", "add", "Which colour?", "--from", "dev", "--blocks", "dev")
+	require.NoError(t, err)
+	second := askID(t, out)
+
+	deliver(t, file, now.Add(time.Hour))
+	deliver(t, file, now.Add(time.Hour+time.Minute))
+
+	ids := toldIDs(t, log)
+	assert.Equal(t, "blocking "+second, ids[4])
+	assert.Equal(t, "blocking "+first, ids[len(ids)-1], "told again")
+
+	st, err = plugin.Load(filepath.Join(filepath.Dir(file), "plugins", "flaky.told.json"))
+	require.NoError(t, err)
+	assert.False(t, st.Told[first].Dropped)
+	assert.Equal(t, 2, st.Open())
+}
+
+// An ask answered between the look and the run is not paged: it is read again right before it is told.
+func TestPluginsReadAnItemAgainBeforeTellingIt(t *testing.T) {
+	file := pluginCrew(t, "  dev: {}\n", "  - {name: pager, quiet_when_active: off}\n")
+	asksDir := filepath.Join(filepath.Dir(file), "asks")
+	// Told of A-1, the plugin's own run answers A-2 (as the owner might, at the keyboard, while it works).
+	log := recorder(t, file, "pager", `case "$line" in *'"id":"A-1"'*) sed 's/"state": "open"/"state": "answered"/' `+asksDir+
+		`/A-2.json > `+asksDir+`/A-2.tmp && mv `+asksDir+`/A-2.tmp `+asksDir+`/A-2.json;; esac`)
+	now := time.Now()
+
+	deliver(t, file, now)
+
+	_, _, err := zm(t, file, "todo", "add", "First?", "--from", "dev")
+	require.NoError(t, err)
+	_, _, err = zm(t, file, "todo", "add", "Second?", "--from", "dev")
 	require.NoError(t, err)
 
 	deliver(t, file, now.Add(time.Minute))
+	assert.Equal(t, []string{"ask A-1"}, toldIDs(t, log), "A-2 was answered while A-1 was told: not paged")
 
-	st, err := plugin.Load(filepath.Join(filepath.Dir(file), "plugins", "ghost.told.json"))
+	assert.True(t, itemOpen(mustCrew(t, file), "A-1"))
+	assert.False(t, itemOpen(mustCrew(t, file), "A-2"))
+	assert.True(t, itemOpen(mustCrew(t, file), "A-9"), "an item it cannot read is not held back")
+}
+
+// An ask told as ask that then holds a role up is told once more, as blocking.
+func TestPluginsTellAnAskThatBecomesBlocking(t *testing.T) {
+	file := pluginCrew(t, "  dev: {}\n", "  - {name: pager, quiet_when_active: off}\n")
+	log := recorder(t, file, "pager", "")
+	now := time.Now()
+
+	deliver(t, file, now)
+
+	out, _, err := zm(t, file, "todo", "add", "Which name?", "--from", "dev")
 	require.NoError(t, err)
-	require.NotNil(t, st.Failed)
-	assert.Contains(t, st.Failed.Err, "program not found")
-	assert.Len(t, st.Queue, 1)
+	id := askID(t, out)
+
+	deliver(t, file, now.Add(time.Minute))
+
+	_, _, err = zm(t, file, "todo", "edit", id, "--blocks", "dev")
+	require.NoError(t, err)
+
+	deliver(t, file, now.Add(2*time.Minute))
+	deliver(t, file, now.Add(3*time.Minute))
+
+	assert.Equal(t, []string{"ask " + id, "blocking " + id}, toldIDs(t, log))
+	assert.Equal(t, true, told(t, log)[1].Line["blocking"])
+}
+
+// One ask file that does not read withholds only its own entry: the rest of the look is judged as ever, and ls and doctor say the
+// look was partial.
+func TestPluginsAPartialLookWithholdsOnlyItsOwn(t *testing.T) {
+	file := pluginCrew(t, "  dev: {}\n", "  - {name: pager, quiet_when_active: off}\n")
+	log := recorder(t, file, "pager", "")
+	now := time.Now()
+
+	deliver(t, file, now)
+
+	for _, q := range []string{"One?", "Two?"} {
+		_, _, err := zm(t, file, "todo", "add", q, "--from", "dev")
+		require.NoError(t, err)
+	}
+
+	deliver(t, file, now.Add(time.Minute))
+	require.Equal(t, []string{"ask A-1", "ask A-2"}, toldIDs(t, log))
+
+	// A-2's file stops reading; A-1 is answered.
+	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(file), "asks", "A-2.json"), []byte("{"), 0o600))
+	_, _, err := zm(t, file, "todo", "answer", "A-1", "one")
+	require.NoError(t, err)
+
+	deliver(t, file, now.Add(2*time.Minute))
+	assert.Equal(t, []string{"ask A-1", "ask A-2", "answered A-1"}, toldIDs(t, log), "A-1's end goes; A-2 is not judged")
+
+	var rows []pluginRow
+
+	out, _, err := zm(t, file, "plugin", "ls", "--json")
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal([]byte(out), &rows))
+	assert.Equal(t, "A-2", rows[0].Partial)
+
+	out, _, err = zm(t, file, "plugin", "ls")
+	require.NoError(t, err)
+	assert.Contains(t, out, "last look partial: A-2")
+
+	out, _, _ = zm(t, file, "doctor")
+	assert.Regexp(t, `plugins +pager: .*last look partial: A-2`, out)
+
+	// The file reads again, and the ask is answered: its end goes.
+	require.NoError(t, os.Remove(filepath.Join(filepath.Dir(file), "asks", "A-2.json")))
+
+	deliver(t, file, now.Add(3*time.Minute))
+	assert.Equal(t, "answered A-2", toldIDs(t, log)[3], "gone: the look is whole again")
+
+	out, _, err = zm(t, file, "plugin", "ls")
+	require.NoError(t, err)
+	assert.NotContains(t, out, "partial")
 }
 
 // A run that outlasts its beat keeps its plugin's lock: the next delivery skips that plugin and serves the others.

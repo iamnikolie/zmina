@@ -44,9 +44,9 @@ func (a *app) pluginsBeat(now time.Time) {
 // pluginWorld is what is open now, read once for every plugin of a beat.
 type pluginWorld struct {
 	crew *crew.Crew
-	// things are what a plugin may be told of; whole says they are all of it.
+	// things are what a plugin may be told of; gaps is what the look could not read (it judges nothing of those).
 	things  []plugin.Thing
-	whole   bool
+	gaps    plugin.Gaps
 	items   map[string]todoItem
 	dialogs map[string]plugin.DialogFacts
 	// ownerActive is when the owner was last at the machine, read the first time it is asked.
@@ -60,8 +60,8 @@ func (a *app) pluginWorld(c *crew.Crew, now time.Time) (*pluginWorld, error) {
 
 	err := a.readState(func(s *shift.Shift) error {
 		views := s.Views()
-		items, problems := todo(c, now, views)
-		w.whole = len(problems) == 0
+		items, _ := todo(c, now, views)
+		w.gaps = readGaps(c)
 
 		for _, it := range items {
 			key := plugin.ItemKey(it.ID)
@@ -73,14 +73,14 @@ func (a *app) pluginWorld(c *crew.Crew, now time.Time) (*pluginWorld, error) {
 		for _, v := range views {
 			// A role tmux could not be asked about may have a question up: nothing is judged ended by its absence.
 			if v.State == shift.PresenceUnknown {
-				w.whole = false
+				w.gaps.Roles[v.Role] = true
 
 				continue
 			}
 
 			facts, ok, known := standingDialog(s, c, v)
 			if !known {
-				w.whole = false
+				w.gaps.Roles[v.Role] = true
 			}
 
 			if !ok {
@@ -115,6 +115,62 @@ func (a *app) pluginWorld(c *crew.Crew, now time.Time) (*pluginWorld, error) {
 	}
 
 	return w, nil
+}
+
+// readGaps is what the files of the todo's sources did not read: an ask or a task whose file does not read is named by its id,
+// the parked list as a whole when one of its files does not. What a gap hides is not judged ended, and is not forgotten.
+func readGaps(c *crew.Crew) plugin.Gaps {
+	g := plugin.Gaps{Items: map[string]bool{}, Roles: map[string]bool{}}
+
+	if bad, _ := askStore(c).Unreadable(); len(bad) > 0 {
+		for name := range bad {
+			g.Items[strings.TrimSuffix(name, ".json")] = true
+		}
+	}
+
+	if bad, _ := taskStore(c).Unreadable(); len(bad) > 0 {
+		for name := range bad {
+			g.Items[strings.TrimSuffix(name, ".json")] = true
+		}
+	}
+
+	if _, problems, _ := laterStore(c).Scan(); len(problems) > 0 {
+		g.Items[plugin.LaterAll] = true
+	}
+
+	return g
+}
+
+// isOpen reports whether the thing of a ledger key is open in this look.
+func (w *pluginWorld) isOpen(key string) bool {
+	if _, ok := w.items[key]; ok {
+		return true
+	}
+
+	_, ok := w.dialogs[key]
+
+	return ok
+}
+
+// itemOpen reads an item again, right before it is told: an ask answered since the look, a task that has left the todo, a parked
+// item put back, is not paged. A file that does not read is not a reason to hold it back.
+func itemOpen(c *crew.Crew, id string) bool {
+	switch {
+	case strings.HasPrefix(id, "A-"):
+		a, err := askStore(c).Get(id)
+
+		return err != nil || a.Open()
+	case strings.HasPrefix(id, "T-"):
+		t, err := taskStore(c).Get(id)
+
+		return err != nil || t.State == task.Waiting && t.On == "" && !t.Answered.After(t.Updated) && !t.Ignored.After(t.Updated)
+	case strings.HasPrefix(id, "L-"):
+		it, err := laterStore(c).Get(id)
+
+		return err != nil || it.State == later.Parked && !it.Back.IsZero()
+	}
+
+	return true
 }
 
 // standingDialog is the question a role's screen shows that a plugin can be told of: the dialog its choose command would
@@ -345,9 +401,10 @@ func (a *app) pluginDeliverOne(c *crew.Crew, pl crew.Plugin, w *pluginWorld, now
 		say("%v", lerr)
 	}
 
-	st.Observe(w.things, now, w.whole)
+	st.Observe(w.things, now, w.gaps)
+	st.Partial = w.gaps.Words()
 
-	plan := plugin.Make(plugin.Inputs{Plugin: pl, State: st, Things: w.things, Whole: w.whole, Now: now, OwnerActive: w.ownerActive})
+	plan := plugin.Make(plugin.Inputs{Plugin: pl, State: st, Things: w.things, Gaps: w.gaps, Now: now, OwnerActive: w.ownerActive})
 
 	for _, key := range plan.Cancel {
 		st.Cancel(key)
@@ -360,7 +417,7 @@ func (a *app) pluginDeliverOne(c *crew.Crew, pl crew.Plugin, w *pluginWorld, now
 	}
 
 	save := func() {
-		st.Prune(clock())
+		st.Prune(clock(), w.isOpen)
 
 		if err := st.Save(path); err != nil {
 			say("not saved: %v", err)
@@ -370,25 +427,42 @@ func (a *app) pluginDeliverOne(c *crew.Crew, pl crew.Plugin, w *pluginWorld, now
 	prog, perr := plugin.Resolve(pl, c.Layout().Dir)
 	b := plugin.Builder{Crew: c.Path, Plugin: pl.Name, Clean: shift.QuoteN}
 
+	// A program that does not resolve is a mistake of the setup, not of an event: nothing is run, no try is spent and nothing is
+	// dropped; what waits goes once the program is there. It is said once, and doctor and plugin ls say it as long as it lasts.
+	if perr != nil {
+		if st.Problem != perr.Error() {
+			st.Problem = perr.Error()
+			say("%v: nothing is told to it until it is there", perr)
+		}
+
+		plan.Send = nil
+	} else {
+		st.Problem = ""
+	}
+
+	taken := false
+
 	for _, d := range plan.Send {
+		// What was answered since the look is not paged.
+		if d.Kind != plugin.Answered && d.Kind != plugin.Dialog && !itemOpen(c, d.Entry.ID) {
+			st.Cancel(d.Key)
+
+			continue
+		}
+
 		line, ok := w.line(b, d, now)
 		if !ok {
 			continue
 		}
 
-		var res plugin.Result
-
-		if perr != nil {
-			res = plugin.Result{Code: -1, Err: perr}
-		} else {
-			res = plugin.Exec(plugin.Spec{Program: prog, Dir: c.Dir, Stdin: line, Timeout: pl.TimeoutD(),
-				Env: plugin.Env(os.Environ(), pl.Name, d.Kind, c.Path)})
-		}
+		res := plugin.Exec(plugin.Spec{Program: prog, Dir: c.Dir, Stdin: line, Timeout: pl.TimeoutD(),
+			Env: plugin.Env(os.Environ(), pl.Name, d.Kind, c.Path)})
 
 		at := clock()
 
 		if res.OK() {
 			st.Succeed(d, at)
+			taken = true
 			pluginLog(c, "plugin-told", pl.Name, d, "", res)
 			say("%s %s told", d.Kind, d.Entry.ID)
 			save()
@@ -406,6 +480,11 @@ func (a *app) pluginDeliverOne(c *crew.Crew, pl crew.Plugin, w *pluginWorld, now
 		}
 
 		break
+	}
+
+	// A plugin that took an event is up: what it was given up on while it was not, and is still open, gets one more go.
+	if taken {
+		st.Revive(w.isOpen)
 	}
 
 	save()

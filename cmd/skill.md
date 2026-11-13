@@ -1587,12 +1587,20 @@ one small file a plugin, apart from `state.json` (nothing in the state moved), p
 that holds a role up is told, as `notify_on: blocking` does); `notify_again` has no counterpart: an event goes once. A run
 that fails (non-zero, past the deadline, a program that is not there) is tried again after 1, 5 and 15 minutes, then dropped
 with one event `plugin-failed` in the log; a delivery is `plugin-told` there, each with the plugin's stdout and stderr cut to
-4 KB. An event queued for a retry whose item was closed meanwhile is never sent.
+4 KB. An event queued for a retry whose item was closed meanwhile is never sent, and an item is read
+again right before it is told, so one answered since the look is not paged. A program that does not resolve (not found,
+refused) is a mistake of the setup, not of an event: nothing runs, no try is spent and nothing is dropped; `plugin ls` and
+`doctor` say so, and what waits goes once it resolves. An item dropped after its tries that is still open gets one more go once
+the plugin has taken another event, and is never forgotten while it is open. An item told as `ask` that later holds a role up
+is told once more, as `blocking`: a plugin keeps one card per `id` and upgrades it. A look that could not read an ask or task
+file, or a role's screen, withholds only the entries of that item or role (`last look partial` in `plugin ls` and `doctor`);
+the rest is judged as ever.
 
 `quiet_when_active`: while the owner was at the machine within the span — he typed a line to a role (Chat, a terminal, Remote
 Control; the activity that postpones a restart) or answered in a terminal (`plugins/owner.json`; an answer through a plugin
 does not count) — `ask`, `blocking`, `dialog` and `reminder` are held for that plugin, and sent when the span passes if the
-item is still open, so what he answered at the keyboard never pages. `answered` is never held.
+item is still open, so what he answered at the keyboard never pages. The hold is bound by the item's age: one that has waited
+the span (a dialog: has stood it) is sent whatever he does, so a busy owner never starves a push. `answered` is never held.
 
 | Command | Does |
 |---|---|

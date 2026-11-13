@@ -52,10 +52,10 @@ func (d Due) QueueKey() string {
 type Inputs struct {
 	Plugin crew.Plugin
 	State  *State
-	// Things are what is open now. Whole says it is all of it: a thing told of that is not among them has ended; with Whole
-	// false (a file did not read) nothing is judged ended.
+	// Things are what is open now. A thing told of that is not among them has ended, unless Gaps says the look could not see
+	// it (a file did not read, a screen could not be seen): then it is neither judged ended nor forgotten.
 	Things []Thing
-	Whole  bool
+	Gaps   Gaps
 	Now    time.Time
 	// OwnerActive is when the owner was last at the machine (zero: unknown), asked for only when it can matter.
 	OwnerActive func() time.Time
@@ -92,7 +92,7 @@ func Make(in Inputs) Plan {
 			continue
 		}
 
-		if q.Event != Answered && in.Whole {
+		if q.Event != Answered && !in.Gaps.Hides(q.Entry) {
 			if _, ok := open[q.Key]; !ok {
 				p.Cancel = append(p.Cancel, q.Key)
 
@@ -104,37 +104,36 @@ func Make(in Inputs) Plan {
 		p.Send = append(p.Send, Due{Key: keyOf(q), Kind: q.Event, Entry: q.Entry, Retry: &q})
 	}
 
-	// What ended: the plugin is told, once, if it takes answered and was told of it.
-	if in.Whole {
-		var ended []string
+	// What ended: the plugin is told, once, if it takes answered and was told of it. A question on a screen that was replaced by
+	// another stand of the session has ended too, whatever its words.
+	var ended []string
 
-		for key, e := range st.Told {
-			if e.Dropped || !e.Closed.IsZero() {
-				continue
-			}
-
-			if _, still := open[key]; still {
-				continue
-			}
-
-			if _, waiting := st.queued(ClosingKey(key)); waiting {
-				continue
-			}
-
-			ended = append(ended, key)
+	for key, e := range st.Told {
+		if e.Dropped || !e.Closed.IsZero() || in.Gaps.Hides(*e) {
+			continue
 		}
 
-		sort.Strings(ended)
-
-		for _, key := range ended {
-			if !pl.Takes(Answered) {
-				p.Settle = append(p.Settle, key)
-
-				continue
-			}
-
-			p.Send = append(p.Send, Due{Key: key, Kind: Answered, Entry: *st.Told[key]})
+		if t, still := open[key]; still && sameStand(t, *e) {
+			continue
 		}
+
+		if _, waiting := st.queued(ClosingKey(key)); waiting {
+			continue
+		}
+
+		ended = append(ended, key)
+	}
+
+	sort.Strings(ended)
+
+	for _, key := range ended {
+		if !pl.Takes(Answered) {
+			p.Settle = append(p.Settle, key)
+
+			continue
+		}
+
+		p.Send = append(p.Send, Due{Key: key, Kind: Answered, Entry: *st.Told[key]})
 	}
 
 	var fresh []Due
@@ -144,8 +143,9 @@ func Make(in Inputs) Plan {
 	asked := false
 	quiet := pl.QuietD()
 
-	held := func() bool {
-		if quiet <= 0 {
+	// A push is held while the owner is at the machine, but not for ever: once it has waited the span, it goes whatever he does.
+	held := func(since time.Time) bool {
+		if quiet <= 0 || !since.IsZero() && in.Now.Sub(since) >= quiet {
 			return false
 		}
 
@@ -160,36 +160,51 @@ func Make(in Inputs) Plan {
 	}
 
 	for _, t := range in.Things {
-		// Told, and open to the plugin still: nothing more. A question on a screen that was told and closed, and is on the screen
-		// again, is a new question: the same words, another time.
+		// Told, and open to the plugin still: nothing more — but an ask that then holds a role up is told once more, as blocking.
+		// A dropped one that has been given its one more go is told again. A question on a screen that was told and closed, and is
+		// on the screen again, is a new question: the same words, another time.
+		kind := KindFor(pl, t)
+		revived := false
+
 		if e, told := st.Told[t.Key]; told && e.Closed.IsZero() {
-			continue
+			switch {
+			case e.Dropped && e.Revive:
+				revived = true
+			case !e.Dropped && e.Kind == Ask && kind == Blocking && !e.Escalated:
+			default:
+				continue
+			}
 		}
 
 		if _, waiting := st.queued(t.Key); waiting {
 			continue
 		}
 
-		kind := KindFor(pl, t)
 		if kind == "" {
 			continue
 		}
 
+		since := t.Opened
+
 		switch {
 		case t.Class == DialogThing:
-			if in.Now.Sub(st.Seen[t.Key]) < pl.DialogAfterD()-Jitter {
+			sight := st.Seen[t.Key]
+			if in.Now.Sub(sight.First) < pl.DialogAfterD()-Jitter {
 				continue
 			}
+
+			since = sight.First
 		case kind != Blocking && t.Opened.Before(st.Since):
 			// Open before the plugin was first looked at: not new to it, unless it holds a role up.
 			continue
 		}
 
-		if held() {
+		if held(since) {
 			continue
 		}
 
-		fresh = append(fresh, Due{Key: t.Key, Kind: kind, Entry: Entry{ID: t.ID, Kind: kind, Role: t.Role, Opened: t.Opened}})
+		fresh = append(fresh, Due{Key: t.Key, Kind: kind, Entry: Entry{ID: t.ID, Kind: kind, Role: t.Role, Opened: t.Opened,
+			Revived: revived, Escalated: kind == Blocking && st.Told[t.Key] != nil}})
 	}
 
 	byKey := map[string]Thing{}
@@ -213,6 +228,12 @@ func Make(in Inputs) Plan {
 	}
 
 	return p
+}
+
+// sameStand reports whether a thing is the one an entry was made for: a question on a screen is a new one when the session's
+// wait began again, whatever its words.
+func sameStand(t Thing, e Entry) bool {
+	return t.Class != DialogThing || t.Opened.IsZero() || e.Opened.IsZero() || t.Opened.Equal(e.Opened)
 }
 
 // keyOf is the thing's key of a queued event: the closing key is the queue's name for an answered, the thing's is under it.

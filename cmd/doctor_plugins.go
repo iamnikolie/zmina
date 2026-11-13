@@ -36,9 +36,15 @@ func checkPlugins(c *crew.Crew, add func(name, level, format string, args ...any
 }
 
 func waitingWords(r pluginRow) string {
-	if r.Waiting == 0 {
-		return ""
+	out := ""
+
+	if r.Waiting > 0 {
+		out = fmt.Sprintf(" · %d waiting for a retry", r.Waiting)
 	}
 
-	return fmt.Sprintf(" · %d waiting for a retry", r.Waiting)
+	if r.Partial != "" {
+		out += " · last look partial: " + r.Partial + " (not judged until it reads)"
+	}
+
+	return out
 }
