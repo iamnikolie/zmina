@@ -143,7 +143,7 @@ func (s *Shift) restart(name string, r *crew.Role, now time.Time, tasks []string
 	}
 
 	mine := s.heldTasks(name)
-	if s.notesLanded(mine, act.Prompt) {
+	if s.noteLanded(name, mine, act.Prompt) {
 		// Not put down at the very beat after a turn's end: a reply in flight to the role would be lost.
 		if !begin || idle < restartDueSettle {
 			return ""
@@ -225,7 +225,7 @@ func (s *Shift) restartAtTurnEnd(name string, sess *registry.Session, now time.T
 	}
 
 	mine := s.heldTasks(name)
-	if s.notesLanded(mine, act.Prompt) {
+	if s.noteLanded(name, mine, act.Prompt) {
 		// It saved its note in this very turn: nothing to ask for.
 		rs.RestartNoted = sess.SessionID
 
@@ -547,6 +547,31 @@ func (s *Shift) heldTasks(name string) []task.Task {
 	}
 
 	return mine
+}
+
+// limitAskWindow is how long after the thresholds asked the plan's roles for a checkpoint one saved is taken for the answer to that ask.
+const limitAskWindow = 2 * time.Hour
+
+// noteLanded is notesLanded for the note a restart finds already there, without asking: a checkpoint saved since the role's last turn began.
+// One saved in the window after the thresholds asked the role's plan for checkpoints (limitsAskedAt) may be the answer to that ask, which
+// says no restart follows and is not written for one: the restart asks for its own note.
+func (s *Shift) noteLanded(name string, tasks []task.Task, after time.Time) bool {
+	if !s.notesLanded(tasks, after) {
+		return false
+	}
+
+	asked := s.limitsAskedAt(name)
+	if asked.IsZero() {
+		return true
+	}
+
+	for _, t := range tasks {
+		if at := t.Checkpoint.At; !at.Before(asked) && at.Sub(asked) <= limitAskWindow {
+			return false
+		}
+	}
+
+	return true
 }
 
 // notesLanded reports whether every task has a current checkpoint saved at or after a time.

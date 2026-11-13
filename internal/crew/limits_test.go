@@ -115,12 +115,12 @@ func TestCodexHomesAreTheDefaultAndEachSeats(t *testing.T) {
 		"no Codex seat: the default home is still looked at, under its own name")
 }
 
-func TestThresholdsAreOnByDefaultForBothPlans(t *testing.T) {
+func TestThresholdsAreOnByDefaultAndHoldTheShortWindowOnly(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 
 	want := limits.DefaultThresholds()
-	assert.Equal(t, limits.Shares{Warn: 75, Checkpoint: 90, Hold: 97}, want.Claude)
-	assert.Equal(t, limits.Shares{Warn: 75, Checkpoint: 90, Hold: 97}, want.Codex)
+	assert.Equal(t, limits.Shares{Warn: 75, Checkpoint: 90, Hold: map[string]limits.Share{limits.WindowFiveHour: 97, limits.WindowSevenDay: 0}}, want.Claude)
+	assert.Equal(t, limits.Shares{Warn: 75, Checkpoint: 90, Hold: map[string]limits.Share{limits.WindowWeek: 0}}, want.Codex)
 
 	for name, body := range map[string]string{
 		"no key":         "",
@@ -134,27 +134,41 @@ func TestThresholdsAreOnByDefaultForBothPlans(t *testing.T) {
 	}
 }
 
+func shares(warn, checkpoint limits.Share, hold map[string]limits.Share) limits.Shares {
+	return limits.Shares{Warn: warn, Checkpoint: checkpoint, Hold: hold}
+}
+
 func TestThresholdsOverrideOneShareAtATime(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
+
+	five, seven, week := limits.WindowFiveHour, limits.WindowSevenDay, limits.WindowWeek
 
 	cases := []struct {
 		name, yaml string
 		want       limits.Thresholds
 	}{
-		{"every share of both", "limits:\n  claude: {pinned: 80, stop: 99, warn: 60, checkpoint: 80, hold: 95}\n  codex: {pinned: 80, warn: 50, checkpoint: 70, hold: 90}\n",
-			limits.Thresholds{Claude: limits.Shares{Warn: 60, Checkpoint: 80, Hold: 95}, Codex: limits.Shares{Warn: 50, Checkpoint: 70, Hold: 90}}},
-		{"hold only", "limits:\n  claude: {hold: 100}\n",
-			limits.Thresholds{Claude: limits.Shares{Warn: 75, Checkpoint: 90, Hold: 100}, Codex: limits.DefaultShares()}},
-		{"codex off", "limits:\n  codex: {warn: off, checkpoint: off, hold: off}\n",
-			limits.Thresholds{Claude: limits.DefaultShares(), Codex: limits.Shares{}}},
+		{"every share of both", "limits:\n  claude: {pinned: 80, stop: 99, warn: 60, checkpoint: 80, hold: 95}\n  codex: {pinned: 80, warn: 50, checkpoint: 70, hold: {week: 90}}\n",
+			limits.Thresholds{Claude: shares(60, 80, map[string]limits.Share{five: 95, seven: 0}), Codex: shares(50, 70, map[string]limits.Share{week: 90})}},
+		{"a number holds the short window", "limits:\n  claude: {hold: 100}\n",
+			limits.Thresholds{Claude: shares(75, 90, map[string]limits.Share{five: 100, seven: 0}), Codex: limits.DefaultShares(limits.PlanCodex)}},
+		{"a map says it per window", "limits:\n  claude: {hold: {five_hour: 97, seven_day: 98}}\n",
+			limits.Thresholds{Claude: shares(75, 90, map[string]limits.Share{five: 97, seven: 98}), Codex: limits.DefaultShares(limits.PlanCodex)}},
+		{"a long window opts in on its own", "limits:\n  claude: {hold: {seven_day: 99}}\n",
+			limits.Thresholds{Claude: shares(75, 90, map[string]limits.Share{five: 97, seven: 99}), Codex: limits.DefaultShares(limits.PlanCodex)}},
+		{"the short window off, the long one on", "limits:\n  claude: {hold: {five_hour: off, seven_day: 98}}\n",
+			limits.Thresholds{Claude: shares(75, 90, map[string]limits.Share{five: 0, seven: 98}), Codex: limits.DefaultShares(limits.PlanCodex)}},
+		{"hold off holds nothing", "limits:\n  claude: {hold: off}\n",
+			limits.Thresholds{Claude: shares(75, 90, map[string]limits.Share{five: 0, seven: 0}), Codex: limits.DefaultShares(limits.PlanCodex)}},
+		{"codex opts its week in", "limits:\n  codex: {hold: {week: 97}}\n",
+			limits.Thresholds{Claude: limits.DefaultShares(limits.PlanClaude), Codex: shares(75, 90, map[string]limits.Share{week: 97})}},
+		{"codex off is allowed", "limits:\n  codex: {warn: off, checkpoint: off, hold: off}\n",
+			limits.Thresholds{Claude: limits.DefaultShares(limits.PlanClaude), Codex: shares(0, 0, map[string]limits.Share{week: 0})}},
 		{"one off", "limits:\n  claude: {checkpoint: off}\n",
-			limits.Thresholds{Claude: limits.Shares{Warn: 75, Hold: 97}, Codex: limits.DefaultShares()}},
+			limits.Thresholds{Claude: shares(75, 0, map[string]limits.Share{five: 97, seven: 0}), Codex: limits.DefaultShares(limits.PlanCodex)}},
 		{"off quoted, in any case", "limits:\n  claude: {warn: 'Off', hold: \"off\"}\n",
-			limits.Thresholds{Claude: limits.Shares{Checkpoint: 90}, Codex: limits.DefaultShares()}},
+			limits.Thresholds{Claude: shares(0, 90, map[string]limits.Share{five: 0, seven: 0}), Codex: limits.DefaultShares(limits.PlanCodex)}},
 		{"warn equal to checkpoint", "limits:\n  claude: {warn: 90}\n",
-			limits.Thresholds{Claude: limits.Shares{Warn: 90, Checkpoint: 90, Hold: 97}, Codex: limits.DefaultShares()}},
-		{"warn above the default checkpoint, with checkpoint off", "limits:\n  claude: {warn: 95, checkpoint: off}\n",
-			limits.Thresholds{Claude: limits.Shares{Warn: 95, Hold: 97}, Codex: limits.DefaultShares()}},
+			limits.Thresholds{Claude: shares(90, 90, map[string]limits.Share{five: 97, seven: 0}), Codex: limits.DefaultShares(limits.PlanCodex)}},
 	}
 
 	for _, c := range cases {
@@ -170,17 +184,25 @@ func TestThresholdsOverrideOneShareAtATime(t *testing.T) {
 
 func TestThresholdsAreChecked(t *testing.T) {
 	cases := map[string]string{
-		"limits:\n  claude: {warn: 0}\n":                        "limits.claude.warn is a share of the window, 1 to 100, or off, not 0",
-		"limits:\n  claude: {checkpoint: 101}\n":                "limits.claude.checkpoint is a share of the window, 1 to 100, or off, not 101",
-		"limits:\n  codex: {hold: -1}\n":                        "limits.codex.hold is a share of the window, 1 to 100, or off, not -1",
-		"limits:\n  claude: {warn: 95, checkpoint: 90}\n":       "limits.claude: warn 95 is above checkpoint 90",
-		"limits:\n  claude: {warn: 95}\n":                       "limits.claude: warn 95 is above checkpoint 90",
-		"limits:\n  codex: {checkpoint: 98}\n":                  "limits.codex: checkpoint 98 is above hold 97",
-		"limits:\n  codex: {warn: 99, checkpoint: off}\n":       "limits.codex: warn 99 is above hold 97",
-		"limits:\n  claude: {warn: sometimes}\n":                "a share of the window is a number from 1 to 100, or off",
-		"limits:\n  claude: {hold: [97]}\n":                     "a share of the window is a number from 1 to 100, or off",
-		"limits:\n  claude: {hold: 97.5}\n":                     "a share of the window is a number from 1 to 100, or off",
-		"limits:\n  claude: {pinned: 95, stop: 90, hold: 50}\n": "limits.claude: pinned 95 is above stop 90",
+		"limits:\n  claude: {warn: 0}\n":                                    "limits.claude.warn is a share of the window, 1 to 100, or off, not 0",
+		"limits:\n  claude: {checkpoint: 101}\n":                            "limits.claude.checkpoint is a share of the window, 1 to 100, or off, not 101",
+		"limits:\n  claude: {hold: 0}\n":                                    "limits.claude.hold is a share of the window, 1 to 100, or off, not 0",
+		"limits:\n  claude: {hold: {seven_day: 150}}\n":                     "limits.claude.hold.seven_day is a share of the window, 1 to 100, or off, not 150",
+		"limits:\n  codex: {hold: {week: -1}}\n":                            "limits.codex.hold.week is a share of the window, 1 to 100, or off, not -1",
+		"limits:\n  claude: {warn: 95, checkpoint: 90}\n":                   "limits.claude: warn 95 is above checkpoint 90",
+		"limits:\n  claude: {warn: 95}\n":                                   "limits.claude: warn 95 is above checkpoint 90",
+		"limits:\n  claude: {checkpoint: 98}\n":                             "limits.claude: checkpoint 98 is above the hold of the 5h window 97",
+		"limits:\n  claude: {hold: {seven_day: 80}}\n":                      "limits.claude: checkpoint 90 is above the hold of the 7d window 80",
+		"limits:\n  codex: {hold: {week: 80}}\n":                            "limits.codex: checkpoint 90 is above the hold of the weekly window 80",
+		"limits:\n  codex: {warn: 99, checkpoint: off, hold: {week: 95}}\n": "limits.codex: warn 99 is above the hold of the weekly window 95",
+		"limits:\n  codex: {hold: 97}\n":                                    "Codex reports only a weekly one: write hold: {week: 97}",
+		"limits:\n  claude: {hold: {weekly: 97}}\n":                         `limits.claude.hold: no window "weekly": the windows are five_hour, seven_day`,
+		"limits:\n  codex: {hold: {five_hour: 97}}\n":                       `limits.codex.hold: no window "five_hour": the windows are week`,
+		"limits:\n  claude: {warn: sometimes}\n":                            "a share of the window is a number from 1 to 100, or off",
+		"limits:\n  claude: {hold: [97]}\n":                                 "hold is a number or off",
+		"limits:\n  claude: {hold: {five_hour: [1]}}\n":                     "a share of the window is a number from 1 to 100, or off",
+		"limits:\n  claude: {hold: 97.5}\n":                                 "a share of the window is a number from 1 to 100, or off",
+		"limits:\n  claude: {pinned: 95, stop: 90, hold: 50}\n":             "limits.claude: pinned 95 is above stop 90",
 	}
 
 	for in, want := range cases {

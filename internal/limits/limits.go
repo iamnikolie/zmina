@@ -18,7 +18,46 @@ const (
 	// Heartbeat is how often the tap refreshes a reading whose values did not change: the file then says when a
 	// status line was last drawn, not when the figures last moved, and an idle crew is not mistaken for a silent one.
 	Heartbeat = 5 * time.Minute
+	// replaceAfter is how long a stored window may go undrawn before any newer reading replaces it, an earlier reset included: a
+	// reading that old is no evidence against a newer one (another account, a reset the stored one had wrong).
+	replaceAfter = 10 * time.Minute
+	// raceWindow is how close two draws of one window may be for the figure to decide between them: the sessions that drew them
+	// are not told apart by their clocks, and a window only fills.
+	raceWindow = 10 * time.Second
+	// sameResetWithin is how far two reset times of one window may be apart and still be the same period.
+	sameResetWithin = 2 * time.Minute
 )
+
+// The longest a window can have left, as it is spoken of by its length and a little slack: the 5-hour window, and the week.
+const (
+	fiveHourMax = 5*time.Hour + 15*time.Minute
+	weekMax     = 7*24*time.Hour + time.Hour
+)
+
+// MaxReset is how far off a reset time can be from the moment its window was read: the window's length and slack. A reset
+// beyond it cannot be this window's (a status line that sent milliseconds for seconds, a garbled figure) and is no reset.
+func MaxReset(window string) time.Duration {
+	if window == WindowFiveHour {
+		return fiveHourMax
+	}
+
+	return weekMax
+}
+
+// sameReset reports whether two reset times are the same period's: a reset that moves by less than two minutes is a rounding,
+// one that moves further is another window.
+func sameReset(a, b time.Time) bool {
+	d := a.Sub(b)
+
+	return d > -sameResetWithin && d < sameResetWithin
+}
+
+// bound drops a reset further off than the window can have left at the moment it was read (MaxReset); the figure stays.
+func (w *Window) bound(window string, at time.Time) {
+	if w != nil && w.Resets != nil && w.Resets.Sub(at) > MaxReset(window) {
+		w.Resets = nil
+	}
+}
 
 // Window is one rate-limit window as a source last saw it.
 type Window struct {
@@ -49,15 +88,30 @@ func (w *Window) same(o *Window) bool {
 	return w.Resets == nil || w.Resets.Equal(*o.Resets)
 }
 
-// latest is the window that stands when w, a reading just drawn, meets o, the one stored: o when w is older by its own
-// evidence (it resets before o does, or at the same moment with less spent), else w. A window that says nothing of its
-// reset has no evidence of age, and w stands.
-func (w *Window) latest(o *Window) *Window {
+// latest is the window that stands when w, a reading drawn at at, meets o, the one stored, drawn at oldAt: o when w is older by
+// its own evidence, else w. A stored window nobody has drawn for replaceAfter yields to any newer reading. Inside that time w is
+// older when it resets before o does (an old status line input redrawn) or was drawn before o was; at the same reset the newer
+// reading stands whatever it spent, but two draws within raceWindow keep the higher figure, since a window only fills and the
+// two are not told apart by time. A window that says nothing of its reset has no evidence of age, and w stands.
+func (w *Window) latest(o *Window, at, oldAt time.Time) *Window {
 	if w == nil || o == nil || w.Resets == nil || o.Resets == nil {
 		return w
 	}
 
-	if w.Resets.Before(*o.Resets) || (w.Resets.Equal(*o.Resets) && w.Used < o.Used) {
+	if at.Sub(oldAt) > replaceAfter {
+		return w
+	}
+
+	switch {
+	case at.Before(oldAt):
+		return o
+	case sameReset(*w.Resets, *o.Resets):
+		if at.Sub(oldAt) < raceWindow && w.Used < o.Used {
+			return o
+		}
+
+		return w
+	case w.Resets.Before(*o.Resets):
 		return o
 	}
 
@@ -78,6 +132,9 @@ const SourceStatusline = "statusline"
 
 // Judge marks each window stale or not as of now.
 func (c *Claude) Judge(now time.Time) {
+	c.FiveHour.bound(WindowFiveHour, c.At)
+	c.SevenDay.bound(WindowSevenDay, c.At)
+
 	for _, w := range []*Window{c.FiveHour, c.SevenDay} {
 		if w != nil {
 			w.judge(c.At, now)
@@ -100,10 +157,15 @@ type Codex struct {
 	At time.Time `json:"at"`
 	// Source names the rollout's home: "rollout <seat>".
 	Source string `json:"source"`
+	// Home is the directory of the Codex home the reading came from. Seats of another home bill another account: a hold made
+	// by this reading keeps only the seats of this one. Not printed.
+	Home string `json:"-"`
 }
 
 // Judge marks the window stale or not as of now.
 func (c *Codex) Judge(now time.Time) {
+	c.Week.bound(WindowWeek, c.At)
+
 	if c.Week != nil {
 		c.Week.judge(c.At, now)
 	}
@@ -141,6 +203,24 @@ func Collect(dir string, homes []Home, policy Policy, now time.Time) (Report, er
 	}
 
 	if r.Codex = ReadCodex(homes); r.Codex != nil {
+		r.Codex.Judge(now)
+	}
+
+	return r, err
+}
+
+// CollectCached is Collect for the beat, which asks every minute: the Codex homes are not walked each time (ReadCodexCached). The commands that show
+// the limits (zmina limits) and route work by them read afresh.
+func CollectCached(dir string, homes []Home, policy Policy, now time.Time) (Report, error) {
+	r := Report{Policy: policy}
+
+	var err error
+
+	if r.Claude, err = ReadClaude(dir); r.Claude != nil {
+		r.Claude.Judge(now)
+	}
+
+	if r.Codex = ReadCodexCached(dir, homes, now); r.Codex != nil {
 		r.Codex.Judge(now)
 	}
 

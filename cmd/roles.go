@@ -472,6 +472,12 @@ func (a *app) upCommand() *cobra.Command {
 						up = s.UpHanding
 					}
 
+					// A start is the owner's own act and goes on; the role's plan is held, and zmina says that nothing it is sent is delivered.
+					if what, until, held := s.PlanHeldWhy(n, s.Now()); held {
+						fmt.Fprintf(a.err, "zmina: warning: %s: its plan is held (%s until %s): nothing is delivered to it but your own line, "+
+							"and its boot is a model call you chose (zmina limits)\n", n, what, until.In(s.Crew.Location()).Format("15:04"))
+					}
+
 					if err := up(n, opts); err != nil {
 						if !errors.Is(err, shift.ErrPartial) {
 							errs = append(errs, upAgainHint(s, n, fresh, resume, err))
@@ -1019,7 +1025,16 @@ func (a *app) sendCommand() *cobra.Command {
 					return nil
 				}
 
-				return s.Send(args[0], text)
+				err := s.Send(args[0], text)
+
+				// A line a held plan would not have: queued instead of typed, and said so.
+				if queued := (*shift.SendQueued)(nil); errors.As(err, &queued) {
+					fmt.Fprintln(a.out, queued.Say(s.Crew.Location()))
+
+					return nil
+				}
+
+				return err
 			})
 		},
 	}

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -16,10 +17,13 @@ import (
 // hold that is on the book (the share was turned off, or its reset time passed). Nil: the beat judges none, because the crew
 // file does not load; the holds already on the book still hold until their reset time.
 func (a *app) limitsSnapshot(now time.Time) *limits.Report {
-	c, err := crew.Load(a.crewPath())
+	c, err := a.loadCrew()
 	if err != nil {
 		return nil
 	}
+
+	// The beat's first shift is built over this crew, not over a second parse of the file.
+	a.crewOnce = c
 
 	if !c.LimitsThresholds().Any() {
 		return &limits.Report{Policy: c.LimitsPolicy()}
@@ -35,7 +39,7 @@ func (a *app) limitsSnapshot(now time.Time) *limits.Report {
 		}
 	}
 
-	r, err := limits.Collect(c.Layout().Limits(), homes, c.LimitsPolicy(), now)
+	r, err := limits.CollectCached(c.Layout().Limits(), homes, c.LimitsPolicy(), now)
 	if err != nil {
 		fmt.Fprintln(a.err, "zmina: warning:", err)
 	}
@@ -75,6 +79,38 @@ func holdFooter(s *shift.Shift) []string {
 		out = append(out, "hold: "+holdWords(h, now)+"; the owner's own line passes (zmina limits)")
 	}
 
+	for _, line := range waitLines(s.PlanWaits(now), now) {
+		out = append(out, "release: "+line)
+	}
+
+	return out
+}
+
+// waitLines say the roles that wait their turn after a hold ended, a line for each plan: how many, and when the last goes.
+func waitLines(waits []limits.Wait, now time.Time) []string {
+	var out []string
+
+	for _, plan := range []limits.Plan{limits.PlanClaude, limits.PlanCodex} {
+		n := 0
+
+		var last time.Time
+
+		for _, w := range waits {
+			if w.Plan == plan {
+				n++
+
+				if w.Until.After(last) {
+					last = w.Until
+				}
+			}
+		}
+
+		if n > 0 {
+			out = append(out, fmt.Sprintf("%s plan: %d %s let go in turn, the last at %s (%d at a time, a minute apart)", plan, n, plural(n, "role", "roles"),
+				last.Format("15:04"), limits.StaggerGroup))
+		}
+	}
+
 	return out
 }
 
@@ -82,6 +118,23 @@ func holdFooter(s *shift.Shift) []string {
 // bills too, that it cannot read the note that tells of it, so the owner is told here, by the event and by the todo item that
 // blocks it.
 func checkPlanHolds(c *crew.Crew, st *shift.State, now time.Time, add func(name, level, format string, args ...any)) {
+	// A holds file that does not read holds nothing: said here, and the next beat moves it aside (one of a newer zmina it leaves alone).
+	if _, err := limits.ReadBook(c.Layout().Limits()); err != nil {
+		if errors.Is(err, limits.ErrBookFuture) {
+			add("holds", "warn", "%v: nothing is held by it here, and nothing is written over it; upgrade zmina", err)
+		} else {
+			add("holds", "warn", "the holds file does not read (%v): nothing is held by it; the next beat moves it aside and writes a new one", err)
+		}
+	}
+
+	if st == nil {
+		st = shift.NewState()
+	}
+
+	for _, line := range waitLines((&shift.Shift{Crew: c, State: st}).PlanWaits(now), now) {
+		add("holds", "ok", "release: %s", line)
+	}
+
 	for _, h := range planHolds(c, st, now) {
 		words := fmt.Sprintf("%s: nothing is delivered to %s until %s; %d %s wait, the owner's own line passes (zmina limits)",
 			h.Label(), strings.Join(h.Roles, ", "), h.Reset.Format("Mon 15:04 MST"), h.Lines, plural(h.Lines, "line", "lines"))

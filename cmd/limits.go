@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"math"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -51,9 +53,89 @@ func (a *app) limitsCommand() *cobra.Command {
 		},
 	}
 
-	c.Flags().BoolVar(&asJSON, "json", false, "machine-readable: both plans, each window with its stale flag, and the policy")
+	c.Flags().BoolVar(&asJSON, "json", false, "machine-readable: both plans, each window with its stale flag, the policy, the thresholds and the holds that are on")
+
+	c.AddCommand(a.limitsReleaseCommand())
 
 	return c
+}
+
+// limitsReleaseCommand is zmina limits release: the owner's (or the dispatcher's) way to lift a plan hold by hand.
+func (a *app) limitsReleaseCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "release <plan> [<window>]",
+		Short: "Lift a plan's hold by hand (the owner and the dispatcher): its roles are let go in turn; the period is not held again, a later one may be",
+		Args:  cobra.RangeArgs(1, 2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			plan, window, err := parseHoldTarget(args)
+			if err != nil {
+				return err
+			}
+
+			return a.withState(func(s *shift.Shift) error {
+				if s.By != "hand" && s.By != s.Crew.Dispatcher {
+					return errors.New("only the owner or the dispatcher can lift a hold")
+				}
+
+				lifted, err := s.LiftHolds(plan, window, s.Now())
+				if err != nil {
+					return err
+				}
+
+				if len(lifted.Holds) == 0 && lifted.Waits == 0 {
+					fmt.Fprintf(a.out, "nothing is held for %s\n", plan)
+
+					return nil
+				}
+
+				loc := s.Crew.Location()
+
+				for _, h := range lifted.Holds {
+					fmt.Fprintf(a.out, "lifted: %s, held at %.0f%% since %s, to end %s\n", h.Label(), h.Used, h.Since.In(loc).Format("15:04"),
+						h.Reset.In(loc).Format("Mon 15:04"))
+				}
+
+				if lifted.Waits > 0 {
+					fmt.Fprintf(a.out, "%d %s waiting their turn after an earlier release let go\n", lifted.Waits, plural(lifted.Waits, "role", "roles"))
+				}
+
+				if lifted.Turns > 0 {
+					fmt.Fprintf(a.out, "the dispatcher goes now, the other %d %s in turn (%d at a time, a minute apart)\n", lifted.Turns,
+						plural(lifted.Turns, "role", "roles"), limits.StaggerGroup)
+				}
+
+				return nil
+			})
+		},
+	}
+}
+
+// parseHoldTarget reads the plan and the optional window zmina limits release names: claude or codex, and a window of that plan by the names
+// the limits data uses (five_hour, seven_day, week), 5h and 7d for the first two.
+func parseHoldTarget(args []string) (limits.Plan, string, error) {
+	plan := limits.Plan(strings.ToLower(args[0]))
+	if plan != limits.PlanClaude && plan != limits.PlanCodex {
+		return "", "", fmt.Errorf("a plan is claude or codex, not %q", args[0])
+	}
+
+	if len(args) == 1 {
+		return plan, "", nil
+	}
+
+	window := strings.ToLower(args[1])
+
+	switch window {
+	case "5h":
+		window = limits.WindowFiveHour
+	case "7d":
+		window = limits.WindowSevenDay
+	}
+
+	if !slices.Contains(limits.PlanWindows(plan), window) {
+		return "", "", fmt.Errorf("no window %q for %s: %s", args[1], plan, strings.Join(limits.PlanWindows(plan), ", "))
+	}
+
+	return plan, window, nil
 }
 
 // writeLimits prints the report: one line a plan, then the policy. A window that is stale is printed as unknown

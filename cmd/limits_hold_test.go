@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/iamnikolie/zmina/internal/asks"
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/limits"
 	"github.com/iamnikolie/zmina/internal/shift"
@@ -27,7 +28,7 @@ func holdBook(t *testing.T, c *crew.Crew, reset time.Time, ask string) {
 
 func TestLimitsTextShowsTheMarksAndTheHolds(t *testing.T) {
 	marks := limits.DefaultThresholds()
-	marks.Codex.Hold = 0
+	marks.Codex.Hold[limits.WindowWeek] = 97
 
 	r := limits.Report{
 		Policy:     limits.DefaultPolicy(),
@@ -44,7 +45,7 @@ func TestLimitsTextShowsTheMarksAndTheHolds(t *testing.T) {
 	assert.Equal(t, `claude   unknown (no status line has drawn the limits yet)
 codex    unknown (no Codex rollout with the limits found)
 policy   claude: pinned work only from 80%, nothing from 99% · codex: pinned work only from 80%
-marks    claude: warn 75%, checkpoint 90%, hold 97% · codex: warn 75%, checkpoint 90%, hold off
+marks    claude: warn 75%, checkpoint 90%, hold 5h 97%, 7d off · codex: warn 75%, checkpoint 90%, hold week 97%
 hold     claude 5h window at 97%, until 21:40 (2 roles, 14 lines waiting); the owner's own line passes
 `, out.String())
 
@@ -65,7 +66,7 @@ func TestLimitsFlowShowsTheMarksAndTheHolds(t *testing.T) {
 	// The defaults are on, with no key in the crew file.
 	out, _, err := zm(t, crewFile, "limits")
 	require.NoError(t, err)
-	assert.Contains(t, out, "marks    claude: warn 75%, checkpoint 90%, hold 97% · codex: warn 75%, checkpoint 90%, hold 97%\n")
+	assert.Contains(t, out, "marks    claude: warn 75%, checkpoint 90%, hold 5h 97%, 7d off · codex: warn 75%, checkpoint 90%, hold week off\n")
 	assert.NotContains(t, out, "\nhold ")
 
 	out, _, err = zm(t, crewFile, "limits", "--json")
@@ -77,8 +78,8 @@ func TestLimitsFlowShowsTheMarksAndTheHolds(t *testing.T) {
 		Holds      []map[string]any
 	}
 	require.NoError(t, json.Unmarshal([]byte(out), &got))
-	assert.Equal(t, map[string]any{"warn": 75.0, "checkpoint": 90.0, "hold": 97.0}, got.Thresholds["claude"])
-	assert.Equal(t, map[string]any{"warn": 75.0, "checkpoint": 90.0, "hold": 97.0}, got.Thresholds["codex"])
+	assert.Equal(t, map[string]any{"warn": 75.0, "checkpoint": 90.0, "hold": map[string]any{"five_hour": 97.0, "seven_day": "off"}}, got.Thresholds["claude"])
+	assert.Equal(t, map[string]any{"warn": 75.0, "checkpoint": 90.0, "hold": map[string]any{"week": "off"}}, got.Thresholds["codex"])
 	assert.Equal(t, map[string]any{"pinned": 80.0, "stop": 99.0}, got.Policy["claude"], "routing is as it was")
 	assert.Empty(t, got.Holds)
 
@@ -117,15 +118,16 @@ func TestLimitsFlowShowsTheMarksAndTheHolds(t *testing.T) {
 }
 
 func TestLimitsMarksAreTheCrewFilesAndOffIsOff(t *testing.T) {
-	crewFile := testCrew(t, "limits:\n  claude: {warn: 60, hold: off}\n  codex: {checkpoint: off}\ntimezone: UTC\n")
+	crewFile := testCrew(t, "limits:\n  claude: {warn: 60, hold: {five_hour: off, seven_day: 98}}\n  codex: {checkpoint: off, hold: {week: 99}}\ntimezone: UTC\n")
 
 	out, _, err := zm(t, crewFile, "limits")
 	require.NoError(t, err)
-	assert.Contains(t, out, "marks    claude: warn 60%, checkpoint 90%, hold off · codex: warn 75%, checkpoint off, hold 97%\n")
+	assert.Contains(t, out, "marks    claude: warn 60%, checkpoint 90%, hold 5h off, 7d 98% · codex: warn 75%, checkpoint off, hold week 99%\n")
 
 	out, _, err = zm(t, crewFile, "limits", "--json")
 	require.NoError(t, err)
-	assert.Contains(t, out, `"hold": "off"`)
+	assert.Contains(t, out, `"five_hour": "off"`)
+	assert.Contains(t, out, `"seven_day": 98`)
 }
 
 func TestCrewCheckRefusesThresholdsOutOfOrder(t *testing.T) {
@@ -366,4 +368,188 @@ func TestTickBeginsAHoldAndStartsNothing(t *testing.T) {
 	out, _, err = zm(t, crewFile, "tick")
 	require.NoError(t, err)
 	assert.NotContains(t, out, "limits:")
+}
+
+// zmina up is the owner's own act: it goes on during a plan hold, and says on stderr that the role's plan is held.
+func TestUpDuringAPlanHoldGoesOnAndSaysSo(t *testing.T) {
+	crewFile := testCrew(t, "  dev:\ntimezone: UTC\n")
+
+	c, err := crew.Load(crewFile)
+	require.NoError(t, err)
+
+	reset := time.Now().UTC().Add(time.Hour).Truncate(time.Minute)
+	holdBook(t, c, reset, "")
+
+	out, errOut, err := zm(t, crewFile, "up", "dev")
+	require.NoError(t, err, errOut)
+	assert.Contains(t, out, "dev up as ")
+	assert.Contains(t, errOut, "zmina: warning: dev: its plan is held (claude 5h window until "+reset.Format("15:04")+")")
+	assert.Contains(t, errOut, "nothing is delivered to it but your own line")
+
+	// A role of a plan that is not held starts without a word.
+	free := testCrew(t, "  dev:\ntimezone: UTC\n")
+	_, errOut, err = zm(t, free, "up", "dev")
+	require.NoError(t, err, errOut)
+	assert.NotContains(t, errOut, "plan is held")
+}
+
+// zmina limits release lifts a plan's hold by hand: the owner and the dispatcher may; the period is recorded as lifted, the roles go in turn,
+// its todo item closes and the event says by hand.
+func TestLimitsReleaseLiftsAHoldByHand(t *testing.T) {
+	crewFile := testCrew(t, "  dev:\n  codex-dev:\n    runtime: codex\ntimezone: UTC\n")
+
+	c, err := crew.Load(crewFile)
+	require.NoError(t, err)
+
+	reset := time.Now().UTC().Add(90 * time.Minute).Truncate(time.Minute)
+
+	item, err := askStore(c).Add(asks.Ask{Kind: asks.Check, Title: "claude 5h window held", Role: "ticker", By: "limits-hold", Blocks: "dispatcher"}, time.Now())
+	require.NoError(t, err)
+	holdBook(t, c, reset, item.ID)
+
+	l, err := shift.Lock(c.StateDir())
+	require.NoError(t, err)
+	l.Role("dev").Inbox = []string{"[dispatcher] look at T-1"}
+	require.NoError(t, l.Save())
+
+	// Nothing is held for Codex: said, and no failure.
+	out, _, err := zm(t, crewFile, "limits", "release", "codex")
+	require.NoError(t, err)
+	assert.Contains(t, out, "nothing is held for codex")
+
+	// A role may not lift it; the dispatcher may.
+	t.Setenv("ZMINA_ROLE", "dev")
+
+	_, _, err = zm(t, crewFile, "limits", "release", "claude")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "only the owner or the dispatcher can lift a hold")
+
+	book, err := limits.ReadBook(c.Layout().Limits())
+	require.NoError(t, err)
+	assert.Len(t, book.Holds, 1, "refused: it is still on")
+
+	t.Setenv("ZMINA_ROLE", "dispatcher")
+
+	out, _, err = zm(t, crewFile, "limits", "release", "claude", "five_hour")
+	require.NoError(t, err)
+	assert.Contains(t, out, "lifted: claude 5h window, held at 97% since ")
+	assert.Contains(t, out, "the dispatcher goes now, the other 1 role in turn")
+
+	book, err = limits.ReadBook(c.Layout().Limits())
+	require.NoError(t, err)
+	assert.Empty(t, book.Holds)
+	require.Len(t, book.Periods, 1)
+	assert.False(t, book.Periods[0].Lifted.IsZero(), "the period is lifted: it is not held again")
+	require.Len(t, book.Waits, 1)
+	assert.Equal(t, "dev", book.Waits[0].Role)
+
+	got, err := askStore(c).Get(item.ID)
+	require.NoError(t, err)
+	assert.False(t, got.Open(), "its todo item closes")
+
+	events, err := os.ReadFile(c.Layout().Events())
+	require.NoError(t, err)
+	assert.Contains(t, string(events), `"event":"limit-release"`)
+	assert.Contains(t, string(events), "hold lifted by hand")
+
+	st, err := shift.Read(c.StateDir())
+	require.NoError(t, err)
+	assert.Contains(t, strings.Join(st.Notes, "|"), "claude: 5h window hold lifted by hand")
+
+	// Again: the role still waiting its turn is let go with it (the owner's word); and once more, nothing is held.
+	out, _, err = zm(t, crewFile, "limits", "release", "claude")
+	require.NoError(t, err)
+	assert.Contains(t, out, "1 role waiting their turn after an earlier release let go")
+
+	out, _, err = zm(t, crewFile, "limits", "release", "claude")
+	require.NoError(t, err)
+	assert.Contains(t, out, "nothing is held for claude")
+
+	// A window or a plan that is no name of either is an error.
+	t.Setenv("ZMINA_ROLE", "")
+
+	_, _, err = zm(t, crewFile, "limits", "release", "gemini")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "claude or codex")
+
+	_, _, err = zm(t, crewFile, "limits", "release", "claude", "weekly")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "five_hour, seven_day")
+}
+
+func TestDoctorSaysAHoldsFileThatDoesNotReadOrIsNewer(t *testing.T) {
+	crewFile := testCrew(t, "  dev:\ntimezone: UTC\n")
+
+	c, err := crew.Load(crewFile)
+	require.NoError(t, err)
+
+	require.NoError(t, os.MkdirAll(c.Layout().Limits(), 0o700))
+
+	lines := func() []check {
+		var got []check
+
+		checkPlanHolds(c, nil, time.Now(), func(name, level, format string, args ...any) {
+			got = append(got, check{Name: name, Level: level, Detail: fmt.Sprintf(format, args...)})
+		})
+
+		return got
+	}
+
+	assert.Empty(t, lines())
+
+	path := filepath.Join(c.Layout().Limits(), limits.HoldsFile)
+	require.NoError(t, os.WriteFile(path, []byte("{nope"), 0o600))
+
+	got := lines()
+	require.Len(t, got, 1)
+	assert.Equal(t, "warn", got[0].Level)
+	assert.Contains(t, got[0].Detail, "the holds file does not read")
+	assert.Contains(t, got[0].Detail, "the next beat moves it aside")
+
+	require.NoError(t, os.WriteFile(path, []byte(`{"v":9}`), 0o600))
+
+	got = lines()
+	require.Len(t, got, 1)
+	assert.Contains(t, got[0].Detail, "nothing is held by it here, and nothing is written over it; upgrade zmina")
+}
+
+func TestLsAndDoctorSayTheRolesWaitingTheirTurnAfterARelease(t *testing.T) {
+	r := newExplainRig(t)
+	r.session("idle", "")
+
+	c, err := crew.Load(r.crewFile)
+	require.NoError(t, err)
+
+	require.NoError(t, limits.WriteBook(c.Layout().Limits(), limits.Book{Waits: []limits.Wait{
+		{Role: "dev", Plan: limits.PlanClaude, Window: limits.WindowFiveHour, Until: r.now.Add(2 * time.Minute)},
+		{Role: "dispatcher", Plan: limits.PlanClaude, Window: limits.WindowFiveHour, Until: r.now.Add(time.Minute)},
+	}}))
+
+	assert.Contains(t, r.mustRun("ls"), "release: claude plan: 2 roles let go in turn, the last at 12:02 (3 at a time, a minute apart)")
+
+	var views []shift.View
+
+	require.NoError(t, json.Unmarshal([]byte(r.mustRun("ls", "--json")), &views))
+
+	for _, v := range views {
+		if v.Role == "dev" {
+			assert.Equal(t, "release of the claude plan", v.PlanHeld)
+			assert.True(t, v.PlanHeldUntil.Equal(r.now.Add(2*time.Minute)))
+		}
+	}
+
+	ex := r.mustRun("explain", "dev")
+	assert.Contains(t, ex, "queue: waiting its turn in the release of the claude plan until Sat 12:02 UTC")
+
+	var got []check
+
+	st, err := shift.Read(c.StateDir())
+	require.NoError(t, err)
+
+	checkPlanHolds(c, st, r.now, func(name, level, format string, args ...any) {
+		got = append(got, check{Name: name, Level: level, Detail: fmt.Sprintf(format, args...)})
+	})
+	require.Len(t, got, 1)
+	assert.Equal(t, "ok", got[0].Level)
+	assert.Contains(t, got[0].Detail, "release: claude plan: 2 roles let go in turn")
 }

@@ -65,8 +65,20 @@ func resetTime(raw json.RawMessage) *time.Time {
 	return nil
 }
 
+// epochMax is the biggest number of seconds a reset time may be: the year 5138. A bigger number is milliseconds, and read as
+// such once; a number still bigger is no moment.
+const epochMax = 1e11
+
 func epoch(sec float64) *time.Time {
 	if math.IsNaN(sec) || math.IsInf(sec, 0) || sec <= 0 {
+		return nil
+	}
+
+	if sec > epochMax {
+		sec /= 1000
+	}
+
+	if sec > epochMax {
 		return nil
 	}
 
@@ -87,6 +99,10 @@ func ParseStatusline(raw []byte, now time.Time) *Claude {
 	if c.FiveHour == nil && c.SevenDay == nil {
 		return nil
 	}
+
+	// A reset a window cannot have is no reset: it never gets into the file.
+	c.FiveHour.bound(WindowFiveHour, now)
+	c.SevenDay.bound(WindowSevenDay, now)
 
 	return c
 }
@@ -130,9 +146,10 @@ func ReadClaude(dir string) (*Claude, error) {
 //
 // Sessions share the file, and one that redraws with figures it saw long ago (a stale status line input) must not
 // take back a newer reading: a window whose reset is earlier than the stored one's is the stored window's past, and
-// at the same reset the higher percentage is the later figure (a window only fills). The stored window stays then,
+// at the same reset two draws seconds apart keep the higher percentage (a window only fills). The stored window stays then,
 // and a draw that brought nothing newer than the file leaves it as it is, At included: the file says when its figures
-// were seen, not when an old one was drawn again.
+// were seen, not when an old one was drawn again. A stored window nobody drew for ten minutes yields to any newer reading, and at
+// the same reset a newer reading stands whatever it spent (Window.latest).
 func Tap(dir string, raw []byte, now time.Time) (bool, error) {
 	c := ParseStatusline(raw, now)
 	if c == nil {
@@ -143,7 +160,7 @@ func Tap(dir string, raw []byte, now time.Time) (bool, error) {
 	if old, _ := ReadClaude(dir); old != nil {
 		drawnAgain := old.sameFigures(c)
 
-		c.FiveHour, c.SevenDay = c.FiveHour.latest(old.FiveHour), c.SevenDay.latest(old.SevenDay)
+		c.FiveHour, c.SevenDay = c.FiveHour.latest(old.FiveHour, c.At, old.At), c.SevenDay.latest(old.SevenDay, c.At, old.At)
 
 		if old.sameFigures(c) {
 			if !drawnAgain {

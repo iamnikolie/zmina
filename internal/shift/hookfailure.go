@@ -297,7 +297,8 @@ func (s *Shift) FailureHolds(now time.Time) []FailureHold {
 }
 
 // ownerLine is the place in a role's queue of the first line that is the owner's own message (the cockpit's chat), -1 when
-// there is none.
+// there is none. A line a receipt was made for is the owner's whichever runtime the role has (ownerMessage): a Codex seat has no input line
+// the message is typed into, but a hold lets it through all the same, as a post of its own.
 func (s *Shift) ownerLine(name string) int {
 	rs, ok := s.State.Roles[name]
 	if !ok {
@@ -305,7 +306,7 @@ func (s *Shift) ownerLine(name string) int {
 	}
 
 	for i, line := range rs.Inbox {
-		if s.ownerChat(name, line) {
+		if rs.ownerMessage(line) {
 			return i
 		}
 	}

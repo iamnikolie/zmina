@@ -209,3 +209,67 @@ func TestCollectReadsBothSourcesAndJudgesThem(t *testing.T) {
 	assert.True(t, r.Codex.Week.Stale, "eight hours without a Codex session")
 	assert.Equal(t, 50.0, r.Codex.Week.Used, "its last figure stays visible")
 }
+
+// The beat does not walk a Codex home's whole tree every minute: what it found is kept, the newest rollout is looked at alone, and the home
+// is walked again after five minutes.
+func TestReadCodexCachedWalksAHomeOncePerFiveMinutes(t *testing.T) {
+	home, dir := t.TempDir(), t.TempDir()
+	reset := noon.Add(24 * time.Hour).Unix()
+
+	writeRollout(t, home, "2030/01/01", "a", noon, tokenCount(noon.Add(-time.Hour), 40, reset, "pro"))
+
+	homes := []Home{{Path: home, Label: "dev"}}
+
+	c := ReadCodexCached(dir, homes, noon)
+	require.NotNil(t, c)
+	assert.Equal(t, 40.0, c.Week.Used)
+	assert.Equal(t, "rollout dev", c.Source)
+	assert.Equal(t, home, c.Home)
+	assert.FileExists(t, filepath.Join(dir, CodexCacheFile))
+
+	// A newer rollout of another session appears: within five minutes the cached walk stands.
+	writeRollout(t, home, "2030/01/02", "b", noon.Add(time.Minute), tokenCount(noon, 91, reset, "pro"))
+
+	c = ReadCodexCached(dir, homes, noon.Add(2*time.Minute))
+	require.NotNil(t, c)
+	assert.Equal(t, 40.0, c.Week.Used, "not walked again yet")
+
+	// ... after five minutes it is found.
+	c = ReadCodexCached(dir, homes, noon.Add(6*time.Minute))
+	require.NotNil(t, c)
+	assert.Equal(t, 91.0, c.Week.Used)
+	assert.Equal(t, 91.0, ReadCodex(homes).Week.Used, "the same as an uncached read")
+}
+
+// The newest rollout cached is read again as soon as it grows, with no walk: a status that moves is seen at the next beat.
+func TestReadCodexCachedReadsTheNewestRolloutAgainWhenItGrows(t *testing.T) {
+	home, dir := t.TempDir(), t.TempDir()
+	reset := noon.Add(24 * time.Hour).Unix()
+
+	path := writeRollout(t, home, "2030/01/01", "a", noon, tokenCount(noon.Add(-time.Hour), 40, reset, "pro"))
+	homes := []Home{{Path: home, Label: "dev"}}
+
+	require.Equal(t, 40.0, ReadCodexCached(dir, homes, noon).Week.Used)
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
+	require.NoError(t, err)
+	_, err = f.WriteString(tokenCount(noon.Add(-time.Minute), 97, reset, "pro") + "\n")
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	require.NoError(t, os.Chtimes(path, noon.Add(time.Minute), noon.Add(time.Minute)))
+
+	assert.Equal(t, 97.0, ReadCodexCached(dir, homes, noon.Add(time.Minute)).Week.Used, "no walk needed to see it")
+}
+
+func TestReadCodexCachedHandlesNothingToReadAndACacheThatIsBroken(t *testing.T) {
+	dir := t.TempDir()
+
+	assert.Nil(t, ReadCodexCached(dir, []Home{{Path: t.TempDir(), Label: "dev"}}, noon), "a home with no rollout")
+	assert.Nil(t, ReadCodexCached(dir, nil, noon))
+
+	require.NoError(t, os.WriteFile(filepath.Join(dir, CodexCacheFile), []byte("{broken"), 0o600))
+
+	home := t.TempDir()
+	writeRollout(t, home, "2030/01/01", "a", noon, tokenCount(noon, 12, noon.Add(time.Hour).Unix(), "pro"))
+	assert.Equal(t, 12.0, ReadCodexCached(dir, []Home{{Path: home, Label: "dev"}}, noon).Week.Used)
+}

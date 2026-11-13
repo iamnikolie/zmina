@@ -157,8 +157,9 @@ type PlanHoldFact struct {
 	Used   float64   `json:"used"`
 	Since  time.Time `json:"since"`
 	Until  time.Time `json:"until"`
-	// Why is what is done about it.
-	Why string `json:"why"`
+	// Why is what is done about it. Turn is set when the hold is over and the role waits its turn to be let go (Window then names that).
+	Why  string `json:"why"`
+	Turn bool   `json:"turn,omitempty"`
 }
 
 // HoldFact is a queue held for a failed turn.
@@ -609,9 +610,16 @@ func (s *Shift) queueFacts(v View, r Reasoning, rs *RoleState) QueueFacts {
 	}
 
 	// Held because its plan is at the hold share: the test the delivery makes (planHeld), at the moment of this look.
-	if h, held := s.planHold(v.Role, r.At); held {
-		q.PlanHold = &PlanHoldFact{Window: h.Label(), Used: h.Used, Since: h.Since.In(s.Crew.Location()), Until: h.Reset.In(s.Crew.Location()),
-			Why: "nothing is delivered to the plan's roles until it resets; the owner's own line goes through"}
+	if what, until, held := s.planHeldWhy(v.Role, r.At); held {
+		loc := s.Crew.Location()
+		q.PlanHold = &PlanHoldFact{Window: what, Until: until.In(loc), Turn: true,
+			Why: "its plan's hold ended and the roles are let go in turn, the dispatcher first, then a few a minute: this one waits for its turn; " +
+				"the owner's own line goes through"}
+
+		if h, ok := s.planHold(v.Role, r.At); ok {
+			q.PlanHold.Used, q.PlanHold.Since, q.PlanHold.Turn = h.Used, h.Since.In(loc), false
+			q.PlanHold.Why = "nothing is delivered to the plan's roles until it resets; the owner's own line goes through"
+		}
 	}
 
 	if !rs.SlashAt.IsZero() && within(r.At, rs.SlashAt, slashSettle) {

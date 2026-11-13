@@ -38,11 +38,6 @@ func (s *Shift) release(name string, r *crew.Role, now time.Time) (did, note str
 		return "", ""
 	}
 
-	// A release that has tasks to park asks the role for something: it does not begin while the role's plan is held.
-	if rs.Releasing.IsZero() && s.planHeld(name, now) {
-		return "", ""
-	}
-
 	if len(rs.Inbox) > 0 || !rs.RestartAsked.IsZero() || !rs.Downing.IsZero() || !s.ready(name, now) ||
 		!s.landed(name, now) {
 		return "", ""
@@ -91,6 +86,14 @@ func (s *Shift) release(name string, r *crew.Role, now time.Time) (did, note str
 		rs.ReleaseIdle = idle
 		if len(mine) == 0 {
 			return s.putDown(name)
+		}
+
+		// Asking the role to park its tasks is a model call: it does not begin while the role's plan is held. Putting down a role with
+		// none asks nothing, and is not held.
+		if s.planHeld(name, now) {
+			rs.ReleaseIdle = 0
+
+			return "", ""
 		}
 
 		rs.Releasing, rs.ReleaseTasks = now, ids

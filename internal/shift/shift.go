@@ -39,6 +39,9 @@ const (
 
 	// SignalsMax is signalsMax for a command that tells the owner how many signals the dispatcher takes.
 	SignalsMax = signalsMax
+	// signalsHeldMax is how many signals wait for a dispatcher whose plan is held (limits: hold): nothing reads them for as long as the hold
+	// lasts, up to a week, and the roles' reports are the work they would otherwise have to repeat.
+	signalsHeldMax = 100
 
 	// typeTries is how many tries a queued line gets before it moves to the failed list. A try is a pass that fails
 	// at least countedGap after the one before it: passes that run seconds apart (a command's delivery and the beat)
@@ -143,6 +146,8 @@ type Asks interface {
 	Add(a asks.Ask, now time.Time) (asks.Ask, error)
 	// Close takes an open ask off the list (the hold of a plan closes the item it opened for the owner).
 	Close(id string, st asks.State, answer string, now time.Time) (asks.Ask, error)
+	// Pending is every ask still open (the beat closes the item of a hold that is gone).
+	Pending() []asks.Ask
 }
 
 // Events is the shift's history.
@@ -459,8 +464,8 @@ func (s *Shift) look(name string, held map[string][]string) (View, Reasoning, bo
 		v.Problem = err.Error()
 	}
 
-	if h, ok := s.planHoldOf(PlanOf(r), s.Now()); ok {
-		v.PlanHeld, v.PlanHeldUntil = h.Label(), h.Reset.In(s.Crew.Location())
+	if what, until, ok := s.planHeldWhy(name, s.Now()); ok {
+		v.PlanHeld, v.PlanHeldUntil = what, until.In(s.Crew.Location())
 	}
 
 	var sess *registry.Session
@@ -1392,6 +1397,16 @@ func (s *Shift) Send(name, text string) error {
 		return fmt.Errorf("%s: %w", name, ErrNotUp)
 	}
 
+	// A line typed now would pass a hold of the role's plan, which keeps every line but the owner's own: from anyone else it is queued
+	// instead, behind the others, and the caller is told (SendQueued is not a failure).
+	if what, until, held := s.planHeldWhy(name, s.Now()); held && s.By != "hand" && s.By != "ui" {
+		if err := s.QueueFrom(name, text, Facts{}); err != nil {
+			return err
+		}
+
+		return &SendQueued{What: what, Until: until.In(s.Crew.Location())}
+	}
+
 	// Posted to its inbox socket, the line arrives as a message from zmina whatever its input line holds; a post
 	// that never started is typed instead.
 	if sess := s.native(name, s.Now()); sess != nil && postable(text) {
@@ -1618,8 +1633,12 @@ func (s *Shift) note(from, text string, ifUp, info bool) (string, bool, error) {
 		return sig, false, nil
 	}
 
-	if len(s.State.Signals) >= signalsMax {
-		return "", false, fmt.Errorf("%d notes already wait for the dispatcher; it is not reading them", signalsMax)
+	if most := s.signalsCap(); len(s.State.Signals) >= most {
+		if most > signalsMax {
+			s.signalRefused(most)
+		}
+
+		return "", false, fmt.Errorf("%d notes already wait for the dispatcher; it is not reading them", most)
 	}
 
 	// The id comes with the note, not with its delivery: zmina queue ls and the recovery pack show it, and a line
@@ -1901,8 +1920,8 @@ func (s *Shift) Queues() []QueueView {
 		q := QueueView{Role: name, Inbox: rs.Inbox, Sent: rs.Sent, Posted: rs.Posted, joined: name != s.Crew.Dispatcher}
 
 		if s.Now != nil {
-			if h, held := s.planHold(name, s.Now()); held {
-				q.PlanHeld, q.PlanHeldUntil = h.Label(), h.Reset.In(s.Crew.Location())
+			if what, until, held := s.planHeldWhy(name, s.Now()); held {
+				q.PlanHeld, q.PlanHeldUntil = what, until.In(s.Crew.Location())
 			}
 		}
 
