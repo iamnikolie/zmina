@@ -26,6 +26,8 @@ type Dialog struct {
 	// there is none, and then nothing says what is being approved (View.WaitingFor says it is a permission prompt).
 	Tool    string `json:"tool,omitempty"`
 	Subject string `json:"subject,omitempty"`
+	// SubjectCut: the subject is not all of what is being approved (see AskedPermission.Cut).
+	SubjectCut bool `json:"subject_cut,omitempty"`
 	// Multi: several choices can be ticked, which Enter on one does not settle: it needs the terminal.
 	Multi bool `json:"multi,omitempty"`
 }
@@ -179,8 +181,8 @@ func (s *Shift) dialogOf(name string, sess *registry.Session, screen string) *Di
 		return nil
 	}
 
-	if p := s.permissionLook(name, sess); p != nil {
-		d.Tool, d.Subject = p.Tool, p.Input
+	if p := s.permissionLook(name, sess); p != nil && permissionOnScreen(p, screen) {
+		d.Tool, d.Subject, d.SubjectCut = p.Tool, p.Input, p.Cut
 		d.ID = permissionDialogID(p, d.ID)
 	}
 

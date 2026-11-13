@@ -108,6 +108,7 @@ type Event struct {
 	Prompt        string `json:"prompt,omitempty"`
 	Tool          string `json:"tool,omitempty"`
 	Subject       string `json:"subject,omitempty"`
+	SubjectCut    bool   `json:"subject_cut,omitempty"`
 	NeedsTerminal bool   `json:"needs_terminal,omitempty"`
 	Task          string `json:"task,omitempty"`
 	TaskTitle     string `json:"task_title,omitempty"`
@@ -220,11 +221,12 @@ func (b Builder) answer(it Item, opts []Option) *Answer {
 type DialogFacts struct {
 	Role, ID, Question, Nonce string
 	Prompt, Tool, Subject     string
-	// Multi: several choices can be ticked. Since is when the wait began.
-	Multi           bool
-	Since           time.Time
-	Options         []Option
-	Task, TaskTitle string
+	// Multi: several choices can be ticked. SubjectCut: the subject is not all of what is being approved (it was cut, or the call has
+	// parts it does not show): the phone cannot show it whole, so neither of them is pressed from it. Since is when the wait began.
+	Multi, SubjectCut bool
+	Since             time.Time
+	Options           []Option
+	Task, TaskTitle   string
 }
 
 // DialogID is the id of a dialog in the plan and in the ledger: the role, a colon and the fingerprint.
@@ -244,7 +246,7 @@ func (b Builder) Dialog(d DialogFacts) Event {
 	id := EventDialogID(d.Role, d.ID, d.Nonce)
 	ev := Event{V: Version, Event: Dialog, ID: id, Role: b.clean(d.Role, roleMax), Question: b.clean(d.Question, TextMax),
 		Prompt: b.clean(d.Prompt, roleMax), Tool: b.clean(d.Tool, roleMax), Subject: b.clean(d.Subject, SubjectMax),
-		Task: b.clean(d.Task, roleMax), TaskTitle: b.clean(d.TaskTitle, TitleMax), NeedsTerminal: d.Multi}
+		Task: b.clean(d.Task, roleMax), TaskTitle: b.clean(d.TaskTitle, TitleMax), SubjectCut: d.SubjectCut, NeedsTerminal: d.Multi || d.SubjectCut}
 
 	a := &Answer{}
 
@@ -255,9 +257,10 @@ func (b Builder) Dialog(d DialogFacts) Event {
 
 		ev.Options = append(ev.Options, Option{N: o.N, Text: b.clean(o.Text, OptionMax), Detail: b.clean(o.Detail, DetailMax)})
 
-		// A question whose choices are ticked is settled in the terminal: pressing one choice would tick it, and answer nothing. And
-		// choose takes a choice from 1 to 9.
-		if !d.Multi && o.N >= 1 && o.N <= maxChoice {
+		// A question whose choices are ticked is settled in the terminal: pressing one choice would tick it, and answer nothing. So is
+		// a permission prompt whose call the phone cannot be shown whole: never a working Yes for what it does not show. And choose
+		// takes a choice from 1 to 9.
+		if !d.Multi && !d.SubjectCut && o.N >= 1 && o.N <= maxChoice {
 			a.Options = append(a.Options, OptionAnswer{N: o.N, Argv: []string{zminaBinary, "--crew", b.Crew, "choose", d.Role,
 				strconv.Itoa(o.N), "--dialog", id, "--by", b.Plugin}})
 		}

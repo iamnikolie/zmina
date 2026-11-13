@@ -213,3 +213,15 @@ func TestNoArgvForAChoiceAboveNine(t *testing.T) {
 	assert.Len(t, ev.Answer.Options, 9, "only 1 to 9 can be pressed")
 	assert.Equal(t, 9, ev.Answer.Options[8].N)
 }
+
+// A subject that is not all of what is approved is said so, and offers nothing to press.
+func TestACutSubjectOffersNoArgv(t *testing.T) {
+	ev := builder().Dialog(DialogFacts{Role: "dev", ID: "ab", Nonce: "0011223344556677", Prompt: "permission", Tool: "Bash", Subject: "make deploy",
+		SubjectCut: true, Options: []Option{{N: 1, Text: "Yes"}, {N: 2, Text: "No"}}})
+
+	assert.True(t, ev.SubjectCut)
+	assert.True(t, ev.NeedsTerminal)
+	assert.Nil(t, ev.Answer)
+	assert.Contains(t, string(ev.Line()), `"subject":"make deploy","subject_cut":true,"needs_terminal":true`)
+	assert.Len(t, ev.Options, 2)
+}

@@ -225,7 +225,7 @@ func standingDialog(s *shift.Shift, c *crew.Crew, v shift.View) (plugin.DialogFa
 	}
 
 	f := plugin.DialogFacts{Role: v.Role, ID: d.ID, Question: cmp.Or(v.Dialog.Question, d.Question), Prompt: prompt, Tool: d.Tool,
-		Subject: d.Subject, Multi: d.Multi || v.Dialog.Multi, Since: v.Since}
+		Subject: d.Subject, SubjectCut: d.SubjectCut, Multi: d.Multi || v.Dialog.Multi, Since: v.Since}
 
 	for _, o := range d.Options {
 		f.Options = append(f.Options, plugin.Option{N: o.N, Text: o.Label, Detail: o.Detail})

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/iamnikolie/zmina/internal/crew"
@@ -100,10 +101,30 @@ type AskedPermission struct {
 	Tool      string    `json:"tool"`
 	Input     string    `json:"input"`
 	InputSum  string    `json:"input_sum"`
+	// Cut: Input is not all of what the call asks. It was cut, or the call has parts Input does not show and that change what is
+	// approved (a shell call's sandbox switch, a file call's content): a phone shown it cannot judge the call, and is offered nothing
+	// to press.
+	Cut bool `json:"subject_cut,omitempty"`
 }
 
-// RecordPermission reads a PermissionRequest hook's input and, for any tool but AskUserQuestion, writes the call as the role's
-// permission record (replacing the one before). Input that is not a tool call records nothing and is no error.
+// permissionRecords is the file of a role's permission records: the last few calls, not the last one, because two requests of a
+// session may be made within a moment (parallel tool calls, sub-agents) and the one on the screen is then not the one that wrote
+// last.
+type permissionRecords struct {
+	Records []AskedPermission `json:"records"`
+}
+
+const (
+	// permissionKeep is how many calls a role's permission file keeps, permissionAge how long.
+	permissionKeep = 8
+	permissionAge  = 10 * time.Minute
+	// permissionHeadMax is how much of a shell call's command must be on the screen for the call to be the one it shows.
+	permissionHeadMax = 24
+)
+
+// RecordPermission reads a PermissionRequest hook's input and, for any tool but AskUserQuestion, adds the call to the role's
+// permission file (the last few calls, under a lock: hooks of parallel requests run at once). Input that is not a tool call
+// records nothing and is no error.
 func RecordPermission(l crew.Layout, role string, input []byte, now time.Time) error {
 	var in struct {
 		SessionID string          `json:"session_id"`
@@ -126,26 +147,82 @@ func RecordPermission(l crew.Layout, role string, input []byte, now time.Time) e
 	}
 
 	sum := sha256.Sum256(append([]byte(in.ToolName+"\x00"), canon...))
+	words, whole := toolInputWords(in.ToolInput)
+	folded := oneLine(words)
 
-	return writeRecord(l, l.HookPermission(role), AskedPermission{SessionID: in.SessionID, At: now.UTC(), Tool: oneLine(in.ToolName),
-		Input: clipRunes(oneLine(toolInputWords(in.ToolInput)), permissionInputMax), InputSum: hex.EncodeToString(sum[:8])})
-}
+	rec := AskedPermission{SessionID: in.SessionID, At: now.UTC(), Tool: oneLine(in.ToolName), Input: clipRunes(folded, permissionInputMax),
+		InputSum: hex.EncodeToString(sum[:8]), Cut: !whole || len([]rune(folded)) > permissionInputMax}
 
-// toolInputWords says what a tool call was asked to do: the command of a shell call, the path or address of a file or web call, else
-// the input as JSON.
-func toolInputWords(raw json.RawMessage) string {
-	var m map[string]any
-	if json.Unmarshal(raw, &m) != nil {
-		return string(raw)
+	if st, err := os.Stat(l.Dir); err != nil || !st.IsDir() {
+		return errors.New("no crew directory to record in")
 	}
 
-	for _, key := range []string{"command", "file_path", "path", "notebook_path", "url", "pattern", "query"} {
-		if v, ok := m[key].(string); ok && v != "" {
-			return v
+	if err := fsx.MkdirAll(l.Hooks(), 0o700); err != nil {
+		return err
+	}
+
+	lock, err := os.OpenFile(l.HookPermission(role)+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+
+	defer func() { _ = lock.Close() }()
+
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return err
+	}
+
+	defer func() { _ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) }()
+
+	var have permissionRecords
+
+	_ = readRecord(l.HookPermission(role), &have)
+
+	kept := have.Records[:0:0]
+
+	for _, r := range have.Records {
+		if now.Sub(r.At) <= permissionAge {
+			kept = append(kept, r)
 		}
 	}
 
-	return string(raw)
+	kept = append(kept, rec)
+	if len(kept) > permissionKeep {
+		kept = kept[len(kept)-permissionKeep:]
+	}
+
+	return writeRecord(l, l.HookPermission(role), permissionRecords{Records: kept})
+}
+
+// benignInputKeys are the keys of a tool's input that change nothing of what is approved: a shell call's own words for what it does,
+// and its time limit.
+var benignInputKeys = []string{"description", "timeout"}
+
+// toolInputWords says what a tool call was asked to do: the command of a shell call, the path or address of a file or web call, else
+// the input as JSON. whole is false when the call has other parts that change what is approved (a key that is not the one shown, and
+// not a benign one): the words are then not all of it.
+func toolInputWords(raw json.RawMessage) (words string, whole bool) {
+	var m map[string]any
+	if json.Unmarshal(raw, &m) != nil {
+		return string(raw), true
+	}
+
+	for _, key := range []string{"command", "file_path", "path", "notebook_path", "url", "pattern", "query"} {
+		v, ok := m[key].(string)
+		if !ok || v == "" {
+			continue
+		}
+
+		for other := range m {
+			if other != key && !slices.Contains(benignInputKeys, other) {
+				return v, false
+			}
+		}
+
+		return v, true
+	}
+
+	return string(raw), true
 }
 
 // writeRecord writes a record whole or not at all, in a directory it makes under an existing crew directory.
@@ -177,6 +254,7 @@ func (s *Shift) dropHookRecords(name string) {
 	l := s.Crew.Layout()
 	_ = os.Remove(l.HookQuestion(name))
 	_ = os.Remove(l.HookPermission(name))
+	_ = os.Remove(l.HookPermission(name) + ".lock")
 	_ = os.Remove(l.HookFailure(name))
 }
 
@@ -230,22 +308,64 @@ func (s *Shift) askedLook(name string, sess *registry.Session) (q *AskedQuestion
 }
 
 // permissionLook is the tool call a role's hook recorded, when it is the one on the role's screen: the session file says the session
-// waits on a permission prompt, the record is of that very session, and it was written within hookSkew of the moment that wait began.
-// Anything else — no record, one of an earlier prompt, one of another session — is nil: nothing says what is being approved.
+// waits on a permission prompt, and exactly one call of that very session was recorded within hookSkew of the moment the wait
+// began (or several that are the very same call). Two different calls in that window — parallel requests — leave nothing that says
+// which the prompt is: nil. So do no record, one of another session, one of an earlier prompt.
 func (s *Shift) permissionLook(name string, sess *registry.Session) *AskedPermission {
 	if sess == nil || !hookRole(name) || waitKind(sess) != WaitPermission || sess.StatusUpdatedAt <= 0 {
 		return nil
 	}
 
-	var rec AskedPermission
-
-	switch {
-	case !readRecord(s.Crew.Layout().HookPermission(name), &rec), rec.SessionID == "", rec.SessionID != sess.SessionID, rec.Tool == "",
-		!near(rec.At, sess.StatusSince()):
+	var have permissionRecords
+	if !readRecord(s.Crew.Layout().HookPermission(name), &have) {
 		return nil
 	}
 
-	return &rec
+	var found *AskedPermission
+
+	for i := range have.Records {
+		r := have.Records[i]
+		if r.SessionID == "" || r.SessionID != sess.SessionID || r.Tool == "" || !near(r.At, sess.StatusSince()) {
+			continue
+		}
+
+		if found != nil && (found.Tool != r.Tool || found.InputSum != r.InputSum) {
+			return nil
+		}
+
+		found = &r
+	}
+
+	return found
+}
+
+// permissionOnScreen reports whether a shell call's command is on the screen the prompt is on: the head of its words (folded, a
+// bounded prefix) among the screen's last lines, which the prompt draws under "Bash command". The screens of the goldens show the
+// command of a shell call so; they show no other tool, so no other tool is held to it. A call that is not on the screen is not the
+// prompt's.
+func permissionOnScreen(p *AskedPermission, screen string) bool {
+	if p.Tool != "Bash" {
+		return true
+	}
+
+	head := []rune(oneLine(p.Input))
+	if len(head) > permissionHeadMax {
+		head = head[:permissionHeadMax]
+	}
+
+	if len(head) == 0 {
+		return false
+	}
+
+	lines := strings.Split(screen, "\n")
+	if len(lines) > nowLines {
+		lines = lines[len(lines)-nowLines:]
+	}
+
+	// The screen's frame (a box's edges) and its line breaks are not the command's.
+	frame := strings.NewReplacer("│", " ", "┃", " ", "╭", " ", "╮", " ", "╰", " ", "╯", " ", "─", " ")
+
+	return strings.Contains(oneLine(frame.Replace(strings.Join(lines, "\n"))), string(head))
 }
 
 // apart says how far a moment is from another, in words: "1m0s before".
