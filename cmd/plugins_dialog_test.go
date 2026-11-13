@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -270,4 +271,56 @@ func TestChooseByHand(t *testing.T) {
 	_, err = runWith(t, file, seams, "choose", "dev", "1")
 	require.ErrorContains(t, err, "no question on its screen now")
 	assert.Len(t, f.pressed(), 1)
+}
+
+// A choose run by a role is recorded as that role's, and is no sign that the owner is at the machine; the cockpit's button is the
+// owner's own choice, and is noted for the plugins too.
+func TestChooseRecordsWhoChose(t *testing.T) {
+	file, f, seams, ns := dialogWorld(t, "  - {name: pager, quiet_when_active: 5m}\n")
+	f.show(t, ns, true)
+	owner := filepath.Join(filepath.Dir(file), "plugins", "owner.json")
+
+	t.Setenv("ZMINA_ROLE", "dev")
+
+	_, err := runWith(t, file, seams, "choose", "dev", "2")
+	require.NoError(t, err)
+
+	o := plugin.ReadOwner(owner)
+	assert.True(t, o.Active.IsZero(), "a role's choice does not say the owner is here")
+	require.Len(t, o.Chosen, 1)
+
+	for _, c := range o.Chosen {
+		assert.Equal(t, "role dev", c.By)
+	}
+
+	t.Setenv("ZMINA_PLUGIN", "pager")
+	_, err = runWith(t, file, seams, "choose", "dev", "2", "--dialog", "dev:x", "--by", "pager")
+	require.ErrorContains(t, err, "a role (dev) does not answer in a plugin's voice")
+	t.Setenv("ZMINA_ROLE", "")
+
+	// The cockpit.
+	a := &app{crew: file, out: io.Discard, err: io.Discard, shiftSeams: seams}
+
+	var id string
+
+	require.NoError(t, a.readState(func(s *shift.Shift) error {
+		id = viewOf(s, "dev").Dialog.ID
+
+		return nil
+	}))
+	require.NoError(t, a.withState(func(s *shift.Shift) error { return chooseDialog(s, "dev", "3:"+id) }))
+
+	o = plugin.ReadOwner(owner)
+	assert.WithinDuration(t, time.Now(), o.Active, time.Minute)
+
+	chosen := plugin.Chosen{}
+
+	for _, c := range o.Chosen {
+		if c.N == 3 {
+			chosen = c
+		}
+	}
+
+	assert.Equal(t, "owner", chosen.By)
+	assert.Equal(t, "No", chosen.Text)
 }

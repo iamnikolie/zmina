@@ -332,7 +332,7 @@ func (a *app) chooseCommand() *cobra.Command {
 				}
 
 				s.Log(role, "chose", "", detail)
-				noteChosen(s, role, d.ID, answeredBy("hand", via), n, label)
+				noteChosen(s, role, d.ID, answeredBy(by(), via), n, label)
 
 				fmt.Fprintf(a.out, "%s · chose %d: %s\n", role, n, label)
 

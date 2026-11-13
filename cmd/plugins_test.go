@@ -214,7 +214,8 @@ func TestAnswerThroughAPluginIsRecorded(t *testing.T) {
 	assert.Equal(t, "-acme", ask.Answer)
 }
 
-// --by is accepted only for a plugin of the crew file, with ZMINA_PLUGIN naming it: a mistake is never taken for a plugin.
+// --by is accepted only for a plugin of the crew file, with ZMINA_PLUGIN naming it, and never from a role: a mistake is never
+// taken for a plugin, and a role does not speak with the owner's voice.
 func TestByNeedsThePluginsOwnRun(t *testing.T) {
 	file := pluginCrew(t, "  dev: {}\n", "  - name: pager\n")
 	out, _, err := zm(t, file, "todo", "add", "Which name?")
@@ -237,6 +238,13 @@ func TestByNeedsThePluginsOwnRun(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, id, "none of them answered it")
 
+	// A role's environment may say anything: it is not a plugin.
+	t.Setenv("ZMINA_PLUGIN", "pager")
+	t.Setenv("ZMINA_ROLE", "dev")
+	_, _, err = zm(t, file, "todo", "answer", id, "--by", "pager", "acme")
+	require.ErrorContains(t, err, "a role (dev) does not answer in a plugin's voice")
+	t.Setenv("ZMINA_ROLE", "")
+
 	// Without --by the answer is the caller's own, whatever ZMINA_PLUGIN says.
 	t.Setenv("ZMINA_PLUGIN", "pager")
 	_, _, err = zm(t, file, "todo", "answer", id, "acme")
@@ -246,8 +254,8 @@ func TestByNeedsThePluginsOwnRun(t *testing.T) {
 	assert.Equal(t, "owner", ask.ClosedBy)
 }
 
-// The first answer wins: a second answer to a closed ask, or to a waiting task already answered, is refused with exit 1 and says
-// so, from the keyboard or a plugin alike; nothing is queued for the dispatcher the second time.
+// The first answer wins: a second answer to a closed ask is refused with exit 1 and says so, from the keyboard or a plugin alike;
+// a plugin's answer to a waiting task already answered is refused too. Nothing is queued for the dispatcher the second time.
 func TestSecondAnswerIsRefused(t *testing.T) {
 	file := pluginCrew(t, "  dev: {}\n", "  - name: pager\n")
 	out, _, err := zm(t, file, "todo", "add", "Which name?", "--rec", "acme")
@@ -289,11 +297,20 @@ func TestSecondAnswerIsRefused(t *testing.T) {
 	_, _, err = zm(t, file, "todo", "answer", "T-1", "eu-west")
 	require.NoError(t, err)
 
+	// A plugin's late answer is refused; at the keyboard a follow-up, or an answer after he set it aside, works as it always did.
 	_, _, err = zm(t, file, "todo", "answer", "T-1", "--by", "pager", "us-east")
 	require.ErrorContains(t, err, "T-1 is already answered")
 
-	_, _, err = zm(t, file, "todo", "ignore", "T-1")
+	_, _, err = zm(t, file, "todo", "ignore", "--by", "pager", "T-1")
 	require.ErrorContains(t, err, "T-1 is already answered")
+
+	_, _, err = zm(t, file, "todo", "answer", "T-1", "eu-west, then")
+	require.NoError(t, err, "a follow-up answer at the keyboard")
+
+	_, _, err = zm(t, file, "todo", "ignore", "T-1")
+	require.NoError(t, err)
+	_, _, err = zm(t, file, "todo", "answer", "T-1", "after all: eu-west")
+	require.NoError(t, err, "an answer after he set it aside")
 
 	// It waits again when the task changes: a new question, a new answer.
 	_, _, err = zm(t, file, "task", "set", "T-1", "--note", "eu-west is full: us-east?")

@@ -334,8 +334,19 @@ func chooseDialog(s *shift.Shift, role, pick string) error {
 	if !ok || err != nil || n < 1 || n > 9 {
 		return errors.New("choose:<n>:<label>")
 	}
-	_, err = pressChoice(s, role, n, id, true)
-	return err
+	d, err := pressChoice(s, role, n, id, true)
+	if err != nil {
+		return err
+	}
+	label := ""
+	for _, o := range d.Options {
+		if o.N == n {
+			label = o.Label
+		}
+	}
+	// The cockpit's button is the owner's own choice: a plugin that was told of this question hears it was chosen, and by him.
+	noteChosen(s, role, d.ID, "owner", n, label)
+	return nil
 }
 
 // pressChoice is chooseDialog's work: it presses choice n of the dialog on the role's screen and returns the dialog it

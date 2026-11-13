@@ -548,6 +548,11 @@ func pluginVoice(c *crew.Crew, by string) (string, error) {
 		return "", fmt.Errorf("--by %s: only a plugin's own run answers in its voice; ZMINA_PLUGIN=%s is not set", by, by)
 	}
 
+	// A role is never a plugin: whatever a role's environment says, it does not speak with the owner's voice.
+	if role := os.Getenv("ZMINA_ROLE"); role != "" {
+		return "", fmt.Errorf("--by %s: a role (%s) does not answer in a plugin's voice", by, role)
+	}
+
 	return by, nil
 }
 
@@ -622,10 +627,12 @@ func answerTodo(s *shift.Shift, from, via, action, id, words string) (string, er
 			return "", err
 		}
 
-		// The first answer wins: a waiting task the owner has answered, or set aside, since it last changed waits on him no more.
-		if t.State == task.Waiting && (action == "answer" || action == "park" || action == "ignore") &&
+		// The first answer wins over a plugin's: a waiting task the owner has answered, or set aside, since it last changed
+		// waits on him no more, and a late tap on a phone does not answer it again. At the keyboard a follow-up answer, or one
+		// after he set it aside, is his to give as it always was.
+		if via != "" && t.State == task.Waiting && (action == "answer" || action == "park" || action == "ignore") &&
 			(t.Answered.After(t.Updated) || t.Ignored.After(t.Updated)) {
-			return "", fmt.Errorf("%s is already answered (a waiting task takes its first answer)", t.ID)
+			return "", fmt.Errorf("%s is already answered (a plugin's answer is its first: answer it in a terminal to say more)", t.ID)
 		}
 
 		switch action {
