@@ -297,3 +297,19 @@ func TestCodexRates(t *testing.T) {
 	_, ok = p.Cost(m)
 	assert.False(t, ok)
 }
+
+// The newest models are priced: a turn on one of them counts against a role's and a task's budget.
+func TestBuiltinPricesTheNewestModels(t *testing.T) {
+	tb := Builtin()
+
+	for _, id := range []string{"claude-fable-5-2", "claude-mythos-5-2"} {
+		p, ok := tb.Models[id]
+		if !ok {
+			t.Fatalf("%s has no price", id)
+		}
+
+		if p.Input != 8 || p.Output != 40 || p.Read != 0.20 || p.Fast != 2 {
+			t.Fatalf("%s: %+v", id, p)
+		}
+	}
+}

@@ -23,7 +23,8 @@ func (a *app) laterCommand() *cobra.Command {
 	}
 
 	c.AddCommand(a.laterAddCommand(), a.laterLsCommand(), a.laterCloseCommand("done", later.Done),
-		a.laterCloseCommand("drop", later.Dropped), a.laterTakeCommand())
+		a.laterCloseCommand("drop", later.Dropped), a.laterTakeCommand(), a.laterKeepCommand(), a.laterSweepCommand(),
+		a.laterSweptCommand())
 
 	return c
 }
@@ -150,6 +151,10 @@ func (a *app) laterLsCommand() *cobra.Command {
 					fmt.Fprintln(a.out, line)
 				}
 
+				if line := sweepFooter(s, items); line != "" {
+					fmt.Fprintln(a.out, line)
+				}
+
 				return nil
 			})
 		},
@@ -180,7 +185,16 @@ func (a *app) laterCloseCommand(use string, st later.State) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.withState(func(s *shift.Shift) error {
-				it, err := laterStore(s.Crew).Close(args[0], st, note, s.Now())
+				store := laterStore(s.Crew)
+
+				// An item an open sweep lists is closed on evidence: a note that says what shows it.
+				if it, err := store.Get(args[0]); err == nil {
+					if err := refuseBareClose(s, it, st, note); err != nil {
+						return err
+					}
+				}
+
+				it, err := store.Close(args[0], st, note, s.Now())
 				if err != nil {
 					return err
 				}
@@ -237,6 +251,15 @@ func (a *app) laterTakeCommand() *cobra.Command {
 				n.Note = "from " + it.ID
 				if it.Note != "" {
 					n.Note += ": " + it.Note
+				}
+
+				n.Sweep, n.AskedFor, n.Title = nil, nil, ""
+
+				// A sweep put away (task park, an idle release) is taken up as a sweep again, over what it still lists.
+				if from, ok := parkedSweep(s, it); ok {
+					if err := continueSweep(s, &n, it, from, role); err != nil {
+						return err
+					}
 				}
 
 				t, err := a.ledger(s).New(n)

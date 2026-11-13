@@ -250,6 +250,9 @@ func maskTags(text string) string {
 // any session tag marked as there and not shown, then cut to evidenceMax characters.
 func Quote(text string) string { return quoteN(text, evidenceMax) }
 
+// QuoteN is Quote cut to n characters: for a text that goes into a line another session reads, where it is data.
+func QuoteN(text string, n int) string { return quoteN(text, n) }
+
 // quoteN is Quote cut to n characters.
 func quoteN(text string, n int) string {
 	return clipRunes(maskTags(oneLine(text)), n)

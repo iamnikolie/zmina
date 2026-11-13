@@ -16,6 +16,7 @@ import (
 
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/donecheck"
+	"github.com/iamnikolie/zmina/internal/later"
 	"github.com/iamnikolie/zmina/internal/task"
 	"github.com/iamnikolie/zmina/internal/worktree"
 )
@@ -113,6 +114,8 @@ type Ledger struct {
 	// InCheck says this process was started by a check: it acts for no one, so it sets no task's check and forces past
 	// none (donecheck.InCheckEnv).
 	InCheck bool
+	// Later is the parked list a sweep task is closed against (ErrUnswept); nil: a sweep closes like any task.
+	Later *later.Store
 }
 
 // NewTask is what a new task is made of.
@@ -134,6 +137,11 @@ type NewTask struct {
 	// Check is the command closing the task as done runs (task.Task.Check); only the owner and the dispatcher set
 	// one, and it needs a worktree.
 	Check *donecheck.Spec
+	// Sweep is the parked items the task asks a verdict on (task.Task.Sweep).
+	Sweep []string
+	// AskedFor, when set, builds the asked text once the task has its id, and is written with it: for a text that names its own
+	// task. Asked stands for it until then, and is what a task that sets none keeps.
+	AskedFor func(id string) string
 }
 
 // New records a task. With a worktree, the task is written first — with the worktree's path, branch and base — and
@@ -153,7 +161,7 @@ func (l *Ledger) New(n NewTask) (task.Task, error) {
 	}
 
 	t := task.Task{Role: n.Role, Asked: n.Asked, Note: n.Note, By: n.By, Title: n.Title, Project: n.Project, URL: n.URL,
-		Budget: n.Budget, Route: n.Route, Criteria: criteria}
+		Budget: n.Budget, Route: n.Route, Criteria: criteria, Sweep: n.Sweep}
 
 	if n.Check != nil {
 		if t.Check, err = l.cleanCheck(*n.Check, n.By, n.Worktree); err != nil {
@@ -176,7 +184,12 @@ func (l *Ledger) New(n NewTask) (task.Task, error) {
 		}
 	}
 
-	t, err = l.Store.Add(t, l.Now())
+	var fill func(*task.Task)
+	if n.AskedFor != nil {
+		fill = func(t *task.Task) { t.Asked = n.AskedFor(t.ID) }
+	}
+
+	t, err = l.Store.AddFunc(t, l.Now(), fill)
 	if err != nil {
 		return t, err
 	}
@@ -337,6 +350,17 @@ func (l *Ledger) apply(t task.Task, c Change, preflight bool) (task.Task, []stri
 		case c.State == task.Done && !alreadyDone:
 			if checked, unchecked, err = l.closeCheck(t, c, preflight); err != nil {
 				return t, nil, err
+			}
+
+			// A sweep has no worktree to run a check in: its check is zmina later swept, asked here.
+			var early *task.Unchecked
+
+			if early, err = l.closeSweep(t, c); err != nil {
+				return t, nil, err
+			}
+
+			if unchecked == nil {
+				unchecked = early
 			}
 		}
 

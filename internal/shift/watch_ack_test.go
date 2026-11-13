@@ -113,6 +113,27 @@ func TestWatchTaskCarryingTheNoteAcksIt(t *testing.T) {
 	assert.Equal(t, "task T-2", f.s.State.Watch["ci-red"].Keys["acme/site!12:approved"].AckedBy)
 }
 
+// A sweep of the parked list lists the texts of old items, urls and keys among them: it is no turning of a note into work.
+func TestWatchSweepTaskIsNeverACarrier(t *testing.T) {
+	f := fixtureWith(t, watchYAML)
+
+	runFor(t, f, 5*time.Minute, approved())
+	f.s.State.Signals = nil
+
+	sweep := task.Task{ID: "T-7", Role: "dev", State: task.Open, Created: *f.now, Sweep: []string{"L-1", "L-2"},
+		Asked: "Sweep of the parked list. L-1 · 40d · \"look at " + mrURL + " and acme/site!12:approved\"",
+		Note:  "ci-red/acme/site!12:approved"}
+	f.tk.list = []task.Task{sweep}
+	assert.Equal(t, []string{"ci-red/acme/site!12:approved"}, watchKeys(t, f), "the sweep's rows do not ack the note")
+	assert.Equal(t, 1, f.s.WatchViews()[0].Unacked)
+
+	// The same task without a sweep list is a carrier, as before: it is the list that makes the difference.
+	plain := sweep
+	plain.Sweep = nil
+	f.tk.list = []task.Task{plain}
+	assert.Empty(t, watchKeys(t, f))
+}
+
 func TestWatchTaskNamingTheKeyAcksIt(t *testing.T) {
 	f := fixtureWith(t, watchYAML)
 

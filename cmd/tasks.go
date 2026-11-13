@@ -17,6 +17,7 @@ import (
 
 	"github.com/iamnikolie/zmina/internal/donecheck"
 	"github.com/iamnikolie/zmina/internal/events"
+	"github.com/iamnikolie/zmina/internal/later"
 	"github.com/iamnikolie/zmina/internal/ledger"
 	"github.com/iamnikolie/zmina/internal/shift"
 	"github.com/iamnikolie/zmina/internal/task"
@@ -79,36 +80,13 @@ func (a *app) taskNewCommand() *cobra.Command {
 					return err
 				}
 
-				if _, err := s.Role(pick.role); err != nil {
-					return err
-				}
-
-				pane, err := s.Tmux.Probe(pick.role)
-				if err != nil {
-					return err
-				}
-
-				n.Role, n.Asked, n.By, n.Route = pick.role, pick.asked, s.By, pick.record()
-
-				t, err := a.ledger(s).New(n)
-				if t.ID != "" {
-					pick.log(s, t)
-				}
-
+				t, pane, err := a.openTask(s, pick, n)
 				if err != nil {
 					return err
 				}
 
 				if pane.State == tmux.Up {
-					if _, err := s.HandTask(t.Role, t); err != nil {
-						return fmt.Errorf("%s recorded, but handoff failed: %w", t.ID, err)
-					}
-
-					// The packet goes now when the role can take it, else with the beat.
-					s.DeliverTo(t.Role)
-
-					t, err = s.Tasks.Get(t.ID)
-					if err != nil {
+					if t, err = a.handOut(s, t); err != nil {
 						return err
 					}
 				}
@@ -160,6 +138,42 @@ func (a *app) taskNewCommand() *cobra.Command {
 	c.Flags().BoolVar(&asJSON, "json", false, "JSON output")
 
 	return c
+}
+
+// openTask records a task for the role picked, as task new does: the role must exist and tmux must answer about it, the
+// task is made and, when the crew has routes, the route event is logged. n names the rest of the task; its role, asked
+// text, author and route are the pick's. The task exists on the ledger even when the error says something went wrong after
+// it was made (a worktree that could not be made: its id is in the error and the task, dropped, is on the ledger).
+func (a *app) openTask(s *shift.Shift, pick rolePick, n ledger.NewTask) (task.Task, tmux.Pane, error) {
+	if _, err := s.Role(pick.role); err != nil {
+		return task.Task{}, tmux.Pane{}, err
+	}
+
+	pane, err := s.Tmux.Probe(pick.role)
+	if err != nil {
+		return task.Task{}, pane, err
+	}
+
+	n.Role, n.Asked, n.By, n.Route = pick.role, pick.asked, s.By, pick.record()
+
+	t, err := a.ledger(s).New(n)
+	if t.ID != "" {
+		pick.log(s, t)
+	}
+
+	return t, pane, err
+}
+
+// handOut gives a task recorded for a role that is up its handoff packet: the line is queued, and goes now when the role can
+// take it, else with the beat. It returns the task as the hand-out left it.
+func (a *app) handOut(s *shift.Shift, t task.Task) (task.Task, error) {
+	if _, err := s.HandTask(t.Role, t); err != nil {
+		return t, fmt.Errorf("%s recorded, but handoff failed: %w", t.ID, err)
+	}
+
+	s.DeliverTo(t.Role)
+
+	return s.Tasks.Get(t.ID)
 }
 
 // checkFlags is the flags that give a task its check: --check, with --check-timeout, --check-commit and --check-env-rc.
@@ -450,6 +464,12 @@ func (a *app) printCheck(s *shift.Shift, t task.Task, full bool) {
 	if spec, source, ok := a.ledger(s).CheckFor(t); ok && t.State.Active() {
 		fmt.Fprintf(a.out, "check: %s · %s's, run by zmina task done; it passing says the command exited 0, not that the work is right\n",
 			spec, source)
+	}
+
+	if len(t.Sweep) > 0 && t.State.Active() {
+		items, _, _ := laterStore(s.Crew).Scan()
+		fmt.Fprintf(a.out, "check: zmina later swept %s · closing it as done waits on it; %d of %d parked items have no verdict\n",
+			t.ID, len(later.Unswept(items, t.Sweep, t.ID)), len(t.Sweep))
 	}
 
 	if c := t.CheckEnv; c != nil && t.State.Active() {

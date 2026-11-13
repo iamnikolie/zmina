@@ -894,3 +894,22 @@ func TestDoneCheckKey(t *testing.T) {
 	_, err = Load(write(t, "done_check: {run: x, timeot: 5m}\n"+roles))
 	require.ErrorContains(t, err, `a check has no key "timeot"`, "a gate that silently asks for less is not a warning")
 }
+
+// A span that does not fit a time.Duration is refused, not wrapped round to a small or a negative one.
+func TestParseSpanRefusesWhatOverflows(t *testing.T) {
+	for in, want := range map[string]time.Duration{
+		"90s":     90 * time.Second,
+		"14d":     14 * 24 * time.Hour,
+		"0d":      0,
+		"106751d": 106751 * 24 * time.Hour, // the most whole days a Duration holds
+	} {
+		got, err := ParseSpan(in)
+		require.NoError(t, err, in)
+		assert.Equal(t, want, got, in)
+	}
+
+	for _, in := range []string{"106752d", "999999999d", "9223372036854775807d", "99999999999999999999d", "2562048h", "-3d", "d", "1.5d"} {
+		_, err := ParseSpan(in)
+		assert.Error(t, err, in)
+	}
+}

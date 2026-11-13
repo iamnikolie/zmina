@@ -1282,6 +1282,7 @@ func (a *app) tickCommand() *cobra.Command {
 			a.pushTick(time.Now())
 			a.lessonsBeat(time.Now())
 			a.worktreeBeat(time.Now())
+			a.laterSweepBeat(time.Now())
 			a.retentionBeat(time.Now())
 			a.versionBeat(time.Now())
 			a.diskBeat(time.Now())

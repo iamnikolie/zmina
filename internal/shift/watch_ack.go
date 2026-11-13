@@ -58,7 +58,9 @@ func (s *Shift) allTasks() []task.Task {
 // (main, prod) is a word any task may say, so it never acks.
 func carrier(name, key string, k *watch.Key, tasks []task.Task) string {
 	for _, t := range tasks {
-		if t.Created.Before(k.Since) {
+		// A sweep of the parked list carries the texts of old items, urls and keys among them: it is no work made of the
+		// note, whatever its rows say.
+		if t.Created.Before(k.Since) || len(t.Sweep) > 0 {
 			continue
 		}
 
