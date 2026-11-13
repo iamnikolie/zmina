@@ -36,7 +36,13 @@ func (o Overrides) InForce() bool { return o.Present && o.Err == nil && o.Count 
 func LoadOverrides(base *Table, path string) (*Table, Overrides) {
 	o := Overrides{Path: path}
 
-	f, err := os.Open(path)
+	// Only a plain file is read. A FIFO would hold the command until something wrote to it, a device could be endless: what the
+	// path is, a symlink followed, is asked before it is opened.
+	fi, err := os.Lstat(path)
+	if err == nil && fi.Mode()&fs.ModeSymlink != 0 {
+		fi, err = os.Stat(path)
+	}
+
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return base, o
@@ -48,6 +54,19 @@ func LoadOverrides(base *Table, path string) (*Table, Overrides) {
 	}
 
 	o.Present = true
+
+	if !fi.Mode().IsRegular() {
+		o.Err = fmt.Errorf("%s is not a regular file (it is a %s): it is not read", path, kindOf(fi.Mode()))
+
+		return base, o
+	}
+
+	f, err := openPlain(path)
+	if err != nil {
+		o.Err = err
+
+		return base, o
+	}
 
 	defer func() { _ = f.Close() }()
 
@@ -175,4 +194,20 @@ func rowSetsOf(r Rule) string {
 	}
 
 	return r.Sets
+}
+
+// kindOf names what a file that is not a plain file is.
+func kindOf(m fs.FileMode) string {
+	switch {
+	case m.IsDir():
+		return "directory"
+	case m&fs.ModeNamedPipe != 0:
+		return "named pipe"
+	case m&fs.ModeSocket != 0:
+		return "socket"
+	case m&fs.ModeDevice != 0:
+		return "device"
+	default:
+		return "special file"
+	}
 }
