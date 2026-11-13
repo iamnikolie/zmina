@@ -335,10 +335,12 @@ func chooseDialog(s *shift.Shift, role, pick string) error {
 	if !ok || err != nil || n < 1 || n > 9 {
 		return errors.New("choose:<n>:<label>")
 	}
-	d, err := pressChoice(s, role, n, id, true, nil)
+	d, since, err := pressChoice(s, role, n, id, true, nil)
 	if err != nil {
 		return err
 	}
+	// A press has gone into this wait: no card of it presses again while the question is still on the screen.
+	spendMarks(s, role, d, since)
 	label := ""
 	for _, o := range d.Options {
 		if o.N == n {
@@ -355,39 +357,39 @@ func chooseDialog(s *shift.Shift, role, pick string) error {
 // the choice takes it, as the owner who reads the screen himself means it. The id is the one the view carries, which for a
 // permission prompt covers the tool call the hook recorded. The screen is read last, right before the keys, and must still
 // have that fingerprint. before, when given, is the last word before the keys go (a plugin's one-shot mark is spent there): an
-// error from it presses nothing.
-func pressChoice(s *shift.Shift, role string, n int, id string, check bool, before func(d *shift.Dialog) error) (*shift.Dialog, error) {
+// error from it presses nothing. It also returns when the wait on the screen began, which is what a one-shot mark is of.
+func pressChoice(s *shift.Shift, role string, n int, id string, check bool, before func(d *shift.Dialog, since time.Time) error) (*shift.Dialog, time.Time, error) {
 	v := viewOf(s, role)
 	if v == nil || v.Status != "waiting" {
-		return nil, errors.New("it is not waiting on a question now")
+		return nil, time.Time{}, errors.New("it is not waiting on a question now")
 	}
 	if _, ok, err := s.Tmux.Prompt(role); err != nil || ok {
-		return nil, errors.New("no question on its screen now")
+		return nil, time.Time{}, errors.New("no question on its screen now")
 	}
 	if v.Dialog == nil {
-		return nil, errors.New("no question on its screen now")
+		return nil, time.Time{}, errors.New("no question on its screen now")
 	}
 	i := slices.IndexFunc(v.Dialog.Options, func(o shift.DialogOption) bool { return o.N == n })
 	if i < 0 || check && v.Dialog.ID != id {
-		return nil, errors.New("the question on its screen changed: look again")
+		return nil, time.Time{}, errors.New("the question on its screen changed: look again")
 	}
 	screen, err := s.Tmux.Capture(role, 80)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	d := s.DialogOn(role, screen)
 	if d == nil {
-		return nil, errors.New("no question on its screen now")
+		return nil, time.Time{}, errors.New("no question on its screen now")
 	}
 	if d.ID != v.Dialog.ID {
-		return nil, errors.New("the question on its screen changed: look again")
+		return nil, time.Time{}, errors.New("the question on its screen changed: look again")
 	}
 	if before != nil {
-		if err := before(d); err != nil {
-			return nil, err
+		if err := before(d, v.Since); err != nil {
+			return nil, time.Time{}, err
 		}
 	}
-	return d, s.PressKeys(role, d.ChooseKeys(n))
+	return d, v.Since, s.PressKeys(role, d.ChooseKeys(n))
 }
 
 // questionAnswer is the owner's answer to the question on a role's screen, from Chat: per item the chosen options

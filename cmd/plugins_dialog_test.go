@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/iamnikolie/zmina/internal/crew"
+	"github.com/iamnikolie/zmina/internal/events"
 	"github.com/iamnikolie/zmina/internal/plugin"
 	"github.com/iamnikolie/zmina/internal/registry"
 	"github.com/iamnikolie/zmina/internal/shift"
@@ -90,9 +91,10 @@ func (f *dialogScreenTmux) show(t *testing.T, ns string, dialog bool) {
 	f.mu.Lock()
 	f.input = !dialog
 
-	// A new wait is later than the one before, as the file's own milliseconds say.
-	if now := time.Now(); !now.After(f.since) {
-		f.since = f.since.Add(time.Millisecond)
+	// A new wait is later than the one before, by what a person takes to answer: more than the moment a hook's record and its
+	// session file are allowed to differ by, or two prompts would be one.
+	if now := time.Now(); now.Before(f.since.Add(2 * time.Second)) {
+		f.since = f.since.Add(2 * time.Second)
 	} else {
 		f.since = now
 	}
@@ -115,18 +117,28 @@ func (f *dialogScreenTmux) show(t *testing.T, ns string, dialog bool) {
 	require.NoError(t, os.WriteFile(filepath.Join(ns, "sessions", strconv.Itoa(f.pid)+".json"), []byte(body), 0o600))
 }
 
-// permission makes the wait a permission prompt of a tool call, as its hook recorded it: the command, written the moment the wait
+// permission makes the wait a permission prompt of a shell call, as its hook recorded it: the command, written the moment the wait
 // began.
 func (f *dialogScreenTmux) permission(t *testing.T, crewFile, ns, command string) {
 	t.Helper()
 
+	f.permissionCall(t, crewFile, ns, command, `{"command":`+strconv.Quote(command)+`}`)
+}
+
+// permissionCall is permission for a call with the tool input given whole: the screen draws the command, the hook has the input.
+func (f *dialogScreenTmux) permissionCall(t *testing.T, crewFile, ns, command, toolInput string) {
+	t.Helper()
+
 	f.mu.Lock()
 	f.waitingFor = "permission prompt"
+	f.screen = " Bash command\n\n   " + command + "\n\n Do you want to proceed?\n ❯ 1. Yes\n" +
+		"   2. Yes, and don't ask again for this command\n   3. No, and tell Claude what to do differently (esc)\n\n" +
+		" Esc to cancel · Tab to amend · ctrl+e to explain\n"
 	f.mu.Unlock()
 
 	f.show(t, ns, true)
 
-	input := `{"session_id":"sid-1","hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":` + strconv.Quote(command) + `}}`
+	input := `{"session_id":"sid-1","hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":` + toolInput + `}`
 	require.NoError(t, shift.RecordPermission(crew.Layout{Dir: filepath.Dir(crewFile)}, "dev", []byte(input), f.since))
 }
 
@@ -400,7 +412,7 @@ func TestPluginsTellOfAPermissionPromptOnlyWithItsSubject(t *testing.T) {
 	assert.Equal(t, "permission", ev["prompt"])
 	assert.Equal(t, "Bash", ev["tool"])
 	assert.Equal(t, "rm -rf build", ev["subject"], "what is being approved")
-	assert.Contains(t, ev["question"], "Ship it?")
+	assert.Contains(t, ev["question"], "Do you want to proceed?")
 
 	first := ev["id"].(string)
 
@@ -565,4 +577,286 @@ func TestPluginsDoNotTellOfAPromptThatIsNotSaidToBeAQuestion(t *testing.T) {
 	}
 
 	assert.Empty(t, told(t, log))
+}
+
+// armedOf is a plugin's one-shot marks, as the crew keeps them.
+func armedOf(file, name string) plugin.Armed {
+	l := crew.Layout{Dir: filepath.Dir(file)}
+
+	return plugin.Armed{Path: l.PluginArmed(name), Lock: l.PluginArmedLock(name)}
+}
+
+// The mark of a card that was closed presses nothing, though it was never pressed: the question answered at the terminal and asked
+// again, in a wait of its own, with the very same words, is not what the old card was told of.
+func TestAClosedCardNeverPressesTheTwinOfALaterWait(t *testing.T) {
+	file, f, seams, ns := dialogWorld(t, "  - {name: pager, quiet_when_active: off}\n")
+	log := recorder(t, file, "pager", "")
+	now := time.Now().Add(-10 * time.Minute)
+
+	f.permission(t, file, ns, "make deploy")
+	deliver(t, file, now, seams)
+	deliver(t, file, now.Add(time.Minute), seams)
+	first := told(t, log)[0].Line["id"].(string)
+
+	// Answered at the terminal, and asked again in a new wait: the same command, the same words.
+	f.permission(t, file, ns, "make deploy")
+	deliver(t, file, now.Add(2*time.Minute), seams)
+	deliver(t, file, now.Add(3*time.Minute), seams)
+
+	ids := toldIDs(t, log)
+	require.Len(t, ids, 3, "%v", ids)
+	assert.Equal(t, "answered "+first, ids[1])
+
+	second := told(t, log)[2].Line["id"].(string)
+	require.NotEqual(t, first, second)
+	assert.Equal(t, strings.Join(strings.Split(first, ":")[:2], ":"), strings.Join(strings.Split(second, ":")[:2], ":"), "the same fingerprint: that is the trap")
+
+	t.Setenv("ZMINA_PLUGIN", "pager")
+
+	_, err := runWith(t, file, seams, "choose", "dev", "1", "--dialog", first, "--by", "pager")
+	require.Error(t, err, "the old card, closed by its answered, presses nothing of the new wait")
+	assert.ErrorContains(t, err, "not armed")
+	assert.Empty(t, f.pressed(), "no key sent")
+
+	// And were its mark armed still, it is of an earlier wait.
+	nonce := strings.Split(first, ":")[2]
+	require.NoError(t, armedOf(file, "pager").Arm(nonce, strings.Join(strings.Split(first, ":")[:2], ":"), f.since.Add(-time.Hour), time.Now()))
+
+	_, err = runWith(t, file, seams, "choose", "dev", "1", "--dialog", first, "--by", "pager")
+	require.ErrorContains(t, err, "earlier wait")
+	assert.Empty(t, f.pressed())
+
+	// The new card serves the new wait.
+	_, err = runWith(t, file, seams, "choose", "dev", "1", "--dialog", second, "--by", "pager")
+	require.NoError(t, err)
+	assert.Len(t, f.pressed(), 1)
+}
+
+// A press spends every card of its wait: another plugin's card of the same question presses nothing after the first's. Both hear
+// how it ended, and by whom.
+func TestAPressSpendsEveryPluginsCardOfItsWait(t *testing.T) {
+	file, f, seams, ns := dialogWorld(t, "  - {name: pager, quiet_when_active: off}\n  - {name: other, quiet_when_active: off}\n")
+	pager, other := recorder(t, file, "pager", ""), recorder(t, file, "other", "")
+	now := time.Now().Add(-10 * time.Minute)
+
+	f.permission(t, file, ns, "make deploy")
+	deliver(t, file, now, seams)
+	deliver(t, file, now.Add(time.Minute), seams)
+
+	one, two := told(t, pager)[0].Line["id"].(string), told(t, other)[0].Line["id"].(string)
+	require.NotEqual(t, one, two, "a mark of each")
+
+	t.Setenv("ZMINA_PLUGIN", "pager")
+	_, err := runWith(t, file, seams, "choose", "dev", "1", "--dialog", one, "--by", "pager")
+	require.NoError(t, err)
+
+	// The question has not left the screen yet: the other plugin's card goes nowhere.
+	t.Setenv("ZMINA_PLUGIN", "other")
+	_, err = runWith(t, file, seams, "choose", "dev", "1", "--dialog", two, "--by", "other")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "used already")
+	assert.Len(t, f.pressed(), 1, "one press")
+
+	// The wait ends: both cards close, and the plugin that did not press hears who did, and what.
+	f.show(t, ns, false)
+	deliver(t, file, time.Now().Add(time.Minute), seams)
+	deliver(t, file, time.Now().Add(2*time.Minute), seams)
+
+	for name, log := range map[string]string{"pager": pager, "other": other} {
+		evs := told(t, log)
+		require.Len(t, evs, 2, name)
+		assert.Equal(t, "answered", evs[1].Event, name)
+		assert.Equal(t, "chosen", evs[1].Line["how"], name)
+		assert.Equal(t, "plugin pager", evs[1].Line["by"], name)
+		assert.Equal(t, "Yes", evs[1].Line["text"], name)
+	}
+}
+
+// Every way a card is closed disarms its mark: its answered, the settling of a plugin that takes none, a queued event that is
+// cancelled because its question went before the plugin took it.
+func TestEveryClosingOfACardDisarmsItsMark(t *testing.T) {
+	file, f, seams, ns := dialogWorld(t, "  - {name: pager, quiet_when_active: off}\n  - {name: lazy, on: [dialog], quiet_when_active: off}\n  - {name: down, quiet_when_active: off}\n")
+	pager, lazy := recorder(t, file, "pager", ""), recorder(t, file, "lazy", "")
+	down := recorder(t, file, "down", "exit 1")
+	now := time.Now().Add(-10 * time.Minute)
+
+	f.permission(t, file, ns, "make deploy")
+	deliver(t, file, now, seams)
+	deliver(t, file, now.Add(time.Minute), seams)
+
+	idOf := func(log string) (string, string, string) {
+		id := told(t, log)[0].Line["id"].(string)
+		parts := strings.Split(id, ":")
+
+		return id, parts[0] + ":" + parts[1], parts[2]
+	}
+
+	_, pagerDialog, pagerNonce := idOf(pager)
+	_, lazyDialog, lazyNonce := idOf(lazy)
+	_, downDialog, downNonce := idOf(down)
+
+	a := func(name string) plugin.Armed { return armedOf(file, name) }
+	since := f.since
+
+	// While the question stands each is armed: a fresh one for the right wait would be allowed.
+	require.NoError(t, a("pager").Rearm(pagerNonce, time.Now()))
+	require.NoError(t, a("lazy").Rearm(lazyNonce, time.Now()))
+
+	// The question goes: the pager's answered, the lazy plugin's settling, the failing plugin's queued event (never taken) cancelled.
+	f.show(t, ns, false)
+	deliver(t, file, time.Now().Add(time.Minute), seams)
+
+	require.Len(t, told(t, pager), 2, "answered")
+	assert.Len(t, told(t, lazy), 1, "a plugin that takes no answered hears none")
+
+	for name, tc := range map[string]struct{ nonce, dialog string }{
+		"answered":  {pagerNonce, pagerDialog},
+		"settled":   {lazyNonce, lazyDialog},
+		"cancelled": {downNonce, downDialog},
+	} {
+		plug := map[string]string{"answered": "pager", "settled": "lazy", "cancelled": "down"}[name]
+		err := a(plug).Consume(tc.nonce, tc.dialog, since, time.Now())
+		require.Error(t, err, name)
+		assert.ErrorContains(t, err, "not armed", name)
+	}
+}
+
+// A mark the plugin was never told of is not kept: the event that was given up after its tries disarms its own.
+func TestAGivenUpDialogEventDisarmsItsMark(t *testing.T) {
+	file, f, seams, ns := dialogWorld(t, "  - {name: down, quiet_when_active: off}\n")
+	down := recorder(t, file, "down", "exit 1")
+	now := time.Now().Add(-2 * time.Hour)
+
+	f.permission(t, file, ns, "make deploy")
+	deliver(t, file, now, seams)
+
+	for _, m := range []int{1, 3, 10, 30} {
+		deliver(t, file, now.Add(time.Duration(m)*time.Minute), seams)
+	}
+
+	require.Len(t, told(t, down), 4)
+
+	id := told(t, down)[0].Line["id"].(string)
+	parts := strings.Split(id, ":")
+
+	err := armedOf(file, "down").Consume(parts[2], parts[0]+":"+parts[1], f.since, time.Now())
+	require.ErrorContains(t, err, "not armed")
+}
+
+// An arming that cannot be written is said once, not every beat, and nothing is told meanwhile; when it can, it goes.
+func TestAnArmingThatFailsIsSaidOnce(t *testing.T) {
+	file, f, seams, ns := dialogWorld(t, "  - {name: pager, quiet_when_active: off}\n")
+	log := recorder(t, file, "pager", "")
+	now := time.Now().Add(-10 * time.Minute)
+
+	// The lock the marks are written under cannot be opened: it is a directory.
+	lock := crew.Layout{Dir: filepath.Dir(file)}.PluginArmedLock("pager")
+	require.NoError(t, os.MkdirAll(lock, 0o700))
+
+	f.permission(t, file, ns, "make deploy")
+
+	for _, m := range []int{0, 1, 2, 3, 4} {
+		deliver(t, file, now.Add(time.Duration(m)*time.Minute), seams)
+	}
+
+	assert.Empty(t, told(t, log))
+
+	evs, err := eventLog(mustCrew(t, file)).Read(events.Filter{})
+	require.NoError(t, err)
+
+	var said []string
+
+	for _, e := range evs {
+		if e.Event == "plugin-error" {
+			said = append(said, e.Detail)
+		}
+	}
+
+	require.Len(t, said, 1, "once, not every beat: %v", said)
+	assert.Contains(t, said[0], "could not be armed for a one-shot press")
+
+	require.NoError(t, os.RemoveAll(lock))
+	deliver(t, file, now.Add(5*time.Minute), seams)
+	assert.Len(t, told(t, log), 1)
+
+	st, err := plugin.Load(crew.Layout{Dir: filepath.Dir(file)}.PluginTold("pager"))
+	require.NoError(t, err)
+	assert.Empty(t, st.Arming, "and it is said again if it comes back")
+}
+
+// A question is read again right before it is told: one gone from the screen, or answered and asked again, since the look is not
+// paged.
+func TestADialogIsReadAgainBeforeItIsTold(t *testing.T) {
+	file, f, seams, ns := dialogWorld(t, "  - {name: pager, quiet_when_active: off}\n")
+	recorder(t, file, "pager", "")
+	f.permission(t, file, ns, "make deploy")
+
+	a := &app{crew: file, out: io.Discard, err: io.Discard, shiftSeams: seams}
+	w, err := a.pluginWorld(mustCrew(t, file), time.Now())
+	require.NoError(t, err)
+	require.Len(t, w.dialogs, 1)
+
+	var facts plugin.DialogFacts
+
+	for _, d := range w.dialogs {
+		facts = d
+	}
+
+	assert.False(t, facts.Since.IsZero())
+	assert.True(t, w.dialogStill(facts), "as it was read")
+
+	f.permission(t, file, ns, "make deploy") // answered, and asked again, the very same words
+	assert.False(t, w.dialogStill(facts), "a wait of its own")
+
+	f.show(t, ns, false)
+	assert.False(t, w.dialogStill(facts), "gone")
+}
+
+// The beat starts nothing, and says nothing, for a crew with no plugins, and reads the crew file quietly for one that has some.
+func TestBeatReadsTheCrewQuietly(t *testing.T) {
+	file := testCrew(t, "  dev: {}\n")
+	require.NoError(t, os.WriteFile(file, append(mustRead(t, file), []byte("\nnot_a_key: 1\n")...), 0o600))
+
+	var errb bytes.Buffer
+
+	var spawned int
+
+	a := &app{crew: file, out: io.Discard, err: &errb, spawn: func([]string) error { spawned++; return nil }}
+	a.pluginsBeat(time.Now())
+	assert.Zero(t, spawned)
+	assert.Empty(t, errb.String(), "the crew file's warnings are for the commands that read it, not said every beat")
+
+	require.NoError(t, os.WriteFile(file, append(mustRead(t, file), []byte("plugins:\n  - name: pager\n")...), 0o600))
+	a.pluginsBeat(time.Now())
+	assert.Equal(t, 1, spawned)
+	assert.Empty(t, errb.String())
+}
+
+// A role does not send a test event to the owner's phone, and does not hold his pushes by saying it is his hand.
+func TestARoleCannotPageTheOwnerOrHoldHisPushes(t *testing.T) {
+	file := pluginCrew(t, "  dev: {}\n", "  - {name: pager, quiet_when_active: 5m}\n")
+	log := recorder(t, file, "pager", "")
+
+	t.Setenv("ZMINA_ROLE", "dev")
+
+	_, _, err := zm(t, file, "plugin", "test", "pager")
+	require.ErrorContains(t, err, "a role (dev) does not run it")
+	assert.Empty(t, told(t, log))
+
+	out, _, err := zm(t, file, "todo", "add", "Which name?", "--from", "hand")
+	require.NoError(t, err)
+
+	_, _, err = zm(t, file, "todo", "answer", strings.TrimSpace(out), "--from", "hand", "acme")
+	require.NoError(t, err)
+	assert.True(t, plugin.ReadOwner(filepath.Join(filepath.Dir(file), "plugins", "owner.json")).Active.IsZero(),
+		"a role that says it is the hand is no owner at the machine")
+
+	// The owner's own hand does.
+	t.Setenv("ZMINA_ROLE", "")
+
+	out, _, err = zm(t, file, "todo", "add", "Which colour?")
+	require.NoError(t, err)
+	_, _, err = zm(t, file, "todo", "answer", strings.TrimSpace(out), "blue")
+	require.NoError(t, err)
+	assert.False(t, plugin.ReadOwner(filepath.Join(filepath.Dir(file), "plugins", "owner.json")).Active.IsZero())
 }

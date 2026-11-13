@@ -111,6 +111,8 @@ type State struct {
 	// program could not be run at the last delivery, empty when it could.
 	Partial string `json:"partial,omitempty"`
 	Problem string `json:"problem,omitempty"`
+	// Arming is why the last dialog could not be armed for a one-shot press, empty when it could: said once, as Problem is.
+	Arming string `json:"arming,omitempty"`
 	// Last is the newest run, Failed the newest run that failed.
 	Last   *Last `json:"last,omitempty"`
 	Failed *Last `json:"failed,omitempty"`
@@ -373,6 +375,15 @@ func (s *State) dequeue(key string) {
 	if i, ok := s.queued(key); ok {
 		s.Queue = append(s.Queue[:i], s.Queue[i+1:]...)
 	}
+}
+
+// QueuedEntry is what a waiting event is about.
+func (s *State) QueuedEntry(key string) (Entry, bool) {
+	if i, ok := s.queued(key); ok {
+		return s.Queue[i].Entry, true
+	}
+
+	return Entry{}, false
 }
 
 // Cancel takes a waiting event off its queue without sending it: what it was about ended before the plugin was told.

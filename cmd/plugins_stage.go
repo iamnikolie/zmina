@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"cmp"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -26,7 +27,8 @@ import (
 
 // pluginsBeat starts the delivery after the beat. A crew with no plugin starts nothing.
 func (a *app) pluginsBeat(now time.Time) {
-	c, err := a.loadCrew()
+	// Read as the other beats' chores read it (diskBeat): a beat that finds no plugins says nothing and notes nothing, every minute.
+	c, err := crew.Load(a.crewPath())
 	if err != nil || len(c.Plugins) == 0 {
 		return
 	}
@@ -49,6 +51,8 @@ type pluginWorld struct {
 	dialogs map[string]plugin.DialogFacts
 	// ownerActive is when the owner was last at the machine, read the first time it is asked.
 	ownerActive func() time.Time
+	// dialogStill reads a role's screen again and says whether the question the facts are of is still on it, in the same wait.
+	dialogStill func(f plugin.DialogFacts) bool
 }
 
 // pluginWorld reads what is open: each item on the owner's todo, and each question on a role's screen that its choose
@@ -89,6 +93,18 @@ func (a *app) pluginWorld(c *crew.Crew, now time.Time) (*pluginWorld, error) {
 			w.dialogs[key] = facts
 			w.things = append(w.things, plugin.Thing{Key: key, ID: plugin.DialogID(facts.Role, facts.ID), Class: plugin.DialogThing,
 				Role: facts.Role, Opened: v.Since})
+		}
+
+		// Read again right before a question is told, as an item is: one answered, or asked again, since the look is not paged.
+		w.dialogStill = func(f plugin.DialogFacts) bool {
+			v, _, ok := s.Look(f.Role)
+			if !ok {
+				return false
+			}
+
+			now, standing, known := standingDialog(s, c, v)
+
+			return known && standing && now.ID == f.ID && v.Since.Equal(f.Since)
 		}
 
 		owner := c.Layout().PluginOwner()
@@ -177,7 +193,8 @@ func itemOpen(c *crew.Crew, id string) bool {
 // asked to approve blind. A prompt the session does not say what it waits on is not told either. known is false when the screen
 // could not be read.
 func standingDialog(s *shift.Shift, c *crew.Crew, v shift.View) (plugin.DialogFacts, bool, bool) {
-	if v.State != shift.PresenceUp || !v.Prompt || v.Dialog == nil || v.Status != "waiting" {
+	// A wait with no moment it began is no wait a one-shot mark can be of: nothing is told of it.
+	if v.State != shift.PresenceUp || !v.Prompt || v.Dialog == nil || v.Status != "waiting" || v.Since.IsZero() {
 		return plugin.DialogFacts{}, false, true
 	}
 
@@ -208,7 +225,7 @@ func standingDialog(s *shift.Shift, c *crew.Crew, v shift.View) (plugin.DialogFa
 	}
 
 	f := plugin.DialogFacts{Role: v.Role, ID: d.ID, Question: cmp.Or(v.Dialog.Question, d.Question), Prompt: prompt, Tool: d.Tool,
-		Subject: d.Subject, Multi: d.Multi || v.Dialog.Multi}
+		Subject: d.Subject, Multi: d.Multi || v.Dialog.Multi, Since: v.Since}
 
 	for _, o := range d.Options {
 		f.Options = append(f.Options, plugin.Option{N: o.N, Text: o.Label, Detail: o.Detail})
@@ -430,12 +447,26 @@ func (a *app) pluginDeliverOne(c *crew.Crew, pl crew.Plugin, w *pluginWorld, now
 
 	plan := plugin.Make(plugin.Inputs{Plugin: pl, State: st, Things: w.things, Gaps: w.gaps, Now: now, OwnerActive: w.ownerActive})
 
+	armed := plugin.Armed{Path: c.Layout().PluginArmed(pl.Name), Lock: c.Layout().PluginArmedLock(pl.Name)}
+
+	// Whatever closes a card disarms its mark: a card of a question that is gone presses nothing, however long it stays on a phone.
+	disarm := func(e plugin.Entry) {
+		if e.Kind == plugin.Dialog {
+			_ = armed.Disarm(nonceOfEvent(e.ID), clock())
+		}
+	}
+
 	for _, key := range plan.Cancel {
+		if e, ok := st.QueuedEntry(key); ok {
+			disarm(e)
+		}
+
 		st.Cancel(key)
 	}
 
 	for _, key := range plan.Settle {
 		if e := st.Told[key]; e != nil {
+			disarm(*e)
 			e.Closed = now
 		}
 	}
@@ -450,7 +481,6 @@ func (a *app) pluginDeliverOne(c *crew.Crew, pl crew.Plugin, w *pluginWorld, now
 
 	prog, perr := plugin.Resolve(pl, c.Layout().Dir)
 	b := plugin.Builder{Crew: c.Path, Plugin: pl.Name, Clean: shift.QuoteN}
-	armed := plugin.Armed{Path: c.Layout().PluginArmed(pl.Name), Lock: c.Layout().PluginArmedLock(pl.Name)}
 
 	// A program that does not resolve is a mistake of the setup, not of an event: nothing is run, no try is spent and nothing is
 	// dropped; what waits goes once the program is there. It is said once, and doctor and plugin ls say it as long as it lasts.
@@ -465,19 +495,39 @@ func (a *app) pluginDeliverOne(c *crew.Crew, pl crew.Plugin, w *pluginWorld, now
 		st.Problem = ""
 	}
 
-	taken := false
+	taken, armFailed := false, false
 
 	for _, d := range plan.Send {
-		// What was answered since the look is not paged.
+		// What was answered since the look is not paged; nor is a question that is gone from the screen, or asked again.
 		if d.Kind != plugin.Answered && d.Kind != plugin.Dialog && !itemOpen(c, d.Entry.ID) {
 			st.Cancel(d.Key)
 
 			continue
 		}
 
-		line, entryID, ok := w.line(b, d, now, armed, clock())
-		if !ok {
-			problem("%s %s could not be armed for a one-shot press (%s): not told", d.Kind, d.Entry.ID, c.Layout().PluginArmed(pl.Name))
+		if d.Kind == plugin.Dialog && d.Retry == nil && !w.dialogStill(w.dialogs[d.Key]) {
+			continue
+		}
+
+		// The end of a card is known: its mark is disarmed before the plugin hears of it.
+		if d.Kind == plugin.Answered {
+			disarm(d.Entry)
+		}
+
+		line, entryID, err := w.line(b, d, now, armed, clock())
+
+		switch {
+		case errors.Is(err, errNotInLook):
+			// It left the look between the plan and now: the next beat judges it.
+			continue
+		case err != nil:
+			// Said once, as a program that is not there is: a disk that cannot keep the marks says it every beat otherwise.
+			armFailed = true
+
+			if msg := fmt.Sprintf("%s %s could not be armed for a one-shot press (%v): not told", d.Kind, d.Entry.ID, err); st.Arming != msg {
+				st.Arming = msg
+				problem("%s", msg)
+			}
 
 			continue
 		}
@@ -516,6 +566,10 @@ func (a *app) pluginDeliverOne(c *crew.Crew, pl crew.Plugin, w *pluginWorld, now
 		break
 	}
 
+	if !armFailed {
+		st.Arming = ""
+	}
+
 	// A plugin that took an event is up: what it was given up on while it was not, and is still open, gets one more go.
 	if taken {
 		st.Revive(w.isOpen)
@@ -526,38 +580,42 @@ func (a *app) pluginDeliverOne(c *crew.Crew, pl crew.Plugin, w *pluginWorld, now
 	return lines
 }
 
+// errNotInLook says a thing a plan was made of is no longer among what the look found.
+var errNotInLook = errors.New("not in the look")
+
 // line is the event of a due send as it goes on the plugin's stdin, and the id it carries: the one a failed try kept, or one built
 // now from what is open (an answered from where the thing lives). A dialog event is armed for one press before it goes: its nonce
-// is in its id, and the first press made with it disarms it. false when that could not be written.
-func (w *pluginWorld) line(b plugin.Builder, d plugin.Due, now time.Time, armed plugin.Armed, at time.Time) ([]byte, string, bool) {
+// is in its id, and the first press made with it, in the wait it was told in, disarms it. The error is errNotInLook for a thing that
+// is not in the look, else why the mark could not be written.
+func (w *pluginWorld) line(b plugin.Builder, d plugin.Due, now time.Time, armed plugin.Armed, at time.Time) ([]byte, string, error) {
 	switch {
 	case d.Retry != nil:
-		return []byte(d.Retry.Line), d.Entry.ID, true
+		return []byte(d.Retry.Line), d.Entry.ID, nil
 	case d.Kind == plugin.Answered:
-		return b.Answered(closureOf(w.crew, d.Entry, now)).Line(), d.Entry.ID, true
+		return b.Answered(closureOf(w.crew, d.Entry, now)).Line(), d.Entry.ID, nil
 	case d.Kind == plugin.Dialog:
 		f, ok := w.dialogs[d.Key]
 		if !ok {
-			return nil, d.Entry.ID, false
+			return nil, d.Entry.ID, errNotInLook
 		}
 
 		f.Nonce = plugin.NewNonce()
 
-		if err := armed.Arm(f.Nonce, plugin.DialogID(f.Role, f.ID), at); err != nil {
-			return nil, d.Entry.ID, false
+		if err := armed.Arm(f.Nonce, plugin.DialogID(f.Role, f.ID), f.Since, at); err != nil {
+			return nil, d.Entry.ID, err
 		}
 
 		ev := b.Dialog(f)
 
-		return ev.Line(), ev.ID, true
+		return ev.Line(), ev.ID, nil
 	}
 
 	it, ok := w.items[d.Key]
 	if !ok {
-		return nil, d.Entry.ID, false
+		return nil, d.Entry.ID, errNotInLook
 	}
 
-	return b.Item(d.Kind, w.itemFacts(it)).Line(), d.Entry.ID, true
+	return b.Item(d.Kind, w.itemFacts(it)).Line(), d.Entry.ID, nil
 }
 
 // pluginLog puts what happened to an event in the event log: a delivery (plugin-told) or the giving up (plugin-failed), with
@@ -598,7 +656,8 @@ func taskRefOf(id string) string {
 
 // touchOwner notes that the owner answered in a terminal just now, for the crews that have plugins to hold a push by.
 func touchOwner(s *shift.Shift) {
-	if len(s.Crew.Plugins) == 0 {
+	// A role that says --from hand is no owner at the machine: it could hold the owner's pushes for as long as it liked.
+	if len(s.Crew.Plugins) == 0 || os.Getenv("ZMINA_ROLE") != "" {
 		return
 	}
 

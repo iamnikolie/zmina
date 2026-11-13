@@ -50,6 +50,7 @@ const (
 	SubjectMax  = 1000
 	NoteMax     = 1000
 	roleMax     = 64
+	maxChoice   = 9
 	textHolder  = "<text>"
 	timeLayout  = time.RFC3339
 	zminaBinary = "zmina"
@@ -219,9 +220,11 @@ func (b Builder) answer(it Item, opts []Option) *Answer {
 type DialogFacts struct {
 	Role, ID, Question, Nonce string
 	Prompt, Tool, Subject     string
-	Multi                     bool
-	Options                   []Option
-	Task, TaskTitle           string
+	// Multi: several choices can be ticked. Since is when the wait began.
+	Multi           bool
+	Since           time.Time
+	Options         []Option
+	Task, TaskTitle string
 }
 
 // DialogID is the id of a dialog in the plan and in the ledger: the role, a colon and the fingerprint.
@@ -252,8 +255,9 @@ func (b Builder) Dialog(d DialogFacts) Event {
 
 		ev.Options = append(ev.Options, Option{N: o.N, Text: b.clean(o.Text, OptionMax), Detail: b.clean(o.Detail, DetailMax)})
 
-		// A question whose choices are ticked is settled in the terminal: pressing one choice would tick it, and answer nothing.
-		if !d.Multi {
+		// A question whose choices are ticked is settled in the terminal: pressing one choice would tick it, and answer nothing. And
+		// choose takes a choice from 1 to 9.
+		if !d.Multi && o.N >= 1 && o.N <= maxChoice {
 			a.Options = append(a.Options, OptionAnswer{N: o.N, Argv: []string{zminaBinary, "--crew", b.Crew, "choose", d.Role,
 				strconv.Itoa(o.N), "--dialog", id, "--by", b.Plugin}})
 		}

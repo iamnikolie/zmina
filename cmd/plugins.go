@@ -195,6 +195,11 @@ func (a *app) pluginTestCommand() *cobra.Command {
 		Short: "Run a plugin once on an event made up for the test (marked \"test\": true) and print how it went",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// A made-up event goes to the owner's phone: a role has no business sending one.
+			if role := os.Getenv("ZMINA_ROLE"); role != "" {
+				return fmt.Errorf("zmina plugin test is the owner's; a role (%s) does not run it", role)
+			}
+
 			c, err := a.loadCrew()
 			if err != nil {
 				return err
@@ -339,7 +344,7 @@ func (a *app) chooseCommand() *cobra.Command {
 				// A plugin answers the dialog it was told of and no other, and once: a late tap on a phone must never press a key in
 				// another question, nor a second time in this one.
 				var (
-					before func(d *shift.Dialog) error
+					before func(d *shift.Dialog, since time.Time) error
 					rearm  func()
 				)
 
@@ -357,8 +362,8 @@ func (a *app) chooseCommand() *cobra.Command {
 
 					spent := false
 
-					before = func(d *shift.Dialog) error {
-						if err := armed.Consume(nonce, plugin.DialogID(role, d.ID), now); err != nil {
+					before = func(d *shift.Dialog, since time.Time) error {
+						if err := armed.Consume(nonce, plugin.DialogID(role, d.ID), since, now); err != nil {
 							return err
 						}
 
@@ -375,7 +380,7 @@ func (a *app) chooseCommand() *cobra.Command {
 					}
 				}
 
-				d, err := pressChoice(s, role, n, fingerprint, dialog != "", before)
+				d, since, err := pressChoice(s, role, n, fingerprint, dialog != "", before)
 				if err != nil {
 					if rearm != nil {
 						rearm()
@@ -383,6 +388,10 @@ func (a *app) chooseCommand() *cobra.Command {
 
 					return err
 				}
+
+				// A press has gone into this wait, whoever made it: no other card of it, a plugin's or the same one's, follows it
+				// while the question is still on the screen.
+				spendMarks(s, role, d, since)
 
 				label := ""
 				for _, o := range d.Options {
@@ -419,8 +428,19 @@ func (a *app) chooseCommand() *cobra.Command {
 	return c
 }
 
-// noteChosen keeps what was chosen of a dialog under its id (role:fingerprint, with the event's nonce when a plugin pressed), for the
-// plugins' run to say how a dialog that left the screen ended; a choice
+// spendMarks spends every plugin's one-shot marks of the wait a press has just gone into.
+func spendMarks(s *shift.Shift, role string, d *shift.Dialog, since time.Time) {
+	now := s.Now()
+
+	for _, pl := range s.Crew.Plugins {
+		armed := plugin.Armed{Path: s.Crew.Layout().PluginArmed(pl.Name), Lock: s.Crew.Layout().PluginArmedLock(pl.Name)}
+		_ = armed.Spend(plugin.DialogID(role, d.ID), since, now)
+	}
+}
+
+// noteChosen keeps what was chosen of a dialog under its own id (role:fingerprint) and, for a plugin's press, under the id that plugin
+// was told as well (role:fingerprint:nonce): another plugin told of the same question looks up its own id and then the dialog's,
+// and says it was chosen, and by whom. It is for the plugins' run to say how a dialog that left the screen ended; a choice
 // made in a terminal says the owner is at the machine too.
 func noteChosen(s *shift.Shift, role, id, by string, n int, label string) {
 	if len(s.Crew.Plugins) == 0 {
@@ -433,7 +453,9 @@ func noteChosen(s *shift.Shift, role, id, by string, n int, label string) {
 			o.Chosen = map[string]plugin.Chosen{}
 		}
 
-		o.Chosen[id] = plugin.Chosen{By: by, N: n, Text: shift.QuoteN(label, plugin.OptionMax), At: now}
+		c := plugin.Chosen{By: by, N: n, Text: shift.QuoteN(label, plugin.OptionMax), At: now}
+		o.Chosen[id] = c
+		o.Chosen[dialogOfEvent(id)] = c
 
 		if by == "owner" {
 			o.Active = now

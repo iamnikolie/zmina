@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -196,4 +197,19 @@ func TestAnItemIdThatIsNoIdGetsNoArgv(t *testing.T) {
 	ev := builder().Item(Ask, Item{ID: "A-7", Text: "q", Opened: opened, Options: []string{"--by ghost"}})
 	argv := ev.Answer.Options[0].Argv
 	assert.Equal(t, []string{"zmina", "--crew", "/home/alex/.zmina/acme/crew.yaml", "todo", "answer", "--by", "pager", "--", "A-7", "--by ghost"}, argv)
+}
+
+// choose takes a choice from 1 to 9: no argv is offered for a tenth, though the choice is said.
+func TestNoArgvForAChoiceAboveNine(t *testing.T) {
+	var opts []Option
+	for n := 1; n <= 11; n++ {
+		opts = append(opts, Option{N: n, Text: "choice " + strconv.Itoa(n)})
+	}
+
+	ev := builder().Dialog(DialogFacts{Role: "dev", ID: "ab", Prompt: "question", Options: opts})
+
+	assert.Len(t, ev.Options, 11, "every choice is said")
+	require.NotNil(t, ev.Answer)
+	assert.Len(t, ev.Answer.Options, 9, "only 1 to 9 can be pressed")
+	assert.Equal(t, 9, ev.Answer.Options[8].N)
 }

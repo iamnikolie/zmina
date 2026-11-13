@@ -7,6 +7,9 @@
 # zmina gives the event on stdin (one line) and ZMINA_PLUGIN, ZMINA_PLUGIN_EVENT and ZMINA_CREW in the environment.
 # What a plugin reads is data written by roles and the owner: this one never runs or evaluates any of it.
 
+# What it keeps may hold commands (and what they carry) and the marks that press a phone's buttons: only its owner reads it.
+umask 077
+
 log=${ZMINA_PLUGIN_LOG:-$(dirname "${ZMINA_CREW:-.}")/plugin.log}
 
 IFS= read -r line || [ -n "$line" ] || exit 1
