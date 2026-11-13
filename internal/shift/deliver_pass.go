@@ -15,7 +15,8 @@ import (
 // clock and nothing else: no tmux, no registry, no inbox socket, no task file, and it makes no state of a role that
 // has none. A role it names may still not take its line (busy, a draft, a dialog): that is for the pass to find out; a
 // role it leaves out has nothing a pass could give. It leaves out, too, a role held after a turn that ended on an API
-// error (failureHeld): for a role that has something to give it reads that role's small failure record and Claude Code's
+// error (failureHeld), bar the owner's own message wherever it stands in its queue: for a role that has something to give it
+// reads that role's small failure record and Claude Code's
 // session file by the role's session name — still no tmux. The hold ends with no change of state.json, as the other
 // gates do, so a caller that must see the end of it looks again from time to time (queueGated).
 func (s *Shift) Waiting() []string {
@@ -30,19 +31,51 @@ func (s *Shift) Waiting() []string {
 		}
 
 		if name == s.Crew.Dispatcher {
-			if !rs.dispatchTriedLately(now) && s.dispatcherWaits(rs, now) && !s.failureHeld(name, now) {
+			// The cheap tests first: a record is read only for a dispatcher that has something to give. Held, it is the owner's
+			// own line, wherever it stands in its queue, that it can still be given.
+			if !rs.dispatchTriedLately(now) && s.dispatcherWaits(rs, now) && (!s.failureHeld(name, now) || s.ownerWaits(name, rs, now)) {
 				out = append(out, name)
 			}
 
 			continue
 		}
 
-		if len(rs.Inbox) > 0 && !rs.triedLately(now) && (!s.failureHeld(name, now) || s.ownerNext(name)) {
+		if s.queueWaits(name, rs, now) {
 			out = append(out, name)
 		}
 	}
 
 	return out
+}
+
+// queueWaits reports whether a role that is not the dispatcher has a line a pass could give it now: one queued that did not
+// fail less than countedGap ago, and not held for a failed turn, bar the owner's own line (ownerWaits).
+func (s *Shift) queueWaits(name string, rs *RoleState, now time.Time) bool {
+	if len(rs.Inbox) == 0 {
+		return false
+	}
+
+	if !s.failureHeld(name, now) {
+		return !rs.triedLately(now)
+	}
+
+	return s.ownerWaits(name, rs, now)
+}
+
+// ownerWaits reports whether a role held for a failed turn has the owner's own line to be given: the first of them, wherever it
+// stands. One behind other lines is given whatever those lines' failed tries say, as deliverInboxOnce gives it, since the
+// tries counted in the state are the first line's; it has tries of its own, and is given unless it failed less than countedGap
+// ago itself, as a line at the head is.
+func (s *Shift) ownerWaits(name string, rs *RoleState, now time.Time) bool {
+	switch i := s.ownerLine(name); {
+	case i < 0:
+		return false
+	case i == 0:
+		return !rs.triedLately(now)
+	default:
+		// Behind another line it has tries of its own (ownerTry), the same spacing as a head line's.
+		return !s.ownerTriedLately(name, rs.Inbox[i], now)
+	}
 }
 
 // dispatcherWaits reports whether deliver has something for the dispatcher: a queued line of its own that did not fail

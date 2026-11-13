@@ -35,6 +35,10 @@ const (
 	// inboxMax caps the lines waiting for one role; signalsMax the signals waiting for the dispatcher.
 	inboxMax   = 20
 	signalsMax = 20
+
+	// SignalsMax is signalsMax for a command that tells the owner how many signals the dispatcher takes.
+	SignalsMax = signalsMax
+
 	// typeTries is how many tries a queued line gets before it moves to the failed list. A try is a pass that fails
 	// at least countedGap after the one before it: passes that run seconds apart (a command's delivery and the beat)
 	// are one try.
@@ -258,6 +262,14 @@ type View struct {
 	// Claude Code's own words for it, empty when the role is not idle since such a turn or has no such hook. Computed on
 	// every look, and gone when the next turn starts; it is not kept in the state.
 	TurnError string `json:"turn_error,omitempty"`
+	// TurnErrorKind is what kind of error that was when it is not a transient one: "limit" (a usage or rate limit, with
+	// TurnErrorReset when the message gave the time it lifts) or "account" (billing, login, permission, a model that is not
+	// there: the owner mends it). Empty for a transient error, and when TurnError is empty.
+	TurnErrorKind  string    `json:"turn_error_kind,omitempty"`
+	TurnErrorReset time.Time `json:"turn_error_reset,omitzero"`
+	// TurnErrorHeldUntil is when the lines queued for the role are let go again, for a kind that is not transient, unless its
+	// next turn or a restart ends the hold sooner; zero when no hold is on.
+	TurnErrorHeldUntil time.Time `json:"turn_error_held_until,omitzero"`
 	// Context is how many tokens the conversation fills (0: not known); ContextMax the role's context_max.
 	Context    int `json:"context,omitempty"`
 	ContextMax int `json:"context_max,omitempty"`
@@ -460,6 +472,15 @@ func (s *Shift) Views() []View {
 
 			if f := s.failureFor(name, sess); f != nil {
 				v.TurnError = f.Text()
+
+				if c := f.Class(); c.Kind != KindTransient {
+					v.TurnErrorKind, v.TurnErrorReset = string(c.Kind), c.Reset
+
+					// In the crew's location, as every time the owner reads is: the instant is the same.
+					if f.holds(s.Now()) {
+						v.TurnErrorHeldUntil = f.holdEnd().In(s.Crew.Location())
+					}
+				}
 			}
 
 			// The question its hook recorded, when that is the one on screen; else what the screen reads as.
@@ -1368,6 +1389,28 @@ func (s *Shift) QueueFrom(name, text string, f Facts) error {
 	s.log(name, "queued", "", text)
 
 	return nil
+}
+
+// ownerRoom is how many of the owner's own messages a held role's queue takes beyond inboxMax.
+const ownerRoom = 5
+
+// QueueOwner queues the owner's own message (the cockpit's chat) for a role. It is QueueFrom, except for a role whose queue
+// is full and held for a failed turn (failureHeld): the lines that fill it cannot be read until the hold is over, and the
+// owner's message, which goes through the hold (deliverInboxOnce), is not refused for them. It takes up to ownerRoom of them
+// past inboxMax.
+func (s *Shift) QueueOwner(name, line string) error {
+	if _, err := s.Role(name); err != nil {
+		return err
+	}
+
+	if n := len(s.State.Role(name).Inbox); n >= inboxMax && n < inboxMax+ownerRoom && s.failureHeld(name, s.Now()) {
+		s.enqueue(name, line, Facts{From: "owner"})
+		s.log(name, "queued", "", line)
+
+		return nil
+	}
+
+	return s.QueueFrom(name, line, Facts{From: "owner"})
 }
 
 // QueueTracked is Queue for a line that waits for its reader's ack (zmina send --when-idle): it carries its id and

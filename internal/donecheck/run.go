@@ -74,11 +74,15 @@ func Run(ctx context.Context, s Spec, dir string, env []string) Result {
 	case ctx.Err() != nil:
 		res.Exit, res.Interrupted = -1, true
 	case cmd.ProcessState == nil:
-		res.Exit, res.Err = -1, "did not start: "+err.Error()
+		res.Exit, res.Err, res.Kind = -1, "did not start: "+err.Error(), KindEnvironment
 	case cmd.ProcessState.ExitCode() < 0:
 		res.Exit, res.Err = -1, cmd.ProcessState.String()
 	default:
 		res.Exit = cmd.ProcessState.ExitCode()
+
+		if res.Exit == exitNotExecutable || res.Exit == exitNotFound || s.EnvFaultRC != 0 && res.Exit == s.EnvFaultRC {
+			res.Kind = KindEnvironment
+		}
 	}
 
 	return res

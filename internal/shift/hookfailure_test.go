@@ -24,6 +24,24 @@ const failedInput = `{"session_id":"sid-designer","hook_event_name":"StopFailure
 const failedText = "model_not_found: There's an issue with the selected model (…). It may not exist or you may not have " +
 	"access to it. Run /model to pick a different model."
 
+// transientInput is a StopFailure of an error that goes by itself (the API overloaded), and transientText what the record
+// says of it: the queue behind it waits FailHold, and the dispatcher's note is the plain line.
+const transientInput = `{"session_id":"sid-designer","hook_event_name":"StopFailure","error":"server_error",` +
+	`"last_assistant_message":"API Error: 529 Overloaded"}`
+
+const transientText = "server_error: API Error: 529 Overloaded"
+
+// limitInput is a StopFailure of a usage limit that says when it lifts: the time is at, in UTC, to the minute, as Claude Code
+// shows it.
+func limitInput(reset time.Time) string {
+	return `{"session_id":"sid-designer","hook_event_name":"StopFailure","error":"rate_limit",` +
+		`"last_assistant_message":"You've hit your limit · resets ` + reset.UTC().Format("3:04pm") + ` (UTC)"}`
+}
+
+// limitNoTimeInput is one that says nothing of when.
+const limitNoTimeInput = `{"session_id":"sid-designer","hook_event_name":"StopFailure","error":"rate_limit",` +
+	`"last_assistant_message":"API Error: 429 Too Many Requests"}`
+
 // live lets the role's session be found by its name in the session files, as Waiting finds it without tmux.
 func (f fix) live(role string) {
 	r, err := f.s.Role(role)
@@ -215,12 +233,12 @@ func TestAPIErrorFromTheHookIsToldOnce(t *testing.T) {
 	f := fixtureWith(t, crewYAML)
 	require.NoError(t, f.s.Up("designer"))
 	f.status("designer", "idle", *f.now)
-	f.failed(t, "designer", failedInput, *f.now)
+	f.failed(t, "designer", transientInput, *f.now)
 	*f.now = f.now.Add(3 * time.Minute)
 
 	rs := f.s.State.Role("designer")
 
-	assert.Equal(t, "designer: its last turn ended in an API error: "+failedText, f.s.apiErrorNote("designer", rs))
+	assert.Equal(t, "designer: its last turn ended in an API error: "+transientText, f.s.apiErrorNote("designer", rs))
 	assert.True(t, f.ev.has("designer", "api-error"))
 	assert.Empty(t, f.s.apiErrorNote("designer", rs), "once")
 
@@ -258,23 +276,23 @@ func TestAPIErrorToldFromTheHookIsNotToldAgainFromTheTranscript(t *testing.T) {
 			require.NoError(t, f.s.Up("designer"))
 			*f.now = failedAt
 			f.status("designer", "idle", failedAt)
-			f.failed(t, "designer", failedInput, failedAt)
+			f.failed(t, "designer", transientInput, failedAt)
 
 			rs := f.s.State.Role("designer")
 
-			require.Equal(t, "designer: its last turn ended in an API error: "+failedText, f.s.apiErrorNote("designer", rs),
+			require.Equal(t, "designer: its last turn ended in an API error: "+transientText, f.s.apiErrorNote("designer", rs),
 				"the hook's record is told first: the transcript does not show the error yet")
 
 			// The next turn started before the beat saw both: not idle since the failure, and the transcript's last error is
 			// still the failed turn's.
 			*f.now = failedAt.Add(time.Minute)
 			f.status("designer", "busy", *f.now)
-			f.rg.errors["sid-designer"] = "API Error: There's an issue with the selected model"
+			f.rg.errors["sid-designer"] = "API Error: Connection lost mid-response."
 			f.rg.errorAt["sid-designer"] = tc.errorAt
 
 			got := f.s.apiErrorNote("designer", rs)
 			if tc.told {
-				assert.Contains(t, got, "its last turn ended in an API error: API Error: There's an issue")
+				assert.Contains(t, got, "its last turn ended in an API error: API Error: Connection lost")
 			} else {
 				assert.Empty(t, got, "the same failed turn")
 			}
@@ -290,10 +308,10 @@ func TestAPIErrorWordsAreTheTranscriptsWhenItHasThem(t *testing.T) {
 	f := fixtureWith(t, crewYAML)
 	require.NoError(t, f.s.Up("designer"))
 	f.status("designer", "idle", *f.now)
-	f.failed(t, "designer", failedInput, *f.now)
+	f.failed(t, "designer", transientInput, *f.now)
 
-	f.rg.errors["sid-designer"] = "API Error: Rate limit reached"
-	assert.Equal(t, "designer: its last turn ended in an API error: API Error: Rate limit reached",
+	f.rg.errors["sid-designer"] = "API Error: Connection lost mid-response."
+	assert.Equal(t, "designer: its last turn ended in an API error: API Error: Connection lost mid-response.",
 		f.s.apiErrorNote("designer", f.s.State.Role("designer")))
 }
 
@@ -315,7 +333,7 @@ func TestAFailedTurnHoldsTheQueueForAWhile(t *testing.T) {
 	*f.now = failedAt
 	f.status("designer", "idle", failedAt)
 	f.live("designer")
-	f.failed(t, "designer", failedInput, failedAt)
+	f.failed(t, "designer", transientInput, failedAt)
 
 	queued := func() []string { return f.s.State.Role("designer").Inbox }
 	waiting := func() bool { return slicesContain(f.s.Waiting(), "designer") }
@@ -356,7 +374,7 @@ func TestAFailedTurnHoldsTheQueueForAWhile(t *testing.T) {
 	*f.now = again.Add(10 * time.Second)
 	f.status("designer", "idle", *f.now)
 	f.live("designer")
-	f.failed(t, "designer", failedInput, *f.now)
+	f.failed(t, "designer", transientInput, *f.now)
 	require.NoError(t, f.s.Queue("designer", "[dispatcher] third"))
 
 	*f.now = f.now.Add(time.Minute)
@@ -438,7 +456,7 @@ func TestAFailedDispatcherTurnHoldsItsSignalsToo(t *testing.T) {
 	*f.now = failedAt
 	f.status("dispatcher", "idle", failedAt)
 	f.live("dispatcher")
-	f.failed(t, "dispatcher", strings.Replace(failedInput, "sid-designer", "sid-dispatcher", 1), failedAt)
+	f.failed(t, "dispatcher", strings.Replace(transientInput, "sid-designer", "sid-dispatcher", 1), failedAt)
 
 	*f.now = failedAt.Add(time.Minute)
 	assert.NotContains(t, f.s.Waiting(), "dispatcher")
@@ -543,7 +561,7 @@ func TestTheOwnersOwnMessageIsNotHeldAfterAFailedTurn(t *testing.T) {
 	rs.ChatReceipts = append(rs.ChatReceipts, chat.Receipt{ID: "c1", Line: owner, At: *f.now})
 
 	assert.True(t, slicesContain(f.s.Waiting(), "designer"), "the owner's message is next: the role is asked")
-	assert.True(t, f.s.ownerNext("designer"))
+	assert.Equal(t, 0, f.s.ownerLine("designer"), "the owner's line is the head of the queue")
 	assert.NotEmpty(t, f.s.DeliverTo("designer"), "and it goes")
 	assert.Equal(t, []string{"[dispatcher] second"}, rs.Inbox, "what zmina queued behind it waits for that turn")
 }

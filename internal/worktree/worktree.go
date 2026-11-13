@@ -126,14 +126,14 @@ func Add(repo, path, branch, base string) (*Tree, error) {
 	return &Tree{Repo: top, Path: path, Branch: branch, Base: base}, nil
 }
 
-// Dirty lists the worktree's uncommitted changes (git status --short), empty when clean. A worktree that is gone
-// is clean.
+// Dirty lists the worktree's uncommitted changes (git status --short, every untracked file listed whatever the user's
+// status.showUntrackedFiles says), empty when clean. A worktree that is gone is clean.
 func (t *Tree) Dirty() (string, error) {
 	if _, err := os.Stat(t.Path); errors.Is(err, os.ErrNotExist) {
 		return "", nil
 	}
 
-	out, err := gitCtx(t.ctx(), t.Path, "status", "--short")
+	out, err := gitCtx(t.ctx(), t.Path, "status", "--short", "--untracked-files=all")
 
 	return strings.TrimSpace(out), err
 }
@@ -274,10 +274,21 @@ func git(dir string, args ...string) (string, error) {
 
 // gitCtx is git that also ends when parent does.
 func gitCtx(parent context.Context, dir string, args ...string) (string, error) {
+	return gitEnv(parent, dir, nil, args...)
+}
+
+// gitEnv is gitCtx with env added to the environment git runs in (GIT_INDEX_FILE, for a snapshot that leaves the real
+// index alone).
+func gitEnv(parent context.Context, dir string, env []string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(parent, Timeout)
 	defer cancel()
 
-	out, err := gitCmd(ctx, parent.Done() != nil, append([]string{"-C", dir}, args...)...).CombinedOutput()
+	cmd := gitCmd(ctx, parent.Done() != nil, append([]string{"-C", dir}, args...)...)
+	if env != nil {
+		cmd.Env = append(os.Environ(), env...)
+	}
+
+	out, err := cmd.CombinedOutput()
 	if parent.Err() != nil {
 		return "", fmt.Errorf("git %s: stopped: %w", args[0], parent.Err())
 	}

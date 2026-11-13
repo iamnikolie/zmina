@@ -1096,3 +1096,33 @@ func TestPruneCardsRemovesOldAsideFilesAndFilesOfRolesGone(t *testing.T) {
 		assert.Contains(t, names(l), "retired.json")
 	})
 }
+
+// The tries of a held role's owner line (delivery/<role>.owner-tries) are not a card file, are never moved aside as a broken
+// one, and go with a role that is no longer in the crew.
+func TestPruneCardsRemovesTheOwnerTriesOfARoleGoneAndMistakesThemForNoCards(t *testing.T) {
+	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
+	inCrew := func(role string) bool { return role == "designer" }
+
+	l := crew.Layout{Dir: t.TempDir()}
+	require.NoError(t, os.MkdirAll(l.Delivery(), 0o700))
+
+	for _, role := range []string{"designer", "retired"} {
+		require.NoError(t, os.WriteFile(l.DeliveryOwnerTries(role), []byte(`{"line":"x","attempts":1,"tried_at":"2026-10-24T11:59:00Z"}`+"\n"), 0o600))
+	}
+
+	n, err := PruneCards(l, now, inCrew, true)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n, "a dry run counts the one of the role gone")
+	assert.FileExists(t, l.DeliveryOwnerTries("retired"))
+
+	n, err = PruneCards(l, now, inCrew, false)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+	assert.NoFileExists(t, l.DeliveryOwnerTries("retired"))
+	assert.FileExists(t, l.DeliveryOwnerTries("designer"), "a role in the crew keeps it")
+
+	entries, err := os.ReadDir(l.Delivery())
+	require.NoError(t, err)
+	require.Len(t, entries, 1, "nothing was moved aside")
+	assert.Equal(t, "designer.owner-tries", entries[0].Name())
+}

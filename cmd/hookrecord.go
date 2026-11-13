@@ -81,9 +81,10 @@ func (a *app) permissionRequestCommand() *cobra.Command {
 
 // stopFailureCommand is the StopFailure hook of a Claude role (roleSettings): Claude Code runs it when a turn ends on an
 // API error, which runs no Stop hook. It only records: the error for the role (shift.RecordFailure), so the role's view
-// and the dispatcher's note say how the turn ended and delivery holds the role's queue for a while (shift.FailHold), and
-// one event in the log, the hold's start. It posts nothing, retries nothing, prints nothing, and exits 0 whatever goes
-// wrong, a record that cannot be written included.
+// and the dispatcher's note say how the turn ended and delivery holds the role's queue for a while, by the kind of the error
+// (shift.FailHold, 5 minutes; shift.AccountHold, 30 minutes; for a limit until it lifts, at least FailHold and at most
+// shift.LimitHoldMax), and one event in the log, the hold's start, with its times in the crew's location. It posts nothing,
+// retries nothing, prints nothing, and exits 0 whatever goes wrong, a record that cannot be written included.
 func (a *app) stopFailureCommand() *cobra.Command {
 	var role string
 
@@ -109,8 +110,14 @@ func (a *app) stopFailureCommand() *cobra.Command {
 				return nil
 			}
 
+			// The times in the event are in the crew's location, the crew file's timezone else this machine's.
+			loc := time.Local
+			if c, err := crew.Load(a.crewPath()); err == nil {
+				loc = c.Location()
+			}
+
 			_ = (&events.Log{Path: l.Events()}).Add(events.Event{Role: role, Event: "failure-hold", By: "hook",
-				Detail: "its turn ended on an API error (" + f.Text() + "): the lines queued for it wait " + shift.FailHold.String()})
+				Detail: "its turn ended on an API error (" + f.Text() + "): " + shift.HoldWords(f, loc)})
 
 			return nil
 		},

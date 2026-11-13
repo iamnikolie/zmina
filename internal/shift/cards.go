@@ -491,6 +491,21 @@ func PruneCards(l crew.Layout, now time.Time, known func(role string) bool, dry 
 			continue
 		}
 
+		// The tries of a held role's owner line (<role>.owner-tries) go with a role no longer in the crew.
+		if role, ok := strings.CutSuffix(e.Name(), ".owner-tries"); ok && hookRole(role) {
+			if known != nil && !known(role) {
+				total++
+
+				if !dry {
+					if err := os.Remove(filepath.Join(l.Delivery(), e.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
+						errs = append(errs, err)
+					}
+				}
+			}
+
+			continue
+		}
+
 		// The mark of a role's start (<role>.bell) goes with a role no longer in the crew.
 		if role, ok := strings.CutSuffix(e.Name(), ".bell"); ok && hookRole(role) {
 			if known != nil && !known(role) {

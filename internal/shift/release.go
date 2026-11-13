@@ -242,6 +242,7 @@ func (s *Shift) Park(t task.Task, text string) (later.Item, error) {
 	was := t.Status()
 
 	t.State, t.Later, t.On, t.Updated = task.Parked, it.ID, "", now
+	t.CheckEnv, t.CheckEnvTold = nil, nil // a fault the check met is no part of a task put away
 	if err := s.Tasks.Put(t); err != nil {
 		return it, fmt.Errorf("%s is on the later list, but %s is still %s: %w", it.ID, t.ID, was, err)
 	}

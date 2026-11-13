@@ -9,6 +9,7 @@ package donecheck
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -26,6 +27,13 @@ const (
 // runMax is the longest command line a check may be.
 const runMax = 2000
 
+// The exit statuses a shell gives when it could not run the command at all: found but not executable, not found. They
+// say the environment is broken (a tool missing from the seat), not that the work failed the check.
+const (
+	exitNotExecutable = 126
+	exitNotFound      = 127
+)
+
 // Spec is what to run, as a task or the crew file names it.
 type Spec struct {
 	// Run is the shell line, run as /bin/sh -c in the task's worktree.
@@ -34,19 +42,23 @@ type Spec struct {
 	Timeout string `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 	// Commit asks for a commit beyond the task's base as well: a branch nothing was committed on does not pass.
 	Commit bool `yaml:"commit,omitempty" json:"commit,omitempty"`
+	// EnvFaultRC is an exit status (3 to 255; 0 is unset) that this check uses to say it could not run its own
+	// tests: a missing tool, a service that is down. Like the shell's 126 and 127 it is an environment fault, not a
+	// failed check (Result.Kind). 1 and 2 are the statuses of a check that ran and failed, and are refused.
+	EnvFaultRC int `yaml:"env_fault_rc,omitempty" json:"env_fault_rc,omitempty"`
 }
 
 // Off reports a spec that says there is no check: the crew file's done_check given as off or none, or as nothing.
 func (s Spec) Off() bool {
 	switch strings.ToLower(strings.TrimSpace(s.Run)) {
 	case "", "off", "none":
-		return s.Timeout == "" && !s.Commit
+		return s.Timeout == "" && !s.Commit && s.EnvFaultRC == 0
 	}
 
 	return false
 }
 
-// UnmarshalYAML reads a string (the command) or a mapping of the three keys. A key it does not know is an error, not
+// UnmarshalYAML reads a string (the command) or a mapping of the four keys. A key it does not know is an error, not
 // a warning: a mistyped commit or timeout would otherwise be a gate that silently asks for less.
 func (s *Spec) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind == yaml.ScalarNode {
@@ -56,8 +68,13 @@ func (s *Spec) UnmarshalYAML(n *yaml.Node) error {
 	for i := 0; i+1 < len(n.Content); i += 2 {
 		switch key := n.Content[i]; key.Value {
 		case "run", "timeout", "commit":
+		case "env_fault_rc":
+			// 0 is how an unset one reads, so a 0 written out is a mistake, not a choice.
+			if v, err := strconv.ParseInt(n.Content[i+1].Value, 0, 64); err == nil && v == 0 {
+				return fmt.Errorf("line %d: env_fault_rc is an exit status from 3 to 255, not 0", key.Line)
+			}
 		default:
-			return fmt.Errorf("line %d: a check has no key %q (run, timeout, commit)", key.Line, key.Value)
+			return fmt.Errorf("line %d: a check has no key %q (run, timeout, commit, env_fault_rc)", key.Line, key.Value)
 		}
 	}
 
@@ -88,6 +105,12 @@ func (s Spec) Validate() error {
 			"file the command runs)")
 	}
 
+	if s.EnvFaultRC != 0 {
+		if err := CheckEnvFaultRC(s.EnvFaultRC); err != nil {
+			return fmt.Errorf("check %w", err)
+		}
+	}
+
 	if s.Timeout == "" {
 		return nil
 	}
@@ -102,6 +125,22 @@ func (s Spec) Validate() error {
 	}
 
 	return nil
+}
+
+// CheckEnvFaultRC says what is wrong with a status named as env_fault_rc, nil when it can be one. 1 and 2 are refused: a
+// test runner, a compiler or make exit them (a general error, a misused command, a failed run) for a check that ran and
+// failed, and a spec that called them an environment fault would turn every failed check into one that judges nothing. The
+// shell's own 126 and 127 are faults without it.
+func CheckEnvFaultRC(rc int) error {
+	switch {
+	case rc == 1 || rc == 2:
+		return fmt.Errorf("env_fault_rc %d is the status of a check that ran and failed (a test run, a compiler, make): name "+
+			"a status from 3 to 255 that only a broken environment exits (126 and 127, the shell's, are faults already)", rc)
+	case rc < 0 || rc > 255:
+		return fmt.Errorf("env_fault_rc %d: an exit status from 3 to 255", rc)
+	default:
+		return nil
+	}
 }
 
 // unprintable is a rune that is no part of plain text: a control character (C0, DEL, C1), a format character (zero
@@ -125,6 +164,10 @@ func (s Spec) String() string {
 
 	if s.Commit {
 		out += ", a commit beyond the base"
+	}
+
+	if s.EnvFaultRC != 0 {
+		out += fmt.Sprintf(", exit %d is an environment fault", s.EnvFaultRC)
 	}
 
 	return out + ")"
@@ -166,6 +209,9 @@ type Result struct {
 	DurationMS int64     `json:"duration_ms"`
 	// Exit is the command's exit status: 0 passes. -1 when it did not exit by itself (timed out, killed, did not start).
 	Exit int `json:"exit"`
+	// Kind is KindEnvironment when the run says nothing of the work: the shell could not run the command (exit 126 or
+	// 127, or it did not start) or the command exited with the spec's EnvFaultRC. Empty for any other run.
+	Kind string `json:"kind,omitempty"`
 	// TimedOut says the timeout ended it, Interrupted that the caller stopped it (a signal to zmina); Err says why else it
 	// has no status of its own (could not start, killed by a signal).
 	TimedOut    bool   `json:"timed_out,omitempty"`
@@ -174,6 +220,29 @@ type Result struct {
 	// Output is the tail of what it printed, bounded (see Tail); Truncated says there was more before it.
 	Output    string `json:"output,omitempty"`
 	Truncated bool   `json:"truncated,omitempty"`
+}
+
+// KindEnvironment is the Kind of a run that could not run the check: the environment is broken, and the work was not
+// judged. A timeout is not one: it stays an ordinary failure.
+const KindEnvironment = "environment"
+
+// Environment reports a run that says nothing of the work (see KindEnvironment).
+func (r Result) Environment() bool { return r.Kind == KindEnvironment }
+
+// Fault is what an environment fault was, in one phrase; empty for any other run. It is what a fault is told once for.
+func (r Result) Fault() string {
+	switch {
+	case !r.Environment():
+		return ""
+	case r.Err != "":
+		return r.Err
+	case r.Exit == exitNotExecutable:
+		return "exit 126: the shell found the command and could not execute it"
+	case r.Exit == exitNotFound:
+		return "exit 127: the shell did not find the command"
+	default:
+		return fmt.Sprintf("exit %d: the status the check names as an environment fault (env_fault_rc)", r.Exit)
+	}
 }
 
 // Passed reports whether the command ran and exited 0.

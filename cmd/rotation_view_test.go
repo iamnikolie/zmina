@@ -45,10 +45,15 @@ func TestLsShowsTheRotations(t *testing.T) {
 	screenHas(t, file, "lead", "claude ")
 
 	now := time.Now()
+
+	// The ended rotation is on the same local day as now, whatever the hour and the zone of the host: ls writes a time of day for
+	// a rotation of today and a date with it for any other, and "three hours ago" is yesterday between midnight and 3 am.
+	rebuilt := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+
 	rotationRecord(t, file, "dev", rotationLinesAt("open0001", "dev", "restart_at", "context 262k over restart_at 250k", now.Add(-2*time.Minute-10*time.Second))...)
-	rotationRecord(t, file, "lead", append(rotationLinesAt("done0002", "lead", "manual", "by hand (zmina restart)", now.Add(-3*time.Hour),
+	rotationRecord(t, file, "lead", append(rotationLinesAt("done0002", "lead", "manual", "by hand (zmina restart)", rebuilt,
 		`"what":"boot","by":"lead"`), fmt.Sprintf(`{"id":"done0002","at":%q,"phase":"closed","outcome":"rebuilt","confirmed":["boot"]}`,
-		now.Add(-3*time.Hour+time.Minute).UTC().Format(time.RFC3339Nano)))...)
+		rebuilt.Add(time.Minute).UTC().Format(time.RFC3339Nano)))...)
 
 	out, _, err := zm(t, file, "ls")
 	require.NoError(t, err)

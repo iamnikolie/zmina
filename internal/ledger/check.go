@@ -20,6 +20,10 @@ var (
 	// ErrCheckFailed is returned when a task cannot close as done because its check did not pass: the command failed
 	// or timed out, it left files behind, or the commit it asks for is not there.
 	ErrCheckFailed = errors.New("check failed")
+	// ErrCheckEnvironment is returned (as an *EnvFault) when the check could not run at all: the shell did not find
+	// the command or could not execute it, did not start, or the command exited with the spec's env_fault_rc. The task
+	// stays open: nothing was judged, so nothing failed.
+	ErrCheckEnvironment = errors.New("check could not run")
 	// ErrCheckInterrupted is returned when the check was stopped before it ended (a signal to zmina): it did not fail,
 	// and nothing is known of it.
 	ErrCheckInterrupted = errors.New("check interrupted")
@@ -35,6 +39,28 @@ var (
 	// ErrInCheck is returned when a zmina that a check started would set a check or force past one.
 	ErrInCheck = errors.New("a zmina run by a check acts for no one: it sets no task's check and forces past none")
 )
+
+// EnvFault is the refusal of a check that ran into a broken environment (ErrCheckEnvironment): what ran, and what came of
+// it. The work was not judged, and the task is as it was.
+type EnvFault struct {
+	ID     string
+	Role   string
+	Result donecheck.Result
+	// Spec is the check that ran.
+	Spec donecheck.Spec
+}
+
+func (e *EnvFault) Unwrap() error { return ErrCheckEnvironment }
+
+func (e *EnvFault) Error() string {
+	res := e.Result
+
+	return fmt.Sprintf("%s: %s: the check could not run, so the work was not judged: %s (%s, at %s); either the environment is "+
+		"broken (a tool the check needs is missing, or the seat it runs on) or a file it runs is missing or not executable in "+
+		"the worktree; the task stays open and no failed check is recorded; mend that and run it again\n%s\n--force closes it "+
+		"anyway, for the owner and the dispatcher", e.ID, ErrCheckEnvironment, donecheck.Line(e.Spec.Run),
+		donecheck.Line(res.Fault()), res.Commit[:min(len(res.Commit), 10)], res.Tail())
+}
 
 // MayCheck reports whether who may set a task's check, or close a task past it: the owner and the dispatcher, and
 // neither from inside a check. A worker's own check would be a command of its own choosing that its closing runs. who is
@@ -184,9 +210,9 @@ func (l *Ledger) ownCommits(t task.Task, tr worktree.Tree) (bool, error) {
 }
 
 // RunCheck runs a plan's check, in its worktree, holding no lock, and says what came of it: the Checked to close the
-// task on, or an error that wraps ErrCheckFailed (the end of the output with it), or ErrCheckInterrupted when the run was
-// stopped before it ended. A check that passes and leaves files in a clean worktree has failed: the task could not close
-// over them. Either way the run is an event.
+// task on, or an error that wraps ErrCheckFailed (the end of the output with it), or an *EnvFault (ErrCheckEnvironment)
+// when the check could not run, or ErrCheckInterrupted when the run was stopped before it ended. A check that passes and
+// leaves files in a clean worktree has failed: the task could not close over them. Either way the run is an event.
 func (l *Ledger) RunCheck(ctx context.Context, p *CheckPlan) (*Checked, error) {
 	res := donecheck.Run(ctx, p.Spec, p.Task.Worktree, l.Env)
 	res.Source, res.Commit = p.Source, p.Head
@@ -196,6 +222,11 @@ func (l *Ledger) RunCheck(ctx context.Context, p *CheckPlan) (*Checked, error) {
 	took := res.Duration().Round(time.Millisecond)
 
 	switch {
+	case res.Environment():
+		l.log(p.Task.Role, "check", p.Task.ID, fmt.Sprintf("environment fault, the work was not judged: %s (%s, %s after %s, at %s)",
+			line, p.Source, donecheck.Line(res.Fault()), took, short))
+
+		return nil, &EnvFault{ID: p.Task.ID, Role: p.Task.Role, Result: res, Spec: p.Spec}
 	case res.Interrupted:
 		l.log(p.Task.Role, "check", p.Task.ID, fmt.Sprintf("interrupted: %s (%s, after %s, at %s)", line, p.Source, took, short))
 
@@ -348,6 +379,9 @@ func (l *Ledger) setCheck(t *task.Task, c Change) (string, error) {
 	if err := l.refuseSetter(c.By, ErrCheckSetter); err != nil {
 		return "", fmt.Errorf("%s: %w", t.ID, err)
 	}
+
+	// A fault the old check met says nothing of the new one.
+	t.CheckEnv, t.CheckEnvTold = nil, nil
 
 	if c.ClearCheck {
 		t.Check = nil
