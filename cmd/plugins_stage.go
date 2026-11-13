@@ -193,8 +193,9 @@ func itemOpen(c *crew.Crew, id string) bool {
 // asked to approve blind. A prompt the session does not say what it waits on is not told either. known is false when the screen
 // could not be read.
 func standingDialog(s *shift.Shift, c *crew.Crew, v shift.View) (plugin.DialogFacts, bool, bool) {
-	// A wait with no moment it began is no wait a one-shot mark can be of: nothing is told of it.
-	if v.State != shift.PresenceUp || !v.Prompt || v.Dialog == nil || v.Status != "waiting" || v.Since.IsZero() {
+	// A wait with no moment it began is no wait a one-shot mark can be of: nothing is told of it. (A session file with no time says 0,
+	// which is 1970, not the zero time.)
+	if v.State != shift.PresenceUp || !v.Prompt || v.Dialog == nil || v.Status != "waiting" || v.Since.UnixMilli() <= 0 {
 		return plugin.DialogFacts{}, false, true
 	}
 
@@ -225,7 +226,7 @@ func standingDialog(s *shift.Shift, c *crew.Crew, v shift.View) (plugin.DialogFa
 	}
 
 	f := plugin.DialogFacts{Role: v.Role, ID: d.ID, Question: cmp.Or(v.Dialog.Question, d.Question), Prompt: prompt, Tool: d.Tool,
-		Subject: d.Subject, SubjectCut: d.SubjectCut, Multi: d.Multi || v.Dialog.Multi, Since: v.Since}
+		Subject: d.Subject, SubjectCut: d.SubjectCut, SubjectChecked: d.SubjectChecked, Multi: d.Multi || v.Dialog.Multi, Since: v.Since}
 
 	for _, o := range d.Options {
 		f.Options = append(f.Options, plugin.Option{N: o.N, Text: o.Label, Detail: o.Detail})
@@ -336,6 +337,16 @@ func dialogOfEvent(id string) string {
 	}
 
 	return parts[0] + ":" + parts[1]
+}
+
+// fingerprintOfEvent is the dialog's fingerprint of the id an event carries (role:fingerprint:nonce).
+func fingerprintOfEvent(id string) string {
+	parts := strings.SplitN(id, ":", 3)
+	if len(parts) < 2 {
+		return ""
+	}
+
+	return parts[1]
 }
 
 // nonceOfEvent is the nonce of an event's dialog id, empty when it has none.
@@ -505,8 +516,24 @@ func (a *app) pluginDeliverOne(c *crew.Crew, pl crew.Plugin, w *pluginWorld, now
 			continue
 		}
 
-		if d.Kind == plugin.Dialog && d.Retry == nil && !w.dialogStill(w.dialogs[d.Key]) {
-			continue
+		// A question is read again right before it is told, and a card that failed and waits for its retry is held to the same: if the
+		// question was answered and asked again meanwhile, the card is of a wait that is over, and a fresh one is told of this.
+		if d.Kind == plugin.Dialog {
+			f, ok := w.dialogs[d.Key]
+			stale := !ok || !w.dialogStill(f)
+
+			if !stale && d.Retry != nil {
+				stale = !f.Since.Equal(d.Entry.Opened) || fingerprintOfEvent(d.Entry.ID) != f.ID
+			}
+
+			if stale {
+				if d.Retry != nil {
+					disarm(d.Entry)
+					st.Cancel(d.Key)
+				}
+
+				continue
+			}
 		}
 
 		// The end of a card is known: its mark is disarmed before the plugin hears of it.

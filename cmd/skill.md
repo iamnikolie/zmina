@@ -391,9 +391,13 @@ gets, and asks the process (`ps`) of a role an earlier zmina started.
 The settings also carry a `PermissionRequest` hook, `zmina _permission-request --role <role>` (timeout 5 s, output to
 `/dev/null`, `|| true`). For an `AskUserQuestion` it writes the questions and options as the tool had them, with the
 session id and the time, to `hooks/<role>.question.json` next to the crew file (one write replaces the last); any other
-tool's call it adds to `hooks/<role>.permission.json`, which keeps the role's last 8 calls of the last 10 minutes (the tool, its
-command or path cut to 1000 characters, `subject_cut` when that is not all of what the call asks, a sum of the whole input, the
-session and the time: what a plugin is shown of a permission prompt, see Plugins), and input that is not a call records nothing. It prints nothing, never allows or denies, and exits 0 on any error, so it neither settles
+tool's call it adds to `hooks/<role>.permission.json` (mode 0600), which keeps the role's last 8 calls: the tool, its command or
+path on one line (a break of it shown as `⏎`) cut to 1000 characters, a shell call's description, `subject_cut` when that is not all
+of the call or folding changed more than the space at its ends, a sum of the whole input, the session and the time. It is what a
+plugin is shown of a permission prompt (see Plugins) and what the cockpit shows under it, so it is written whether the crew has
+plugins or not: **the commands waiting for approval stay in that file** until later calls push them out, a day passes, or the role
+starts again (its start removes the file), and a command may carry a secret. A call it must let go of is remembered by its time
+(`lost`), so a prompt whose call it may have lost is not told. Input that is not a call records nothing. It prints nothing, never allows or denies, and exits 0 on any error, so it neither settles
 nor breaks the dialog. `zmina ls --json` and the cockpit take the role's `dialog` from that file while the session file
 says it waits on a question (`waitingFor: input needed`), the file is of the current session and was written within 1 s
 of that wait's start; otherwise the screen is read as before. Where the screen reads as a dialog too, the file is used
@@ -1563,7 +1567,7 @@ rest less). Nothing in it is an instruction to the plugin, and a plugin never ev
 |---|---|---|
 | `ask` | a question on the todo: an ask, a decision, a check, a task that waits on the owner | `role`, `title`, `text`, `note` (a waiting task's note, a field of its own), `why` (what it holds up: the role, the task id and title), `reason`, `recommendation`, `options` (`[{n, text}]`), `answer`, `opened` (RFC 3339), `blocking` |
 | `blocking` | the same while it holds a role up; sent **instead of** `ask`, never as well | as `ask`, `blocking: true` |
-| `dialog` | a question on a role's screen that zmina does not answer itself (a permission prompt, AskUserQuestion), once it has stood `dialog_after`, so what the role settles itself never pages. `id` is `<role>:<fingerprint>:<mark>`: the fingerprint is of the question, every choice and, for a permission prompt, the tool call; the mark is this event's one-shot mark | `role`, `question`, `prompt` (`permission` or `question`), `tool`, `subject` and `subject_cut` (a permission prompt: what is being approved, the call's command or path; `subject_cut` when that is not all of it), `options` (`[{n, text, detail}]`), `answer`, `needs_terminal`, `task`, `task_title` |
+| `dialog` | a question on a role's screen that zmina does not answer itself (a permission prompt, AskUserQuestion), once it has stood `dialog_after`, so what the role settles itself never pages. `id` is `<role>:<fingerprint>:<mark>`: the fingerprint is of the question, every choice and, for a permission prompt, the tool call; the mark is this event's one-shot mark | `role`, `question`, `prompt` (`permission` or `question`), `tool`, `subject`, `subject_checked` and `subject_cut` (a permission prompt: what is being approved, the call's command or path; `subject_checked` when the prompt's own block on the screen was compared with it, word for word; `subject_cut` when it is not all of the call), `options` (`[{n, text, detail}]`), `answer`, `needs_terminal`, `task`, `task_title` |
 | `reminder` | a reminder ringing, a parked item brought back by its alarm (as `notify`'s reminder); a plugin whose `on` lacks `reminder` (the default) is told of it as an `ask` | as `ask`; for a parked item (`L-3`) only `answer.done` |
 | `answered` | an item or dialog the plugin was **told of** is closed, so it can mark its card | `for` (the event it was sent as), `how` (`answered`, `done`, `dropped` — parked or set aside —, `chosen`, `gone`), `by` (`owner`, `plugin <name>`, `role <name>`, empty when zmina closed it), `text` (the answer when there is one), `closed` |
 
@@ -1573,7 +1577,7 @@ the environment, every flag before the `--` and after it the id and the words: `
 the argv with that option's words; `yes` takes the recommendation; `done` says a check is done; for a dialog `options[n].argv` is
 `["zmina","--crew","<file>","choose","<role>","<n>","--dialog","<role>:<fingerprint>:<mark>","--by","pager"]`, and none is given
 for a choice above 9 (`choose` takes 1 to 9) and none at all when `needs_terminal`: several choices can be ticked (pressing one
-answers nothing), or the subject is cut (below). An item id that is not `A-n`, `T-n` or `L-n`
+answers nothing), or a permission prompt's subject is cut or was not checked (below). An item id that is not `A-n`, `T-n` or `L-n`
 gets no argv.
 
 **Answering.** `todo answer`, `todo yes`, `todo done` and the other `todo` verbs, and `zmina choose <role> <n> --dialog <id>`,
@@ -1583,33 +1587,51 @@ note and the log. **A plugin is trusted with the owner's voice** — anything it
 itself check who is talking to it** (zmina cannot: `--by` guards against a mistake, not a forger). The first answer wins: the
 ledger refuses a second answer to a closed ask, and a plugin's answer to a waiting task already answered.
 
-**Permission prompts and one-shot presses.** The screen of a permission prompt says "Do you want to proceed?" and the command stands
-above it, which zmina does not read; so the role's `PermissionRequest` hook records each call (`hooks/<role>.permission.json`: the tool,
-its command or path, a sum of the whole input), and a permission prompt is told to a plugin only when exactly one recorded call of
-this very session is the one the wait began with (within a second of it: two different calls in that moment — parallel requests —
-leave nothing that says which is on the screen, and nothing is told; the same call twice is one), and, for a shell call, the head of
-its command is on the screen (the goldens show the command of a shell call so; they show no other tool, so no other is held to
-it). Without that nothing says what would be approved, and nothing is told (so is a prompt the session file does not say what it
-waits on, and one with no moment its wait began; a role started before the hook has none: answer in a terminal). The call is the
-event's `subject` and is in the fingerprint, so two commands never share an id. **`subject_cut`** says the subject is not all of what
-is approved: it was cut at 1000 characters, or the call has parts it does not show that change what runs (a shell call's sandbox
-switch, a file call's content: any key but the command and its `description` and `timeout`). Then the event says `needs_terminal`
-and offers no argv: never a working Yes for a call the phone cannot show whole. A press through a plugin is **one-shot**, and of one
-wait: the event's id carries a mark kept armed in `plugins/<name>.armed.json` (apart from the told file: the delivery and the choose
-both write it, each under a short lock) together with the moment the wait began, and `choose --by` spends it right before the keys
-go. A second press, a double tap, a retry of the plugin's own network call or a card from yesterday is refused (`this card was used
-already`), though the same question is still on the screen; so is a card of an earlier wait of the same question (answered at the
-terminal and asked again, with the very same words: `of an earlier wait`). Whatever closes a card — its `answered`, the settling of a
-plugin that takes none, a queued event cancelled, one given up — disarms its mark, and a press by anyone (a card, a hand, the
-cockpit) spends every plugin's marks of its wait, so a second plugin's card of the question presses nothing after the first's;
-keys that could not be sent give the mark back. Every plugin told of the question is then told how it ended — `chosen`, by whom, and
-what — whoever pressed. `choose --dialog` reads the screen last, right before the press, and presses nothing unless it still has
-the fingerprint (`the question on its screen changed: look again`); `--by` requires `--dialog` with a mark. A dialog is read again
-right before it is told, as an item is. A prompt answered and asked again in the same breath is a new wait: the old card is closed
-(`answered`, `gone`) and the new one told with a mark of its own. A mark that cannot be written is said once (`plugin-error`) and
-nothing is told of the question meanwhile. `zmina choose <role> <n>` by hand needs no `--dialog`: the owner reads the screen himself;
-it presses choice n as the arrows and Enter would, only while the session says it waits on a dialog, and is the CLI of Chat's
-`choose`. `plugin test` and `plugin deliver` refuse a role, and a role that says `--from hand` does not hold the owner's pushes.
+**Permission prompts and one-shot presses.** The screen of a permission prompt says "Do you want to proceed?" and the call stands above
+it, so the role's `PermissionRequest` hook records each call (`hooks/<role>.permission.json`, see the hook paragraph), and a
+permission prompt gets a subject, and a card that presses, **only when the call is certainly the one on the screen**:
+
+1. *One call.* Claude Code does not write the session file again while a session stays waiting on a permission prompt, so the prompt
+   that follows an answered one in a queue (two sub-agents, parallel tool calls) has the first prompt's wait start. So a call is the
+   prompt's only when it is the one call recorded for the role at or after the wait began (the same call twice is one), and recorded
+   within a second of it; any different call recorded since, of any session of the role, makes the prompt nobody's: no subject, nothing
+   told. A card told before such a call was recorded stops matching the moment it is (its fingerprint covers the call): its press is
+   refused (`the question on its screen changed`), and it is closed with `answered` / `gone`. So is a call the file may have had to let go
+   of.
+2. *A shell call is compared with the screen.* The prompt draws a block under its `Bash command` title and above its question; the
+   call's command (and its description, which the prompt draws under it), folded, must be that block, word for word, with the frame of a box
+   stripped from both: not the head of it somewhere among the last lines, where an earlier call's tool line stands. Wrapped through a word, or
+   cut: the same words, but not comparable as they stand, so `subject_cut` and nothing to press. Another command: no subject.
+3. *Any other tool is told, not pressed.* No golden shows another tool's prompt, so nothing of its screen is compared: the event carries the
+   subject (when rule 1 holds), no `subject_checked`, `needs_terminal`, and no argv. A card is made for a tool only with an equally strict
+   check from a golden of that tool's screen.
+
+Everything else is the same rule at work: a prompt with no record, one the session file does not say what it waits on, and one with no moment
+its wait began (0 is no moment) are not told. `subject_cut` also says the call has parts the subject does not show that change what runs (a
+shell call's sandbox switch, a file call's content: any key but the command, its `description` and `timeout`), that several lines are several
+things to run, or that folding changed anything else (a double space, a control character, a hidden mark): the event says `needs_terminal`
+and offers no argv, never a working Yes for a call the phone cannot show whole. The subject is in the fingerprint, so two commands never
+share an id. The same identity check runs again when a card is pressed: `choose --by` reads the record and the screen again, and presses
+nothing unless the call is still certainly the prompt's (`answer it in a terminal`) and the fingerprint is the card's.
+
+A press through a plugin is **one-shot**, and of one wait: the event's id carries a mark kept armed in `plugins/<name>.armed.json` (apart
+from the told file: the delivery and the choose both write it, each under a short lock) together with the moment the wait began, and `choose
+--by` spends it right before the keys go. A used card is refused with `this card was used already`, though the same question is still on the
+screen: a second press, a double tap, a retry of the plugin's own network call. A card whose question was answered (its `answered`, the
+settling of a plugin that takes none, a queued event cancelled, one given up all disarm its mark) says `this card is not armed`, as does one
+never told or two days old; one of an earlier wait of the same question (answered at the terminal and asked again, with the very same
+words) is refused with `of an earlier wait`. A press by anyone (a card, a hand, the cockpit) spends every plugin's marks of its wait, so a
+second plugin's card of the question presses nothing after the first's; keys that could not be sent give the mark back, but not after a tmux
+that did not answer in time (they may have landed). Every plugin told of the question is then told how it ended: `chosen`, by whom, and what.
+`choose --dialog` reads the screen last, right before the press, and presses nothing unless it still has the fingerprint (`the question on its
+screen changed: look again`); `--by` requires `--dialog` with a mark. A dialog is read again right before it is told, as an item is, and a card
+waiting for its retry is held to the same: if the question was answered and asked again meanwhile, the old card is not sent and a fresh one is
+told. A prompt answered and asked again in the same breath is a new wait: the old card is closed (`answered`, `gone`) and the new one told with
+a mark of its own. A mark that cannot be written is said once (`plugin-error`) and nothing is told of the question meanwhile. `zmina choose
+<role> <n>` by hand needs no `--dialog`: the owner reads the screen himself; it presses choice n as the arrows and Enter would, only while the
+session says it waits on a dialog, and is the CLI of Chat's `choose`. The cockpit shows a prompt's subject under the same rules, and says when it
+is cut or was not checked against the screen. `plugin test` and `plugin deliver` refuse a role, and a role that says `--from hand` does not hold
+the owner's pushes.
 
 **Delivery.** The beat starts `zmina plugin deliver --beat` (hidden; a role refuses it: it is the ticker's and the owner's, and the log names who
 ran it) detached, as it starts the lessons run, and never waits for it:

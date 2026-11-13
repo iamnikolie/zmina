@@ -129,17 +129,33 @@ func (f *dialogScreenTmux) permission(t *testing.T, crewFile, ns, command string
 func (f *dialogScreenTmux) permissionCall(t *testing.T, crewFile, ns, command, toolInput string) {
 	t.Helper()
 
-	f.mu.Lock()
-	f.waitingFor = "permission prompt"
-	f.screen = " Bash command\n\n   " + command + "\n\n Do you want to proceed?\n ❯ 1. Yes\n" +
+	screen := " Bash command\n\n   " + command + "\n\n Do you want to proceed?\n ❯ 1. Yes\n" +
 		"   2. Yes, and don't ask again for this command\n   3. No, and tell Claude what to do differently (esc)\n\n" +
 		" Esc to cancel · Tab to amend · ctrl+e to explain\n"
+
+	f.permissionRaw(t, crewFile, ns, screen, "Bash", toolInput)
+}
+
+// permissionRaw makes the wait a permission prompt of any call: the screen as given, the hook's record of the tool and its input,
+// written the moment the wait began.
+func (f *dialogScreenTmux) permissionRaw(t *testing.T, crewFile, ns, screen, tool, toolInput string) {
+	t.Helper()
+
+	f.mu.Lock()
+	f.waitingFor = "permission prompt"
+	f.screen = screen
 	f.mu.Unlock()
 
 	f.show(t, ns, true)
+	f.record(t, crewFile, tool, toolInput, 0)
+}
 
-	input := `{"session_id":"sid-1","hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":` + toolInput + `}`
-	require.NoError(t, shift.RecordPermission(crew.Layout{Dir: filepath.Dir(crewFile)}, "dev", []byte(input), f.since))
+// record writes the hook's record of a call, at a moment after the wait began.
+func (f *dialogScreenTmux) record(t *testing.T, crewFile, tool, toolInput string, after time.Duration) {
+	t.Helper()
+
+	input := `{"session_id":"sid-1","hook_event_name":"PermissionRequest","tool_name":"` + tool + `","tool_input":` + toolInput + `}`
+	require.NoError(t, shift.RecordPermission(crew.Layout{Dir: filepath.Dir(crewFile)}, "dev", []byte(input), f.since.Add(after)))
 }
 
 func (f *dialogScreenTmux) pressed() [][]string {
@@ -510,10 +526,19 @@ func TestPluginPressIsOneShot(t *testing.T) {
 	assert.Equal(t, "dev · chose 1: Yes\n", out)
 }
 
-// failingKeys is a tmux whose keys do not go.
-type failingKeys struct{ *dialogScreenTmux }
+// failingKeys is a tmux whose keys do not go: with the error it is given, os.ErrClosed when none.
+type failingKeys struct {
+	*dialogScreenTmux
+	err error
+}
 
-func (f *failingKeys) Keys(string, ...string) error { return os.ErrClosed }
+func (f *failingKeys) Keys(string, ...string) error {
+	if f.err != nil {
+		return f.err
+	}
+
+	return os.ErrClosed
+}
 
 // A prompt answered and asked again in the same breath, with the very same words and call, is a new wait: the old card is closed in
 // the same beat and the new one is told, with a mark of its own, once it has stood.

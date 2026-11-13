@@ -537,6 +537,12 @@ func noAnswer(err error) bool {
 	return errors.As(err, &n)
 }
 
+// NewNoAnswer is the error of a call that got no answer in time, for a fake of tmux to give.
+func NewNoAnswer(msg string) error { return &noAnswerError{msg: msg} }
+
+// NoAnswer reports a call that got no answer within Timeout: tmux may still have run it, so a key it was to send may have landed.
+func NoAnswer(err error) bool { return noAnswer(err) }
+
 // typePiece is the most characters typed in one go, typePause the wait after each: well under what Claude Code takes
 // for a paste even when a few pieces reach it in one read.
 const (

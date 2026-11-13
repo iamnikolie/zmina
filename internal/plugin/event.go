@@ -104,14 +104,16 @@ type Event struct {
 	// A dialog: the question on the role's screen, and the task the role holds. Prompt says what it is, permission (a tool's
 	// approval: Tool and Subject are the call, what is being approved) or question; NeedsTerminal says a choice of it cannot be
 	// pressed from here (several can be ticked), so the event offers no argv for it.
-	Question      string `json:"question,omitempty"`
-	Prompt        string `json:"prompt,omitempty"`
-	Tool          string `json:"tool,omitempty"`
-	Subject       string `json:"subject,omitempty"`
-	SubjectCut    bool   `json:"subject_cut,omitempty"`
-	NeedsTerminal bool   `json:"needs_terminal,omitempty"`
-	Task          string `json:"task,omitempty"`
-	TaskTitle     string `json:"task_title,omitempty"`
+	Question   string `json:"question,omitempty"`
+	Prompt     string `json:"prompt,omitempty"`
+	Tool       string `json:"tool,omitempty"`
+	Subject    string `json:"subject,omitempty"`
+	SubjectCut bool   `json:"subject_cut,omitempty"`
+	// SubjectChecked: the subject was compared with what the prompt shows on the screen, and is it.
+	SubjectChecked bool   `json:"subject_checked,omitempty"`
+	NeedsTerminal  bool   `json:"needs_terminal,omitempty"`
+	Task           string `json:"task,omitempty"`
+	TaskTitle      string `json:"task_title,omitempty"`
 
 	// An answered: what it closes (the event it went as), how, by whom, the words of the answer, when.
 	For    string `json:"for,omitempty"`
@@ -222,11 +224,13 @@ type DialogFacts struct {
 	Role, ID, Question, Nonce string
 	Prompt, Tool, Subject     string
 	// Multi: several choices can be ticked. SubjectCut: the subject is not all of what is being approved (it was cut, or the call has
-	// parts it does not show): the phone cannot show it whole, so neither of them is pressed from it. Since is when the wait began.
-	Multi, SubjectCut bool
-	Since             time.Time
-	Options           []Option
-	Task, TaskTitle   string
+	// parts it does not show): the phone cannot show it whole, so neither of them is pressed from it. SubjectChecked: the prompt's own
+	// block on the screen was compared with the subject, word for word; of a permission prompt that was not, nothing says the subject is
+	// the prompt's own, and nothing is offered to press. Since is when the wait began.
+	Multi, SubjectCut, SubjectChecked bool
+	Since                             time.Time
+	Options                           []Option
+	Task, TaskTitle                   string
 }
 
 // DialogID is the id of a dialog in the plan and in the ledger: the role, a colon and the fingerprint.
@@ -241,12 +245,16 @@ func EventDialogID(role, fingerprint, nonce string) string {
 	return DialogID(role, fingerprint) + ":" + nonce
 }
 
+// permissionUnsure reports a permission prompt whose subject was not checked against the screen: the subject may be of another call of
+// the session, and a card that pressed it would approve what it does not show.
+func permissionUnsure(d DialogFacts) bool { return d.Prompt == "permission" && !d.SubjectChecked }
+
 // Dialog is the event of a question on a role's screen.
 func (b Builder) Dialog(d DialogFacts) Event {
 	id := EventDialogID(d.Role, d.ID, d.Nonce)
 	ev := Event{V: Version, Event: Dialog, ID: id, Role: b.clean(d.Role, roleMax), Question: b.clean(d.Question, TextMax),
 		Prompt: b.clean(d.Prompt, roleMax), Tool: b.clean(d.Tool, roleMax), Subject: b.clean(d.Subject, SubjectMax),
-		Task: b.clean(d.Task, roleMax), TaskTitle: b.clean(d.TaskTitle, TitleMax), SubjectCut: d.SubjectCut, NeedsTerminal: d.Multi || d.SubjectCut}
+		Task: b.clean(d.Task, roleMax), TaskTitle: b.clean(d.TaskTitle, TitleMax), SubjectCut: d.SubjectCut, SubjectChecked: d.SubjectChecked, NeedsTerminal: d.Multi || d.SubjectCut || permissionUnsure(d)}
 
 	a := &Answer{}
 
@@ -260,7 +268,7 @@ func (b Builder) Dialog(d DialogFacts) Event {
 		// A question whose choices are ticked is settled in the terminal: pressing one choice would tick it, and answer nothing. So is
 		// a permission prompt whose call the phone cannot be shown whole: never a working Yes for what it does not show. And choose
 		// takes a choice from 1 to 9.
-		if !d.Multi && !d.SubjectCut && o.N >= 1 && o.N <= maxChoice {
+		if !d.Multi && !d.SubjectCut && !permissionUnsure(d) && o.N >= 1 && o.N <= maxChoice {
 			a.Options = append(a.Options, OptionAnswer{N: o.N, Argv: []string{zminaBinary, "--crew", b.Crew, "choose", d.Role,
 				strconv.Itoa(o.N), "--dialog", id, "--by", b.Plugin}})
 		}
@@ -318,7 +326,7 @@ func (b Builder) Sample(kind string, now time.Time) (Event, bool) {
 			Check: kind == Reminder})
 	case Dialog:
 		ev = b.Dialog(DialogFacts{Role: "dev", ID: "0000000000000000", Nonce: "0000000000000000", Question: "Do you want to proceed?",
-			Prompt: "permission", Tool: "Bash", Subject: "echo this is a test", Options: []Option{{N: 1, Text: "Yes"}, {N: 2, Text: "No"}},
+			Prompt: "permission", Tool: "Bash", Subject: "echo this is a test", SubjectChecked: true, Options: []Option{{N: 1, Text: "Yes"}, {N: 2, Text: "No"}},
 			Task: "T-0", TaskTitle: "A test"})
 	case Answered:
 		ev = b.Answered(Closure{ID: "A-0", For: Ask, How: HowAnswered, By: "owner", Text: "yes", At: now})

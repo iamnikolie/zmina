@@ -134,14 +134,14 @@ func TestEventRoundTrip(t *testing.T) {
 // A dialog event names what is being approved, and its id carries the one-shot mark of the event: role:fingerprint:nonce.
 func TestPermissionDialogEventGolden(t *testing.T) {
 	ev := builder().Dialog(DialogFacts{Role: "dev", ID: "0123456789abcdef", Nonce: "aabbccddeeff0011", Prompt: "permission", Tool: "Bash",
-		Subject: "rm -rf build", Question: "Do you want to proceed?", Options: []Option{{N: 1, Text: "Yes"}, {N: 2, Text: "No"}},
+		Subject: "rm -rf build", SubjectChecked: true, Question: "Do you want to proceed?", Options: []Option{{N: 1, Text: "Yes"}, {N: 2, Text: "No"}},
 		Task: "T-12", TaskTitle: "Rename the site"})
 
 	want := `{"v":1,"event":"dialog","id":"dev:0123456789abcdef:aabbccddeeff0011","role":"dev","options":[{"n":1,"text":"Yes"},` +
 		`{"n":2,"text":"No"}],"answer":{"options":[{"n":1,"argv":["zmina","--crew","/home/alex/.zmina/acme/crew.yaml","choose","dev","1",` +
 		`"--dialog","dev:0123456789abcdef:aabbccddeeff0011","--by","pager"]},{"n":2,"argv":["zmina","--crew","/home/alex/.zmina/acme/crew.yaml",` +
 		`"choose","dev","2","--dialog","dev:0123456789abcdef:aabbccddeeff0011","--by","pager"]}]},"question":"Do you want to proceed?",` +
-		`"prompt":"permission","tool":"Bash","subject":"rm -rf build","task":"T-12","task_title":"Rename the site"}`
+		`"prompt":"permission","tool":"Bash","subject":"rm -rf build","subject_checked":true,"task":"T-12","task_title":"Rename the site"}`
 
 	assert.Equal(t, want+"\n", string(ev.Line()))
 	assert.Equal(t, "dev:0123456789abcdef", DialogID("dev", "0123456789abcdef"), "the plan's id has no nonce")
@@ -224,4 +224,29 @@ func TestACutSubjectOffersNoArgv(t *testing.T) {
 	assert.Nil(t, ev.Answer)
 	assert.Contains(t, string(ev.Line()), `"subject":"make deploy","subject_cut":true,"needs_terminal":true`)
 	assert.Len(t, ev.Options, 2)
+}
+
+// A permission prompt whose subject was not compared with the prompt's own block on the screen (any tool but a shell call: no golden
+// shows one) is told with its subject and offers nothing to press.
+func TestAnUncheckedPermissionSubjectOffersNoArgv(t *testing.T) {
+	ev := builder().Dialog(DialogFacts{Role: "dev", ID: "ab", Nonce: "0011223344556677", Prompt: "permission", Tool: "WebFetch",
+		Subject: "https://example.com/x", Options: []Option{{N: 1, Text: "Yes"}, {N: 2, Text: "No"}}})
+
+	assert.False(t, ev.SubjectChecked)
+	assert.False(t, ev.SubjectCut)
+	assert.True(t, ev.NeedsTerminal)
+	assert.Nil(t, ev.Answer)
+	assert.Equal(t, "https://example.com/x", ev.Subject)
+	assert.Len(t, ev.Options, 2)
+
+	// A question is not a permission prompt: the check is of a subject, and it has none.
+	q := builder().Dialog(DialogFacts{Role: "dev", ID: "ab", Prompt: "question", Options: []Option{{N: 1, Text: "Yes"}}})
+	assert.False(t, q.NeedsTerminal)
+	assert.NotNil(t, q.Answer)
+
+	// And one checked, and whole, is pressed.
+	ok := builder().Dialog(DialogFacts{Role: "dev", ID: "ab", Prompt: "permission", Tool: "Bash", Subject: "ls", SubjectChecked: true,
+		Options: []Option{{N: 1, Text: "Yes"}}})
+	assert.False(t, ok.NeedsTerminal)
+	assert.NotNil(t, ok.Answer)
 }

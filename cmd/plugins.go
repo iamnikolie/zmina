@@ -15,6 +15,7 @@ import (
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/plugin"
 	"github.com/iamnikolie/zmina/internal/shift"
+	"github.com/iamnikolie/zmina/internal/tmux"
 )
 
 func (a *app) pluginCommand() *cobra.Command {
@@ -345,7 +346,7 @@ func (a *app) chooseCommand() *cobra.Command {
 				// another question, nor a second time in this one.
 				var (
 					before func(d *shift.Dialog, since time.Time) error
-					rearm  func()
+					rearm  func(err error)
 				)
 
 				if via != "" {
@@ -372,9 +373,10 @@ func (a *app) chooseCommand() *cobra.Command {
 						return nil
 					}
 
-					// Keys that could not be sent are no press: the mark is given back.
-					rearm = func() {
-						if spent {
+					// Keys that could not be sent are no press: the mark is given back. Not when tmux did not answer in time: it may have sent
+					// them, and a second press must not follow a first that may have landed.
+					rearm = func(err error) {
+						if spent && !tmux.NoAnswer(err) {
 							_ = armed.Rearm(nonce, now)
 						}
 					}
@@ -383,7 +385,7 @@ func (a *app) chooseCommand() *cobra.Command {
 				d, since, err := pressChoice(s, role, n, fingerprint, dialog != "", before)
 				if err != nil {
 					if rearm != nil {
-						rearm()
+						rearm(err)
 					}
 
 					return err

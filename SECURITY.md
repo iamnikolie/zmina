@@ -39,3 +39,8 @@ Some things are known and by design rather than vulnerabilities:
   nothing: any process of yours can set it). It must check for itself who is talking to it. zmina runs it only from `run`, PATH
   or the crew's `plugins/` directory, and only a regular executable file that group and others cannot write; it hands it
   roles' text as cleaned and bounded data, never as an instruction, and none of its own secrets in the environment.
+- **The commands waiting for approval are kept in a file.** The `PermissionRequest` hook adds each tool call of a role to
+  `hooks/<role>.permission.json` (mode 0600, the last 8 calls, each cut to 1000 characters), so that a plugin and the cockpit can
+  show what a permission prompt is about. They stay until later calls push them out, a day passes or the role starts again, and
+  a command may carry a secret. The file is the crew's own and is read by nothing that leaves the machine except a plugin the owner
+  configured, which is shown the one call a prompt is certainly of.

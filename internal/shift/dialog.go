@@ -26,8 +26,11 @@ type Dialog struct {
 	// there is none, and then nothing says what is being approved (View.WaitingFor says it is a permission prompt).
 	Tool    string `json:"tool,omitempty"`
 	Subject string `json:"subject,omitempty"`
-	// SubjectCut: the subject is not all of what is being approved (see AskedPermission.Cut).
-	SubjectCut bool `json:"subject_cut,omitempty"`
+	// SubjectCut: the subject is not all of what is being approved (see AskedPermission.Cut). SubjectChecked: the prompt's own block
+	// was compared with it, word for word (a shell call); of any other tool nothing on the screen is compared. A card may press a
+	// permission prompt only when its subject is checked and not cut.
+	SubjectCut     bool `json:"subject_cut,omitempty"`
+	SubjectChecked bool `json:"subject_checked,omitempty"`
 	// Multi: several choices can be ticked, which Enter on one does not settle: it needs the terminal.
 	Multi bool `json:"multi,omitempty"`
 }
@@ -181,9 +184,13 @@ func (s *Shift) dialogOf(name string, sess *registry.Session, screen string) *Di
 		return nil
 	}
 
-	if p := s.permissionLook(name, sess); p != nil && permissionOnScreen(p, screen) {
-		d.Tool, d.Subject, d.SubjectCut = p.Tool, p.Input, p.Cut
-		d.ID = permissionDialogID(p, d.ID)
+	if p := s.permissionLook(name, sess); p != nil {
+		if m := checkPermissionScreen(p, screen, d); m != matchNone {
+			d.Tool, d.Subject = p.Tool, p.Input
+			d.SubjectChecked = m == matchWhole
+			d.SubjectCut = p.Cut || m == matchPartial
+			d.ID = permissionDialogID(p, d.ID)
+		}
 	}
 
 	d.Multi = boxedChoices(d.Options)

@@ -384,6 +384,12 @@ func pressChoice(s *shift.Shift, role string, n int, id string, check bool, befo
 	if d.ID != v.Dialog.ID {
 		return nil, time.Time{}, errors.New("the question on its screen changed: look again")
 	}
+	// A card presses a permission prompt only when the call it shows is certainly the prompt's: recorded alone for this wait, and its
+	// words the very block the prompt draws. The record and the screen are read again here, whatever the card was told.
+	if before != nil && v.WaitingFor == shift.WaitPermission && (d.Subject == "" || !d.SubjectChecked || d.SubjectCut) {
+		return nil, time.Time{}, errors.New("nothing shows that this permission prompt is the call the card showed, or the card could not show it whole: " +
+			"answer it in a terminal")
+	}
 	if before != nil {
 		if err := before(d, v.Since); err != nil {
 			return nil, time.Time{}, err
