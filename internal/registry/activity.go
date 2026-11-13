@@ -126,6 +126,7 @@ func (a *Activity) read(b []byte, head bool, started []string, ended map[string]
 			Prompt string `json:"prompt"`
 			Origin *struct {
 				Kind string `json:"kind"`
+				From string `json:"from"`
 			} `json:"origin"`
 		} `json:"attachment"`
 		Result struct {
@@ -147,11 +148,16 @@ func (a *Activity) read(b []byte, head bool, started []string, ended map[string]
 	// attachment: it begins no turn, but it is said.
 	if l.Type == "attachment" {
 		if l.Attachment.Type == "queued_command" {
-			// Who sent it is in its origin, as on a user line: a peer's text (zmina's tagged lines too) may start
-			// with anything.
-			trigger, _ := textTrigger(strings.TrimSpace(l.Attachment.Prompt))
+			// Who sent it is in its origin, as on a user line: a peer's text may start with anything, zmina's tag
+			// included. Only a message from zmina is told by its text.
+			text := strings.TrimSpace(l.Attachment.Prompt)
+			trigger, _ := textTrigger(text)
+
 			if o := l.Attachment.Origin; o != nil && o.Kind == "peer" {
 				trigger = TriggerPeer
+				if t, ok := postedTrigger(o.From, text); ok {
+					trigger = t
+				}
 			} else if o != nil && o.Kind == "task-notification" {
 				trigger = TriggerAgent
 			}

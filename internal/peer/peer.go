@@ -29,8 +29,8 @@ const Protocol = 1
 // lineMax is Claude Code's cap on one frame line.
 const lineMax = 1 << 20
 
-// From names zmina as the sender.
-const From = "zmina"
+// From names zmina as the sender: the name a transcript's reader knows a message of zmina's by.
+const From = registry.PostedBy
 
 // ErrUnavailable is a post that never started: nothing reached the session, so another way may be tried.
 var ErrUnavailable = errors.New("inbox socket unavailable")
