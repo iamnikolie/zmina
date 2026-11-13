@@ -1807,8 +1807,9 @@ nothing, so the ticker's every beat costs one small read.
 ## Usage
 
 `zmina usage [--since 24h|7d] [--by role|task|model|day|crew|trigger|how|ctx|tool] [--role r] [--all] [--json]` — what the
-work cost, from the transcripts: each API reply once, a role's copies (dev#2) with it, a subagent's replies with
-the session that started it (`SUB` counts them). Columns: turns, `WAITS`, tokens, `CACHED` (the share of the prompt read
+work cost, from the transcripts: each API reply once (also when a transcript is reached under two names, through a linked
+project directory, or lies in two directories, a resume having copied it), a role's copies (dev#2) with it, a subagent's
+replies with the session that started it (`SUB` counts them). Columns: turns, `WAITS`, tokens, `CACHED` (the share of the prompt read
 from cache), `REREAD` (cache reads over cache writes: how many times a token put in context was read again), `$ API`, `$/TURN`, `CTX` (the context a turn carries on average; `!` past 200k — most of such a
 turn's price is reading the conversation again: compact or restart the role), `MODELS` (the model mix by dollars,
 from each reply's own model), and for `--by task` `HOW`. A totals row `all`. Under the table, the cost by what it

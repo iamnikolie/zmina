@@ -381,7 +381,8 @@ type Transcript struct {
 }
 
 // Transcripts lists the namespace's session transcripts written to since a time, with the names they run under.
-// A subagent's transcript is not one of them: it is read with its parent's (Messages).
+// A subagent's transcript is not one of them: it is read with its parent's (Messages). A file is listed once however
+// many names reach it: a project directory linked under a second name shows each of its files twice to the glob.
 func (r *Registry) Transcripts(since time.Time) ([]Transcript, error) {
 	files, err := filepath.Glob(filepath.Join(r.Namespace, "projects", "*", "*.jsonl"))
 	if err != nil {
@@ -390,10 +391,23 @@ func (r *Registry) Transcripts(since time.Time) ([]Transcript, error) {
 
 	var out []Transcript
 
+	seen := map[string]bool{}
+
 	for _, f := range files {
 		if st, err := os.Stat(f); err != nil || (st.ModTime().Before(since) && !subagentsSince(f, since)) {
 			continue
 		}
+
+		real, err := filepath.EvalSymlinks(f)
+		if err != nil {
+			real = f
+		}
+
+		if seen[real] {
+			continue
+		}
+
+		seen[real] = true
 
 		out = append(out, Transcript{Path: f, ID: strings.TrimSuffix(filepath.Base(f), ".jsonl"), Name: sessionName(f)})
 	}
@@ -585,8 +599,13 @@ func cueAt(cues []cue, at time.Time) cue {
 // Messages reads the replies since a time of a session and of its subagents, each reply once. A subagent's reply
 // carries the trigger of the parent's turn it ran in.
 func Messages(t Transcript, since time.Time) ([]Message, error) {
-	seen := map[string]bool{}
+	return MessagesOnce(t, since, map[string]bool{})
+}
 
+// MessagesOnce is Messages for a read of several transcripts that share seen, the API ids of the replies read so far:
+// a reply in it is skipped. One session can lie in two files (a conversation resumed from another directory is
+// copied there), and its replies are counted once.
+func MessagesOnce(t Transcript, since time.Time, seen map[string]bool) ([]Message, error) {
 	out, cues, err := readMessages(t.Path, since, seen, nil)
 	if err != nil {
 		return nil, err

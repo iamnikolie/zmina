@@ -290,23 +290,28 @@ func usageRead(crews []uiCrew, node string, since time.Time, prices cost.Table, 
 					problems = append(problems, problem)
 				}
 			}
-			sessions = append(sessions, cost.Session{Node: node, Crew: key, Role: u.Role, Group: u.Group, Dispatcher: dispatcherSession(c), Messages: []registry.Message{u.Message}})
+			sessions = append(sessions, cost.Session{Node: node, Crew: key, Role: u.Role, Group: u.Group,
+				Dispatcher: dispatcherSession(c), Messages: []registry.Message{u.Message}})
 		}
 
 		names := crewSessions(c)
 		outside := worktreeDirs(c, tasks)
 
+		// One session can lie in two files (a conversation resumed from another directory is copied there): each reply
+		// and tool call of the crew is counted once.
+		replies, calls := map[string]bool{}, map[string]bool{}
+
 		for _, t := range ts {
 			who, mine := names[t.Name]
 			if !mine {
-				if roleOf[t.Name] || !outside[filepath.Dir(t.Path)] {
+				if roleOf[t.Name] || !outside[filepath.Dir(t.Path)] && !outside[realDir(filepath.Dir(t.Path))] {
 					continue
 				}
 
 				who = [2]string{outsideRole, outsideRole}
 			}
 
-			ms, err := registry.Messages(t, since)
+			ms, err := registry.MessagesOnce(t, since, replies)
 			if err != nil {
 				problems = append(problems, fmt.Sprintf("crew %s: %s: %v", key, t.ID, err))
 
@@ -314,7 +319,7 @@ func usageRead(crews []uiCrew, node string, since time.Time, prices cost.Table, 
 			}
 
 			if fills != nil {
-				fs, err := registry.Fills(t, since, *fills)
+				fs, err := registry.FillsOnce(t, since, *fills, calls)
 				if err != nil {
 					problems = append(problems, fmt.Sprintf("crew %s: %s: %v", key, t.ID, err))
 				}
@@ -368,18 +373,29 @@ func crewSessions(c *crew.Crew) map[string][2]string {
 	return out
 }
 
-// worktreeDirs are the transcript directories of sessions started in one of the crew's task worktrees.
+// worktreeDirs are the transcript directories of sessions started in one of the crew's task worktrees, by the name
+// they are reached under and by the directory that name leads to.
 func worktreeDirs(c *crew.Crew, tasks []task.Task) map[string]bool {
 	reg := &registry.Registry{Namespace: c.Namespace}
 	out := map[string]bool{}
 
 	for _, t := range tasks {
 		if t.Worktree != "" {
-			out[reg.ProjectDir(filepath.Clean(t.Worktree))] = true
+			dir := reg.ProjectDir(filepath.Clean(t.Worktree))
+			out[dir], out[realDir(dir)] = true, true
 		}
 	}
 
 	return out
+}
+
+// realDir is a directory with its links followed, as it is when they cannot be.
+func realDir(dir string) string {
+	if real, err := filepath.EvalSymlinks(dir); err == nil {
+		return real
+	}
+
+	return dir
 }
 
 // peersUsage asks every peer with an address for its crews' cells, all at once; a peer that does not answer is
