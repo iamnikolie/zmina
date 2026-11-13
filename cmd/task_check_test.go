@@ -163,6 +163,118 @@ func TestTaskDoneFailingCheckRefusesTheClose(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// A check that could not run (the shell's 126 or 127, or the check's env_fault_rc) is no failed check: exit 6 and not 4, the
+// task stays open with the fault on it and no closed.check, the dispatcher is told once for the cause, the message says the
+// environment is broken and the work was not judged. A check that ran and failed is exit 4 as ever.
+func TestTaskDoneEnvironmentFaultIsNotAFailedCheck(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		key  string
+		code int
+		why  string
+	}{
+		{name: "not found", key: "done_check: \"echo FAULT-DETAIL; exit 127\"\n", code: exitCheckEnv, why: "exit 127: the shell did not find the command"},
+		{name: "not executable", key: "done_check: \"exit 126\"\n", code: exitCheckEnv, why: "exit 126: the shell found the command and could not execute it"},
+		{name: "the crew's status", key: "done_check: {run: \"echo FAULT-DETAIL; exit 9\", env_fault_rc: 9}\n", code: exitCheckEnv, why: "exit 9: the status the check names"},
+		{name: "another status", key: "done_check: {run: \"exit 8\", env_fault_rc: 9}\n", code: exitCheckFailed},
+		{name: "a plain failure", key: "done_check: \"exit 1\"\n", code: exitCheckFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newCheckCrew(t, tc.key)
+			c.task(t)
+
+			_, _, err := zm(t, c.file, "task", "done", "1")
+			require.Error(t, err)
+			assert.Equal(t, tc.code, exitCodeOf(t, err), err.Error())
+			assert.Equal(t, "open", readTaskFile(t, c.file, "T-1")["state"])
+			assert.NotContains(t, readTaskFile(t, c.file, "T-1"), "closed")
+
+			if tc.code == exitCheckFailed {
+				assert.ErrorContains(t, err, "check failed")
+				assert.NotContains(t, readTaskFile(t, c.file, "T-1"), "check_env")
+				assert.Empty(t, stateOf(t, c.file).Signals, "a failed check tells nobody, as it always did")
+
+				return
+			}
+
+			assert.NotContains(t, err.Error(), "check failed")
+			assert.ErrorContains(t, err, "the environment is broken, not the work, and the work was not judged")
+			assert.ErrorContains(t, err, tc.why)
+			assert.ErrorContains(t, err, "the task stays open and no failed check is recorded")
+			assert.ErrorContains(t, err, "the dispatcher has been told")
+
+			env, _ := readTaskFile(t, c.file, "T-1")["check_env"].(map[string]any)
+			require.NotNil(t, env)
+			assert.Equal(t, "environment", env["kind"])
+
+			if strings.Contains(tc.key, "FAULT-DETAIL") {
+				assert.Equal(t, "FAULT-DETAIL", env["output"])
+				assert.ErrorContains(t, err, "FAULT-DETAIL", "the end of the output is in the message")
+			}
+
+			assert.Len(t, stateOf(t, c.file).Signals, 1, "told once")
+			assert.Contains(t, stateOf(t, c.file).Signals[0], "its done check could not run, and the work was not judged")
+
+			// Again: the same cause is kept and not told again.
+			_, _, err = zm(t, c.file, "task", "set", "1", "done")
+			require.Error(t, err)
+			assert.Equal(t, exitCheckEnv, exitCodeOf(t, err))
+			assert.ErrorContains(t, err, "the dispatcher was told of this already")
+			assert.Len(t, stateOf(t, c.file).Signals, 1)
+
+			shown, _, err := zm(t, c.file, "task", "show", "1")
+			require.NoError(t, err)
+			assert.Contains(t, shown, "check could not run: ")
+			assert.Contains(t, shown, "the environment is broken, the work was not judged")
+
+			log, _, err := zm(t, c.file, "log", "--task", "1")
+			require.NoError(t, err)
+			assert.Contains(t, log, "environment fault, the work was not judged: ")
+
+			// --force is as it was: it closes past the check, and the fault goes with the close.
+			_, _, err = zm(t, c.file, "task", "done", "1", "--force")
+			require.NoError(t, err)
+			assert.NotContains(t, readTaskFile(t, c.file, "T-1"), "check_env")
+		})
+	}
+}
+
+// --check-env-rc gives a task's own check the status that says it could not run; it goes with --check and is 1 to 255.
+func TestTaskCheckEnvRCFlag(t *testing.T) {
+	c := newCheckCrew(t, "")
+	c.task(t, "--check", "exit 5", "--check-env-rc", "5")
+
+	spec, _ := readTaskFile(t, c.file, "T-1")["check"].(map[string]any)
+	assert.EqualValues(t, 5, spec["env_fault_rc"])
+
+	_, _, err := zm(t, c.file, "task", "done", "1")
+	require.Error(t, err)
+	assert.Equal(t, exitCheckEnv, exitCodeOf(t, err))
+
+	shown, _, err := zm(t, c.file, "task", "show", "1")
+	require.NoError(t, err)
+	assert.Contains(t, shown, "exit 5 is an environment fault")
+
+	for _, args := range [][]string{
+		{"task", "set", "1", "--check-env-rc", "5"},
+		{"task", "set", "1", "--check", "true", "--check-env-rc", "0"},
+		{"task", "set", "1", "--check", "true", "--check-env-rc", "256"},
+		{"task", "set", "1", "--check", "-", "--check-env-rc", "5"},
+	} {
+		_, _, err = zm(t, c.file, args...)
+		require.Error(t, err, args)
+	}
+
+	_, _, err = zm(t, c.file, "task", "set", "1", "--check", "exit 6", "--check-env-rc", "6")
+	require.NoError(t, err)
+	assert.NotContains(t, readTaskFile(t, c.file, "T-1"), "check_env", "a new check takes the old one's fault away")
+
+	// The crew file refuses a status that is none.
+	bad := newCheckCrew(t, "done_check: {run: x, env_fault_rc: 0}\n")
+	_, _, err = zm(t, bad.file, "task", "ls")
+	require.ErrorContains(t, err, "env_fault_rc")
+}
+
 func TestTaskDoneCheckThatTimesOutRefusesTheClose(t *testing.T) {
 	c := newCheckCrew(t, "done_check: {run: \"echo before; sleep 60\", timeout: 1s}\n")
 	c.task(t)

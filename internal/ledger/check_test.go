@@ -125,6 +125,100 @@ func TestTimedOutCheckRefusesTheClose(t *testing.T) {
 	assert.Equal(t, task.Open, got.State)
 }
 
+// A check that could not run is not a failed check: it is no ErrCheckFailed (so no exit 4), says the environment is broken
+// and the work was not judged, logs an event of its own, and leaves the task open with nothing recorded of it. A check that
+// ran and failed, or timed out, is as it was.
+func TestCheckThatCouldNotRunIsAnEnvironmentFaultNotAFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		spec  donecheck.Spec
+		fault bool
+		why   string
+	}{
+		{name: "command not found", spec: donecheck.Spec{Run: "echo seen; exit 127"}, fault: true, why: "exit 127: the shell did not find the command"},
+		{name: "not executable", spec: donecheck.Spec{Run: "exit 126"}, fault: true, why: "exit 126"},
+		{name: "the spec's status", spec: donecheck.Spec{Run: "echo seen; exit 9", EnvFaultRC: 9}, fault: true, why: "exit 9"},
+		{name: "a status the spec does not name", spec: donecheck.Spec{Run: "exit 9", EnvFaultRC: 8}},
+		{name: "a plain failure", spec: donecheck.Spec{Run: "exit 2"}},
+		{name: "a timeout", spec: donecheck.Spec{Run: "sleep 60", Timeout: "1s", EnvFaultRC: 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l, _, tk, events := checkFixture(t, &tc.spec)
+
+			plan, err := l.PlanCheck(tk.ID, closing("dev"))
+			require.NoError(t, err)
+
+			checked, err := l.RunCheck(context.Background(), plan)
+			require.Error(t, err)
+			assert.Nil(t, checked)
+
+			var fault *EnvFault
+
+			if !tc.fault {
+				require.ErrorIs(t, err, ErrCheckFailed)
+				assert.NotErrorIs(t, err, ErrCheckEnvironment)
+				assert.False(t, errors.As(err, &fault))
+
+				return
+			}
+
+			require.ErrorAs(t, err, &fault)
+			require.ErrorIs(t, err, ErrCheckEnvironment)
+			assert.NotErrorIs(t, err, ErrCheckFailed, "it is not the exit code of a failed check")
+			assert.Equal(t, tk.ID, fault.ID)
+			assert.Equal(t, "dev", fault.Role)
+			assert.True(t, fault.Result.Environment())
+			assert.Contains(t, err.Error(), "the environment is broken, not the work, and the work was not judged")
+			assert.Contains(t, err.Error(), tc.why)
+			assert.Contains(t, err.Error(), "the task stays open and no failed check is recorded")
+
+			if strings.Contains(tc.spec.Run, "echo seen") {
+				assert.Contains(t, err.Error(), "\nseen\n", "the end of the output is in it")
+			}
+
+			assert.Contains(t, strings.Join(*events, "\n"), "dev check T-1 environment fault, the work was not judged: ")
+			assert.NotContains(t, strings.Join(*events, "\n"), "check T-1 failed")
+
+			// Nothing was recorded: the task is open and no closing rests on it.
+			got, err := l.Store.Get(tk.ID)
+			require.NoError(t, err)
+			assert.Equal(t, task.Open, got.State)
+			assert.Nil(t, got.Closed)
+			assert.Nil(t, got.CheckEnv, "the ledger writes nothing: shift.RecordCheckEnv does, under the lock")
+
+			_, err = l.Set(tk.ID, Change{State: task.Done, By: "dev"})
+			require.ErrorIs(t, err, ErrNotChecked)
+		})
+	}
+}
+
+// What a fault left on the task goes when the task closes or its check changes: it says nothing of a closed task or of a
+// check it was not met by.
+func TestCheckEnvGoesWithTheCloseOrTheCheck(t *testing.T) {
+	l, _, tk, _ := checkFixture(t, &donecheck.Spec{Run: "true"})
+
+	for _, change := range []Change{
+		{State: task.Done, Force: true, By: "boss"},
+		{State: task.Dropped, By: "dev"},
+		{Check: &donecheck.Spec{Run: "true", EnvFaultRC: 4}, By: "boss"},
+		{ClearCheck: true, By: "boss"},
+	} {
+		got, err := l.Store.Get(tk.ID)
+		require.NoError(t, err)
+
+		got.CheckEnv = &donecheck.Result{Run: "true", Exit: 127, Kind: donecheck.KindEnvironment}
+		require.NoError(t, l.Store.Put(got))
+
+		got, err = l.Set(tk.ID, change)
+		require.NoError(t, err)
+		assert.Nil(t, got.CheckEnv, "%+v", change)
+
+		// Back to open and checked, for the next change.
+		got.State, got.Closed, got.Check = task.Open, nil, &donecheck.Spec{Run: "true"}
+		require.NoError(t, l.Store.Put(got))
+	}
+}
+
 // With no check at all the close is what it always was: nothing is run, nothing is recorded.
 func TestNoCheckConfiguredClosesAsBefore(t *testing.T) {
 	l, _, tk, events := checkFixture(t, nil)

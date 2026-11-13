@@ -438,6 +438,9 @@ func (l *Ledger) apply(t task.Task, c Change, preflight bool) (task.Task, []stri
 		if t.Delivery != nil {
 			t.Closed.Gen = t.Delivery.Gen
 		}
+
+		// A fault of the environment the check met is no part of a closed task.
+		t.CheckEnv = nil
 	}
 
 	return t, changes, nil

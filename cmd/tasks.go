@@ -162,10 +162,11 @@ func (a *app) taskNewCommand() *cobra.Command {
 	return c
 }
 
-// checkFlags is the flags that give a task its check: --check, with --check-timeout and --check-commit.
+// checkFlags is the flags that give a task its check: --check, with --check-timeout, --check-commit and --check-env-rc.
 type checkFlags struct {
 	run, timeout string
 	commit       bool
+	envRC        int
 }
 
 func (f *checkFlags) flags(c *cobra.Command) {
@@ -173,25 +174,30 @@ func (f *checkFlags) flags(c *cobra.Command) {
 		"only if it exits 0 (the owner and the dispatcher set it; needs a worktree; with set, - clears it)")
 	c.Flags().StringVar(&f.timeout, "check-timeout", "", "how long the check may run (default 10m, at most 30m)")
 	c.Flags().BoolVar(&f.commit, "check-commit", false, "the check also wants a commit on the branch beyond its base")
+	c.Flags().IntVar(&f.envRC, "check-env-rc", 0, "an exit status (1-255) the check uses to say it could not run (a tool or service "+
+		"missing): an environment fault, not a failed check; the shell's 126 and 127 always are")
 }
 
 // spec is the check the flags give: nil when --check was not given, cleared when it was given as - (set only).
 func (f *checkFlags) spec(cmd *cobra.Command) (spec *donecheck.Spec, cleared bool, err error) {
 	given := cmd.Flags().Changed("check")
-	extra := cmd.Flags().Changed("check-timeout") || cmd.Flags().Changed("check-commit")
+	extra := cmd.Flags().Changed("check-timeout") || cmd.Flags().Changed("check-commit") || cmd.Flags().Changed("check-env-rc")
 
 	switch {
 	case !given && !extra:
 		return nil, false, nil
 	case !given:
-		return nil, false, errors.New("--check-timeout and --check-commit go with --check")
+		return nil, false, errors.New("--check-timeout, --check-commit and --check-env-rc go with --check")
 	case f.run == "-" && extra:
-		return nil, false, errors.New("--check - clears the check: --check-timeout and --check-commit have nothing to go with")
+		return nil, false, errors.New("--check - clears the check: --check-timeout, --check-commit and --check-env-rc have " +
+			"nothing to go with")
+	case cmd.Flags().Changed("check-env-rc") && (f.envRC < 1 || f.envRC > 255):
+		return nil, false, fmt.Errorf("--check-env-rc %d: an exit status from 1 to 255", f.envRC)
 	case f.run == "-":
 		return nil, true, nil
 	}
 
-	return &donecheck.Spec{Run: f.run, Timeout: f.timeout, Commit: f.commit}, false, nil
+	return &donecheck.Spec{Run: f.run, Timeout: f.timeout, Commit: f.commit, EnvFaultRC: f.envRC}, false, nil
 }
 
 // upTaskLine is the command that starts a role on a task recorded for it: a copy (dev#2) is started as its role.
@@ -444,6 +450,15 @@ func (a *app) printCheck(s *shift.Shift, t task.Task, full bool) {
 			spec, source)
 	}
 
+	if c := t.CheckEnv; c != nil && t.State.Active() {
+		fmt.Fprintf(a.out, "check could not run: %s · %s at %s · %s · the environment is broken, the work was not judged\n",
+			donecheck.Line(c.Run), donecheck.Line(c.Fault()), donecheck.Line(c.Commit), c.At.Local().Format(time.DateTime))
+
+		if full && c.Output != "" {
+			fmt.Fprintln(a.out, "  "+strings.ReplaceAll(donecheck.Clean(c.Tail()), "\n", "\n  "))
+		}
+	}
+
 	if t.Closed == nil {
 		return
 	}
@@ -650,6 +665,11 @@ func (a *app) taskParkCommand() *cobra.Command {
 // commit it asks for is not there.
 const exitCheckFailed = 4
 
+// exitCheckEnv is the exit code of a task done whose check could not run: the environment is broken (the shell's 126 or
+// 127, a shell that did not start, or the check's env_fault_rc), so the work was not judged and the task is open, with no
+// failed check recorded.
+const exitCheckEnv = 6
+
 // checkSignals are the signals that end a check along with the command that runs it. A check has a session and process
 // group of its own, which none of these reaches by itself: a terminal's interrupt, a pane that is killed (hangup), a
 // service stopped or a quit.
@@ -705,6 +725,38 @@ func (a *app) doneCheck(id string, st task.State, o taskChange) (*ledger.Checked
 	return checked, checkExit(err)
 }
 
+// checkEnvFault keeps a check that could not run on its task and tells the dispatcher once for each task and cause
+// (shift.RecordCheckEnv), then ends the command with exitCheckEnv: the task stays open and nothing is recorded as a failed
+// check. The error is partial: the state, which holds the note to the dispatcher, is saved.
+func (a *app) checkEnvFault(f *ledger.EnvFault) error {
+	told := false
+
+	err := a.withState(func(s *shift.Shift) error {
+		t, err := s.Tasks.Get(f.ID)
+		if err != nil {
+			return err
+		}
+
+		told, err = s.RecordCheckEnv(t, by(), f.Result)
+
+		return err
+	})
+	if err != nil {
+		return err
+	}
+
+	msg := f.Error()
+
+	switch {
+	case told:
+		msg += "\nthe dispatcher has been told"
+	default:
+		msg += "\nthe dispatcher was told of this already"
+	}
+
+	return shift.Partial(&exitError{code: exitCheckEnv, msg: msg})
+}
+
 // checkExit gives a refusal by the check its own exit code.
 func checkExit(err error) error {
 	if errors.Is(err, ledger.ErrCheckFailed) {
@@ -728,10 +780,16 @@ func (a *app) setTask(id string, st task.State, o taskChange) error {
 		late   *ledger.LateError
 	)
 
+	var envFault *ledger.EnvFault
+
 	checked, err := a.doneCheck(id, st, o)
 	if errors.As(err, &late) {
 		// Refused below, under the lock, where it is kept and told once; no check ran for it.
 		checked, err = nil, nil
+	}
+
+	if errors.As(err, &envFault) {
+		return a.checkEnvFault(envFault)
 	}
 
 	if err != nil {

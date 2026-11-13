@@ -134,6 +134,10 @@ type Task struct {
 	// Check is the command closing the task as done runs, set by the owner or the dispatcher; nil: the crew file's
 	// done_check, when it has one and the task has a worktree. See donecheck.
 	Check *donecheck.Spec `json:"check,omitempty"`
+	// CheckEnv is the last run of the check that could not run for the environment it met (exit 126 or 127, a shell that
+	// did not start, the check's env_fault_rc): the work was not judged and the task stays open. It is kept so that the
+	// dispatcher is told once for each cause; closing the task or changing its check takes it away.
+	CheckEnv *donecheck.Result `json:"check_env,omitempty"`
 	// Late is the reports that sessions made on the task after it was handed to another, newest last: what was kept
 	// of each and what was refused. They change nothing else of the task, and its handoff packet does not carry them.
 	Late []Late `json:"late,omitempty"`
