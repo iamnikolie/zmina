@@ -132,16 +132,13 @@ func (s *Shift) limitsStep(now time.Time) []string {
 		Order: s.releaseOrder})
 
 	if res.Changed {
-		if err := writeLimitsBook(dir, res.Book); err != nil {
+		if err := s.writeBook(dir, res.Book); err != nil {
 			s.limitsProblem("write", time.Hour, "the holds file was not written, so nothing was told or held this beat: "+err.Error(), now)
 
 			s.limitBook = &book
 
 			return nil
 		}
-
-		// Writable again: a problem said of writing is over, and what it held back (the todo item of a hold) is no longer held back.
-		s.limitsProblemClear("write")
 	}
 
 	s.limitBook = &res.Book
@@ -165,8 +162,8 @@ func (s *Shift) limitsStep(now time.Time) []string {
 
 	// The owner's todo, once the book stands: an item for each hold of the dispatcher's plan that has none (the one that just began, or one
 	// whose item could not be written then), and the close of any that no hold answers for.
-	if changed, made := s.openAsks(&res.Book, now); changed {
-		if err := writeLimitsBook(dir, res.Book); err != nil {
+	if changed, made := s.openAsks(&res.Book, dir, now); changed {
+		if err := s.writeBook(dir, res.Book); err != nil {
 			s.limitsProblem("write", time.Hour, "the holds file was not written with the todo item of a hold: "+err.Error(), now)
 
 			// An item the book cannot answer for is closed, not left open: the next beat would make another, and the first would be pushed.
@@ -211,6 +208,17 @@ func (s *Shift) limitsProblem(kind string, every time.Duration, text string, now
 	if raw, err := json.Marshal(last); err == nil {
 		_ = fsx.WriteFile(path, raw, 0o600)
 	}
+}
+
+// writeBook keeps the book, and when that works forgets what was said of writing it: whichever write it is, the disk is back.
+func (s *Shift) writeBook(dir string, b limits.Book) error {
+	if err := writeLimitsBook(dir, b); err != nil {
+		return err
+	}
+
+	s.limitsProblemClear("write")
+
+	return nil
 }
 
 // limitsProblemClear forgets a problem of the kind that was said: it is said again if it comes back.
@@ -263,9 +271,9 @@ func (s *Shift) dispatcherHeldBy(h limits.Hold) bool {
 // note that tells of it, so the owner is told by the path the other owner alarms take (a todo item that blocks the role, which the crew's
 // notify command pushes). An item of the hold's kind that is open already, made for this plan and window since the hold began (the beat that made it
 // died before it recorded the id), is the hold's: it is adopted, not made again. Nothing is made within an hour of a write of the book that failed,
-// whose second write would fail the same way. The item's id goes in the hold, so that its release closes it. A todo that cannot be written is warned
+// whose second write would fail the same way, unless a try of it works. The item's id goes in the hold, so that its release closes it. A todo that cannot be written is warned
 // of; the event and zmina doctor say it all the same. It reports whether it changed the book, and the ids of the items it made (as against adopted).
-func (s *Shift) openAsks(book *limits.Book, now time.Time) (changed bool, made []string) {
+func (s *Shift) openAsks(book *limits.Book, dir string, now time.Time) (changed bool, made []string) {
 	if s.Asks == nil {
 		return false, nil
 	}
@@ -290,7 +298,9 @@ func (s *Shift) openAsks(book *limits.Book, now time.Time) (changed bool, made [
 			continue
 		}
 
-		if s.limitsProblemWithin("write", time.Hour, now) {
+		// A write that failed within the hour holds the item back, unless a try of it works now: the disk that came back is found out here, not
+		// an hour on.
+		if s.limitsProblemWithin("write", time.Hour, now) && s.writeBook(dir, *book) != nil {
 			continue
 		}
 
@@ -376,10 +386,21 @@ func (s *Shift) act(a limits.Action, book limits.Book, now time.Time) (kind, tex
 		// A checkpoint asked a few minutes ago and not yet read would be read after the reset, about a window that is over.
 		s.dropCheckpointAsks(roles, "the plan is held: it would be read after the reset")
 
-		// The note of an earlier hold of this window that the dispatcher has not read is the old news: this one replaces it.
-		s.State.Notes = slices.DeleteFunc(s.State.Notes, func(n string) bool {
-			return strings.HasSuffix(n, holdNoteTail) && strings.HasPrefix(n, holdNotePrefix(a.Hold))
-		})
+		// The note of an earlier hold of this window that the dispatcher has not read is the old news: this one replaces it. Not while another hold
+		// of the same window is on (another Codex home's): its note is not old news, and nothing else says it.
+		if !slices.ContainsFunc(book.Active(now), func(h limits.Hold) bool {
+			return h.Plan == a.Plan && h.Window == a.Window && h.Home != a.Home
+		}) {
+			s.State.Notes = slices.DeleteFunc(s.State.Notes, func(n string) bool {
+				if !strings.HasSuffix(n, holdNoteTail) || !strings.HasPrefix(n, holdNotePrefix(a.Hold)) {
+					return false
+				}
+
+				delete(s.State.NoticeMeta, n)
+
+				return true
+			})
+		}
 
 		return "limit-hold", fmt.Sprintf("%s: %s at %s, holding its %d %s until %s%s", a.Plan,
 			limits.WindowLabel(a.Window), percent(a.Used), len(roles), plural(len(roles), "role", "roles"), limitClock(a.Reset, now, loc), holdNoteTail)
@@ -483,7 +504,7 @@ func (s *Shift) linesGo(plan limits.Plan, home string, roles []string, book limi
 // releaseText is how a hold ended, in words, and what joins it to what follows.
 type releaseText struct{ text, sep string }
 
-// releaseWhy says how a hold ended — reset (the note's plain case: `5h window reset, 14 lines go now`), under the share, turned off, lifted
+// releaseWhy says how a hold ended — reset (the note's plain case: `5h window reset, 14 lines go now`), turned off, lifted
 // by hand, a reset time no window can have, or by the clock with the data stale.
 func releaseWhy(a limits.Action, now time.Time, loc *time.Location) releaseText {
 	switch {
@@ -562,7 +583,7 @@ func (s *Shift) LiftHolds(plan limits.Plan, window string, now time.Time) (Lifte
 		return LiftedHolds{}, nil
 	}
 
-	if err := limits.WriteBook(dir, next); err != nil {
+	if err := s.writeBook(dir, next); err != nil {
 		return LiftedHolds{}, fmt.Errorf("limits: the holds file was not written: %w", err)
 	}
 

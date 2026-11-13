@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -1865,4 +1866,172 @@ func TestLimitsHoldNotesReplaceEachOtherAndOnlyAnActiveHoldsIsPinned(t *testing.
 	}
 
 	assert.NotContains(t, f.s.State.Notes, second, "an ended hold's note is not pinned")
+}
+
+// The owner's pass is blocked only by a card that says the line is another's: a card that says nothing of its sender (written by a build that did
+// not keep it, or made again when a line was given back) is as it was before cards were checked.
+func TestAnOwnerLinePassesWithACardThatSaysNothingOfItsSender(t *testing.T) {
+	const owner = "stop, look at this first"
+
+	f, _ := heldDesigner(t)
+	f.live("designer")
+	f.status("designer", "idle", *f.now)
+	f.live("designer")
+
+	ownerSays(t, f, "designer", owner)
+
+	// The card is as an older build wrote it: no sender.
+	for i := range f.s.cards.roles["designer"].cards {
+		if f.s.cards.roles["designer"].cards[i].Head == owner {
+			f.s.cards.roles["designer"].cards[i].From = ""
+		}
+	}
+
+	assert.True(t, slicesContain(f.s.Waiting(), "designer"), "no sender on the card: the receipt stands")
+
+	// A card that names another sender does not pass.
+	for i := range f.s.cards.roles["designer"].cards {
+		if f.s.cards.roles["designer"].cards[i].Head == owner {
+			f.s.cards.roles["designer"].cards[i].From = "dev"
+		}
+	}
+
+	assert.False(t, slicesContain(f.s.Waiting(), "designer"))
+}
+
+// A line given back when no card of it is in play gets a card that keeps the sender of the line's newest card: the owner's retried line keeps its pass.
+func TestACardMadeAgainForAGivenBackLineKeepsItsSender(t *testing.T) {
+	const owner = "stop, look at this first"
+
+	f, _ := heldDesigner(t)
+	ownerSays(t, f, "designer", owner)
+
+	// The line went and its card finished (landed): a retry gives the line back with no card in play.
+	f.s.cardsClosed("designer", owner, nil, ClosedLanded, "it landed")
+
+	f.s.cardBack("designer", owner, "a retry", *f.now)
+
+	var from []string
+
+	for _, c := range CardsOf(f.s.cards.roles["designer"].cards, "designer", owner) {
+		from = append(from, c.From)
+	}
+
+	assert.Equal(t, []string{"owner", "owner"}, from, "a card made again, from the sender of the one that finished")
+
+	// With no card of the line at all (pruned after a week) the card made has no sender, and the receipt stands.
+	f.s.cards.roles["designer"].cards = nil
+	f.s.cardBack("designer", owner, "a retry", *f.now)
+	require.Len(t, f.s.cards.roles["designer"].cards, 1)
+	assert.Empty(t, f.s.cards.roles["designer"].cards[0].From)
+
+	// Cards of a line that were all closed, the newest one the owner's: the one made again copies the sender.
+	f.s.cards.roles["designer"].cards = []Card{
+		{ID: CardID("designer", owner), From: "owner", Head: owner, Closed: &CardClosed{How: ClosedLanded, At: *f.now}},
+		{ID: CardID("designer", owner), From: "owner", Head: owner, Closed: &CardClosed{How: ClosedAcked, At: *f.now}},
+	}
+	f.s.cardBack("designer", owner, "a retry", *f.now)
+
+	assert.Equal(t, "owner", f.s.cards.roles["designer"].cards[2].From, "a third card, made again, from the newest of the line's")
+}
+
+// A card whose line is no longer in the queue — the owner's line failed with its outcome unclear, and waits for a look — is not a line in the
+// queue: a role's line of the same words is not paired with it.
+func TestAnUnclearFailedCardIsNotPairedWithARolesLineOfTheSameWords(t *testing.T) {
+	const owner = "stop, look at this first"
+
+	f, _ := heldDesigner(t)
+	f.live("designer")
+	f.status("designer", "idle", *f.now)
+	f.live("designer")
+
+	ownerSays(t, f, "designer", owner)
+
+	// The owner's line was typed, may have reached the role, and is in the failed list for a look: its card needs attention.
+	f.s.cardAttention("designer", owner, "may have reached it", *f.now)
+
+	rs := f.s.State.Role("designer")
+	rs.Inbox = slices.DeleteFunc(rs.Inbox, func(l string) bool { return l == owner })
+
+	// A role sends the same words.
+	f.s.By = "dev"
+	require.NoError(t, f.s.Queue("designer", owner))
+	f.s.By = "hand"
+
+	assert.Equal(t, -1, f.s.ownerLine("designer"), "the role's line has the receipt's words and none of its sender")
+	assert.False(t, slicesContain(f.s.Waiting(), "designer"))
+}
+
+// Two Codex homes held at once on the same window: a hold for one does not delete the note of the other's, which the dispatcher has not read.
+func TestLimitsHoldNoteIsNotReplacedByAnotherHomesHold(t *testing.T) {
+	f := fixtureWith(t, "timezone: UTC\nlimits:\n  codex: {hold: {week: 97}}\n"+crewYAML+"  cx-a:\n    runtime: codex\n  cx-b:\n    runtime: codex\n    codex_home: /home/alex/.codex-b\n")
+
+	homeA := f.s.Crew.CodexHomeOf(f.s.Crew.Roles["cx-a"])
+	homeB := f.s.Crew.CodexHomeOf(f.s.Crew.Roles["cx-b"])
+
+	reset := f.now.Add(48 * time.Hour)
+	week := func(used float64, home string) *limits.Report {
+		return &limits.Report{Codex: &limits.Codex{Week: &limits.Window{Used: used, Resets: &reset}, At: *f.now, Home: home}}
+	}
+
+	f.s.Limits = week(97, homeA)
+	require.Len(t, f.s.limitsStep(*f.now), 1)
+
+	*f.now = f.now.Add(time.Minute)
+	f.s.Limits = week(99, homeB)
+	require.Len(t, f.s.limitsStep(*f.now), 1)
+
+	var holdNotes []string
+
+	for _, n := range f.s.State.Notes {
+		if strings.HasSuffix(n, holdNoteTail) {
+			holdNotes = append(holdNotes, n)
+		}
+	}
+
+	require.Len(t, holdNotes, 2, "each home's hold has its note: %v", holdNotes)
+	assert.Contains(t, holdNotes[0], "weekly window at 97%")
+	assert.Contains(t, holdNotes[1], "weekly window at 99%")
+
+	// A new hold of the same home's window replaces that home's note, and the meta of the note it replaced goes with it.
+	require.Len(t, f.s.State.NoticeMeta, len(f.s.State.Notes))
+}
+
+// A write of the book that works again clears what was said of writing, whichever write it is, and the todo item that was held back is made at
+// once: the beat tries the write before it keeps the item back.
+func TestLimitsARecoveredDiskIsNoticedAtTheNextBeat(t *testing.T) {
+	f := fixtureWith(t, limitsCrew)
+	store := &asks.Store{Dir: f.s.Crew.Layout().Asks()}
+	f.s.Asks = store
+
+	calls := 0
+	real := writeLimitsBook
+	writeLimitsBook = func(dir string, b limits.Book) error {
+		calls++
+		if calls == 2 {
+			return errors.New("no space left on device")
+		}
+
+		return real(dir, b)
+	}
+
+	t.Cleanup(func() { writeLimitsBook = real })
+
+	// The first beat: the book is written, the item made, its id not recorded (the second write fails): the item is closed.
+	f.claudeLimits(97, 10)
+	f.s.limitsStep(*f.now)
+	assert.Empty(t, f.book(t).Holds[0].Ask)
+	assert.Empty(t, store.Pending())
+	assert.True(t, f.s.limitsProblemWithin("write", time.Hour, *f.now))
+
+	// The next beat: the disk is back. The book does not change, so there is no write of it to clear the marker by; the beat tries one before it holds
+	// the item back, finds it works, and makes the item.
+	*f.now = f.now.Add(time.Minute)
+	f.claudeLimits(97, 10)
+	f.s.limitBook = nil
+	f.s.limitsStep(*f.now)
+
+	assert.False(t, f.s.limitsProblemWithin("write", time.Hour, *f.now), "cleared")
+	require.Len(t, store.Pending(), 1)
+	assert.Equal(t, store.Pending()[0].ID, f.book(t).Holds[0].Ask)
 }

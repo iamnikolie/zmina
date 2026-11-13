@@ -2139,8 +2139,10 @@ hold     claude 5h window at 97%, until 21:40 (6 roles, 14 lines waiting); the o
     doctor` say it. While the dispatcher is held, the note of each hold that is on (a new hold of the same window replaces the note of the one
     before) and one note saying how many signals were refused are kept by the cap on the health notes (20), and signals are taken up to 100
     (20 as ever when it is not held); past 100 a signal is refused, `zmina note` fails with that, and the one note that counts them is saved
-    all the same. The owner's own line is the line the owner queued: besides his receipt it must have a delivery card that says it came from him
-    and is still queued, so a role that queues the same words after his line has gone waits behind the hold, for a failed turn's hold too.
+    all the same. The owner's own line is the line the owner queued: besides his receipt it must have a delivery card that is still queued (not
+    delivered, seen, closed, or waiting for a look after a failure of unclear outcome) and does not name another sender, so a role that queues
+    the same words after his line has gone waits behind the hold, for a failed turn's hold too. A card that names no sender (written by an older build,
+    or made again when a line was given back, which keeps the sender of the line's newest card) stands on the receipt, as before.
   - **Release**: the hold ends by the clock at the window's reset time, whether or not a beat has run; or when a fresh
     reading of a **different** period, drawn after the hold began, shows the window rolled over (its reset is later than the hold's by more
     than two minutes: a new window, or another account); or when `hold` is turned off for the window in the crew file (no reading needed; the next

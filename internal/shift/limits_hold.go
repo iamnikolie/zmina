@@ -297,7 +297,7 @@ func (s *Shift) postponedOnce(role string, run time.Time) bool {
 	book.Postpone(role, run)
 	s.limitBook = &book
 
-	_ = limits.WriteBook(s.Crew.Layout().Limits(), book)
+	_ = s.writeBook(s.Crew.Layout().Limits(), book)
 
 	return true
 }

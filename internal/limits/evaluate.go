@@ -46,7 +46,7 @@ type Action struct {
 	Reset time.Time
 	// Hold is the hold that began (KindHold) or ended (KindRelease).
 	Hold Hold
-	// Reason and Confirmed are for a release. Confirmed says a fresh reading showed the window rolled over or under the share, or
+	// Reason and Confirmed are for a release. Confirmed says a fresh reading of another period showed the window rolled over, or
 	// that a person lifted the hold; a release by the clock alone, with no reading since the reset, is not confirmed: its data is
 	// stale, and the release is paced more carefully (Stagger).
 	Reason    Reason
@@ -74,7 +74,7 @@ const (
 	// StaggerGap is the time between two groups: a beat.
 	StaggerGap = time.Minute
 	// UnconfirmedWait is how long the roles after the first wait when the hold ended by the clock with no fresh reading to confirm
-	// it, unless a fresh reading shows the window under its hold share before.
+	// it, unless a fresh reading of the new period (a reset after the old one's) comes before.
 	UnconfirmedWait = 10 * time.Minute
 )
 
@@ -361,7 +361,7 @@ func cmpString(a, b string) int {
 
 // stagger puts the roles of a plan whose hold ended in their turns, after the dispatcher, who goes at once: a group of StaggerGroup
 // a beat, the role whose oldest line waited longest first. A hold that ended by the clock alone, with no fresh reading, lets one
-// role go with the dispatcher and keeps the others for a fresh reading under the share, or UnconfirmedWait.
+// role go with the dispatcher and keeps the others for a fresh reading of the new period, or UnconfirmedWait.
 func (b *Book) stagger(roles Roles, plan Plan, window, home string, after time.Time, confirmed bool, now time.Time) {
 	b.Waits = slices.DeleteFunc(b.Waits, func(w Wait) bool { return w.Plan == plan && holds(w.Home, home) })
 

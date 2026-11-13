@@ -17,8 +17,9 @@ import (
 // role it leaves out has nothing a pass could give. It leaves out, too, a role whose plan is held (planHeld: the holds file,
 // read once) and a role held after a turn that ended on an API error (failureHeld), bar the owner's own message wherever it
 // stands in its queue: for a role that has something to give it reads that role's small failure record and Claude Code's
-// session file by the role's session name — still no tmux. The hold ends with no change of state.json, as the other
-// gates do, so a caller that must see the end of it looks again from time to time (queueGated).
+// session file by the role's session name, and for a held role with an owner's line queued its delivery cards, the file read once for the
+// pass (cardsPeek) to tell that line from one a role queued in the same words — still no tmux. The hold ends with no change of state.json, as the
+// other gates do, so a caller that must see the end of it looks again from time to time (queueGated).
 func (s *Shift) Waiting() []string {
 	now := s.Now()
 
