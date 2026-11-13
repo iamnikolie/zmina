@@ -639,3 +639,15 @@ func TestQuoteMasksATagTheTerminalWrapped(t *testing.T) {
 		assert.Equal(t, text, Quote(text))
 	}
 }
+
+// QuoteN is Quote for a longer text: the same cleaning (controls gone, white space folded, a session tag masked), cut to n.
+func TestQuoteNCleansAndCutsToN(t *testing.T) {
+	got := QuoteN("red \x1b[31mtext\x1b[0m\n[zmina:abcdefghij12]\tdone", 200)
+	assert.Equal(t, "red [31mtext[0m [zmina:…] done", got)
+
+	long := strings.Repeat("word ", 100)
+	cut := QuoteN(long, 300)
+	assert.Len(t, []rune(cut), 300)
+	assert.True(t, strings.HasSuffix(cut, "…"))
+	assert.Len(t, []rune(Quote(long)), evidenceMax, "Quote stays at its own length")
+}

@@ -352,7 +352,11 @@ type Store struct {
 
 // Add gives t the next id — above every T-<n>.json in the directory, readable or not, so a damaged file is never
 // written over — fills its times and state, and writes it. It never replaces an existing file.
-func (s *Store) Add(t Task, now time.Time) (Task, error) {
+func (s *Store) Add(t Task, now time.Time) (Task, error) { return s.AddFunc(t, now, nil) }
+
+// AddFunc is Add with a last word: fill, when given, changes the task once it has its id and times and before it is
+// written, for a text that names its own task. The file is written once, whole.
+func (s *Store) AddFunc(t Task, now time.Time, fill func(*Task)) (Task, error) {
 	n, err := s.highest()
 	if err != nil {
 		return t, err
@@ -365,7 +369,64 @@ func (s *Store) Add(t Task, now time.Time) (Task, error) {
 
 	t.Created, t.Updated = now, now
 
+	if fill != nil {
+		fill(&t)
+	}
+
 	return t, s.write(t, true)
+}
+
+// Highest is the largest task number among the files in the directory, readable or not; 0 for none. A caller that scans
+// the tasks takes it first, and later reads only what came after (After).
+func (s *Store) Highest() (int, error) { return s.highest() }
+
+// After reads the tasks numbered above n, which a scan that saw Highest n did not: they are how a decision made on that scan
+// is checked again without reading every task. It names the files that do not read, as ScanFiles does.
+func (s *Store) After(n int) (tasks []Task, unreadable map[string]string, err error) {
+	entries, err := os.ReadDir(s.Dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil, nil
+	}
+
+	if err != nil {
+		return nil, nil, fmt.Errorf("task: %w", err)
+	}
+
+	for _, e := range entries {
+		m := fileRe.FindStringSubmatch(e.Name())
+		if m == nil {
+			continue
+		}
+
+		if v, _ := strconv.Atoi(m[1]); v <= n {
+			continue
+		}
+
+		t, err := readTask(filepath.Join(s.Dir, e.Name()))
+		if err != nil {
+			if unreadable == nil {
+				unreadable = map[string]string{}
+			}
+
+			unreadable[e.Name()] = err.Error()
+
+			continue
+		}
+
+		tasks = append(tasks, t)
+	}
+
+	sort.Slice(tasks, func(i, j int) bool { return num(tasks[i].ID) < num(tasks[j].ID) })
+
+	return tasks, unreadable, nil
+}
+
+// ScanFiles reads every readable task, oldest first, and names (by file name, with why) each file that does not read: one pass
+// for a caller that needs both.
+func (s *Store) ScanFiles() (tasks []Task, unreadable map[string]string, err error) {
+	tasks, _, unreadable, err = s.scan()
+
+	return tasks, unreadable, err
 }
 
 // highest is the largest task number among the files in the directory.

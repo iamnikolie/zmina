@@ -59,8 +59,11 @@ type Item struct {
 	// Reviewed is when a sweep last found the item still standing (later keep); zero when none has. A file written
 	// before it was kept reads as never reviewed.
 	Reviewed time.Time `json:"reviewed,omitzero"`
-	Created  time.Time `json:"created"`
-	Updated  time.Time `json:"updated"`
+	// KeptFor is the sweep task the last keep answered, when the item was in an open sweep then: it is how a sweep counts
+	// its verdicts by what was answered, not by a clock. Empty for a keep outside any sweep.
+	KeptFor string    `json:"kept_for,omitempty"`
+	Created time.Time `json:"created"`
+	Updated time.Time `json:"updated"`
 }
 
 // Open reports whether the item is still on the list.
@@ -234,8 +237,9 @@ func (s *Store) Close(id string, st State, note string, now time.Time) (Item, er
 	return it, s.Put(it)
 }
 
-// Keep stamps an open item as reviewed and still standing; note, when given, replaces its note, as Close's does.
-func (s *Store) Keep(id, note string, now time.Time) (Item, error) {
+// Keep stamps an open item as reviewed and still standing; note, when given, replaces its note, as Close's does. sweep is the
+// open sweep task that lists the item, "" when none does: the keep is its verdict.
+func (s *Store) Keep(id, note, sweep string, now time.Time) (Item, error) {
 	it, err := s.Get(id)
 	if err != nil {
 		return it, err
@@ -245,7 +249,7 @@ func (s *Store) Keep(id, note string, now time.Time) (Item, error) {
 		return it, fmt.Errorf("%s is already %s", it.ID, it.State)
 	}
 
-	it.Reviewed, it.Updated = now, now
+	it.Reviewed, it.KeptFor, it.Updated = now, sweep, now
 	if note != "" {
 		it.Note = note
 	}

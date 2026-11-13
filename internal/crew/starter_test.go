@@ -48,6 +48,21 @@ func TestStarterMentionsWorktreeGC(t *testing.T) {
 	assert.True(t, c.WorktreeGCOn())
 }
 
+// The starter names later_sweep commented out; uncommented, it turns the ticker's sweep of the parked list on and the file loads.
+func TestStarterMentionsLaterSweep(t *testing.T) {
+	body := strings.Replace(Starter(t.TempDir()), "dir: "+defaultDir, "dir: "+t.TempDir(), 1)
+	require.Contains(t, body, "\n# later_sweep: {role: dispatcher} ")
+
+	c, err := LoadStrict(write(t, body))
+	require.NoError(t, err)
+	assert.False(t, c.LaterSweepOn(), "off unless the owner takes the comment away")
+
+	c, err = LoadStrict(write(t, strings.Replace(body, "\n# later_sweep:", "\nlater_sweep:", 1)))
+	require.NoError(t, err)
+	require.True(t, c.LaterSweepOn())
+	assert.Equal(t, "dispatcher", c.LaterSweep.Role)
+}
+
 // The starter names courier commented out; uncommented, it turns the courier off and the file still loads.
 func TestStarterMentionsCourier(t *testing.T) {
 	body := strings.Replace(Starter(t.TempDir()), "dir: "+defaultDir, "dir: "+t.TempDir(), 1)

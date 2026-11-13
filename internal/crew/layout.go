@@ -67,6 +67,11 @@ func (l Layout) ScreenRules() string { return filepath.Join(l.Dir, "screen-rules
 // and does not read the log to find out. Nothing decides by it but that.
 func (l Layout) ScreenRulesTold() string { return filepath.Join(l.Dir, "screen-rules.told") }
 
+// LaterSweep is where the ticker keeps when its next sweep of the parked list may be due and how its last failed attempt
+// went (see cmd's laterSweepBeat): one small file, so that a beat that is a new process reads nothing else to know it is too
+// early. Nothing decides by it but that; a file that is missing or does not read says to look.
+func (l Layout) LaterSweep() string { return filepath.Join(l.Dir, "later-sweep.json") }
+
 // Hooks is the directory of what a role's hooks recorded for zmina to read: one small file a role and kind, replaced by
 // the next record (HookQuestion, HookFailure). A file here is only ever read as a hint, with the session it is about
 // and the time it was written; a role started before a hook existed has none.

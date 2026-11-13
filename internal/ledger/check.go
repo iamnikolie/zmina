@@ -351,7 +351,7 @@ func (l *Ledger) closeCheck(t task.Task, c Change, preflight bool) (*donecheck.R
 }
 
 // closeSweep is what closing a sweep task as done asks of the parked list: every item it covers is closed, taken or kept
-// since the sweep was made (later.Unswept, the answer of zmina later swept), or the owner or the dispatcher closes it past
+// for this sweep (later.Unswept, the answer of zmina later swept), or the owner or the dispatcher closes it past
 // that (c.Force), which comes back as the Unchecked the closing keeps. nil, nil: a task that is no sweep, or no list to ask.
 func (l *Ledger) closeSweep(t task.Task, c Change) (*task.Unchecked, error) {
 	if len(t.Sweep) == 0 || l.Later == nil {
@@ -363,7 +363,7 @@ func (l *Ledger) closeSweep(t task.Task, c Change) (*task.Unchecked, error) {
 		return nil, fmt.Errorf("%s: %w", t.ID, err)
 	}
 
-	open := later.Unswept(items, t.Sweep, t.Created)
+	open := later.Unswept(items, t.Sweep, t.ID)
 	if len(open) == 0 {
 		return nil, nil //nolint:nilnil // every item has its verdict
 	}

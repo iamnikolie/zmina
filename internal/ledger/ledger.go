@@ -118,9 +118,6 @@ type Ledger struct {
 	Later *later.Store
 }
 
-// SelfID stands for a sweep task's own id in its asked text (NewTask.Sweep): New writes the id in its place.
-const SelfID = "{task}"
-
 // NewTask is what a new task is made of.
 type NewTask struct {
 	Role, Asked, Note, By string
@@ -142,6 +139,9 @@ type NewTask struct {
 	Check *donecheck.Spec
 	// Sweep is the parked items the task asks a verdict on (task.Task.Sweep).
 	Sweep []string
+	// AskedFor, when set, builds the asked text once the task has its id, and is written with it: for a text that names its own
+	// task. Asked stands for it until then, and is what a task that sets none keeps.
+	AskedFor func(id string) string
 }
 
 // New records a task. With a worktree, the task is written first — with the worktree's path, branch and base — and
@@ -184,18 +184,14 @@ func (l *Ledger) New(n NewTask) (task.Task, error) {
 		}
 	}
 
-	t, err = l.Store.Add(t, l.Now())
-	if err != nil {
-		return t, err
+	var fill func(*task.Task)
+	if n.AskedFor != nil {
+		fill = func(t *task.Task) { t.Asked = n.AskedFor(t.ID) }
 	}
 
-	// A sweep's text names its own task, whose id is not known until the record is numbered.
-	if len(n.Sweep) > 0 && strings.Contains(t.Asked, SelfID) {
-		t.Asked = strings.ReplaceAll(t.Asked, SelfID, t.ID)
-
-		if err := l.Store.Put(t); err != nil {
-			return t, err
-		}
+	t, err = l.Store.AddFunc(t, l.Now(), fill)
+	if err != nil {
+		return t, err
 	}
 
 	if n.Worktree {

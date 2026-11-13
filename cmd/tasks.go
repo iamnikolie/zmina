@@ -469,7 +469,7 @@ func (a *app) printCheck(s *shift.Shift, t task.Task, full bool) {
 	if len(t.Sweep) > 0 && t.State.Active() {
 		items, _, _ := laterStore(s.Crew).Scan()
 		fmt.Fprintf(a.out, "check: zmina later swept %s · closing it as done waits on it; %d of %d parked items have no verdict\n",
-			t.ID, len(later.Unswept(items, t.Sweep, t.Created)), len(t.Sweep))
+			t.ID, len(later.Unswept(items, t.Sweep, t.ID)), len(t.Sweep))
 	}
 
 	if c := t.CheckEnv; c != nil && t.State.Active() {

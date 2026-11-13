@@ -34,29 +34,33 @@ func sweepFixture(t *testing.T) (*Ledger, task.Task) {
 	return l, tk
 }
 
-// A sweep's text names its own task before the task has a number; the ledger writes the id in, in the record and in the
-// event. A task that is no sweep keeps its text as it was written.
-func TestSweepTextNamesItsOwnTask(t *testing.T) {
+// A text that names its own task is built once the task has its number and is written with it: the record and the event
+// have the final text, and what is not the header's is as it was given. A task with no such text keeps the one it was asked.
+func TestAskedForBuildsTheTextOnceTheTaskIsNumbered(t *testing.T) {
 	l, _ := fixture(t, "")
 
 	var logged []string
 
 	l.Log = func(_, event, id, detail string) { logged = append(logged, event+" "+id+" "+detail) }
 
-	text := "run zmina later swept " + SelfID + ", then zmina task done " + SelfID
+	rows := "L-1 \"look at {task} and T-0\""
+	built := func(id string) string {
+		return "run zmina later swept " + id + ", then zmina task done " + id + "\n" + rows
+	}
 
-	sw, err := l.New(NewTask{Role: "dev", Asked: text, Sweep: []string{"L-1"}})
+	sw, err := l.New(NewTask{Role: "dev", Asked: "a placeholder", Sweep: []string{"L-1"}, AskedFor: built})
 	require.NoError(t, err)
-	assert.Equal(t, "run zmina later swept T-1, then zmina task done T-1", sw.Asked)
+	assert.Equal(t, built("T-1"), sw.Asked)
+	assert.Contains(t, sw.Asked, "{task}", "a row that holds the literal is as it was written")
 
 	got, err := l.Store.Get("T-1")
 	require.NoError(t, err)
 	assert.Equal(t, sw.Asked, got.Asked)
 	assert.Equal(t, []string{"task T-1 new: " + sw.Asked}, logged)
 
-	plain, err := l.New(NewTask{Role: "dev", Asked: text})
+	plain, err := l.New(NewTask{Role: "dev", Asked: "run {task}"})
 	require.NoError(t, err)
-	assert.Equal(t, text, plain.Asked)
+	assert.Equal(t, "run {task}", plain.Asked)
 }
 
 func TestNewKeepsTheItemsASweepCovers(t *testing.T) {
@@ -86,7 +90,7 @@ func TestSweepTaskDoesNotCloseWhileItemsHaveNoVerdict(t *testing.T) {
 
 	_, err = l.Later.Close("L-1", later.Done, "fixed in the last release", l.Now())
 	require.NoError(t, err)
-	_, err = l.Later.Keep("L-2", "the API is not ready", l.Now())
+	_, err = l.Later.Keep("L-2", "the API is not ready", tk.ID, l.Now())
 	require.NoError(t, err)
 
 	_, err = l.Set(tk.ID, Change{State: task.Done, By: "dev"})
@@ -104,16 +108,22 @@ func TestSweepTaskDoesNotCloseWhileItemsHaveNoVerdict(t *testing.T) {
 	assert.Nil(t, closed.Closed.Unchecked, "nothing was forced")
 }
 
-// A keep from a sweep before this one does not count for this one.
-func TestAnOlderKeepIsNoVerdictForANewerSweep(t *testing.T) {
+// A keep that answered another sweep, or none, does not count for this one; one that answered it counts whatever the clock
+// said when it was made.
+func TestOnlyAKeepForThisSweepIsItsVerdict(t *testing.T) {
 	l, tk := sweepFixture(t)
 
-	_, err := l.Later.Keep("L-1", "kept at the last sweep", tk.Created.Add(-time.Hour))
+	_, err := l.Later.Keep("L-1", "kept at the last sweep", "T-0", tk.Created.Add(time.Hour))
+	require.NoError(t, err)
+	_, err = l.Later.Keep("L-2", "kept outside any sweep", "", tk.Created.Add(time.Hour))
+	require.NoError(t, err)
+	_, err = l.Later.Keep("L-3", "kept for this one, the clock was set back", tk.ID, tk.Created.Add(-48*time.Hour))
 	require.NoError(t, err)
 
 	_, err = l.Set(tk.ID, Change{State: task.Done, By: "dev"})
 	require.ErrorIs(t, err, ErrUnswept)
-	assert.ErrorContains(t, err, "L-1")
+	assert.ErrorContains(t, err, "L-1, L-2")
+	assert.NotContains(t, err.Error(), "L-3")
 }
 
 // The owner and the dispatcher close a sweep past its check, like a task past its own; a worker cannot, and the closing

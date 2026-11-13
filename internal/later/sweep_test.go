@@ -46,9 +46,27 @@ func TestStalePicksWhatAnItemIsNotTooYoungOrSetAsideFor(t *testing.T) {
 	}
 	back := map[string]time.Time{"L-6": sweepNow.Add(48 * time.Hour), "L-7": sweepNow.Add(-time.Hour)}
 
-	got := Stale(items, back, sweepNow, older)
+	got := Stale(items, nil, back, sweepNow, older)
 	assert.ElementsMatch(t, []string{"L-1", "L-2", "L-5", "L-7", "L-11"}, ids(got))
 	assert.Equal(t, []string{"L-5", "L-7", "L-11", "L-1", "L-2"}, ids(got), "oldest first")
+}
+
+// An item a released role's sweep was parked as (task park, an idle release) is the sweep itself, not something to sweep.
+func TestStaleNeverListsAnItemParkedFromASweep(t *testing.T) {
+	items := []Item{
+		{ID: "L-1", State: Parked, Created: daysAgo(40), From: "T-4", Role: "dev", Text: "Sweep of 12 parked items"},
+		{ID: "L-2", State: Parked, Created: daysAgo(40), From: "T-3", Role: "dev", Text: "fix the login"},
+		{ID: "L-3", State: Parked, Created: daysAgo(40), From: "T-8", Text: "from a task that is gone"},
+		{ID: "L-4", State: Parked, Created: daysAgo(40)},
+	}
+	tasks := []task.Task{
+		{ID: "T-3", State: task.Parked, Later: "L-2"},
+		{ID: "T-4", State: task.Parked, Later: "L-1", Sweep: []string{"L-5", "L-6"}},
+	}
+
+	assert.Equal(t, []string{"L-2", "L-3", "L-4"}, ids(Stale(items, tasks, nil, sweepNow, 14*24*time.Hour)))
+	assert.Equal(t, []string{"L-1", "L-2", "L-3", "L-4"}, ids(Stale(items, nil, nil, sweepNow, 14*24*time.Hour)),
+		"with no ledger to look at, nothing is told apart")
 }
 
 func TestStaleTieBreaksByNumberAndLeavesTheInputAlone(t *testing.T) {
@@ -58,29 +76,30 @@ func TestStaleTieBreaksByNumberAndLeavesTheInputAlone(t *testing.T) {
 		{ID: "L-2", State: Parked, Created: daysAgo(30)},
 	}
 
-	got := Stale(items, nil, sweepNow, 14*24*time.Hour)
+	got := Stale(items, nil, nil, sweepNow, 14*24*time.Hour)
 	assert.Equal(t, []string{"L-2", "L-9", "L-10"}, ids(got))
 	assert.Equal(t, "L-10", items[0].ID, "the caller's slice keeps its order")
 }
 
-func TestUnsweptIsWhatHasNoVerdictSinceTheTaskWasMade(t *testing.T) {
-	since := daysAgo(1)
+// An item has its verdict when it is closed or taken, or kept for this very sweep: what a keep says it answers is the
+// task's id, not a time, so a clock that was set back between the task and the keep changes nothing.
+func TestUnsweptIsWhatHasNoVerdictForThisSweep(t *testing.T) {
 	items := []Item{
-		{ID: "L-1", State: Parked, Created: daysAgo(20)},                        // nothing yet
-		{ID: "L-2", State: Parked, Created: daysAgo(20), Reviewed: daysAgo(30)}, // kept at the last sweep: not this one
-		{ID: "L-3", State: Parked, Created: daysAgo(20), Reviewed: sweepNow},    // kept now
-		{ID: "L-4", State: Done, Created: daysAgo(20)},                          // closed
-		{ID: "L-5", State: Dropped, Created: daysAgo(20)},                       // closed
-		{ID: "L-6", State: Taken, Created: daysAgo(20), Task: "T-4"},            // taken
-		{ID: "L-7", State: Parked, Created: daysAgo(20), Reviewed: since},       // kept the moment the task was made
-		{ID: "L-8", State: Parked, Created: daysAgo(20)},                        // not covered
+		{ID: "L-1", State: Parked, Created: daysAgo(20)},                                         // nothing yet
+		{ID: "L-2", State: Parked, Created: daysAgo(20), Reviewed: daysAgo(30), KeptFor: "T-2"},  // kept at the last sweep
+		{ID: "L-3", State: Parked, Created: daysAgo(20), Reviewed: sweepNow, KeptFor: "T-9"},     // kept for this one
+		{ID: "L-4", State: Done, Created: daysAgo(20)},                                           // closed
+		{ID: "L-5", State: Dropped, Created: daysAgo(20)},                                        // closed
+		{ID: "L-6", State: Taken, Created: daysAgo(20), Task: "T-4"},                             // taken
+		{ID: "L-7", State: Parked, Created: daysAgo(20), Reviewed: daysAgo(400), KeptFor: "T-9"}, // the clock was set back: still its verdict
+		{ID: "L-8", State: Parked, Created: daysAgo(20), Reviewed: sweepNow},                     // kept outside any sweep: no verdict for one
 	}
 
-	got := Unswept(items, []string{"L-1", "L-2", "L-3", "L-4", "L-5", "L-6", "L-7", "L-99"}, since)
-	assert.Equal(t, []string{"L-1", "L-2", "L-99"}, got, "an item that does not read has no verdict to show")
+	got := Unswept(items, []string{"L-1", "L-2", "L-3", "L-4", "L-5", "L-6", "L-7", "L-8", "L-99"}, "T-9")
+	assert.Equal(t, []string{"L-1", "L-2", "L-8", "L-99"}, got, "an item that does not read has no verdict to show")
 
-	assert.Empty(t, Unswept(items, []string{"L-3", "L-4"}, since))
-	assert.Empty(t, Unswept(items, nil, since), "a task that covers nothing has nothing to wait for")
+	assert.Empty(t, Unswept(items, []string{"L-3", "L-4", "L-7"}, "T-9"))
+	assert.Empty(t, Unswept(items, nil, "T-9"), "a task that covers nothing has nothing to wait for")
 }
 
 func TestSweepTasksAreFoundByWhatTheyCover(t *testing.T) {
@@ -132,7 +151,7 @@ func TestReviewedIsOptionalInTheRecord(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(raw), "reviewed")
 
-	kept, err := s.Keep("1", "still the plan: the API is not ready", sweepNow)
+	kept, err := s.Keep("1", "still the plan: the API is not ready", "", sweepNow)
 	require.NoError(t, err)
 	assert.Equal(t, sweepNow, kept.Reviewed)
 	assert.Equal(t, sweepNow, kept.Updated)
@@ -144,17 +163,27 @@ func TestReviewedIsOptionalInTheRecord(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(raw), `"reviewed": "2026-11-13T12:00:00Z"`)
 
-	again, err := s.Keep("L-1", "", sweepNow.Add(time.Hour))
+	again, err := s.Keep("L-1", "", "T-7", sweepNow.Add(time.Hour))
 	require.NoError(t, err)
 	assert.Equal(t, "still the plan: the API is not ready", again.Note, "an empty note leaves the note")
 	assert.Equal(t, sweepNow.Add(time.Hour), again.Reviewed)
+	assert.Empty(t, kept.KeptFor, "kept outside a sweep answers none")
+	assert.Equal(t, "T-7", again.KeptFor, "kept in one, it says which")
+
+	raw, err = os.ReadFile(filepath.Join(s.Dir, "L-1.json"))
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"kept_for": "T-7"`)
+
+	outside, err := s.Keep("L-1", "again, outside it", "", sweepNow.Add(2*time.Hour))
+	require.NoError(t, err)
+	assert.Empty(t, outside.KeptFor, "a keep outside a sweep is no answer to the one before")
 
 	_, err = s.Close("L-1", Done, "", sweepNow)
 	require.NoError(t, err)
 
-	_, err = s.Keep("L-1", "x", sweepNow)
+	_, err = s.Keep("L-1", "x", "", sweepNow)
 	assert.ErrorContains(t, err, "L-1 is already done")
 
-	_, err = s.Keep("L-9", "x", sweepNow)
+	_, err = s.Keep("L-9", "x", "", sweepNow)
 	assert.ErrorContains(t, err, "no item L-9")
 }

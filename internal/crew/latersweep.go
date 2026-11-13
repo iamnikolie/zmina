@@ -87,7 +87,8 @@ func (c *Crew) checkLaterSweep() error {
 	}
 
 	if l.Max < 0 || l.Max > LaterSweepMaxItems {
-		return fmt.Errorf("later_sweep: max is a number of items from 1 to %d, not %d", LaterSweepMaxItems, l.Max)
+		return fmt.Errorf("later_sweep: max is a number of items from 1 to %d (0 or no key: %d), not %d", LaterSweepMaxItems,
+			DefaultLaterSweepMax, l.Max)
 	}
 
 	return nil

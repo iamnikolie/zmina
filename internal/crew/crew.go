@@ -678,6 +678,11 @@ func (c *Crew) Names() []string {
 func (c *Crew) complete() {
 	home := filepath.Dir(c.Path)
 
+	// later_sweep's role is read the way its check reads it, so the ticker asks for the role the check let through.
+	if c.LaterSweep != nil {
+		c.LaterSweep.Role = strings.TrimSpace(c.LaterSweep.Role)
+	}
+
 	// done_check: off, none or nothing is no check, as the other keys that take off.
 	if c.DoneCheck != nil && c.DoneCheck.Off() {
 		c.DoneCheck = nil

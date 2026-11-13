@@ -253,6 +253,15 @@ func (a *app) laterTakeCommand() *cobra.Command {
 					n.Note += ": " + it.Note
 				}
 
+				n.Sweep, n.AskedFor, n.Title = nil, nil, ""
+
+				// A sweep put away (task park, an idle release) is taken up as a sweep again, over what it still lists.
+				if from, ok := parkedSweep(s, it); ok {
+					if err := continueSweep(s, &n, it, from, role); err != nil {
+						return err
+					}
+				}
+
 				t, err := a.ledger(s).New(n)
 				if err != nil {
 					// A task dropped because its worktree failed is on the ledger; the item stays parked.

@@ -333,3 +333,82 @@ func TestLateReportsAreTheSameOnlyForTheSameCallerOnTheSameHandOut(t *testing.T)
 		assert.False(t, l.Same(o), "%+v", o)
 	}
 }
+
+// A text that names its own id is built once the task is numbered and written with it: one write, no second.
+func TestAddFuncFillsTheTaskBeforeItIsWritten(t *testing.T) {
+	s := &Store{Dir: t.TempDir()}
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+
+	_, err := s.Add(Task{Role: "dev", Asked: "first"}, now)
+	require.NoError(t, err)
+
+	got, err := s.AddFunc(Task{Role: "dev"}, now, func(t *Task) { t.Asked = "close " + t.ID + " when done" })
+	require.NoError(t, err)
+	assert.Equal(t, "T-2", got.ID)
+	assert.Equal(t, "close T-2 when done", got.Asked)
+
+	read, err := s.Get("T-2")
+	require.NoError(t, err)
+	assert.Equal(t, "close T-2 when done", read.Asked, "the file has it from the first write")
+	assert.Equal(t, Open, read.State)
+	assert.Equal(t, now, read.Created)
+
+	plain, err := s.AddFunc(Task{Role: "dev", Asked: "x"}, now, nil)
+	require.NoError(t, err)
+	assert.Equal(t, "T-3", plain.ID)
+}
+
+// A scan that saw the highest number is followed up by reading only what was added after it, and says what it cannot read.
+func TestHighestAndAfterReadOnlyWhatIsNew(t *testing.T) {
+	s := &Store{Dir: t.TempDir()}
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+
+	n, err := s.Highest()
+	require.NoError(t, err)
+	assert.Zero(t, n, "no directory, no tasks")
+
+	for range 3 {
+		_, err = s.Add(Task{Role: "dev", Asked: "x"}, now)
+		require.NoError(t, err)
+	}
+
+	n, err = s.Highest()
+	require.NoError(t, err)
+	assert.Equal(t, 3, n)
+
+	newer, unreadable, err := s.After(n)
+	require.NoError(t, err)
+	assert.Empty(t, newer)
+	assert.Empty(t, unreadable)
+
+	_, err = s.Add(Task{Role: "dev", Asked: "four", Sweep: []string{"L-1"}}, now)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(s.Dir, "T-5.json"), []byte(`{"id": "T-5", `), 0o600))
+
+	newer, unreadable, err = s.After(n)
+	require.NoError(t, err)
+	require.Len(t, newer, 1)
+	assert.Equal(t, "T-4", newer[0].ID)
+	assert.Equal(t, []string{"L-1"}, newer[0].Sweep)
+	assert.Contains(t, unreadable, "T-5.json")
+
+	n, err = s.Highest()
+	require.NoError(t, err)
+	assert.Equal(t, 5, n, "a file that does not read still has its number")
+}
+
+func TestScanFilesNamesWhatDoesNotRead(t *testing.T) {
+	s := &Store{Dir: t.TempDir()}
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+
+	_, err := s.Add(Task{Role: "dev", Asked: "x"}, now)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(s.Dir, "T-2.json"), []byte(`{"id": "T-2", "state": `), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(s.Dir, "T-3.json"), []byte(`{"id": "T-3", "state": "paused"}`), 0o600))
+
+	tasks, unreadable, err := s.ScanFiles()
+	require.NoError(t, err)
+	assert.Len(t, tasks, 2, "a task in a state this zmina does not know reads, and counts as active")
+	assert.Len(t, unreadable, 1)
+	assert.Contains(t, unreadable["T-2.json"], "T-2")
+}

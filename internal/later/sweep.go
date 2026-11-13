@@ -14,13 +14,23 @@ import (
 // needs no crew, no state and no clock: which items qualify, and which of a task's items still lack a verdict.
 
 // Stale is the open items a sweep is about, oldest first: made at least older ago, not reviewed (Keep) within older, not
-// waiting on a day to come back (back maps an item to when its alarm rings: one still ahead of now keeps it out) and not
-// already back on the owner's todo (Back). The items given are left as they are.
-func Stale(items []Item, back map[string]time.Time, now time.Time, older time.Duration) []Item {
+// waiting on a day to come back (back maps an item to when its alarm rings: one still ahead of now keeps it out), not
+// already back on the owner's todo (Back), and not a sweep itself put away (From a task in tasks that has a Sweep: a released
+// role's sweep, parked, is taken up again with later take, it is not one more thing to sweep). The items given are left as
+// they are.
+func Stale(items []Item, tasks []task.Task, back map[string]time.Time, now time.Time, older time.Duration) []Item {
+	sweeps := map[string]bool{}
+
+	for _, t := range tasks {
+		if len(t.Sweep) > 0 {
+			sweeps[t.ID] = true
+		}
+	}
+
 	var out []Item
 
 	for _, it := range items {
-		if !it.Open() || !it.Back.IsZero() || now.Sub(it.Created) < older {
+		if !it.Open() || !it.Back.IsZero() || now.Sub(it.Created) < older || sweeps[it.From] {
 			continue
 		}
 
@@ -46,11 +56,11 @@ func Stale(items []Item, back map[string]time.Time, now time.Time, older time.Du
 	return out
 }
 
-// Unswept is the ids, of the ones a sweep task covers, that have no verdict yet: an item that is still open and was not
-// reviewed since the task was made (since). Closed, dropped and taken items have theirs, so has one kept after since. An id
-// no item answers to (a file that does not read) is returned too: nothing shows a verdict for it. items is every item
-// (Store.Scan), in any order; the answer follows ids.
-func Unswept(items []Item, ids []string, since time.Time) []string {
+// Unswept is the ids, of the ones a sweep task covers, that have no verdict yet: an item that is still open and was not kept
+// for this task. Closed, dropped and taken items have theirs, so has one kept while the task listed it (KeptFor): a verdict is
+// told by what it answered, not by a time, which a clock set back would change. An id no item answers to (a file that does not
+// read) is returned too: nothing shows a verdict for it. items is every item (Store.Scan), in any order; the answer follows ids.
+func Unswept(items []Item, ids []string, taskID string) []string {
 	byID := make(map[string]Item, len(items))
 	for _, it := range items {
 		byID[it.ID] = it
@@ -63,9 +73,7 @@ func Unswept(items []Item, ids []string, since time.Time) []string {
 
 		switch {
 		case !ok:
-		case !it.Open():
-			continue
-		case !it.Reviewed.IsZero() && !it.Reviewed.Before(since):
+		case !it.Open(), it.KeptFor == taskID:
 			continue
 		}
 

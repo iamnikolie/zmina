@@ -39,6 +39,31 @@ func TestLaterSweepKey(t *testing.T) {
 	assert.Equal(t, 90*time.Second, c.LaterSweep.OlderSpan())
 }
 
+// The role is read as the check reads it: a name with spaces round it is the name, so the ticker never asks for a role the
+// check let through under another spelling.
+func TestLaterSweepRoleIsTrimmedWhenTheCrewIsLoaded(t *testing.T) {
+	const roles = "namespace: /ns\nroles:\n  dispatcher:\n  dev:\n"
+
+	c, err := Load(write(t, "later_sweep: {role: \" dev \"}\n"+roles))
+	require.NoError(t, err)
+	assert.Equal(t, "dev", c.LaterSweep.Role)
+
+	_, err = Load(write(t, "later_sweep: {role: \"  \"}\n"+roles))
+	require.ErrorContains(t, err, "later_sweep: role is a role of this crew")
+}
+
+// max: 0 is how an absent max reads, and is the default: the message for a number out of range says so.
+func TestLaterSweepMaxZeroIsTheDefault(t *testing.T) {
+	const roles = "namespace: /ns\nroles:\n  dispatcher:\n  dev:\n"
+
+	c, err := Load(write(t, "later_sweep: {role: dev, max: 0}\n"+roles))
+	require.NoError(t, err)
+	assert.Equal(t, DefaultLaterSweepMax, c.LaterSweep.MaxItems())
+
+	_, err = Load(write(t, "later_sweep: {role: dev, max: 26}\n"+roles))
+	require.ErrorContains(t, err, "later_sweep: max is a number of items from 1 to 25 (0 or no key: 12), not 26")
+}
+
 func TestLaterSweepKeyIsCheckedWhenTheCrewIsLoaded(t *testing.T) {
 	const roles = "namespace: /ns\nroles:\n  dispatcher:\n  dev:\n"
 
@@ -52,7 +77,7 @@ func TestLaterSweepKeyIsCheckedWhenTheCrewIsLoaded(t *testing.T) {
 		"later_sweep: {role: dev, every: -2h}\n":      `later_sweep: every "-2h"`,
 		"later_sweep: {role: dev, older: 2weeks}\n":   `later_sweep: older "2weeks"`,
 		"later_sweep: {role: dev, older: 0}\n":        `later_sweep: older "0"`,
-		"later_sweep: {role: dev, max: -1}\n":         "later_sweep: max is a number of items from 1 to 25",
+		"later_sweep: {role: dev, max: -1}\n":         "later_sweep: max is a number of items from 1 to 25 (0 or no key: 12), not -1",
 		"later_sweep: {role: dev, max: 26}\n":         "later_sweep: max is a number of items from 1 to 25",
 		"later_sweep: dev\n":                          "cannot unmarshal",
 		"later_sweep: {role: dev, every: [1, 2]}\n":   "cannot unmarshal",
