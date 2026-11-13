@@ -175,7 +175,7 @@ func TestTaskGCForceRefusesANestedRepositoryAndKeepsWhatStatusConfigHides(t *tes
 
 	out, _, err := zm(t, c.file, "task", "gc", "--force")
 	require.NoError(t, err)
-	assert.Contains(t, out, "T-1: kept: its work could not be kept first (vendor/lib is a nested git repository or a submodule")
+	assert.Contains(t, out, "T-1: kept: its work could not be kept first (vendor/lib (a nested repository, or a submodule at a commit HEAD does not record)")
 	assert.Contains(t, out, "so nothing was removed; --no-preserve removes it anyway")
 	assert.DirExists(t, nested)
 
@@ -192,4 +192,35 @@ func TestTaskGCForceRefusesANestedRepositoryAndKeepsWhatStatusConfigHides(t *tes
 	require.NotEmpty(t, ref)
 	assert.Equal(t, "work", gitIn(t, c.repo, "show", ref+":only-untracked.txt"))
 	assert.NoDirExists(t, wt)
+}
+
+// What lives in the worktree's own index alone is kept and said: a file staged and gone from the disk is a ref of its own, with
+// the command that brings it back.
+func TestTaskGCForceKeepsAndSaysWhatTheIndexAloneHolds(t *testing.T) {
+	c := newCheckCrew(t, "")
+	wt := c.task(t)
+
+	require.NoError(t, os.WriteFile(filepath.Join(wt, "gone.txt"), []byte("staged then deleted"), 0o600))
+	gitIn(t, wt, "add", "gone.txt")
+	require.NoError(t, os.Remove(filepath.Join(wt, "gone.txt")))
+
+	_, _, err := zm(t, c.file, "task", "drop", "1", "--force")
+	require.NoError(t, err)
+
+	out, _, err := zm(t, c.file, "task", "gc", "--force")
+	require.NoError(t, err)
+
+	assert.NotContains(t, out, "T-1: kept its uncommitted changes", "the files hold nothing: only the index does")
+	assert.Contains(t, out, "T-1: kept what its own index holds, which is neither the commit nor the files")
+	assert.Contains(t, out, "as refs/zmina-preserve-dirty/t-1-index-")
+	assert.Contains(t, out, "restore: git -C '"+taskRepo(t, c)+"' worktree add --detach <a new directory> refs/zmina-preserve-dirty/t-1-index-")
+	assert.NoDirExists(t, wt)
+
+	ref := strings.TrimSpace(gitIn(t, c.repo, "for-each-ref", "--format=%(refname)", "refs/zmina-preserve-dirty/"))
+	require.True(t, strings.HasPrefix(ref, "refs/zmina-preserve-dirty/t-1-index-"), ref)
+	assert.Equal(t, "staged then deleted", gitIn(t, c.repo, "show", ref+":gone.txt"))
+
+	log, _, err := zm(t, c.file, "log", "--task", "1")
+	require.NoError(t, err)
+	assert.Contains(t, log, "work kept before removal: what its index holds as refs/zmina-preserve-dirty/t-1-index-")
 }

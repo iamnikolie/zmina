@@ -670,6 +670,10 @@ func PreservedWords(p worktree.Preserved) string {
 		parts = append(parts, "uncommitted changes as "+p.Dirty)
 	}
 
+	if p.Index != "" {
+		parts = append(parts, "what its index holds as "+p.Index)
+	}
+
 	return strings.Join(parts, "; ")
 }
 

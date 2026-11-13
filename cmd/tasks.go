@@ -1008,6 +1008,16 @@ func (a *app) printPreserved(c ledger.Collected) {
 		fmt.Fprintf(a.out, "%s: kept its uncommitted changes, untracked files included (ignored files are not kept), as %s%s; restore: git -C %s worktree add --detach %s %s\n",
 			c.ID, p.Dirty, over, repo, dir, p.Dirty)
 	}
+
+	if p.Index != "" {
+		over := ""
+		if p.IndexOver != "" {
+			over = " (a commit over " + p.IndexOver + ")"
+		}
+
+		fmt.Fprintf(a.out, "%s: kept what its own index holds, which is neither the commit nor the files (a file staged and gone from the disk, an ignored file added with force), as %s%s; restore: git -C %s worktree add --detach %s %s\n",
+			c.ID, p.Index, over, repo, dir, p.Index)
+	}
 }
 
 func (a *app) printJSON(v any) error {

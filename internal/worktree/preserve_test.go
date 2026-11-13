@@ -118,6 +118,9 @@ func TestPreserveSnapshotsUncommittedChangesWithoutTouchingAnything(t *testing.T
 	head := out(t, tree.Path, "rev-parse", "HEAD")
 	status := out(t, tree.Path, "status", "--porcelain=v2")
 	cached := out(t, tree.Path, "diff", "--cached")
+	ownIndex := ownIndexPath(t, tree.Path)
+	ownIndexBefore, err := os.ReadFile(ownIndex)
+	require.NoError(t, err)
 	mainIndex, err := os.ReadFile(filepath.Join(repo, ".git", "index"))
 	require.NoError(t, err)
 
@@ -154,8 +157,20 @@ func TestPreserveSnapshotsUncommittedChangesWithoutTouchingAnything(t *testing.T
 	assert.Empty(t, stack(t, repo), "the shared stash stack")
 	assert.Empty(t, out(t, repo, "branch", "--list", "zmina-preserve/*"), "no branch for changes: a ref outside refs/heads")
 
+	// What the index holds is kept too, as the index is neither HEAD's tree nor the files': a second commit, over HEAD, of the
+	// staged file alone.
+	require.NotEmpty(t, got.Index)
+	assert.True(t, strings.HasPrefix(got.Index, PreserveDirtyPrefix+"t-1-index-"), got.Index)
+	assert.Equal(t, head[:8], got.IndexOver)
+	assert.Equal(t, "staged", out(t, repo, "show", got.Index+":staged.txt"))
+	assert.Equal(t, "a", out(t, repo, "show", got.Index+":a.txt"), "the index has the file as it was staged, not as it is on disk")
+
+	ownIndexAfter, err := os.ReadFile(ownIndex)
+	require.NoError(t, err)
+	assert.Equal(t, ownIndexBefore, ownIndexAfter, "the worktree's own index file, byte for byte")
+
 	after := out(t, repo, "for-each-ref", "--format=%(refname)")
-	assert.Equal(t, refs+"\n"+got.Dirty, after)
+	assert.Equal(t, refs+"\n"+got.Dirty+"\n"+got.Index, after)
 
 	// Named by the tree of the snapshot: the same changes kept again are the same ref, and nothing else is made.
 	treeID := out(t, repo, "rev-parse", got.Dirty+"^{tree}")
@@ -336,25 +351,9 @@ func TestPreserveRefusesNestedRepositoriesAndSubmodules(t *testing.T) {
 
 		_, err := tree.Preserve("T-1")
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "vendor/lib")
-		assert.Contains(t, err.Error(), "nested git repository or a submodule")
+		assert.Contains(t, err.Error(), "vendor/lib (a nested repository, or a submodule at a commit HEAD does not record)")
 		assert.Empty(t, out(t, repo, "branch", "--list", "zmina-preserve/*"), "nothing made, not even the branch of the commits")
 		assert.Empty(t, out(t, repo, "for-each-ref", "refs/zmina-preserve-dirty/"))
-	})
-
-	t.Run("a submodule entry", func(t *testing.T) {
-		repo, tree, _ := preserveFixture(t)
-
-		head := out(t, tree.Path, "rev-parse", "HEAD")
-		run(t, tree.Path, "update-index", "--add", "--cacheinfo", "160000,"+head+",deps/sub")
-		run(t, tree.Path, "commit", "-q", "-m", "a submodule")
-
-		// Its directory is there, as an uninitialised submodule's is: empty.
-		require.NoError(t, os.MkdirAll(filepath.Join(tree.Path, "deps", "sub"), 0o700))
-
-		_, err := tree.Preserve("T-1")
-		require.ErrorContains(t, err, "deps/sub")
-		assert.Empty(t, out(t, repo, "branch", "--list", "zmina-preserve/*"))
 	})
 
 	t.Run("two of them", func(t *testing.T) {
@@ -374,10 +373,11 @@ func TestPreserveRefusesNestedRepositoriesAndSubmodules(t *testing.T) {
 	})
 }
 
-// Only the task's own checkout is snapshotted: a directory that exists but is no worktree of its own, one inside another
-// checkout, is no worktree to keep, as a directory that is gone is none; the other checkout's changes are never taken. A path
-// that is a symlink to the worktree is the worktree.
-func TestPreserveNeverSnapshotsAnotherCheckout(t *testing.T) {
+// Only the task's own checkout is looked into, and a directory that exists and is not it is no "nothing to keep": it is an error
+// that refuses the removal, naming the top level git found, and the other checkout's changes are never taken. A symlink to the
+// worktree is the worktree; so is a spelling of its path that differs by case or by Unicode form, where the file system treats
+// them as one name (a string comparison of paths would call them two directories and skip the work).
+func TestPreserveNeverSnapshotsAnotherCheckoutAndRefusesWhatIsNotTheWorktree(t *testing.T) {
 	repo, tree, _ := preserveFixture(t)
 
 	// The path the task records is a plain directory inside the main checkout, which has work of its own.
@@ -389,10 +389,22 @@ func TestPreserveNeverSnapshotsAnotherCheckout(t *testing.T) {
 	stray := *tree
 	stray.Path = plain
 
-	got, err := stray.Preserve("T-1")
-	require.NoError(t, err)
-	assert.True(t, got.Empty(), "no worktree to keep: %+v", got)
+	_, err := stray.Preserve("T-1")
+	require.Error(t, err, "it exists and is not the checkout git sees there")
+	assert.Contains(t, err.Error(), "left-over exists but is not a checkout of its own")
+	assert.Contains(t, err.Error(), "git's top level for it is")
 	assert.Empty(t, out(t, repo, "for-each-ref", "refs/zmina-preserve-dirty/"), "the main checkout's work was not taken")
+	assert.Empty(t, out(t, repo, "branch", "--list", "zmina-preserve/*"), "and nothing was made")
+
+	// A directory outside any repository is no checkout either.
+	bare := filepath.Join(t.TempDir(), "leftover")
+	require.NoError(t, os.MkdirAll(bare, 0o700))
+
+	away := *tree
+	away.Path = bare
+
+	_, err = away.Preserve("T-1")
+	require.ErrorContains(t, err, "git does not see a checkout in it")
 
 	// A symlink to the task's worktree is the worktree.
 	write(t, tree.Path, "wip.txt", "wip")
@@ -403,9 +415,55 @@ func TestPreserveNeverSnapshotsAnotherCheckout(t *testing.T) {
 	viaLink := *tree
 	viaLink.Path = link
 
-	got, err = viaLink.Preserve("T-1")
+	got, err := viaLink.Preserve("T-1")
 	require.NoError(t, err)
 	assert.Equal(t, "wip", out(t, repo, "show", got.Dirty+":wip.txt"))
+}
+
+// A path spelled with other letter cases, or with the other Unicode form, is the same directory on a file system that says
+// so (macOS, Windows), and the work in it is kept: the worktree is found by file identity, not by a string. On a file system
+// that tells such spellings apart there is no such directory, and the test says so and skips.
+func TestPreserveFindsTheWorktreeBySameFileNotBySpelling(t *testing.T) {
+	for name, spell := range map[string]func(string) string{
+		"another case": func(base string) string { return strings.ToUpper(base) },
+		"the other Unicode form": func(base string) string {
+			return strings.ReplaceAll(base, "caf\u00e9", "cafe\u0301")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			repo := t.TempDir()
+			run(t, repo, "init", "-q", "-b", "main")
+			write(t, repo, "a.txt", "a\n")
+			run(t, repo, "add", ".")
+			run(t, repo, "commit", "-q", "-m", "a")
+
+			// The directory has a lower-case name with a precomposed letter; a spelling of it is asked for.
+			home, err := os.MkdirTemp("", "zmina-spell-")
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = os.RemoveAll(home) })
+
+			tree, err := Add(repo, filepath.Join(home, "caf\u00e9-alpha"), "zmina/t-1", "")
+			require.NoError(t, err)
+
+			write(t, tree.Path, "wip.txt", "wip")
+
+			spelled := *tree
+			spelled.Path = filepath.Join(home, spell("caf\u00e9-alpha"))
+
+			if spelled.Path == tree.Path {
+				t.Skip("no other spelling to try")
+			}
+
+			if _, err := os.Stat(spelled.Path); err != nil {
+				t.Skipf("this file system tells %q from %q: %v", filepath.Base(spelled.Path), filepath.Base(tree.Path), err)
+			}
+
+			got, err := spelled.Preserve("T-1")
+			require.NoError(t, err, "the same directory under another spelling: it is looked into, not skipped")
+			require.NotEmpty(t, got.Dirty, "its work is kept")
+			assert.Equal(t, "wip", out(t, repo, "show", got.Dirty+":wip.txt"))
+		})
+	}
 }
 
 // A path that cannot be read at all, for any reason but being gone, is a failure to keep, not a worktree with nothing in it.
@@ -460,4 +518,232 @@ func TestPreserveOfAWorktreeWithNoCommit(t *testing.T) {
 	require.NotEmpty(t, got.Dirty)
 	assert.Empty(t, got.DirtyOver)
 	assert.Equal(t, "first", out(t, repo, "show", got.Dirty+":first.txt"))
+}
+
+// ownIndexPath is the file of a worktree's own index.
+func ownIndexPath(t *testing.T, dir string) string {
+	t.Helper()
+
+	p := out(t, dir, "rev-parse", "--git-path", "index")
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(dir, p)
+	}
+
+	return p
+}
+
+// What lives in the worktree's own index alone is kept too: a file staged and then deleted from the disk, an ignored file added
+// with force and not committed, the version of a file that was staged before it was edited again. The index is read from a copy:
+// its file is as it was, byte for byte.
+func TestPreserveKeepsWhatLivesInTheIndexAlone(t *testing.T) {
+	t.Run("a file staged and then deleted from the disk", func(t *testing.T) {
+		repo, tree, _ := preserveFixture(t)
+		write(t, tree.Path, "gone.txt", "staged then deleted\n")
+		run(t, tree.Path, "add", "gone.txt")
+		require.NoError(t, os.Remove(filepath.Join(tree.Path, "gone.txt")))
+
+		before, err := os.ReadFile(ownIndexPath(t, tree.Path))
+		require.NoError(t, err)
+
+		got, err := tree.Preserve("T-1")
+		require.NoError(t, err)
+		assert.Empty(t, got.Dirty, "the files are HEAD's: there is nothing in them to keep")
+		require.NotEmpty(t, got.Index)
+		assert.Equal(t, "staged then deleted", out(t, repo, "show", got.Index+":gone.txt"))
+		assert.Equal(t, out(t, repo, "rev-parse", "HEAD")[:8], got.IndexOver)
+		assert.False(t, got.Empty())
+
+		after, err := os.ReadFile(ownIndexPath(t, tree.Path))
+		require.NoError(t, err)
+		assert.Equal(t, before, after, "the worktree's own index is not touched")
+		assert.Contains(t, out(t, tree.Path, "status", "--short"), "AD gone.txt", "and still says what it did")
+	})
+
+	t.Run("an ignored file added with force", func(t *testing.T) {
+		repo, tree, _ := preserveFixture(t)
+		write(t, tree.Path, "forced.log", "ignored but added\n")
+		run(t, tree.Path, "add", "-f", "forced.log")
+
+		got, err := tree.Preserve("T-1")
+		require.NoError(t, err)
+		assert.Empty(t, got.Dirty, "the files tree leaves an ignored file out; this one is a tracked one in the index only")
+		require.NotEmpty(t, got.Index)
+		assert.Equal(t, "ignored but added", out(t, repo, "show", got.Index+":forced.log"))
+	})
+
+	t.Run("the version staged before the file was edited again", func(t *testing.T) {
+		repo, tree, _ := preserveFixture(t)
+		write(t, tree.Path, "a.txt", "staged version\n")
+		run(t, tree.Path, "add", "a.txt")
+		write(t, tree.Path, "a.txt", "edited again\n")
+
+		got, err := tree.Preserve("T-1")
+		require.NoError(t, err)
+		require.NotEmpty(t, got.Dirty)
+		require.NotEmpty(t, got.Index)
+		assert.Equal(t, "edited again", out(t, repo, "show", got.Dirty+":a.txt"))
+		assert.Equal(t, "staged version", out(t, repo, "show", got.Index+":a.txt"))
+	})
+
+	t.Run("an index that is HEAD's or the files' is no second ref", func(t *testing.T) {
+		repo, tree, _ := preserveFixture(t)
+
+		write(t, tree.Path, "b.txt", "b\n")
+		run(t, tree.Path, "add", "-A")
+
+		got, err := tree.Preserve("T-1")
+		require.NoError(t, err)
+		require.NotEmpty(t, got.Dirty)
+		assert.Empty(t, got.Index, "everything staged: the index is the files' tree")
+
+		clean, tree2, _ := preserveFixture(t)
+		write(t, tree2.Path, "c.txt", "c\n")
+
+		got, err = tree2.Preserve("T-1")
+		require.NoError(t, err)
+		require.NotEmpty(t, got.Dirty)
+		assert.Empty(t, got.Index, "nothing staged: the index is HEAD's tree")
+		assert.Empty(t, out(t, clean, "for-each-ref", PreserveDirtyPrefix+"t-1-index-*"))
+		assert.NotContains(t, out(t, repo, "for-each-ref", "--format=%(refname)"), "-index-")
+	})
+
+	t.Run("conflicts: the index cannot be written as a tree, so nothing is kept and the removal is refused", func(t *testing.T) {
+		repo, tree, _ := preserveFixture(t)
+
+		write(t, repo, "a.txt", "main side\n")
+		run(t, repo, "commit", "-q", "-am", "main side")
+		write(t, tree.Path, "a.txt", "task side\n")
+		run(t, tree.Path, "commit", "-q", "-am", "task side")
+
+		// The merge stops on a conflict, and git says so with a status: not a failure of this test.
+		cmd := exec.Command("git", "-C", tree.Path, "-c", "user.email=t@t", "-c", "user.name=t", "merge", "-q", "main")
+		_ = cmd.Run()
+		require.Contains(t, out(t, tree.Path, "status", "--short"), "UU a.txt")
+
+		_, err := tree.Preserve("T-1")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "cannot be written as a tree")
+		assert.Empty(t, out(t, repo, "branch", "--list", "zmina-preserve/*"), "nothing made")
+		assert.Empty(t, out(t, repo, "for-each-ref", "refs/zmina-preserve-dirty/"))
+	})
+}
+
+// A ref kept before for the same tree is the one reused, and what it is over is what its commit says, not what the worktree's
+// HEAD is now.
+func TestPreserveReportsTheParentOfTheKeptCommitWhenItReusesARef(t *testing.T) {
+	repo, tree, _ := preserveFixture(t)
+	write(t, tree.Path, "wip.txt", "wip\n")
+
+	first, err := tree.Preserve("T-1")
+	require.NoError(t, err)
+	require.NotEmpty(t, first.Dirty)
+
+	over := out(t, repo, "rev-parse", first.Dirty+"^")
+	assert.Equal(t, over[:8], first.DirtyOver)
+
+	// The worktree's HEAD moves on, and the files tree is the same as it was (a commit that adds nothing to the tree): the
+	// ref is reused, and the report says what the kept commit is over, which is not the new HEAD.
+	run(t, tree.Path, "commit", "-q", "--allow-empty", "-m", "an empty commit")
+	newHead := out(t, tree.Path, "rev-parse", "HEAD")
+	require.NotEqual(t, over, newHead)
+
+	again, err := tree.Preserve("T-1")
+	require.NoError(t, err)
+	assert.Equal(t, first.Dirty, again.Dirty, "the same ref")
+	assert.Equal(t, over[:8], again.DirtyOver, "over its own parent")
+	assert.NotEqual(t, newHead[:8], again.DirtyOver)
+}
+
+// A repository that merely has submodules is preserved: one that is not initialised, and one that is initialised and clean,
+// hold nothing a tree of the parent would lose. What blocks is work in one: uncommitted changes, a commit HEAD does not record.
+func TestPreserveIsNotBlockedByASubmoduleThatHoldsNoWork(t *testing.T) {
+	// A submodule, and a task worktree made after it was added, so that the worktree has it.
+	submoduleFixture := func(t *testing.T) (repo string, tree *Tree, sub string) {
+		t.Helper()
+
+		sub = t.TempDir()
+		run(t, sub, "init", "-q", "-b", "main")
+		write(t, sub, "lib.txt", "lib\n")
+		run(t, sub, "add", ".")
+		run(t, sub, "commit", "-q", "-m", "lib")
+
+		repo = t.TempDir()
+		run(t, repo, "init", "-q", "-b", "main")
+		write(t, repo, "a.txt", "a\n")
+		run(t, repo, "add", ".")
+		run(t, repo, "commit", "-q", "-m", "a")
+		run(t, repo, "-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "deps/sub")
+		run(t, repo, "commit", "-q", "-m", "a submodule")
+
+		var err error
+
+		tree, err = Add(repo, filepath.Join(t.TempDir(), "wt", "alpha"), "zmina/t-1", "")
+		require.NoError(t, err)
+
+		return repo, tree, sub
+	}
+
+	t.Run("not initialised: its directory is empty", func(t *testing.T) {
+		repo, tree, _ := submoduleFixture(t)
+		write(t, tree.Path, "wip.txt", "wip\n")
+
+		got, err := tree.Preserve("T-1")
+		require.NoError(t, err, "a submodule that is only recorded is not in the way")
+		assert.Equal(t, "wip", out(t, repo, "show", got.Dirty+":wip.txt"))
+	})
+
+	t.Run("initialised and clean", func(t *testing.T) {
+		repo, tree, _ := submoduleFixture(t)
+		run(t, tree.Path, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q")
+		require.FileExists(t, filepath.Join(tree.Path, "deps", "sub", "lib.txt"))
+		write(t, tree.Path, "wip.txt", "wip\n")
+
+		got, err := tree.Preserve("T-1")
+		require.NoError(t, err)
+		assert.Equal(t, "wip", out(t, repo, "show", got.Dirty+":wip.txt"))
+	})
+
+	t.Run("initialised and clean, and nothing else to keep", func(t *testing.T) {
+		_, tree, _ := submoduleFixture(t)
+		run(t, tree.Path, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q")
+
+		got, err := tree.Preserve("T-1")
+		require.NoError(t, err)
+		assert.True(t, got.Empty())
+	})
+
+	t.Run("uncommitted changes in it", func(t *testing.T) {
+		repo, tree, _ := submoduleFixture(t)
+		run(t, tree.Path, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q")
+		write(t, filepath.Join(tree.Path, "deps", "sub"), "mine.txt", "work in the submodule\n")
+
+		_, err := tree.Preserve("T-1")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "deps/sub (it has uncommitted changes)")
+		assert.Empty(t, out(t, repo, "for-each-ref", "refs/zmina-preserve-dirty/"))
+	})
+
+	t.Run("a commit in it that HEAD does not record", func(t *testing.T) {
+		_, tree, _ := submoduleFixture(t)
+		run(t, tree.Path, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "-q")
+
+		subTree := filepath.Join(tree.Path, "deps", "sub")
+		write(t, subTree, "new.txt", "new\n")
+		run(t, subTree, "add", ".")
+		run(t, subTree, "commit", "-q", "-m", "a commit of the submodule's own")
+
+		_, err := tree.Preserve("T-1")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "deps/sub (a nested repository, or a submodule at a commit HEAD does not record)")
+	})
+
+	t.Run("a gitlink that HEAD records with a directory that is gone", func(t *testing.T) {
+		repo, tree, _ := submoduleFixture(t)
+		require.NoError(t, os.RemoveAll(filepath.Join(tree.Path, "deps", "sub")))
+
+		got, err := tree.Preserve("T-1")
+		require.NoError(t, err, "the deletion is a change a snapshot holds")
+		assert.NotEmpty(t, got.Dirty)
+		assert.NotContains(t, out(t, repo, "ls-tree", "-r", got.Dirty), "deps/sub")
+	})
 }

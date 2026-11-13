@@ -37,6 +37,8 @@ func droppedFixture(t *testing.T) (l *Ledger, trees *fakeTrees, unmerged, clean,
 		Branches:  []worktree.KeptBranch{{Name: "zmina-preserve/t-1-0123abcd", Tip: "0123abcd", Commits: 2}},
 		Dirty:     "refs/zmina-preserve-dirty/t-1-4567ef89",
 		DirtyOver: "0123abcd",
+		Index:     "refs/zmina-preserve-dirty/t-1-index-89abcdef",
+		IndexOver: "0123abcd",
 	}}
 
 	for _, id := range []string{unmerged.ID, clean.ID} {
@@ -92,7 +94,8 @@ func TestForcedGCKeepsTheWorkBeforeRemovingIt(t *testing.T) {
 	assert.NotContains(t, strings.Join(trees.calls, "\n"), done.Branch, "force never takes a done task's work")
 
 	assert.Contains(t, strings.Join(*events, "\n"), "dev task "+unmerged.ID+" work kept before removal: 2 commit(s) on branch "+
-		"zmina-preserve/t-1-0123abcd; uncommitted changes as refs/zmina-preserve-dirty/t-1-4567ef89")
+		"zmina-preserve/t-1-0123abcd; uncommitted changes as refs/zmina-preserve-dirty/t-1-4567ef89; what its index holds as "+
+		"refs/zmina-preserve-dirty/t-1-index-89abcdef")
 	assert.NotContains(t, strings.Join(*events, "\n"), "work kept before removal: "+clean.ID)
 }
 
