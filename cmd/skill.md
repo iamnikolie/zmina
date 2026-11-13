@@ -83,6 +83,7 @@ notify_again: 24h                        # an item that still blocks is pushed a
 timezone: Europe/Warsaw                  # the clock reminder times, role schedules, the budget's day and usage's days are read on (default: this machine's)
 lessons: on                              # daily triage of the roles' lessons into one draft MR on the crew's agentic-os (default off; see Lessons)
 worktree_gc: daily                       # the ticker runs `task gc` once a day: closed tasks' merged, clean worktrees go (default off)
+later_sweep: {role: dispatcher, every: 7d, older: 14d, max: 12}  # the ticker hands that role the stale parked items as one task, each to get a verdict (role is required; the rest are the defaults; default off; see Later)
 done_check: make test                    # closing a task with a worktree as done runs this there and needs exit 0 (or {run, timeout: 10m, commit: true, env_fault_rc: 3}; off or none: no check, the default; see What checked means)
 courier: off                             # no courier service beside the ticker: a line for a role waits for the beat, up to a minute (on or off; default on; see The ticker)
 retention: 45d                           # how long finished work stays where it is before the ticker's daily pass moves it to archive/ (30d at least, or off; default 30d; see Retention)
@@ -1823,8 +1824,11 @@ otherwise `later keep L-n --note "<why>"`. No stale item: it says so, makes noth
 
 Closing the sweep: a sweep has no worktree to run a check in, so `task done`/`task set <id> done` itself asks
 `later swept` and is refused (`has parked items without a verdict`) while an item has none; the owner and the dispatcher
-`--force` it, recorded as `unchecked`. Dropping a sweep is not asked anything. A role that is down is not started: the
-usual unaccepted-task note follows. Event `later-sweep` in the log.
+`--force` it, recorded as `unchecked`. Dropping a sweep is not asked anything. `later_sweep: {role, every, older, max}`
+in the crew file (role must be one of the roles; every default 7d, older 14d, max 12; off when absent) has the ticker
+make one after the beat's locked steps, when none is open, the newest sweep task is over `every` old (the ledger says;
+nothing is kept in `state.json`), at least 3 items qualify, the shift runs and the role holds no active task: event
+`later-sweep`, a line in the tick output. A role that is down is not started; the usual unaccepted-task note follows.
 
 ## Alarms — reminders and wake-ups
 
@@ -2665,7 +2669,7 @@ any time. It is not a field of `state.json`.
 - The owner parks a decision or an idea for later ("later", "park it", not for any role now):
   `zmina later add "<their words>"`, not a task. When they come back to one: `zmina later take
   L-3 <role> [--repo r --worktree]`.
-- A sweep of the parked list (`zmina later sweep <role>`) is a task titled `Sweep of N
+- A sweep of the parked list (`zmina later sweep <role>`, or `later_sweep:` in the crew file) is a task titled `Sweep of N
   parked items`. A role that is not you proposes ready work in a `zmina note` (`dev: L-3, L-5 …`) and keeps the items
   (`later keep`): hand it out with `zmina later take L-3 <seat>`. If the dispatcher is the sweep's role, `take` is its own verdict.
 - `FYI released dev2 after 45m idle → L-15, L-16`: the ticker put an idle role down and parked its

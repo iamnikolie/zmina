@@ -18,9 +18,6 @@ import (
 )
 
 const (
-	// sweepMaxDefault and sweepMaxItems are the default and the most items one sweep takes.
-	sweepMaxDefault = 12
-	sweepMaxItems   = 25
 	// sweepSelf stands for the sweep task's own id in its asked text, which is written before the id is known.
 	sweepSelf = ledger.SelfID
 	// sweepBecause is why a sweep goes to the role it is given when the routes name another: the owner or the crew file
@@ -83,8 +80,8 @@ func (a *app) laterSweepCommand() *cobra.Command {
 				return fmt.Errorf("--older %q: a span of time such as 14d or 336h", older)
 			}
 
-			if most < 1 || most > sweepMaxItems {
-				return fmt.Errorf("--max is a number of items from 1 to %d, not %d", sweepMaxItems, most)
+			if most < 1 || most > crew.LaterSweepMaxItems {
+				return fmt.Errorf("--max is a number of items from 1 to %d, not %d", crew.LaterSweepMaxItems, most)
 			}
 
 			run := func(s *shift.Shift) error { return a.sweepNow(s, args[0], span, most, dryRun) }
@@ -97,7 +94,7 @@ func (a *app) laterSweepCommand() *cobra.Command {
 	}
 
 	c.Flags().StringVar(&older, "older", "14d", "an item is stale when it is this old and was not kept within this time")
-	c.Flags().IntVar(&most, "max", sweepMaxDefault, "the most items one sweep takes, oldest first")
+	c.Flags().IntVar(&most, "max", crew.DefaultLaterSweepMax, "the most items one sweep takes, oldest first")
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "say which items would be swept and make nothing")
 
 	return c

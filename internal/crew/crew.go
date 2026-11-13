@@ -349,6 +349,9 @@ type Crew struct {
 	// WorktreeGC is daily or off (the default): daily has the ticker run `zmina task gc` (never --force) once a
 	// day, so the worktrees of closed tasks whose branch is merged do not pile up.
 	WorktreeGC string `yaml:"worktree_gc"`
+	// LaterSweep is the ticker's own sweep of the parked list: a task for one role to give each stale item a verdict
+	// (see LaterSweep). Absent: off.
+	LaterSweep *LaterSweep `yaml:"later_sweep"`
 	// DoneCheck is the command closing a task as done runs in the task's worktree, unless the task sets its own: a
 	// command line, or run, timeout and commit (see donecheck.Spec). Empty, off or none: no check, as before.
 	DoneCheck *donecheck.Spec `yaml:"done_check"`
@@ -908,6 +911,10 @@ func (c *Crew) check() error {
 		if err := c.DoneCheck.Validate(); err != nil {
 			return fmt.Errorf("done_check: %w", err)
 		}
+	}
+
+	if err := c.checkLaterSweep(); err != nil {
+		return err
 	}
 
 	if err := checkRetention(c.Retention); err != nil {
