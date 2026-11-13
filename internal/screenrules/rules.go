@@ -20,7 +20,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 
 	"gopkg.in/yaml.v3"
 )
@@ -423,11 +422,12 @@ func embeddedRows() ([]Rule, error) {
 var (
 	defaultOnce  sync.Once
 	defaultTable *Table
-	active       atomic.Pointer[Table]
 )
 
-// Default is the embedded table. It is read once; an embedded table that does not read is a bug of the build, caught by
-// this package's tests, and stops the program with the row's id rather than reading screens by a half table.
+// Default is the embedded table, read once and shared: it is never changed. A crew's own table (LoadOverrides) is a new table
+// that each shift carries, so that one process serving several crews never reads a pane by another crew's rows. An embedded
+// table that does not read is a bug of the build, caught by this package's tests, and stops the program with the row's id
+// rather than reading screens by a half table.
 func Default() *Table {
 	defaultOnce.Do(func() {
 		t, err := Load()
@@ -440,18 +440,6 @@ func Default() *Table {
 
 	return defaultTable
 }
-
-// Active is the table the readers use: the embedded one unless a crew's overrides were put in force (Use).
-func Active() *Table {
-	if t := active.Load(); t != nil {
-		return t
-	}
-
-	return Default()
-}
-
-// Use puts a table in force for the readers of this process; nil goes back to the embedded one.
-func Use(t *Table) { active.Store(t) }
 
 // Rules lists every row, builtins too, in the order of the files.
 func (t *Table) Rules() []Rule {

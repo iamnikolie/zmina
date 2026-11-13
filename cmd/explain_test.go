@@ -107,15 +107,20 @@ func (r *explainRig) noSession() {
 	require.NoError(r.t, os.RemoveAll(filepath.Join(r.ns, "sessions", strconv.Itoa(r.pid)+".json")))
 }
 
+// seams is what a shift of the rig talks to: its pane, its registry and its clock.
+func (r *explainRig) seams() func(s *shift.Shift) {
+	return func(s *shift.Shift) {
+		s.Tmux, s.Reg, s.Now = r.tm, &registry.Registry{Namespace: r.ns}, func() time.Time { return r.now }
+	}
+}
+
 // run runs one command against the rig, reading its state as a fresh process would.
 func (r *explainRig) run(args ...string) (string, string, error) {
 	r.t.Helper()
 
 	var out, errb bytes.Buffer
 
-	a := &app{out: &out, err: &errb, shiftSeams: func(s *shift.Shift) {
-		s.Tmux, s.Reg, s.Now = r.tm, &registry.Registry{Namespace: r.ns}, func() time.Time { return r.now }
-	}}
+	a := &app{out: &out, err: &errb, shiftSeams: r.seams()}
 	root := newRoot(a)
 	root.SetArgs(append([]string{"--crew", r.crewFile}, args...))
 	err := root.Execute()

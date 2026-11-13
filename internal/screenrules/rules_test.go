@@ -336,18 +336,3 @@ func TestOverrideFileThatCannotBeReadIsAnError(t *testing.T) {
 	require.Error(t, o.Err, "a directory is not a file of rules")
 	assert.Same(t, Default(), got)
 }
-
-func TestUseSwitchesTheActiveTable(t *testing.T) {
-	t.Cleanup(func() { Use(nil) })
-
-	assert.Same(t, Default(), Active())
-
-	other, err := build(nil)
-	require.NoError(t, err)
-
-	Use(other)
-	assert.Same(t, other, Active())
-
-	Use(nil)
-	assert.Same(t, Default(), Active())
-}

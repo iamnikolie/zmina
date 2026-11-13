@@ -3,6 +3,7 @@ package shift
 import (
 	"slices"
 
+	"github.com/iamnikolie/zmina/internal/screenrules"
 	"github.com/iamnikolie/zmina/internal/watch"
 )
 
@@ -21,6 +22,7 @@ func RunTick(locked WithLock, run func([]WatchRun) []watch.Result, rang func(Run
 		restarts []Restart
 		rung     []Rung
 		tm       Tmux
+		rules    *screenrules.Table
 		told     bool
 	)
 
@@ -28,7 +30,7 @@ func RunTick(locked WithLock, run func([]WatchRun) []watch.Result, rang func(Run
 		s.By = "ticker"
 		out(s.Tick())
 
-		told, released, restarts, rung, tm = s.Told, s.Released, s.Restarts, s.Rang, s.Tmux
+		told, released, restarts, rung, tm, rules = s.Told, s.Released, s.Restarts, s.Rang, s.Tmux, s.ScreenRules()
 		runs = s.DueWatches()
 
 		return nil
@@ -71,7 +73,7 @@ func RunTick(locked WithLock, run func([]WatchRun) []watch.Result, rang func(Run
 	}
 
 	if len(gone) > 0 {
-		WaitGone(tm, gone, ExitWait)
+		waitGone(rules, tm, gone, ExitWait)
 	}
 
 	var results []watch.Result

@@ -25,6 +25,7 @@ import (
 	"github.com/iamnikolie/zmina/internal/mesh"
 	"github.com/iamnikolie/zmina/internal/peer"
 	"github.com/iamnikolie/zmina/internal/registry"
+	"github.com/iamnikolie/zmina/internal/screenrules"
 	"github.com/iamnikolie/zmina/internal/shift"
 	"github.com/iamnikolie/zmina/internal/task"
 	"github.com/iamnikolie/zmina/internal/tmux"
@@ -211,9 +212,6 @@ func (a *app) loadCrew() (*crew.Crew, error) {
 		fmt.Fprintln(a.err, "zmina: warning:", w)
 	}
 
-	// The crew's own screen rules, when it has any: a file that does not read is ignored (zmina doctor says why).
-	useScreenRules(c)
-
 	// An edit made outside zmina is kept in the crew file's history on the first command that sees it.
 	if raw, err := os.ReadFile(c.Path); err == nil {
 		_ = noticeCrewFile(c.Path, raw)
@@ -234,7 +232,13 @@ func (a *app) newShift() (*shift.Shift, error) {
 	if n, err := openNode(); err == nil {
 		node = n.Name
 	}
+
+	// The crew's own screen rules, when it has any, are this shift's and no other's: a file that does not read is ignored (zmina
+	// doctor says why) and the embedded rules stay in force.
+	rules, _ := screenrules.LoadOverrides(screenrules.Default(), c.Layout().ScreenRules())
+
 	s := &shift.Shift{
+		Rules:             rules,
 		Node:              node,
 		ReconcileMessages: a.reconcileMessages,
 		Crew:              c,

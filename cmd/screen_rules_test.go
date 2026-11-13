@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,8 +33,6 @@ const goodScreenRules = `rules:
 // A crew with no screen-rules.yaml says nothing of it; with one, doctor says in one line that its overrides are in effect
 // and how many rows it lists; and the rows are in force for the commands of that crew.
 func TestDoctorSaysScreenRuleOverridesAreInForce(t *testing.T) {
-	t.Cleanup(func() { screenrules.Use(nil) })
-
 	crewFile := testCrew(t, "")
 	dir := filepath.Dir(crewFile)
 
@@ -46,21 +45,19 @@ func TestDoctorSaysScreenRuleOverridesAreInForce(t *testing.T) {
 	assert.Regexp(t, `ok +screens +overrides in effect: 3 rules from \S+screen-rules\.yaml \(1 added, 1 replaced, 1 disabled\)`, out)
 	assert.Equal(t, 1, countLines(out, "screens"), "one line")
 
-	// Any command that loads the crew file puts the rows in force for its process.
-	_, _, err := zm(t, crewFile, "ls")
+	// The shift built for the crew carries its rows.
+	s, err := (&app{out: io.Discard, err: io.Discard, crew: crewFile}).newShift()
 	require.NoError(t, err)
 
-	_, ok := screenrules.Active().Test(screenrules.Claude, screenrules.UsageLimit, "plan exhausted")
-	assert.True(t, ok, "the crew's rows are in force for the process that loaded its crew file")
+	_, ok := s.ScreenRules().Test(screenrules.Claude, screenrules.UsageLimit, "plan exhausted")
+	assert.True(t, ok, "the crew's rows are in force for the shift built for its crew")
 
-	_, ok = screenrules.Active().Test(screenrules.Claude, screenrules.FooterHint, "ctrl+t to hide todos")
+	_, ok = s.ScreenRules().Test(screenrules.Claude, screenrules.FooterHint, "ctrl+t to hide todos")
 	assert.False(t, ok, "and a row it disables is gone")
 }
 
 // A file that does not read is reported by doctor and ignored: the embedded rules stay in force, and no command stops.
 func TestBadScreenRulesAreReportedAndIgnored(t *testing.T) {
-	t.Cleanup(func() { screenrules.Use(nil) })
-
 	crewFile := testCrew(t, "")
 	dir := filepath.Dir(crewFile)
 
@@ -78,15 +75,15 @@ func TestBadScreenRulesAreReportedAndIgnored(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, errOut, "screen")
 
-	assert.Same(t, screenrules.Default(), screenrules.Active())
+	s, err := (&app{out: io.Discard, err: io.Discard, crew: crewFile}).newShift()
+	require.NoError(t, err)
+	assert.Same(t, screenrules.Default(), s.ScreenRules())
 
-	_, ok := screenrules.Active().Test(screenrules.Claude, screenrules.FooterHint, "ctrl+t to hide todos")
+	_, ok := s.ScreenRules().Test(screenrules.Claude, screenrules.FooterHint, "ctrl+t to hide todos")
 	assert.True(t, ok)
 }
 
 func TestEmptyScreenRulesFileIsSaidToo(t *testing.T) {
-	t.Cleanup(func() { screenrules.Use(nil) })
-
 	crewFile := testCrew(t, "")
 	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(crewFile), "screen-rules.yaml"), []byte("rules: []\n"), 0o600))
 

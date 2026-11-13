@@ -67,7 +67,7 @@ func sameScreenReading(t testing.TB, label, text string) {
 
 	// The question asked of the screen: the one ParseDialog reads, and each row of it.
 	questions := []string{"Do you want to proceed?"}
-	if d := shift.ParseDialog(text); d != nil {
+	if d := (&shift.Shift{}).ParseDialog(text); d != nil {
 		questions = append(questions, d.Question)
 	}
 

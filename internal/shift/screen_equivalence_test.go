@@ -66,21 +66,21 @@ func sameReading(t testing.TB, label, text string) {
 	want := legacyLimitLine(bottom)
 
 	for _, engine := range []string{screenrules.Claude, screenrules.Codex} {
-		if got := limitLine(engine, text); want != got {
+		if got := limitLine(screenrules.Default(), engine, text); want != got {
 			t.Errorf("%s: limitLine(%s) %q, was %q\n%s", label, engine, got, want, text)
 		}
 
-		if got := limitLine(engine, bottom); want != got {
+		if got := limitLine(screenrules.Default(), engine, bottom); want != got {
 			t.Errorf("%s: limitLine(%s) of the bottom rows %q, was %q\n%s", label, engine, got, want, bottom)
 		}
 	}
 
-	if want, got := legacyTrustKeys(text), trustKeys(text); !assert.ObjectsAreEqual(want, got) {
+	if want, got := legacyTrustKeys(text), trustKeys(screenrules.Default(), text); !assert.ObjectsAreEqual(want, got) {
 		t.Errorf("%s: trustKeys %v, was %v\n%s", label, got, want, text)
 	}
 
 	wantKey, wantOK := legacyExitKey(text)
-	if gotKey, gotOK := exitKey(text); wantKey != gotKey || wantOK != gotOK {
+	if gotKey, gotOK := exitKey(screenrules.Default(), text); wantKey != gotKey || wantOK != gotOK {
 		t.Errorf("%s: exitKey %q %v, was %q %v\n%s", label, gotKey, gotOK, wantKey, wantOK, text)
 	}
 }
@@ -122,10 +122,10 @@ func TestScreenRulesReadTheGoldenCorpusToItsExpectedValues(t *testing.T) {
 		text := loadScreen(t, name)
 
 		assert.Equal(t, g.now, NowLine(text), name)
-		assert.Equal(t, g.limit, limitLine(screenrules.Claude, text), name)
-		assert.Equal(t, g.trust, trustKeys(text), name)
+		assert.Equal(t, g.limit, limitLine(screenrules.Default(), screenrules.Claude, text), name)
+		assert.Equal(t, g.trust, trustKeys(screenrules.Default(), text), name)
 
-		key, ok := exitKey(text)
+		key, ok := exitKey(screenrules.Default(), text)
 		assert.Equal(t, g.exit != nil, ok, name)
 
 		if ok {
@@ -231,10 +231,11 @@ func FuzzScreenRules(f *testing.F) {
 // A row a crew adds is read by the ticker's watch of the screen: a wording the embedded rows do not know is told as a usage
 // limit once the crew's screen-rules.yaml says so, and not before.
 func TestAddedScreenRuleIsReadByTheWatch(t *testing.T) {
-	t.Cleanup(func() { screenrules.Use(nil) })
+	var rules *screenrules.Table
 
 	told := func() []string {
 		f := fixtureWith(t, crewYAML)
+		f.s.Rules = rules
 		require.NoError(t, f.s.Up("designer"))
 		f.status("designer", "idle", *f.now)
 		*f.now = f.now.Add(10 * time.Minute)
@@ -257,8 +258,8 @@ func TestAddedScreenRuleIsReadByTheWatch(t *testing.T) {
 
 	table, o := screenrules.LoadOverrides(screenrules.Default(), path)
 	require.NoError(t, o.Err)
-	screenrules.Use(table)
+	rules = table
 
 	assert.Equal(t, []string{"designer: stopped by a usage limit: ⎿ Plan exhausted until 9pm"}, told())
-	assert.Equal(t, 12, screenrules.Active().Window(screenrules.Claude, screenrules.UsageLimit, limitLines))
+	assert.Equal(t, 12, table.Window(screenrules.Claude, screenrules.UsageLimit, limitLines))
 }

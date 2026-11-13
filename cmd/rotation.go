@@ -161,7 +161,7 @@ func (a *app) rotationAbort(name string, clear, force bool) error {
 			return err
 		}
 
-		shift.WaitGone(s.Tmux, []string{name}, shift.ExitWait)
+		s.WaitGone([]string{name}, shift.ExitWait)
 	}
 
 	return a.withState(func(s *shift.Shift) error {

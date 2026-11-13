@@ -260,15 +260,13 @@ func TestExplainQuotesTheScreenRuleAndTheLineItMatched(t *testing.T) {
 	assert.LessOrEqual(t, len([]rune(e.Screen.Limit.Evidence)), evidenceMax)
 
 	// The rules of the crew are the ones quoted: an added wording is named by its own id.
-	t.Cleanup(func() { screenrules.Use(nil) })
-
 	path := filepath.Join(t.TempDir(), "screen-rules.yaml")
 	require.NoError(t, os.WriteFile(path, []byte("rules:\n  - id: acme.limit.wording\n    engine: claude\n    sets: usage_limit\n"+
 		"    means: a newer wording\n    match: {contains: plan exhausted}\n"), 0o600))
 
 	table, o := screenrules.LoadOverrides(screenrules.Default(), path)
 	require.NoError(t, o.Err)
-	screenrules.Use(table)
+	f.s.Rules = table
 
 	f.tm.screen = "⎿ plan exhausted until 9pm"
 	_, e = look(t, f)

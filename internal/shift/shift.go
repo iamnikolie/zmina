@@ -159,6 +159,9 @@ type Shift struct {
 	Peer Peer
 	// CodexInbox queues lines for a Codex role's bridge; nil types them into its console.
 	CodexInbox Peer
+	// Rules are the screen rules this crew's panes are read by: the embedded tables with the crew's own screen-rules.yaml over
+	// them. Nil reads by the embedded ones. It is the shift's own, never shared between crews (ScreenRules).
+	Rules *screenrules.Table
 	// Version is this zmina's version (zmina version), recorded with each role it starts.
 	Version string
 	// Self is the zmina executable, for the hook a socket role runs after its context is trimmed (zmina pending).
@@ -392,6 +395,15 @@ func (s *Shift) has(name string) bool {
 	return err == nil && p.State == tmux.Up
 }
 
+// ScreenRules is the table this shift reads a role's screen by: the crew's own, else the embedded one.
+func (s *Shift) ScreenRules() *screenrules.Table {
+	if s.Rules != nil {
+		return s.Rules
+	}
+
+	return screenrules.Default()
+}
+
 // Views lists every role, the dispatcher first.
 func (s *Shift) Views() []View {
 	held := s.held()
@@ -490,9 +502,9 @@ func (s *Shift) look(name string, held map[string][]string) (View, Reasoning, bo
 
 		if err == nil {
 			if v.Prompt && !s.isCodex(name) {
-				screen = ParseDialog(text)
+				screen = s.ParseDialog(text)
 			}
-			if line := NowLine(text); line != "" {
+			if line := s.NowLine(text); line != "" {
 				v.Now = line
 				v.NowAt = rs.NowAt
 				if v.Now != rs.Now || v.NowAt.IsZero() {
@@ -1237,7 +1249,7 @@ func (s *Shift) Down(name string, o DownOptions) error {
 	}
 
 	if wait {
-		WaitGone(s.Tmux, []string{name}, ExitWait)
+		s.WaitGone([]string{name}, ExitWait)
 	}
 
 	return s.FinishDown(name)
@@ -1250,7 +1262,11 @@ const exitLines = 15
 const answerEvery = 2 * time.Second
 
 // WaitGone waits until none of the roles' claude runs any more, or the timeout, answering an exit dialog on the way.
-func WaitGone(t Tmux, names []string, timeout time.Duration) {
+func (s *Shift) WaitGone(names []string, timeout time.Duration) {
+	waitGone(s.ScreenRules(), s.Tmux, names, timeout)
+}
+
+func waitGone(rules *screenrules.Table, t Tmux, names []string, timeout time.Duration) {
 	answered := map[string]time.Time{}
 
 	for deadline := time.Now().Add(timeout); time.Now().Before(deadline); time.Sleep(300 * time.Millisecond) {
@@ -1263,7 +1279,7 @@ func WaitGone(t Tmux, names []string, timeout time.Duration) {
 
 			running = true
 
-			if time.Since(answered[n]) >= answerEvery && answerExit(t, n) {
+			if time.Since(answered[n]) >= answerEvery && pressExit(rules, t, n) {
 				answered[n] = time.Now()
 			}
 		}
@@ -1274,25 +1290,23 @@ func WaitGone(t Tmux, names []string, timeout time.Duration) {
 	}
 }
 
-// answerExit picks "Exit and stop tasks" when the role's screen asks, and reports whether it did. That is Claude Code's
+// pressExit picks "Exit and stop tasks" when the role's screen asks, and reports whether it did. That is Claude Code's
 // question on exit while background work runs (claude.exit.stop-tasks): its "Exit and stop tasks" answer ends the work
 // with the session, so the session ends on its own and its hooks run, instead of the kill after ExitWait.
-func answerExit(t Tmux, name string) bool {
-	rules := screenrules.Active()
-
+func pressExit(rules *screenrules.Table, t Tmux, name string) bool {
 	screen, err := t.Capture(name, rules.Window(screenrules.Claude, screenrules.ExitDialog, exitLines))
 	if err != nil {
 		return false
 	}
 
-	key, ok := exitKey(screen)
+	key, ok := exitKey(rules, screen)
 
 	return ok && t.Keys(name, key) == nil
 }
 
 // exitKey is the key of the "Exit and stop tasks" answer on a screen that shows the exit question.
-func exitKey(screen string) (string, bool) {
-	hit, ok := screenrules.Active().Test(screenrules.Claude, screenrules.ExitDialog, screen)
+func exitKey(rules *screenrules.Table, screen string) (string, bool) {
+	hit, ok := rules.Test(screenrules.Claude, screenrules.ExitDialog, screen)
 	if !ok {
 		return "", false
 	}

@@ -466,8 +466,8 @@ func (s *Shift) screenFacts(v View, r Reasoning) ScreenFacts {
 
 	if r.ScreenErr == nil {
 		// The usage-limit notice: the bottom rows, as the rules of the engine say how many.
-		window := screenrules.Active().Window(r.Engine, screenrules.UsageLimit, limitLines)
-		if _, hit := limitHit(r.Engine, screenrules.Tail(r.Screen, window)); hit.Rule.ID != "" {
+		window := s.ScreenRules().Window(r.Engine, screenrules.UsageLimit, limitLines)
+		if _, hit := limitHit(s.ScreenRules(), r.Engine, screenrules.Tail(r.Screen, window)); hit.Rule.ID != "" {
 			l := r.said(SourceScreen, hit.Rule.ID, "a usage-limit notice is on its last rows: "+hit.Rule.Means, quote(hit.Line), time.Time{})
 			l.Why = "not part of the status: ls does not show it; the ticker tells the dispatcher once per stretch"
 			f.Limit = &l

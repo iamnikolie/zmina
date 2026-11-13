@@ -40,12 +40,13 @@ func optionOf(rules *screenrules.Table, line string) []string {
 	return hit.Sub
 }
 
-// ParseDialog reads the last numbered list on a screen and the words above it; nil when there is none of two or more
+// ParseDialog reads, by this crew's rules, the last numbered list on a screen and the words above it; nil when there is none of two or more
 // choices numbered from 1. The words that mark a choice, the footer that closes a live dialog, the choices that ask for
 // words and the title mark are the Claude rules' (claude.dialog.*); the geometry is this function's
 // (claude.dialog.parse).
-func ParseDialog(screen string) *Dialog {
-	rules := screenrules.Active()
+func (s *Shift) ParseDialog(screen string) *Dialog { return parseDialog(s.ScreenRules(), screen) }
+
+func parseDialog(rules *screenrules.Table, screen string) *Dialog {
 	lines := strings.Split(strings.TrimRight(screen, "\n"), "\n")
 
 	first, last := -1, -1

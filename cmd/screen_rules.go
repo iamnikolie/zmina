@@ -8,16 +8,6 @@ import (
 	"github.com/iamnikolie/zmina/internal/screenrules"
 )
 
-// useScreenRules puts the crew's screen-rules.yaml over zmina's embedded tables for the rest of this process. A file that
-// does not read is ignored whole — the embedded rules stay in force — and never stops a command or the ticker; zmina
-// doctor says why.
-func useScreenRules(c *crew.Crew) screenrules.Overrides {
-	t, o := screenrules.LoadOverrides(screenrules.Default(), c.Layout().ScreenRules())
-	screenrules.Use(t)
-
-	return o
-}
-
 // checkScreenRules is doctor's line about the crew's screen rules: one line when the file is there, none when it is not.
 func checkScreenRules(c *crew.Crew, add func(name, level, format string, args ...any)) {
 	_, o := screenrules.LoadOverrides(screenrules.Default(), c.Layout().ScreenRules())

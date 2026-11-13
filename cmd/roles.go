@@ -631,7 +631,7 @@ func (a *app) downRoles(names func(s *shift.Shift) ([]string, error), o shift.Do
 			return err
 		}
 
-		shift.WaitGone(s.Tmux, waitFor, shift.ExitWait)
+		s.WaitGone(waitFor, shift.ExitWait)
 	}
 
 	if len(begun) > 0 {
@@ -764,7 +764,7 @@ func (a *app) restart(name string, opts shift.UpOptions, clear bool) error {
 			return err
 		}
 
-		shift.WaitGone(s.Tmux, []string{name}, shift.ExitWait)
+		s.WaitGone([]string{name}, shift.ExitWait)
 	}
 
 	return a.withState(func(s *shift.Shift) error {
@@ -902,7 +902,7 @@ func (a *app) runOwnRestart(name string, own shift.Own, fresh, continueLast, cle
 			return err
 		}
 
-		shift.WaitGone(s.Tmux, []string{name}, shift.ExitWait)
+		s.WaitGone([]string{name}, shift.ExitWait)
 	}
 
 	return a.withState(func(s *shift.Shift) error {
@@ -1076,7 +1076,7 @@ func (a *app) peekCommand() *cobra.Command {
 					}
 				}
 
-				fmt.Fprintln(a.out, compactScreen(text, lines))
+				fmt.Fprintln(a.out, screenReader{s.ScreenRules()}.compactScreen(text, lines))
 
 				return nil
 			})
@@ -1128,9 +1128,9 @@ func isRule(l string) bool {
 // The last n lines are kept. The footer is cut only when it is recognised as such (footerAt); anything else under
 // the input box — a dialog, boxed or not, an option list, any text — keeps the whole screen: a few lines too many
 // cost a few tokens, a lost dialog costs the reader the question it has to answer.
-func compactScreen(text string, n int) string {
+func (r screenReader) compactScreen(text string, n int) string {
 	lines := strings.Split(text, "\n")
-	if end := footerAt(lines); end >= 0 {
+	if end := r.footerAt(lines); end >= 0 {
 		lines = lines[:end]
 	}
 
@@ -1157,7 +1157,7 @@ func compactScreen(text string, n int) string {
 // footer lines (isFooterLine; the first under the rule may be the status line), then the closing rule, then the
 // input line with its draft, then the opening rule. Any line that does not fit, or an input line that reads as a
 // dialog's option, and it is not the input box.
-func footerAt(lines []string) int {
+func (r screenReader) footerAt(lines []string) int {
 	i := len(lines) - 1
 	for i >= 0 && strings.TrimSpace(lines[i]) == "" {
 		i--
@@ -1174,7 +1174,7 @@ func footerAt(lines []string) int {
 
 	closing := i
 	for k := closing + 1; k <= footer; k++ {
-		if !isFooterLine(lines[k], k == closing+1) {
+		if !r.isFooterLine(lines[k], k == closing+1) {
 			return -1
 		}
 	}
@@ -1194,12 +1194,12 @@ func footerAt(lines []string) int {
 		body = body[1:]
 	}
 
-	if len(body) == 0 || !strings.HasPrefix(body[0], "❯") || isOptionLine(body[0]) {
+	if len(body) == 0 || !strings.HasPrefix(body[0], "❯") || r.isOptionLine(body[0]) {
 		return -1
 	}
 
 	for _, l := range body[1:] {
-		if isOptionLine(l) || strings.ContainsAny(l, "❯│┃") {
+		if r.isOptionLine(l) || strings.ContainsAny(l, "❯│┃") {
 			return -1
 		}
 	}
@@ -1209,24 +1209,24 @@ func footerAt(lines []string) int {
 
 // isOptionLine is a line that reads as a dialog's option: a number and a dot or bracket, maybe behind a cursor or a box
 // (claude.peek.option-line).
-func isOptionLine(l string) bool {
-	_, ok := screenrules.Active().Test(screenrules.Claude, screenrules.FooterOption, l)
+func (r screenReader) isOptionLine(l string) bool {
+	_, ok := r.table().Test(screenrules.Claude, screenrules.FooterOption, l)
 
 	return ok
 }
 
 // isFooterLine is a line Claude Code draws under its input box: indented, no box or cursor in it, and either one of
 // its hint lines (claude.peek.hint-*) or — right under the rule — a status line (a path or a [model] in it).
-func isFooterLine(l string, first bool) bool {
+func (r screenReader) isFooterLine(l string, first bool) bool {
 	if strings.TrimSpace(l) == "" {
 		return true
 	}
 
-	if !strings.HasPrefix(l, "  ") || strings.ContainsAny(l, "❯│┃╭╰") || isOptionLine(l) {
+	if !strings.HasPrefix(l, "  ") || strings.ContainsAny(l, "❯│┃╭╰") || r.isOptionLine(l) {
 		return false
 	}
 
-	rules := screenrules.Active()
+	rules := r.table()
 
 	if _, ok := rules.Test(screenrules.Claude, screenrules.FooterHint, l); ok {
 		return true

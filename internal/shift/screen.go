@@ -43,19 +43,19 @@ func (s *Shift) engineOf(name string) string {
 // limitLine is the usage-limit notice at the bottom of a screen as the engine's rules read it: the last row they match,
 // clipped; empty when none does. Claude Code shows a limit as a notice at the bottom; a reply that talks about limits
 // is further up or sits after a ❯ prompt, which is the rule's own skip.
-func limitLine(engine, screen string) string {
-	line, _ := limitHit(engine, screen)
+func limitLine(rules *screenrules.Table, engine, screen string) string {
+	line, _ := limitHit(rules, engine, screen)
 
 	return line
 }
 
 // limitHit is limitLine with the row that matched.
-func limitHit(engine, screen string) (string, screenrules.Hit) {
+func limitHit(rules *screenrules.Table, engine, screen string) (string, screenrules.Hit) {
 	var last screenrules.Hit
 
 	found := false
 
-	for _, h := range screenrules.Active().Scan(engine, screenrules.UsageLimit, screen) {
+	for _, h := range rules.Scan(engine, screenrules.UsageLimit, screen) {
 		if h.N >= 0 {
 			last, found = h, true
 		}
@@ -87,7 +87,7 @@ func (s *Shift) watchScreen(name string, now time.Time) []string {
 
 	// What the role says it is doing, also while it boots.
 	if text, err := s.Tmux.Capture(name, nowLines); err == nil {
-		if line := NowLine(text); line != "" && line != rs.Now {
+		if line := s.NowLine(text); line != "" && line != rs.Now {
 			rs.Now, rs.NowAt = line, now
 		}
 	}
@@ -136,9 +136,9 @@ func (s *Shift) watchScreen(name string, now time.Time) []string {
 	}
 
 	// The usage limit notice: the bottom of the screen, as the engine's rules say how many rows.
-	eng := s.engineOf(name)
-	if text, err := s.Tmux.Capture(name, screenrules.Active().Window(eng, screenrules.UsageLimit, limitLines)); err == nil {
-		limit := limitLine(eng, text)
+	eng, rules := s.engineOf(name), s.ScreenRules()
+	if text, err := s.Tmux.Capture(name, rules.Window(eng, screenrules.UsageLimit, limitLines)); err == nil {
+		limit := limitLine(rules, eng, text)
 
 		if limit != "" && limit != rs.LimitNoted {
 			note := name + ": stopped by a usage limit: " + limit
@@ -159,10 +159,11 @@ var spaceRe = regexp.MustCompile(`\s+`)
 
 // NowLine is the last thing the role said in words on its screen: the last "⏺ …" line that is not a tool call,
 // with the lines it wraps onto, on one line and clipped. Empty when the screen has none. What counts as a line of words, a
-// tool call and a wrapped row is the Claude rules' (claude.now.*); the walk from the bottom is this function's
+// tool call and a wrapped row is this crew's Claude rules' (claude.now.*); the walk from the bottom is this function's
 // (claude.now.line).
-func NowLine(screen string) string {
-	rules := screenrules.Active()
+func (s *Shift) NowLine(screen string) string { return nowLine(s.ScreenRules(), screen) }
+
+func nowLine(rules *screenrules.Table, screen string) string {
 	lines := strings.Split(screen, "\n")
 
 	for i := len(lines) - 1; i >= 0; i-- {
@@ -212,12 +213,14 @@ func (s *Shift) trust(name string) bool {
 		return false
 	}
 
-	text, err := s.Tmux.Capture(name, screenrules.Active().Window(screenrules.Claude, screenrules.TrustQuestion, trustLines))
+	rules := s.ScreenRules()
+
+	text, err := s.Tmux.Capture(name, rules.Window(screenrules.Claude, screenrules.TrustQuestion, trustLines))
 	if err != nil {
 		return false
 	}
 
-	keys := trustKeys(text)
+	keys := trustKeys(rules, text)
 	if keys == nil {
 		return false
 	}
@@ -238,9 +241,7 @@ const trustLines = 30
 // trustKeys is the keys that answer Claude Code's folder-trust question with yes on a screen that shows it: the cursor
 // is moved from the answer it stands on to the one that says yes, and Enter takes it. Nil when the screen shows no such
 // question, or no cursor or no yes in it (claude.trust.answer; the markers are the claude.trust.* rows).
-func trustKeys(screen string) []string {
-	rules := screenrules.Active()
-
+func trustKeys(rules *screenrules.Table, screen string) []string {
 	if _, ok := rules.Test(screenrules.Claude, screenrules.TrustQuestion, screen); !ok {
 		return nil
 	}
