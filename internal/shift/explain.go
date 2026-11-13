@@ -2,6 +2,7 @@ package shift
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -127,14 +128,22 @@ type QueueFacts struct {
 	Lines     int `json:"lines"`
 	Failed    int `json:"failed,omitempty"`
 	Attention int `json:"attention,omitempty"`
-	// InFlight is the head of the line typed into it that has not landed yet.
-	InFlight string `json:"in_flight,omitempty"`
+	// InFlight is the line typed into it that has not landed yet: what it is and how long, never its words.
+	InFlight *InFlightFact `json:"in_flight,omitempty"`
 	// Held is the failed turn that holds the queue, while one does: why and until when.
 	Held *HoldFact `json:"held,omitempty"`
 	// SettlingUntil is when a slash command typed into it has settled; nothing is delivered before.
 	SettlingUntil time.Time `json:"settling_until,omitzero"`
 	// Waits are the other things in the way of a line typed now, in words.
 	Waits []string `json:"waits,omitempty"`
+}
+
+// InFlightFact is a line typed into a role that has not landed: its kind (a line, a doorbell, lines joined into one) and its length
+// in characters. Its words are not printed: they are the owner's or another role's, and an explanation is read by anyone who may
+// read the crew's status.
+type InFlightFact struct {
+	Kind   string `json:"kind"`
+	Length int    `json:"length"`
 }
 
 // HoldFact is a queue held for a failed turn.
@@ -194,8 +203,21 @@ type LastKnown struct {
 // evidenceMax is the most characters of a screen line an explanation quotes.
 const evidenceMax = 120
 
-// quote is a screen line as an explanation quotes it: control characters stripped, white space folded, cut.
-func quote(line string) string { return clipRunes(oneLine(line), evidenceMax) }
+// sessionTag is the random tag a role's lines carry ([zmina:<12 characters>]): it is what tells a line from a role's own session
+// from one another session sends, so it is never quoted.
+var sessionTag = regexp.MustCompile(`\[zmina:[A-Za-z0-9]{12}\]`)
+
+// Quote is a text as an explanation quotes it, and the one way every quotation of a screen row, a line body, a status or a
+// crew's own words goes out: control characters stripped and white space folded first, so that nothing hides in them, then
+// any session tag marked as there and not shown, then cut to evidenceMax characters.
+func Quote(text string) string { return quoteN(text, evidenceMax) }
+
+// quoteN is Quote cut to n characters.
+func quoteN(text string, n int) string {
+	return clipRunes(sessionTag.ReplaceAllString(oneLine(text), "[zmina:…]"), n)
+}
+
+func quote(line string) string { return Quote(line) }
 
 // age is how long before at the look was, in whole seconds, never negative.
 func (r Reasoning) age(at time.Time) int {
@@ -238,7 +260,7 @@ func (r Reasoning) registrySaid(v View) Said {
 		return r.said(SourceRegistry, "status", who+" gives no status", "status is empty", sess.StatusSince())
 	}
 
-	says := who + " says it is " + sess.Status
+	says := who + " says it is " + quote(sess.Status)
 
 	switch waitKind(sess) {
 	case WaitPermission:
@@ -251,7 +273,7 @@ func (r Reasoning) registrySaid(v View) Said {
 		}
 	}
 
-	ev := "status=" + sess.Status
+	ev := "status=" + quote(sess.Status)
 	if sess.WaitingFor != "" {
 		ev += ", waitingFor=" + quote(sess.WaitingFor)
 	}
@@ -281,7 +303,7 @@ func (r Reasoning) hookFailureSaid(sess *registry.Session) Said {
 	case sess == nil:
 		s.Why = "the role has no session file to match it to"
 	case sess.Status != "idle":
-		s.Why = "an older turn's record: the session is " + sess.Status + " now, not idle since that turn"
+		s.Why = "an older turn's record: the session is " + quote(sess.Status) + " now, not idle since that turn"
 	default:
 		s.Why = "an older turn's record: the session went idle at " + sess.StatusSince().UTC().Format(time.RFC3339) +
 			", not within " + hookSkew.String() + " of it"
@@ -376,7 +398,7 @@ func (r Reasoning) decide(v View, hook, reg, scr []Said) (Said, []Said, []Said, 
 	switch {
 	case r.FailureCurrent:
 		decided, hook = hook[0], nil
-		reg[0].Why = "its word is kept (" + v.Status + "); the hook's record adds the error to it"
+		reg[0].Why = "its word is kept (" + quote(v.Status) + "); the hook's record adds the error to it"
 		scr[0].Why = "it does not change the status"
 
 		if v.Prompt {
@@ -468,7 +490,7 @@ func (s *Shift) screenFacts(v View, r Reasoning) ScreenFacts {
 		// The usage-limit notice: the bottom rows, as the rules of the engine say how many.
 		window := s.ScreenRules().Window(r.Engine, screenrules.UsageLimit, limitLines)
 		if _, hit := limitHit(s.ScreenRules(), r.Engine, screenrules.Tail(r.Screen, window)); hit.Rule.ID != "" {
-			l := r.said(SourceScreen, hit.Rule.ID, "a usage-limit notice is on its last rows: "+hit.Rule.Means, quote(hit.Line), time.Time{})
+			l := r.said(SourceScreen, quote(hit.Rule.ID), "a usage-limit notice is on its last rows: "+quoteN(hit.Rule.Means, 200), quote(hit.Line), time.Time{})
 			l.Why = "not part of the status: ls does not show it; the ticker tells the dispatcher once per stretch"
 			f.Limit = &l
 		}
@@ -509,7 +531,15 @@ func (s *Shift) queueFacts(v View, r Reasoning, rs *RoleState) QueueFacts {
 	q := QueueFacts{Lines: len(rs.Inbox), Failed: len(rs.Failed), Attention: rs.attention()}
 
 	if rs.Sent != nil {
-		q.InFlight = clipRunes(oneLine(rs.Sent.Line), 60)
+		q.InFlight = &InFlightFact{Kind: "line", Length: len([]rune(rs.Sent.Line))}
+
+		switch {
+		case IsBell(rs.Sent.Line):
+			q.InFlight.Kind = "doorbell"
+		case len(rs.Sent.Parts) > 0:
+			q.InFlight.Kind = "lines joined into one"
+		}
+
 		q.Waits = append(q.Waits, "a line typed into it has not landed yet")
 	}
 
@@ -537,7 +567,7 @@ func (s *Shift) queueFacts(v View, r Reasoning, rs *RoleState) QueueFacts {
 
 	switch v.Status {
 	case "busy", "shell", "working":
-		q.Waits = append(q.Waits, "it is "+v.Status+": a line is typed when its turn ends")
+		q.Waits = append(q.Waits, "it is "+quote(v.Status)+": a line is typed when its turn ends")
 	case "waiting":
 		q.Waits = append(q.Waits, "it waits on a dialog: nothing is typed into a dialog")
 	}
@@ -594,14 +624,14 @@ func threshold(name string, limit, size int, then string) string {
 
 // restartFacts are the restarts and trims that were begun and not finished.
 func (s *Shift) restartFacts(v View, rs *RoleState) RestartFacts {
-	f := RestartFacts{Asked: rs.RestartAsked, AskedWhy: rs.RestartWhy, Due: rs.RestartDue != "", Trim: rs.TrimPending}
+	f := RestartFacts{Asked: rs.RestartAsked, AskedWhy: quoteN(rs.RestartWhy, 80), Due: rs.RestartDue != "", Trim: rs.TrimPending}
 
 	var words []string
 
 	if p := rs.Pending; p != nil {
 		f.Pending = p.Kind
 		if p.Why != "" {
-			f.Pending += ": " + clipRunes(oneLine(p.Why), 80)
+			f.Pending += ": " + quoteN(p.Why, 80)
 		}
 
 		words = append(words, "a "+p.Kind+" the ticker began "+p.Claim.UTC().Format(time.RFC3339)+" is waiting for the role to end")
@@ -610,7 +640,7 @@ func (s *Shift) restartFacts(v View, rs *RoleState) RestartFacts {
 	if !rs.RestartAsked.IsZero() {
 		w := "it was asked for its note before a restart at " + rs.RestartAsked.UTC().Format(time.RFC3339)
 		if rs.RestartWhy != "" {
-			w += " (" + clipRunes(oneLine(rs.RestartWhy), 80) + ")"
+			w += " (" + quoteN(rs.RestartWhy, 80) + ")"
 		}
 
 		words = append(words, w)
@@ -678,7 +708,7 @@ func summary(v View, e Explained) string {
 			status = "no status"
 		}
 
-		return fmt.Sprintf("up, %s: decided by the %s (%s)", status, e.Decided.Source, e.Decided.Kind)
+		return fmt.Sprintf("up, %s: decided by the %s (%s)", quote(status), e.Decided.Source, quote(e.Decided.Kind))
 	default:
 		// What tmux said already starts with the state: "down: no session".
 		return e.Decided.Says

@@ -81,22 +81,11 @@ func lastEvent(s *shift.Shift, role string) *explainEvent {
 
 	for i := len(evs) - 1; i >= 0; i-- {
 		if lastEventKinds[evs[i].Event] {
-			return &explainEvent{At: evs[i].TS, Event: evs[i].Event, Detail: clip(oneLineText(evs[i].Detail), 160)}
+			return &explainEvent{At: evs[i].TS, Event: evs[i].Event, Detail: shift.Quote(evs[i].Detail)}
 		}
 	}
 
 	return nil
-}
-
-// oneLineText folds white space to single spaces, newlines and control characters out.
-func oneLineText(s string) string {
-	return strings.Join(strings.Fields(strings.Map(func(r rune) rune {
-		if r < ' ' && r != '\t' && r != '\n' {
-			return -1
-		}
-
-		return r
-	}, s)), " ")
 }
 
 // when is a moment in the crew's own time, with how long before it was: "12:03:10 (4m ago)".
@@ -257,8 +246,8 @@ func writeQueue(w io.Writer, out explainOut) {
 		parts = append(parts, strings.Join(failedMarks(shift.View{Failed: q.Failed, Attention: q.Attention}), ", "))
 	}
 
-	if q.InFlight != "" {
-		parts = append(parts, fmt.Sprintf("typed and not landed: %q", q.InFlight))
+	if f := q.InFlight; f != nil {
+		parts = append(parts, fmt.Sprintf("typed and not landed: a %s of %d characters", f.Kind, f.Length))
 	}
 
 	parts = append(parts, q.Waits...)

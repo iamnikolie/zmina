@@ -100,3 +100,15 @@ func overrideWords(o screenrules.Overrides) string {
 
 	return words
 }
+
+// oneLineText folds white space to single spaces and drops control characters: a reason that came out of a file is printed as one
+// line, and a control byte in a terminal is a command.
+func oneLineText(s string) string {
+	return strings.Join(strings.Fields(strings.Map(func(r rune) rune {
+		if r < ' ' && r != '\t' && r != '\n' {
+			return -1
+		}
+
+		return r
+	}, s)), " ")
+}

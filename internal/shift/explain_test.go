@@ -388,7 +388,8 @@ func TestExplainSaysWhatHoldsTheQueue(t *testing.T) {
 	rs.SlashAt = *f.now
 
 	_, e = look(t, f)
-	assert.Equal(t, "[dispatcher] first second", e.Queue.InFlight)
+	require.NotNil(t, e.Queue.InFlight)
+	assert.Equal(t, InFlightFact{Kind: "line", Length: len([]rune("[dispatcher] first\nsecond"))}, *e.Queue.InFlight)
 	assert.Contains(t, e.Queue.Waits, "a line typed into it has not landed yet")
 	assert.Contains(t, e.Queue.Waits, "a slash command typed into it is settling")
 	assert.True(t, e.Queue.SettlingUntil.Equal(f.now.Add(slashSettle)))
@@ -522,5 +523,93 @@ func TestExplainAndTheWatchReadTheLimitNoticeFromTheSameRows(t *testing.T) {
 			assert.Contains(t, rec.asked, 20, "the ticker captures just the rows the rule names")
 			assert.Contains(t, rec.asked, screenrules.MaxLastLines, "explain captures the most a rule may name")
 		})
+	}
+}
+
+// everything is what explain says of a role, as the owner would read it, text and JSON together.
+func everything(t *testing.T, e Explained) string { return mustJSON(t, e) }
+
+// A session tag — the random [zmina:<12 characters>] a role's lines carry — is never quoted by explain: not in a screen row,
+// not in the words last said, not in a question, not in an event's words.
+func TestExplainRedactsSessionTags(t *testing.T) {
+	f := idleRole(t)
+
+	f.tm.screen = strings.Join([]string{
+		"⏺ [zmina:aaaaaaaaaaaa] I read the line and went on.",
+		"⎿ 5-hour limit reached [zmina:bbbbbbbbbbbb] resets 9pm",
+		"❯ ",
+	}, "\n")
+
+	_, e := look(t, f)
+	out := everything(t, e)
+
+	assert.Contains(t, out, "[zmina:…]", "the tag is marked as there, not shown")
+
+	for _, tag := range []string{"aaaaaaaaaaaa", "bbbbbbbbbbbb"} {
+		assert.NotContains(t, out, tag)
+	}
+
+	// The last row of a screen with no input line, and a dialog's question.
+	f2 := fixtureWith(t, crewYAML)
+	require.NoError(t, f2.s.Up("designer"))
+	f2.waitingOn("designer", "input needed")
+	f2.tm.screen = "Which one [zmina:cccccccccccc]?\n❯ 1. Yes\n  2. No\nEnter to select · [zmina:dddddddddddd] · Esc to cancel"
+
+	_, e2 := look(t, f2)
+	out2 := everything(t, e2)
+
+	for _, tag := range []string{"cccccccccccc", "dddddddddddd"} {
+		assert.NotContains(t, out2, tag)
+	}
+
+	// Only the tag's own form is redacted: a word that is not one stays.
+	assert.Equal(t, "[zmina:…] and [zmina:short] and zmina:aaaaaaaaaaaa", Quote("[zmina:aaaaaaaaaaaa] and [zmina:short] and zmina:aaaaaaaaaaaa"))
+	assert.Equal(t, "[zmina:…]", Quote("[zmina:aa\x00aaaaaaaaaa]"), "stripped of control characters first, so a tag cannot hide in them")
+}
+
+// The line typed into a role that has not landed is not printed at all: its kind and its length only.
+func TestExplainDoesNotPrintTheLineInFlight(t *testing.T) {
+	f := idleRole(t)
+	f.s.State.Role("designer").Sent = &Sent{Line: "[dispatcher] the owner's private words [zmina:eeeeeeeeeeee]", At: *f.now}
+
+	_, e := look(t, f)
+	out := everything(t, e)
+
+	assert.NotContains(t, out, "private words")
+	assert.NotContains(t, out, "dispatcher")
+	assert.NotContains(t, out, "eeeeeeeeeeee")
+	require.NotNil(t, e.Queue.InFlight)
+	assert.Equal(t, "line", e.Queue.InFlight.Kind)
+	assert.Equal(t, len([]rune("[dispatcher] the owner's private words [zmina:eeeeeeeeeeee]")), e.Queue.InFlight.Length)
+}
+
+// What explain quotes from the session file and from a crew's override — a status, a row's words — goes through the same
+// stripping and bound as a screen line.
+func TestExplainBoundsWhatAFileAndAnOverrideSay(t *testing.T) {
+	f := idleRole(t)
+	f.rg.byPID[f.tm.up["designer"]].Status = "idle\x1b[31m\a" + strings.Repeat("s", 400)
+	f.rg.byPID[f.tm.up["designer"]].WaitingFor = "x\x1b]0;title\a" + strings.Repeat("w", 400)
+
+	rules, err := screenrules.NewTable([]screenrules.Rule{{ID: "claude.test.limit", Engine: screenrules.Claude, Sets: screenrules.UsageLimit,
+		Means: "a\x1b[31m wording " + strings.Repeat("m", 400), Match: screenrules.Match{Contains: "limit"}}})
+	require.NoError(t, err)
+
+	f.s.Rules = rules
+	f.tm.screen = "5-hour limit reached"
+
+	v, e := look(t, f)
+	require.NotNil(t, e.Screen.Limit)
+	assert.NotContains(t, everything(t, e), "\x1b")
+	assert.NotContains(t, everything(t, e), "\a")
+
+	for name, said := range map[string]string{"registry says": e.Decided.Says, "evidence": e.Decided.Evidence, "limit says": e.Screen.Limit.Says,
+		"limit kind": e.Screen.Limit.Kind, "summary": e.Summary} {
+		assert.LessOrEqual(t, len([]rune(said)), 320, name)
+	}
+
+	assert.Contains(t, v.Status, "idle")
+
+	for _, w := range e.Queue.Waits {
+		assert.LessOrEqual(t, len([]rune(w)), 200, w)
 	}
 }
