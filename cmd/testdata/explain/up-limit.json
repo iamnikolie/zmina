@@ -1,0 +1,74 @@
+{
+  "status": "idle (last turn ended in an API error, usage limit, resets Sat 15:00 UTC, queue held until 15:00 UTC: rate_limit: You've hit your limit · resets 3:00pm (UTC))",
+  "shows": "up idle (last turn ended in an API error, usage limit, resets Sat 15:00 UTC, queue held until 15:00 UTC: rate_limit: You've hit your limit · resets 3:00pm (UTC))",
+  "role": "dev",
+  "state": "up",
+  "summary": "up, idle: decided by the hook (StopFailure)",
+  "decided": {
+    "source": "hook",
+    "kind": "StopFailure",
+    "says": "its last turn ended in an API error: rate_limit: You've hit your limit · resets 3:00pm (UTC)",
+    "evidence": "record of session sid-dev- written by the StopFailure hook",
+    "at": "2026-10-24T12:00:00Z",
+    "age_seconds": 240
+  },
+  "lost": [
+    {
+      "source": "registry",
+      "kind": "status",
+      "says": "its Claude Code session file says it is idle",
+      "evidence": "status=idle, pid=PID",
+      "at": "2026-10-24T12:00:00Z",
+      "age_seconds": 240,
+      "why": "its word is kept (idle); the hook's record adds the error to it"
+    },
+    {
+      "source": "screen",
+      "kind": "claude.input.line",
+      "says": "an input line is on the screen: the role is at its prompt or in a turn, not at a dialog",
+      "why": "it does not change the status"
+    }
+  ],
+  "screen": {
+    "read": true,
+    "input": {
+      "source": "screen",
+      "kind": "claude.input.line",
+      "says": "an input line is on the screen: the role is at its prompt or in a turn, not at a dialog"
+    },
+    "draft": "empty",
+    "limit": {
+      "source": "screen",
+      "kind": "claude.limit.notice",
+      "says": "a usage-limit notice is on its last rows: Claude Code tells that a usage limit stops the role (5-hour, weekly, credit, extra usage)",
+      "evidence": "⎿ 5-hour limit reached ∙ resets 3pm",
+      "why": "not part of the status: ls does not show it; the ticker tells the dispatcher once per stretch"
+    },
+    "now": {
+      "source": "screen",
+      "kind": "claude.now.line",
+      "says": "the last words it said",
+      "evidence": "Working on the exporter.",
+      "at": "2026-10-24T12:04:00Z"
+    }
+  },
+  "queue": {
+    "lines": 0,
+    "held": {
+      "kind": "limit",
+      "text": "rate_limit: You've hit your limit · resets 3:00pm (UTC)",
+      "why": "a usage limit: the lines queued for it wait until Sat 15:00 UTC (at least 5m, at most 6h)",
+      "until": "2026-10-24T15:00:00Z",
+      "at": "2026-10-24T12:00:00Z"
+    }
+  },
+  "context": {
+    "tokens": 0,
+    "context_max": 0,
+    "context_action": "compact",
+    "restart_at": 250000,
+    "restart_done": 150000,
+    "words": "its conversation size is not known; context_max off; restart_at 250k; restart_done 150k"
+  },
+  "restart": {}
+}

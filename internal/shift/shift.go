@@ -399,102 +399,143 @@ func (s *Shift) Views() []View {
 	var out []View
 
 	for _, name := range s.Names() {
-		r, err := s.Role(name)
-		if err != nil {
-			continue
+		if v, _, ok := s.look(name, held); ok {
+			out = append(out, v)
 		}
-
-		rs := s.State.Role(name)
-		v := View{Runtime: r.Runtime, Profile: r.Profile, Role: name, Session: r.Session, Keep: r.Keep, About: r.About, Dir: r.Dir, State: PresenceDown,
-			Tasks: held[name], Inbox: len(rs.Inbox), Failed: len(rs.Failed), Attention: rs.attention(), NextRun: rs.NextRun,
-			Expires: r.ExpiresAt(), Broken: rs.Broken, ContextMax: r.ContextLimit(), Asleep: s.Asleep(name)}
-		if rs.Dir != "" {
-			v.Dir = rs.Dir
-		} else if err := r.DirErr(); err != nil {
-			v.Problem = err.Error()
-		}
-
-		var sess *registry.Session
-
-		p, perr := s.probe(name)
-
-		switch {
-		case perr != nil:
-			v.State, v.Problem = PresenceUnknown, perr.Error()
-		case p.State == tmux.Up:
-			v.State, v.PID = PresenceUp, p.PID
-
-			if sess, err = s.registryFor(name).ByPID(p.PID); err != nil {
-				v.Status = "unknown"
-
-				// Only a file that does not read is said: another error of the registry is not the file's.
-				if bad := (*registry.BadFileError)(nil); errors.As(err, &bad) {
-					v.StatusError = err.Error()
-				}
-			}
-		case p.State == tmux.Dead:
-			v.State = PresenceDead
-		default:
-			if sess = s.registryFor(name).LiveByName(r.Session); sess != nil {
-				v.State, v.PID = PresenceOutside, sess.PID
-			}
-		}
-
-		if sess != nil {
-			v.Status, v.SessionID, v.Since = sess.Status, sess.SessionID, sess.StatusSince()
-			v.WaitingFor = waitKind(sess)
-			turn, _ := s.registryFor(name).Last(sess.SessionID)
-			v.Context = turn.Context
-		}
-
-		if v.State == PresenceUp {
-			v.Now, v.NowAt = rs.Now, rs.NowAt
-			if s.isCodex(name) {
-				v.Prompt = sess != nil && sess.Status == "waiting"
-			} else if _, ok, err := s.Tmux.Prompt(name); err == nil && !ok {
-				v.Prompt = true
-			}
-
-			var screen *Dialog
-
-			if text, err := s.Tmux.Capture(name, nowLines); err == nil {
-				if v.Prompt && !s.isCodex(name) {
-					screen = ParseDialog(text)
-				}
-				if line := NowLine(text); line != "" {
-					v.Now = line
-					v.NowAt = rs.NowAt
-					if v.Now != rs.Now || v.NowAt.IsZero() {
-						v.NowAt = s.Now()
-					}
-				}
-			}
-
-			if f := s.failureFor(name, sess); f != nil {
-				v.TurnError = f.Text()
-
-				if c := f.Class(); c.Kind != KindTransient {
-					v.TurnErrorKind, v.TurnErrorReset = string(c.Kind), c.Reset
-
-					// In the crew's location, as every time the owner reads is: the instant is the same.
-					if f.holds(s.Now()) {
-						v.TurnErrorHeldUntil = f.holdEnd().In(s.Crew.Location())
-					}
-				}
-			}
-
-			// The question its hook recorded, when that is the one on screen; else what the screen reads as.
-			if v.Prompt && !s.isCodex(name) {
-				v.Dialog = s.dialogFor(name, sess, screen)
-			}
-		}
-
-		v.Rotation = s.rotationView(name)
-
-		out = append(out, v)
 	}
 
 	return out
+}
+
+// Look is one role's view and what it was made from (Reasoning): the very look Views takes of it, so that what explains a
+// status can never differ from the status listed. False for a name that is no role of the crew.
+func (s *Shift) Look(name string) (View, Reasoning, bool) { return s.look(name, s.held()) }
+
+// look is the decision of what a role is and what it is doing: from tmux (is it up), from the registry's session file (its
+// status, what it waits on), from the hooks' records (the turn that ended on an API error, the question asked) and, for
+// what none of them says, from the screen (an input line or none, the question drawn, the last words said). It keeps each
+// source's word beside the view (Reasoning), and nothing else is read or decided for the view.
+func (s *Shift) look(name string, held map[string][]string) (View, Reasoning, bool) {
+	r, err := s.Role(name)
+	if err != nil {
+		return View{}, Reasoning{}, false
+	}
+
+	// The look has no clock of its own where the shift has none: the moment is then zero, and nothing is aged by it.
+	why := Reasoning{At: s.cardNow(), Engine: s.engineOf(name)}
+	rs := s.State.Role(name)
+	v := View{Runtime: r.Runtime, Profile: r.Profile, Role: name, Session: r.Session, Keep: r.Keep, About: r.About, Dir: r.Dir, State: PresenceDown,
+		Tasks: held[name], Inbox: len(rs.Inbox), Failed: len(rs.Failed), Attention: rs.attention(), NextRun: rs.NextRun,
+		Expires: r.ExpiresAt(), Broken: rs.Broken, ContextMax: r.ContextLimit(), Asleep: s.Asleep(name)}
+	if rs.Dir != "" {
+		v.Dir = rs.Dir
+	} else if err := r.DirErr(); err != nil {
+		v.Problem = err.Error()
+	}
+
+	var sess *registry.Session
+
+	p, perr := s.probe(name)
+	why.Pane, why.ProbeErr = p, perr
+
+	switch {
+	case perr != nil:
+		v.State, v.Problem = PresenceUnknown, perr.Error()
+	case p.State == tmux.Up:
+		v.State, v.PID = PresenceUp, p.PID
+
+		if sess, err = s.registryFor(name).ByPID(p.PID); err != nil {
+			v.Status = "unknown"
+			why.SessionErr = err
+
+			// Only a file that does not read is said: another error of the registry is not the file's.
+			if bad := (*registry.BadFileError)(nil); errors.As(err, &bad) {
+				v.StatusError = err.Error()
+			}
+		}
+	case p.State == tmux.Dead:
+		v.State = PresenceDead
+	default:
+		if sess = s.registryFor(name).LiveByName(r.Session); sess != nil {
+			v.State, v.PID = PresenceOutside, sess.PID
+		}
+	}
+
+	if sess != nil {
+		why.Session = sess
+		v.Status, v.SessionID, v.Since = sess.Status, sess.SessionID, sess.StatusSince()
+		v.WaitingFor = waitKind(sess)
+		turn, _ := s.registryFor(name).Last(sess.SessionID)
+		v.Context = turn.Context
+	}
+
+	if v.State == PresenceUp {
+		v.Now, v.NowAt = rs.Now, rs.NowAt
+
+		if s.isCodex(name) {
+			v.Prompt = sess != nil && sess.Status == "waiting"
+		} else {
+			_, ok, err := s.Tmux.Prompt(name)
+			why.InputKnown, why.InputPresent = err == nil, ok
+
+			if err == nil && !ok {
+				v.Prompt = true
+			}
+		}
+
+		var screen *Dialog
+
+		text, err := s.Tmux.Capture(name, nowLines)
+		why.Screen, why.ScreenErr = text, err
+
+		if err == nil {
+			if v.Prompt && !s.isCodex(name) {
+				screen = ParseDialog(text)
+			}
+			if line := NowLine(text); line != "" {
+				v.Now = line
+				v.NowAt = rs.NowAt
+				if v.Now != rs.Now || v.NowAt.IsZero() {
+					v.NowAt = s.Now()
+				}
+			}
+		}
+
+		why.ScreenDialog = screen
+
+		// The record its StopFailure hook left of this session, and whether it is the turn the role is idle since.
+		f, fwhy := s.failureLook(name, sess)
+		why.Failure, why.FailureWhy = f, fwhy
+
+		if f.current(sess) {
+			why.FailureCurrent = true
+			v.TurnError = f.Text()
+
+			if c := f.Class(); c.Kind != KindTransient {
+				v.TurnErrorKind, v.TurnErrorReset = string(c.Kind), c.Reset
+
+				// In the crew's location, as every time the owner reads is: the instant is the same.
+				if f.holds(s.Now()) {
+					v.TurnErrorHeldUntil = f.holdEnd().In(s.Crew.Location())
+				}
+			}
+		}
+
+		// The question its hook recorded, when that is the one on screen; else what the screen reads as.
+		if v.Prompt && !s.isCodex(name) {
+			q, qcur, qwhy := s.askedLook(name, sess)
+			why.Question, why.QuestionCurrent, why.QuestionWhy = q, qcur, qwhy
+
+			v.Dialog = screen
+			if qcur {
+				v.Dialog = askedDialog(q, screen)
+			}
+		}
+	}
+
+	v.Rotation = s.rotationView(name)
+
+	return v, why, true
 }
 
 // Command is the claude command line of a role. The name goes before the first message and again after

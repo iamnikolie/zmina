@@ -173,14 +173,7 @@ func (a *app) lsCompact(s *shift.Shift, views []shift.View, all bool) error {
 			role += " *"
 		}
 
-		state := stateCell(v)
-		if v.Status != "" {
-			state += " " + statusCell(v)
-		}
-
-		if v.Prompt {
-			state += " (dialog)"
-		}
+		state := roleCell(v)
 
 		// A rotation in flight is said where the status is.
 		if mark := rotationMark(v, time.Now()); mark != "" {
@@ -212,6 +205,21 @@ func (a *app) lsCompact(s *shift.Shift, views []shift.View, all bool) error {
 	}
 
 	return nil
+}
+
+// roleCell is a role's state and status as the compact zmina ls writes them, and zmina explain says them again: `up idle
+// (dialog)`. Both read it from the one look at the role (shift.Look).
+func roleCell(v shift.View) string {
+	state := stateCell(v)
+	if v.Status != "" {
+		state += " " + statusCell(v)
+	}
+
+	if v.Prompt {
+		state += " (dialog)"
+	}
+
+	return state
 }
 
 func countDown(views []shift.View) int {

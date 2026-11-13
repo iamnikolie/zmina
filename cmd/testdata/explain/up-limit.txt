@@ -1,0 +1,11 @@
+dev: up idle (last turn ended in an API error, usage limit, resets Sat 15:00 UTC, queue held until 15:00 UTC: rate_limit: You've hit your limit · resets 3:00pm (UTC))
+status shown: idle (last turn ended in an API error, usage limit, resets Sat 15:00 UTC, queue held until 15:00 UTC: rate_limit: You've hit your limit · resets 3:00pm (UTC))
+decided by hook record StopFailure: its last turn ended in an API error: rate_limit: You've hit your limit · resets 3:00pm (UTC) [record of session sid-dev- written by the StopFailure hook] at 12:00:00 (4m ago)
+consulted and not decisive, in the order they are trusted (hook record, session file, screen):
+  - session file status: its Claude Code session file says it is idle [status=idle, pid=PID] at 12:00:00 (4m ago) — not decisive: its word is kept (idle); the hook's record adds the error to it
+  - screen rule claude.input.line: an input line is on the screen: the role is at its prompt or in a turn, not at a dialog — not decisive: it does not change the status
+screen: input line empty
+screen: rule claude.limit.notice matched "⎿ 5-hour limit reached ∙ resets 3pm": a usage-limit notice is on its last rows: Claude Code tells that a usage limit stops the role (5-hour, weekly, credit, extra usage)
+screen: last said "Working on the exporter." since 12:04:00
+queue: held for a failed turn (rate_limit: You've hit your limit · resets 3:00pm (UTC)): a usage limit: the lines queued for it wait until Sat 15:00 UTC (at least 5m, at most 6h); 0 lines waiting
+context: its conversation size is not known; context_max off; restart_at 250k; restart_done 150k
