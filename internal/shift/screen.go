@@ -152,8 +152,10 @@ func (s *Shift) watchScreen(name string, now time.Time) []string {
 	return notes
 }
 
-// nowLines is how much of the screen NowLine reads.
-const nowLines = 80
+// nowLines is how much of the screen a look captures (NowLine reads it, and zmina explain reads the usage-limit notice out of
+// it): the most any row of a screen rule may read (screenrules.MaxLastLines), so that the ticker's watch, which captures just
+// what its rule asks, and explain, which cuts the same rows out of this capture, cannot see different rows.
+const nowLines = screenrules.MaxLastLines
 
 var spaceRe = regexp.MustCompile(`\s+`)
 

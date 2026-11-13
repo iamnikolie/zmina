@@ -86,8 +86,6 @@ rules:
     match:
       regexp: '(?i)^(❯\s*)?(\d\.\s*)?(yes, i trust this folder|yes, proceed|no, exit)'
       trim: true
-    region:
-      last_lines: 30
     priority: 100
     since: Claude Code 2.1
 

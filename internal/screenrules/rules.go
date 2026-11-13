@@ -46,6 +46,26 @@ const (
 //go:embed rules/*.yaml
 var embedded embed.FS
 
+// The bounds on a row. A crew's file is read by every command and every beat of the ticker, over every pane, so what a row
+// may cost is bounded where it is read: a regexp's source and the program it unrolls to, the number of rows in the file, how
+// far up the screen a row reads. The embedded rows are far inside them (TestEmbeddedRowsAreWellInsideTheBounds).
+const (
+	// maxRegexpSource is the longest regexp or literal of a row, in bytes.
+	maxRegexpSource = 512
+	// maxProgram is the most instructions a regexp may compile to, repeats unrolled.
+	maxProgram = 1000
+	// maxOverrideRows is the most rows an override file lists.
+	maxOverrideRows = 64
+	// MaxLastLines is the most rows from the bottom a row may read: the capture both the ticker's watch and zmina explain take
+	// of a screen. A row that asked for more would be read differently by the two.
+	MaxLastLines = 80
+
+	maxID, maxMeans, maxNote, maxVersion, maxSkipPrefix = 64, 512, 1024, 128, 64
+)
+
+// idForm is what an id looks like: it is printed in notes, doctor and zmina explain, and named by overrides.
+var idForm = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
 // Rule is one row of a table, as the file writes it.
 type Rule struct {
 	// ID names the row: engine.topic.what, unique over all tables. An override file refers to a row by it.
@@ -132,6 +152,14 @@ type effectInfo struct {
 	doc string
 	// groups is the fewest groups a regexp row of the effect must have: the reader indexes them.
 	groups int
+	// codex is that the Codex readers read the effect too; every other effect is read only for a Claude screen.
+	codex bool
+	// text is that the reader tests the effect on the region's text as a whole, not a row at a time: the only scope a row of
+	// it may name.
+	text bool
+	// lastLines and inputBox are the regions the reader honours: how much of the bottom it captures, and the input box. A
+	// row names no region its reader ignores.
+	lastLines, inputBox bool
 }
 
 // Effect names: what a row sets. Each is read by one piece of code, named in its doc.
@@ -159,26 +187,30 @@ const (
 )
 
 var effects = map[string]effectInfo{
-	UsageLimit:    {doc: "a line of the screen's bottom that tells a usage limit stops the role (the ticker's usage-limit note)"},
-	SayMark:       {doc: "the start of a line the role says in words (NowLine); Rest is what follows"},
-	ToolCall:      {doc: "the words after a say mark that are a tool call, not words (NowLine skips such a line)"},
-	SayCont:       {doc: "a row wrapped under a say line (NowLine joins it), tested as it stands on the screen"},
-	SayStop:       {doc: "a row that ends the rows wrapped under a say line (NowLine)"},
-	TrustQuestion: {doc: "the screen asks whether to trust the folder (the answer to it is pressed for a worktree zmina made)"},
+	UsageLimit: {doc: "a line of the screen's bottom that tells a usage limit stops the role (the ticker's usage-limit note)",
+		codex: true, lastLines: true, inputBox: true},
+	SayMark:  {doc: "the start of a line the role says in words (NowLine); Rest is what follows"},
+	ToolCall: {doc: "the words after a say mark that are a tool call, not words (NowLine skips such a line)"},
+	SayCont:  {doc: "a row wrapped under a say line (NowLine joins it), tested as it stands on the screen"},
+	SayStop:  {doc: "a row that ends the rows wrapped under a say line (NowLine)"},
+	TrustQuestion: {doc: "the screen asks whether to trust the folder (the answer to it is pressed for a worktree zmina made)",
+		text: true, lastLines: true},
 	TrustOption:   {doc: "an answer of the trust question"},
 	TrustSelected: {doc: "the answer the cursor stands on"},
 	TrustYes:      {doc: "the answer that says yes (tested lower-cased)"},
-	ExitDialog:    {doc: "the exit question's answer that stops the background work; group 1 is its key", groups: 1},
-	DialogOption:  {doc: "a numbered choice of a dialog; groups: 1 the cursor, 2 the number, 3 the words", groups: 3},
-	DialogFooter:  {doc: "the footer line a live dialog ends with"},
-	DialogFree:    {doc: "a choice that asks for words, not a pick (the terminal answers it)"},
-	DialogTitle:   {doc: "the title mark of a dialog's question"},
-	FooterHint:    {doc: "a hint Claude Code draws under its input box (peek cuts the footer)"},
-	FooterOption:  {doc: "a line that reads as a dialog's option (peek keeps a dialog whole)"},
-	FooterModel:   {doc: "a status line's model name in brackets"},
-	FooterPath:    {doc: "the start of a status line's path"},
-	ChatRow:       {doc: "a numbered row of the question dialog, for answering it from the browser chat; groups: 1 cursor, 2 number, 3 tick, 4 words", groups: 4},
-	ChatFrame:     {doc: "the frame a dialog's question is drawn in; removed before its words are read"},
+	ExitDialog: {doc: "the exit question's answer that stops the background work; group 1 is its key", groups: 1, text: true,
+		lastLines: true},
+	DialogOption: {doc: "a numbered choice of a dialog; groups: 1 the cursor, 2 the number, 3 the words", groups: 3},
+	DialogFooter: {doc: "the footer line a live dialog ends with"},
+	DialogFree:   {doc: "a choice that asks for words, not a pick (the terminal answers it)"},
+	DialogTitle:  {doc: "the title mark of a dialog's question"},
+	FooterHint:   {doc: "a hint Claude Code draws under its input box (peek cuts the footer)"},
+	FooterOption: {doc: "a line that reads as a dialog's option (peek keeps a dialog whole)"},
+	FooterModel:  {doc: "a status line's model name in brackets"},
+	FooterPath:   {doc: "the start of a status line's path"},
+	ChatRow: {doc: "a numbered row of the question dialog, for answering it from the browser chat; groups: 1 cursor, 2 number, 3 tick, 4 words",
+		groups: 4},
+	ChatFrame: {doc: "the frame a dialog's question is drawn in; removed before its words are read"},
 }
 
 // The ids of the rows of kind builtin: the logic that stays in Go, each named where it runs.
@@ -250,8 +282,8 @@ func compile(r Rule) (*compiled, error) {
 		return fail("no id")
 	}
 
-	if strings.TrimSpace(r.ID) != r.ID || strings.ContainsAny(r.ID, " \t\n") {
-		return fail("the id has white space in it")
+	if !idForm.MatchString(r.ID) {
+		return fail("an id is letters, digits, dots, dashes and underscores, at most %d characters, starting with a letter or digit", maxID)
 	}
 
 	switch r.Engine {
@@ -262,6 +294,15 @@ func compile(r Rule) (*compiled, error) {
 
 	if r.Means == "" {
 		return fail("no means: say in words what it shows")
+	}
+
+	for _, f := range []struct {
+		name, text string
+		most       int
+	}{{"means", r.Means, maxMeans}, {"note", r.Note, maxNote}, {"since", r.Since, maxVersion}, {"until", r.Until, maxVersion}} {
+		if len(f.text) > f.most {
+			return fail("%s is longer than %d bytes", f.name, f.most)
+		}
 	}
 
 	if r.Kind == "" {
@@ -285,20 +326,44 @@ func compile(r Rule) (*compiled, error) {
 		return fail("sets %q is no flag zmina reads (%s)", r.Sets, strings.Join(Effects(), ", "))
 	}
 
-	if r.Scope == "" {
-		r.Scope = ScopeLine
+	if r.Engine == Codex && !info.codex {
+		return fail("%s is read only for a Claude screen: a row of the codex table that sets it would never be evaluated", r.Sets)
 	}
 
-	if r.Scope != ScopeLine && r.Scope != ScopeText {
-		return fail("scope is %s or %s, not %q", ScopeLine, ScopeText, r.Scope)
+	// The scope a reader tests an effect at is the effect's: a row may say it, never choose another.
+	want := ScopeLine
+	if info.text {
+		want = ScopeText
+	}
+
+	if r.Scope == "" {
+		r.Scope = want
+	}
+
+	if r.Scope != want {
+		return fail("scope %q: a row that sets %s is tested %s at a time, no reader tests it otherwise", r.Scope, r.Sets,
+			map[string]string{ScopeLine: "a line", ScopeText: "as a whole text"}[want])
 	}
 
 	if r.Region.LastLines < 0 {
 		return fail("region.last_lines is negative")
 	}
 
+	if r.Region.LastLines > MaxLastLines {
+		return fail("region.last_lines %d is more than the %d rows the ticker and zmina explain both capture", r.Region.LastLines,
+			MaxLastLines)
+	}
+
 	if r.Region.InputBox && r.Region.LastLines > 0 {
 		return fail("region has last_lines and input_box: pick one")
+	}
+
+	if r.Region.LastLines > 0 && !info.lastLines {
+		return fail("region.last_lines: no reader of %s takes a count of rows; it would be ignored", r.Sets)
+	}
+
+	if r.Region.InputBox && !info.inputBox {
+		return fail("region.input_box: no reader of %s reads the input box; it would be ignored", r.Sets)
 	}
 
 	m := r.Match
@@ -314,6 +379,16 @@ func compile(r Rule) (*compiled, error) {
 		return fail("match has exactly one of regexp, contains and prefix")
 	}
 
+	for _, lit := range []struct{ name, text string }{{"contains", m.Contains}, {"prefix", m.Prefix}, {"regexp", m.Regexp}} {
+		if len(lit.text) > maxRegexpSource {
+			return fail("match.%s is longer than %d bytes", lit.name, maxRegexpSource)
+		}
+	}
+
+	if len(m.SkipPrefix) > maxSkipPrefix {
+		return fail("match.skip_prefix is longer than %d bytes", maxSkipPrefix)
+	}
+
 	c := &compiled{Rule: r, contains: m.Contains, prefix: m.Prefix}
 
 	if m.Lower {
@@ -321,6 +396,17 @@ func compile(r Rule) (*compiled, error) {
 	}
 
 	if m.Regexp != "" {
+		// The program it unrolls to is measured before it is compiled: the matcher runs it over every row of every pane at every
+		// beat, and a pattern such as (?:a?){1000} is a program of thousands of instructions out of a dozen bytes.
+		n, err := programSize(m.Regexp)
+		if err != nil {
+			return fail("bad regexp: %v", err)
+		}
+
+		if n > maxProgram {
+			return fail("the regexp unrolls to a program of %d instructions, more than the %d a row may have", n, maxProgram)
+		}
+
 		re, err := regexp.Compile(m.Regexp)
 		if err != nil {
 			return fail("bad regexp: %v", err)

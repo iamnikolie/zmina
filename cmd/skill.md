@@ -672,6 +672,15 @@ rules:
     disabled: true
 ```
 
+Rows are bounded, because the file is read over every pane at every beat: a regexp or a literal is at most 512 bytes, a regexp
+compiles to at most 1000 instructions once its repeats are unrolled (`(?:a?){1000}` is refused), a file lists at most 64 rows,
+`last_lines` is at most 80 (the capture the ticker and `zmina explain` both take), an id is letters, digits, `.`, `-` and `_`
+(64 at most). Which fields apply to which flags: `match`, `trim`, `lower`, `skip_prefix` and `priority` to every flag; `scope`
+is the flag's own (`text` for `trust_question` and `exit_dialog`, `line` for the rest) and may be left out; `region.last_lines`
+only to `usage_limit`, `trust_question` and `exit_dialog`; `region.input_box` only to `usage_limit`; a row of the codex table
+only sets `usage_limit` (every other flag is read for Claude screens). A row that names what its flag ignores is refused at load,
+with its id, like a bad regexp.
+
 It is read by every command and every beat of the ticker. A file that does not read (a field it does not know, a bad
 regexp, a builtin or an unknown id disabled, an id twice, a `sets` zmina never reads) is ignored whole: the embedded rules
 stay in force and nothing stops. `zmina doctor` says so in its `screens` line (a warning naming the row), and for a good file

@@ -471,3 +471,56 @@ func TestExplainOfACodexRoleDoesNotReadTheInputLine(t *testing.T) {
 	assert.Equal(t, "its Codex bridge's status file is not there for its process yet", Reasoning{Engine: screenrules.Codex}.registrySaid(View{}).Says)
 	assert.Equal(t, "its Claude Code session file is not there for its process yet", Reasoning{Engine: screenrules.Claude}.registrySaid(View{}).Says)
 }
+
+// recordingTmux records how many rows each capture asked for.
+type recordingTmux struct {
+	*fakeTmux
+	asked []int
+}
+
+func (r *recordingTmux) Capture(name string, n int) (string, error) {
+	r.asked = append(r.asked, n)
+
+	return r.fakeTmux.Capture(name, n)
+}
+
+// The ticker and zmina explain read the usage-limit notice out of the same rows: the rows the rule names, which the ticker
+// captures and explain cuts out of its larger capture. A row's reach is bounded by that capture (the loader refuses more), so
+// the two cannot differ.
+func TestExplainAndTheWatchReadTheLimitNoticeFromTheSameRows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "screen-rules.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("rules:\n  - id: acme.limit.wording\n    engine: claude\n    sets: usage_limit\n"+
+		"    means: a newer wording\n    match: {contains: plan exhausted}\n    region: {last_lines: 20}\n"), 0o600))
+
+	table, o := screenrules.LoadOverrides(screenrules.Default(), path)
+	require.NoError(t, o.Err)
+
+	filler := func(n int) string { return strings.Repeat("work\n", n) }
+
+	for name, tc := range map[string]struct {
+		screen string
+		seen   bool
+	}{
+		"inside the rule's rows":  {"⎿ plan exhausted until 9pm\n" + filler(18), true},
+		"just outside them":       {"⎿ plan exhausted until 9pm\n" + filler(20), false},
+		"far above them":          {"⎿ plan exhausted until 9pm\n" + filler(60), false},
+		"at the top of a capture": {"⎿ plan exhausted until 9pm\n" + filler(79), false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := idleRole(t)
+			f.s.Rules = table
+			rec := &recordingTmux{fakeTmux: f.tm}
+			f.s.Tmux = rec
+			f.tm.screen = strings.TrimRight(tc.screen, "\n")
+
+			*f.now = f.now.Add(10 * time.Minute)
+			notes := f.s.watchScreen("designer", *f.now)
+			_, e := look(t, f)
+
+			assert.Equal(t, tc.seen, e.Screen.Limit != nil, "explain")
+			assert.Equal(t, tc.seen, len(notes) == 1, "the ticker's watch: %v", notes)
+			assert.Contains(t, rec.asked, 20, "the ticker captures just the rows the rule names")
+			assert.Contains(t, rec.asked, screenrules.MaxLastLines, "explain captures the most a rule may name")
+		})
+	}
+}

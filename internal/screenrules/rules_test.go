@@ -149,17 +149,17 @@ func TestScanReadsTheInputBox(t *testing.T) {
 	}, "\n")
 
 	tb, err := build([]Rule{
-		{ID: "claude.box", Engine: Claude, Sets: FooterHint, Means: "m", Match: Match{Contains: "TODO"}, Region: Region{InputBox: true}},
+		{ID: "claude.box", Engine: Claude, Sets: UsageLimit, Means: "m", Match: Match{Contains: "TODO"}, Region: Region{InputBox: true}},
 	})
 	require.NoError(t, err)
 
 	var got []string
-	for _, h := range tb.Scan(Claude, FooterHint, screen) {
+	for _, h := range tb.Scan(Claude, UsageLimit, screen) {
 		got = append(got, h.Line)
 	}
 
 	assert.Equal(t, []string{"❯ draft with TODO", "  second row TODO"}, got, "the rows from the ❯ under a rule to the next rule")
-	assert.Empty(t, tb.Scan(Claude, FooterHint, "no box\nTODO"), "no input box on the screen: nothing to read")
+	assert.Empty(t, tb.Scan(Claude, UsageLimit, "no box\nTODO"), "no input box on the screen: nothing to read")
 }
 
 func TestStripRemovesWhatTheRowsMatch(t *testing.T) {
@@ -194,7 +194,7 @@ func TestInvalidRowsFailAtLoadNamingTheRow(t *testing.T) {
 		"no means": {Rule{ID: "claude.nomeans", Engine: Claude, Sets: UsageLimit, Match: Match{Contains: "x"}},
 			`rule "claude.nomeans": no means`},
 		"scope": {Rule{ID: "claude.scope", Engine: Claude, Sets: UsageLimit, Means: "m", Match: Match{Contains: "x"}, Scope: "page"},
-			`rule "claude.scope": scope is line or text`},
+			`rule "claude.scope": scope "page"`},
 		"region": {Rule{ID: "claude.region", Engine: Claude, Sets: UsageLimit, Means: "m", Match: Match{Contains: "x"},
 			Region: Region{LastLines: 3, InputBox: true}}, `rule "claude.region": region has last_lines and input_box`},
 		"groups": {Rule{ID: "claude.groups", Engine: Claude, Sets: DialogOption, Means: "m", Match: Match{Regexp: `(\d)`}},

@@ -87,6 +87,10 @@ func LoadOverrides(base *Table, path string) (*Table, Overrides) {
 func apply(base *Table, rows []Rule) (*Table, Overrides, error) {
 	var o Overrides
 
+	if len(rows) > maxOverrideRows {
+		return nil, o, fmt.Errorf("the override file lists %d rows, at most %d are read", len(rows), maxOverrideRows)
+	}
+
 	seen := map[string]bool{}
 	next := make([]Rule, 0, len(base.rules)+len(rows))
 
