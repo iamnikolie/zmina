@@ -120,13 +120,15 @@ type Session struct {
 	Role, Group string
 	// Dispatcher is the crew's dispatcher session: a peer message from it is a hand-off, not a peer's line.
 	Dispatcher string
-	Messages   []registry.Message
+	// Loc is the clock the session's days are counted on (its crew's); nil: the one Cells is given.
+	Loc      *time.Location
+	Messages []registry.Message
 }
 
 // TriggerDispatcher is a message from the crew's own dispatcher session.
 const TriggerDispatcher = "dispatcher"
 
-// Cells prices the sessions' replies and gives each to a task.
+// Cells prices the sessions' replies and gives each to a task. A day is read on the session's own clock, else on loc.
 func Cells(sessions []Session, ledgers map[string]Ledger, prices Table, loc *time.Location) []Cell {
 	by := map[Cell]*Cell{}
 
@@ -136,6 +138,11 @@ func Cells(sessions []Session, ledgers map[string]Ledger, prices Table, loc *tim
 
 	for _, s := range sessions {
 		l := ledgers[s.Crew]
+
+		clock := loc
+		if s.Loc != nil {
+			clock = s.Loc
+		}
 
 		k := [3]string{s.Node, s.Crew, s.Role}
 		if counted[k] == nil {
@@ -151,7 +158,7 @@ func Cells(sessions []Session, ledgers map[string]Ledger, prices Table, loc *tim
 			}
 
 			key := Cell{Node: s.Node, Crew: s.Crew, Role: s.Group, Task: a.Key(), How: a.How, Model: m.Model,
-				Day: m.At.In(loc).Format(time.DateOnly), Trigger: trigger, Band: BandOf(m.Prompt())}
+				Day: m.At.In(clock).Format(time.DateOnly), Trigger: trigger, Band: BandOf(m.Prompt())}
 
 			c := by[key]
 			if c == nil {

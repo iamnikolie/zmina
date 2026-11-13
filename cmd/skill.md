@@ -80,7 +80,7 @@ notify: [push-cli, send, --title, zmina] # a push to you goes through this (text
 notify_on: [reminder, blocking]          # what is pushed: reminder, blocking (an item that holds a role up), ask (every new ask); default reminder, blocking
 quiet_hours: 23:00-08:00                 # in timezone:; blocking and ask pushes wait until it is over (default none)
 notify_again: 24h                        # an item that still blocks is pushed again this often (default 24h, 1h at least; off)
-timezone: Europe/Warsaw                  # the clock reminder times, role schedules and the budget's day are read on (default: this machine's)
+timezone: Europe/Warsaw                  # the clock reminder times, role schedules, the budget's day and usage's days are read on (default: this machine's)
 lessons: on                              # daily triage of the roles' lessons into one draft MR on the crew's agentic-os (default off; see Lessons)
 worktree_gc: daily                       # the ticker runs `task gc` once a day: closed tasks' merged, clean worktrees go (default off)
 done_check: make test                    # closing a task with a worktree as done runs this there and needs exit 0 (or {run, timeout: 10m, commit: true}; off or none: no check, the default; see What checked means)
@@ -1809,7 +1809,8 @@ nothing, so the ticker's every beat costs one small read.
 `zmina usage [--since 24h|7d] [--by role|task|model|day|crew|trigger|how|ctx|tool] [--role r] [--all] [--json]` — what the
 work cost, from the transcripts: each API reply once (also when a transcript is reached under two names, through a linked
 project directory, or lies in two directories, a resume having copied it), a role's copies (dev#2) with it, a subagent's
-replies with the session that started it (`SUB` counts them). Columns: turns, `WAITS`, tokens, `CACHED` (the share of the prompt read
+replies with the session that started it (`SUB` counts them). A day (`--by day`) is a day of the crew's `timezone:`, else
+of this machine's. Columns: turns, `WAITS`, tokens, `CACHED` (the share of the prompt read
 from cache), `REREAD` (cache reads over cache writes: how many times a token put in context was read again), `$ API`, `$/TURN`, `CTX` (the context a turn carries on average; `!` past 200k — most of such a
 turn's price is reading the conversation again: compact or restart the role), `MODELS` (the model mix by dollars,
 from each reply's own model), and for `--by task` `HOW`. A totals row `all`. Under the table, the cost by what it

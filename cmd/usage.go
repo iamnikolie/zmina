@@ -112,7 +112,7 @@ func (a *app) usageCommand() *cobra.Command {
 				upTo = &time.Time{}
 			}
 
-			got, fills, stretches, problems := usageRead(crews, node, from, prices, upTo, time.Local)
+			got, fills, stretches, problems := usageRead(crews, node, from, prices, upTo, nil)
 			restarts := usageRestarts(crews, node, from)
 			lessons := usageLessons(crews, node, from)
 
@@ -201,7 +201,7 @@ func crewsOf(cells []cost.Cell) map[string]bool {
 // usageCells reads, prices and attributes the crews' sessions since a time. A crew that cannot be read is a
 // problem, not a failure: the others still count.
 func usageCells(crews []uiCrew, node string, since time.Time, prices cost.Table) ([]cost.Cell, []string) {
-	cells, _, _, problems := usageRead(crews, node, since, prices, nil, time.Local)
+	cells, _, _, problems := usageRead(crews, node, since, prices, nil, nil)
 
 	return cells, problems
 }
@@ -224,7 +224,8 @@ type usageStretch struct {
 }
 
 // usageRead is usageCells, the roles' stretches, and with fills what the tools put into the roles' context up to
-// *fills (zero: up to now). loc is the clock the cells' days are counted in.
+// *fills (zero: up to now). loc is the clock the cells' days are counted in; nil: each crew's own, its timezone when
+// its file sets one, else this machine's.
 func usageRead(crews []uiCrew, node string, since time.Time, prices cost.Table, fills *time.Time,
 	loc *time.Location) ([]cost.Cell, []usageFill, []usageStretch, []string) {
 	var (
@@ -262,6 +263,11 @@ func usageRead(crews []uiCrew, node string, since time.Time, prices cost.Table, 
 	for i, c := range loaded {
 		key := keys[i]
 
+		clock := loc
+		if clock == nil {
+			clock = c.Location()
+		}
+
 		ts, ok := transcripts[c.Namespace]
 		if !ok {
 			var err error
@@ -291,7 +297,7 @@ func usageRead(crews []uiCrew, node string, since time.Time, prices cost.Table, 
 				}
 			}
 			sessions = append(sessions, cost.Session{Node: node, Crew: key, Role: u.Role, Group: u.Group,
-				Dispatcher: dispatcherSession(c), Messages: []registry.Message{u.Message}})
+				Dispatcher: dispatcherSession(c), Loc: clock, Messages: []registry.Message{u.Message}})
 		}
 
 		names := crewSessions(c)
@@ -330,7 +336,7 @@ func usageRead(crews []uiCrew, node string, since time.Time, prices cost.Table, 
 			}
 
 			sessions = append(sessions, cost.Session{Node: node, Crew: key, Role: who[0], Group: who[1],
-				Dispatcher: dispatcherSession(c), Messages: ms})
+				Dispatcher: dispatcherSession(c), Loc: clock, Messages: ms})
 		}
 	}
 
