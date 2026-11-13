@@ -438,15 +438,17 @@ func (l *Ledger) apply(t task.Task, c Change, preflight bool) (task.Task, []stri
 	case c.State == "":
 	case c.State.Active():
 		t.Closed = nil
-	case c.By != "":
-		t.Closed = &task.Closure{By: c.By, At: t.Updated, State: c.State, Note: c.Note, Check: checked, Unchecked: unchecked,
-			Unbound: c.unbound}
-		if t.Delivery != nil {
-			t.Closed.Gen = t.Delivery.Gen
-		}
+	default:
+		// A fault of the environment the check met is no part of a closed task, whoever closed it, or none is said to have.
+		t.CheckEnv, t.CheckEnvTold = nil, nil
 
-		// A fault of the environment the check met is no part of a closed task.
-		t.CheckEnv = nil
+		if c.By != "" {
+			t.Closed = &task.Closure{By: c.By, At: t.Updated, State: c.State, Note: c.Note, Check: checked, Unchecked: unchecked,
+				Unbound: c.unbound}
+			if t.Delivery != nil {
+				t.Closed.Gen = t.Delivery.Gen
+			}
+		}
 	}
 
 	return t, changes, nil

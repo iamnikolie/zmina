@@ -174,8 +174,8 @@ func (f *checkFlags) flags(c *cobra.Command) {
 		"only if it exits 0 (the owner and the dispatcher set it; needs a worktree; with set, - clears it)")
 	c.Flags().StringVar(&f.timeout, "check-timeout", "", "how long the check may run (default 10m, at most 30m)")
 	c.Flags().BoolVar(&f.commit, "check-commit", false, "the check also wants a commit on the branch beyond its base")
-	c.Flags().IntVar(&f.envRC, "check-env-rc", 0, "an exit status (1-255) the check uses to say it could not run (a tool or service "+
-		"missing): an environment fault, not a failed check; the shell's 126 and 127 always are")
+	c.Flags().IntVar(&f.envRC, "check-env-rc", 0, "an exit status (3-255; 1 and 2 mean a failed check) the check uses to say it could "+
+		"not run (a tool or service missing): an environment fault, not a failed check; the shell's 126 and 127 always are")
 }
 
 // spec is the check the flags give: nil when --check was not given, cleared when it was given as - (set only).
@@ -191,8 +191,10 @@ func (f *checkFlags) spec(cmd *cobra.Command) (spec *donecheck.Spec, cleared boo
 	case f.run == "-" && extra:
 		return nil, false, errors.New("--check - clears the check: --check-timeout, --check-commit and --check-env-rc have " +
 			"nothing to go with")
-	case cmd.Flags().Changed("check-env-rc") && (f.envRC < 1 || f.envRC > 255):
-		return nil, false, fmt.Errorf("--check-env-rc %d: an exit status from 1 to 255", f.envRC)
+	case cmd.Flags().Changed("check-env-rc") && f.envRC == 0:
+		return nil, false, errors.New("--check-env-rc 0: an exit status from 3 to 255 (leave the flag out for none)")
+	case cmd.Flags().Changed("check-env-rc") && donecheck.CheckEnvFaultRC(f.envRC) != nil:
+		return nil, false, fmt.Errorf("--check-env-rc: %w", donecheck.CheckEnvFaultRC(f.envRC))
 	case f.run == "-":
 		return nil, true, nil
 	}
@@ -725,11 +727,16 @@ func (a *app) doneCheck(id string, st task.State, o taskChange) (*ledger.Checked
 	return checked, checkExit(err)
 }
 
-// checkEnvFault keeps a check that could not run on its task and tells the dispatcher once for each task and cause
+// checkEnvFault keeps a check that could not run on its task and queues a note to the dispatcher once for each task and cause
 // (shift.RecordCheckEnv), then ends the command with exitCheckEnv: the task stays open and nothing is recorded as a failed
-// check. The error is partial: the state, which holds the note to the dispatcher, is saved.
+// check. The dispatcher is said to have been told only when the note was queued and the state that holds it was saved; the
+// cause is marked told after that, so a note or a save that failed is tried again by the next run of the check. The error is
+// partial: the state, which holds the note, is saved.
 func (a *app) checkEnvFault(f *ledger.EnvFault) error {
-	told := false
+	var tell shift.CheckEnvTell
+
+	cause := f.Result.Fault()
+	msg := f.Error()
 
 	err := a.withState(func(s *shift.Shift) error {
 		t, err := s.Tasks.Get(f.ID)
@@ -737,24 +744,28 @@ func (a *app) checkEnvFault(f *ledger.EnvFault) error {
 			return err
 		}
 
-		told, err = s.RecordCheckEnv(t, by(), f.Result)
+		tell, err = s.RecordCheckEnv(t, by(), f.Result)
 
 		return err
 	})
 	if err != nil {
-		return err
+		return &exitError{code: exitCheckEnv, msg: msg + "\nthe fault could not be kept on the task, and the dispatcher was not told: " + err.Error()}
 	}
-
-	msg := f.Error()
 
 	switch {
-	case told:
-		msg += "\nthe dispatcher has been told"
-	default:
-		msg += "\nthe dispatcher was told of this already"
+	case tell.Err != nil:
+		msg += "\nthe dispatcher could not be told: " + tell.Err.Error()
+	case tell.Already:
+		msg += "\nthe dispatcher was told of this cause already"
+	case tell.Queued:
+		if err := a.withState(func(s *shift.Shift) error { return s.MarkCheckEnvTold(f.ID, cause) }); err != nil {
+			msg += "\nthe dispatcher has been told (zmina could not note it on the task, so it may be told again: " + err.Error() + ")"
+		} else {
+			msg += "\nthe dispatcher has been told"
+		}
 	}
 
-	return shift.Partial(&exitError{code: exitCheckEnv, msg: msg})
+	return &exitError{code: exitCheckEnv, msg: msg}
 }
 
 // checkExit gives a refusal by the check its own exit code.

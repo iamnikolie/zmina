@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -198,7 +199,9 @@ func TestTaskDoneEnvironmentFaultIsNotAFailedCheck(t *testing.T) {
 			}
 
 			assert.NotContains(t, err.Error(), "check failed")
-			assert.ErrorContains(t, err, "the environment is broken, not the work, and the work was not judged")
+			assert.ErrorContains(t, err, "the check could not run, so the work was not judged")
+			assert.ErrorContains(t, err, "the environment is broken")
+			assert.ErrorContains(t, err, "a file it runs is missing or not executable in the worktree")
 			assert.ErrorContains(t, err, tc.why)
 			assert.ErrorContains(t, err, "the task stays open and no failed check is recorded")
 			assert.ErrorContains(t, err, "the dispatcher has been told")
@@ -213,13 +216,17 @@ func TestTaskDoneEnvironmentFaultIsNotAFailedCheck(t *testing.T) {
 			}
 
 			assert.Len(t, stateOf(t, c.file).Signals, 1, "told once")
-			assert.Contains(t, stateOf(t, c.file).Signals[0], "its done check could not run, and the work was not judged")
+
+			var told []any
+			told, _ = readTaskFile(t, c.file, "T-1")["check_env_told"].([]any)
+			assert.Len(t, told, 1, "the cause is marked told once the note is queued and the state saved")
+			assert.Contains(t, stateOf(t, c.file).Signals[0], "its done check could not run, so the work was not judged")
 
 			// Again: the same cause is kept and not told again.
 			_, _, err = zm(t, c.file, "task", "set", "1", "done")
 			require.Error(t, err)
 			assert.Equal(t, exitCheckEnv, exitCodeOf(t, err))
-			assert.ErrorContains(t, err, "the dispatcher was told of this already")
+			assert.ErrorContains(t, err, "the dispatcher was told of this cause already")
 			assert.Len(t, stateOf(t, c.file).Signals, 1)
 
 			shown, _, err := zm(t, c.file, "task", "show", "1")
@@ -265,14 +272,27 @@ func TestTaskCheckEnvRCFlag(t *testing.T) {
 		require.Error(t, err, args)
 	}
 
+	// 1 and 2 are the statuses of a check that ran and failed.
+	for _, rc := range []string{"1", "2"} {
+		_, _, err = zm(t, c.file, "task", "set", "1", "--check", "true", "--check-env-rc", rc)
+		require.ErrorContains(t, err, "--check-env-rc: env_fault_rc "+rc+" is the status of a check that ran and failed", rc)
+		require.ErrorContains(t, err, "name a status from 3 to 255")
+	}
+
+	_, _, err = zm(t, c.file, "task", "new", "dev", "--repo", "api", "--worktree", "--check", "true", "--check-env-rc", "1", "more")
+	require.ErrorContains(t, err, "is the status of a check that ran and failed")
 	_, _, err = zm(t, c.file, "task", "set", "1", "--check", "exit 6", "--check-env-rc", "6")
 	require.NoError(t, err)
 	assert.NotContains(t, readTaskFile(t, c.file, "T-1"), "check_env", "a new check takes the old one's fault away")
 
-	// The crew file refuses a status that is none.
-	bad := newCheckCrew(t, "done_check: {run: x, env_fault_rc: 0}\n")
-	_, _, err = zm(t, bad.file, "task", "ls")
-	require.ErrorContains(t, err, "env_fault_rc")
+	// The crew file refuses a status that is none, and the two that a failed check exits.
+	for rc, want := range map[string]string{"0": "env_fault_rc is an exit status from 3 to 255, not 0",
+		"1": "done_check: check env_fault_rc 1 is the status of a check that ran and failed", "2": "done_check: check env_fault_rc 2 is the status",
+		"256": "done_check: check env_fault_rc 256: an exit status from 3 to 255"} {
+		bad := newCheckCrew(t, "done_check: {run: x, env_fault_rc: "+rc+"}\n")
+		_, _, err = zm(t, bad.file, "task", "ls")
+		require.ErrorContains(t, err, want, rc)
+	}
 }
 
 func TestTaskDoneCheckThatTimesOutRefusesTheClose(t *testing.T) {
@@ -792,4 +812,45 @@ func TestTaskDoneCommitCheckAfterTheBranchWasMerged(t *testing.T) {
 	require.ErrorContains(t, err, "a commit of the task's own, and")
 	assert.ErrorContains(t, err, "has none: nothing beyond main, and nothing since the worktree was made")
 	assert.Equal(t, exitCheckFailed, exitCodeOf(t, err))
+}
+
+// A dispatcher that cannot be told is not said to have been: a queue that takes no more signals leaves the fault on the task
+// and the message says the dispatcher could not be told; the cause is not marked told, so the next run, when there is room,
+// tells it.
+func TestTaskDoneEnvironmentFaultSaysWhenTheDispatcherCouldNotBeTold(t *testing.T) {
+	c := newCheckCrew(t, "done_check: \"exit 127\"\n")
+	c.task(t)
+
+	a := &app{out: io.Discard, err: io.Discard, crew: c.file}
+	require.NoError(t, a.withState(func(s *shift.Shift) error {
+		for i := range shift.SignalsMax {
+			if _, err := s.Note("mrs", "acme/site!"+strconv.Itoa(i)+" approved", false); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}))
+
+	_, _, err := zm(t, c.file, "task", "done", "1")
+	require.Error(t, err)
+	assert.Equal(t, exitCheckEnv, exitCodeOf(t, err))
+	assert.ErrorContains(t, err, "the dispatcher could not be told: ")
+	assert.ErrorContains(t, err, "it is not reading them")
+	assert.NotContains(t, err.Error(), "has been told")
+	assert.NotContains(t, err.Error(), "was told of this")
+
+	task := readTaskFile(t, c.file, "T-1")
+	assert.NotNil(t, task["check_env"], "the fault is on the task")
+	assert.NotContains(t, task, "check_env_told", "and nobody was told")
+
+	// Room again: the next run tells it.
+	require.NoError(t, a.withState(func(s *shift.Shift) error { s.State.Signals = nil; return nil }))
+
+	_, _, err = zm(t, c.file, "task", "done", "1")
+	require.ErrorContains(t, err, "the dispatcher has been told")
+	assert.Len(t, readTaskFile(t, c.file, "T-1")["check_env_told"], 1)
+
+	_, _, err = zm(t, c.file, "task", "done", "1")
+	require.ErrorContains(t, err, "the dispatcher was told of this cause already")
 }

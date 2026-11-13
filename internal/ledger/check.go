@@ -55,10 +55,11 @@ func (e *EnvFault) Unwrap() error { return ErrCheckEnvironment }
 func (e *EnvFault) Error() string {
 	res := e.Result
 
-	return fmt.Sprintf("%s: %s: the environment is broken, not the work, and the work was not judged: %s (%s, at %s); the task "+
-		"stays open and no failed check is recorded; fix the environment (a tool the check needs, or the seat it runs on) "+
-		"and run it again\n%s\n--force closes it anyway, for the owner and the dispatcher", e.ID, ErrCheckEnvironment,
-		donecheck.Line(e.Spec.Run), donecheck.Line(res.Fault()), res.Commit[:min(len(res.Commit), 10)], res.Tail())
+	return fmt.Sprintf("%s: %s: the check could not run, so the work was not judged: %s (%s, at %s); either the environment is "+
+		"broken (a tool the check needs is missing, or the seat it runs on) or a file it runs is missing or not executable in "+
+		"the worktree; the task stays open and no failed check is recorded; mend that and run it again\n%s\n--force closes it "+
+		"anyway, for the owner and the dispatcher", e.ID, ErrCheckEnvironment, donecheck.Line(e.Spec.Run),
+		donecheck.Line(res.Fault()), res.Commit[:min(len(res.Commit), 10)], res.Tail())
 }
 
 // MayCheck reports whether who may set a task's check, or close a task past it: the owner and the dispatcher, and
@@ -380,7 +381,7 @@ func (l *Ledger) setCheck(t *task.Task, c Change) (string, error) {
 	}
 
 	// A fault the old check met says nothing of the new one.
-	t.CheckEnv = nil
+	t.CheckEnv, t.CheckEnvTold = nil, nil
 
 	if c.ClearCheck {
 		t.Check = nil

@@ -66,7 +66,7 @@ func TestRunNotStartedIsAFaultAndATimeoutIsNot(t *testing.T) {
 	assert.Equal(t, -1, r.Exit)
 	assert.Contains(t, r.Fault(), "did not start")
 
-	r = Run(context.Background(), Spec{Run: "sleep 30", Timeout: "1s", EnvFaultRC: 1}, t.TempDir(), nil)
+	r = Run(context.Background(), Spec{Run: "sleep 30", Timeout: "1s", EnvFaultRC: 3}, t.TempDir(), nil)
 	assert.True(t, r.TimedOut)
 	assert.False(t, r.Environment(), "a timeout stays an ordinary failure")
 	assert.Equal(t, "timed out after 1s", r.Failure(time.Second))
@@ -79,16 +79,26 @@ func TestRunNotStartedIsAFaultAndATimeoutIsNot(t *testing.T) {
 	assert.False(t, r.Environment(), "a run that was stopped says nothing")
 }
 
-// env_fault_rc is an exit status from 1 to 255: 0 is how an unset one reads, so it cannot be a choice, and no status is
-// beyond 255.
+// env_fault_rc is an exit status from 3 to 255: 0 is how an unset one reads, so it cannot be a choice, 1 and 2 are the statuses
+// of a check that ran and failed, and no status is beyond 255.
 func TestSpecEnvFaultRC(t *testing.T) {
-	for _, rc := range []int{0, 1, 3, 126, 127, 255} {
+	for _, rc := range []int{0, 3, 4, 126, 127, 255} {
 		assert.NoError(t, Spec{Run: "x", EnvFaultRC: rc}.Validate(), rc)
 	}
 
-	for _, rc := range []int{-1, 256, 1000} {
-		assert.ErrorContains(t, Spec{Run: "x", EnvFaultRC: rc}.Validate(), "an exit status from 1 to 255", rc)
+	for _, rc := range []int{1, 2} {
+		err := Spec{Run: "x", EnvFaultRC: rc}.Validate()
+		assert.ErrorContains(t, err, "is the status of a check that ran and failed", rc)
+		assert.ErrorContains(t, err, "a status from 3 to 255", rc)
 	}
+
+	for _, rc := range []int{-1, 256, 1000} {
+		assert.ErrorContains(t, Spec{Run: "x", EnvFaultRC: rc}.Validate(), "an exit status from 3 to 255", rc)
+	}
+
+	assert.NoError(t, CheckEnvFaultRC(3))
+	assert.Error(t, CheckEnvFaultRC(1))
+	assert.Error(t, CheckEnvFaultRC(2))
 
 	assert.Equal(t, "make test (10m, exit 3 is an environment fault)", Spec{Run: "make test", EnvFaultRC: 3}.String())
 	assert.False(t, Spec{Run: "off", EnvFaultRC: 3}.Off(), "a mapping that says more is no 'off'")
@@ -107,7 +117,7 @@ func TestSpecReadsEnvFaultRC(t *testing.T) {
 		"given":        {in: "a: {run: make test, env_fault_rc: 3}", want: &Spec{Run: "make test", EnvFaultRC: 3}},
 		"with others":  {in: "a: {run: x, timeout: 5m, commit: true, env_fault_rc: 255}", want: &Spec{Run: "x", Timeout: "5m", Commit: true, EnvFaultRC: 255}},
 		"not given":    {in: "a: {run: x}", want: &Spec{Run: "x"}},
-		"zero written": {in: "a: {run: x, env_fault_rc: 0}", err: "env_fault_rc is an exit status from 1 to 255, not 0"},
+		"zero written": {in: "a: {run: x, env_fault_rc: 0}", err: "env_fault_rc is an exit status from 3 to 255, not 0"},
 		"hex zero":     {in: "a: {run: x, env_fault_rc: 0x0}", err: "not 0"},
 		"a word":       {in: "a: {run: x, env_fault_rc: many}", err: "cannot unmarshal"},
 		"a typo":       {in: "a: {run: x, env_fault: 3}", err: `no key "env_fault"`},

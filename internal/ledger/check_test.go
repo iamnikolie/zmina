@@ -140,7 +140,7 @@ func TestCheckThatCouldNotRunIsAnEnvironmentFaultNotAFailure(t *testing.T) {
 		{name: "the spec's status", spec: donecheck.Spec{Run: "echo seen; exit 9", EnvFaultRC: 9}, fault: true, why: "exit 9"},
 		{name: "a status the spec does not name", spec: donecheck.Spec{Run: "exit 9", EnvFaultRC: 8}},
 		{name: "a plain failure", spec: donecheck.Spec{Run: "exit 2"}},
-		{name: "a timeout", spec: donecheck.Spec{Run: "sleep 60", Timeout: "1s", EnvFaultRC: 1}},
+		{name: "a timeout", spec: donecheck.Spec{Run: "sleep 60", Timeout: "1s", EnvFaultRC: 3}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			l, _, tk, events := checkFixture(t, &tc.spec)
@@ -168,7 +168,8 @@ func TestCheckThatCouldNotRunIsAnEnvironmentFaultNotAFailure(t *testing.T) {
 			assert.Equal(t, tk.ID, fault.ID)
 			assert.Equal(t, "dev", fault.Role)
 			assert.True(t, fault.Result.Environment())
-			assert.Contains(t, err.Error(), "the environment is broken, not the work, and the work was not judged")
+			assert.Contains(t, err.Error(), "the check could not run, so the work was not judged")
+			assert.Contains(t, err.Error(), "a file it runs is missing or not executable in the worktree")
 			assert.Contains(t, err.Error(), tc.why)
 			assert.Contains(t, err.Error(), "the task stays open and no failed check is recorded")
 
@@ -200,6 +201,7 @@ func TestCheckEnvGoesWithTheCloseOrTheCheck(t *testing.T) {
 	for _, change := range []Change{
 		{State: task.Done, Force: true, By: "boss"},
 		{State: task.Dropped, By: "dev"},
+		{State: task.Dropped, By: ""},
 		{Check: &donecheck.Spec{Run: "true", EnvFaultRC: 4}, By: "boss"},
 		{ClearCheck: true, By: "boss"},
 	} {
@@ -207,11 +209,17 @@ func TestCheckEnvGoesWithTheCloseOrTheCheck(t *testing.T) {
 		require.NoError(t, err)
 
 		got.CheckEnv = &donecheck.Result{Run: "true", Exit: 127, Kind: donecheck.KindEnvironment}
+		got.CheckEnvTold = []string{"exit 127: the shell did not find the command"}
 		require.NoError(t, l.Store.Put(got))
 
 		got, err = l.Set(tk.ID, change)
 		require.NoError(t, err)
 		assert.Nil(t, got.CheckEnv, "%+v", change)
+		assert.Empty(t, got.CheckEnvTold, "%+v", change)
+
+		onDisk, err := l.Store.Get(tk.ID)
+		require.NoError(t, err)
+		assert.Nil(t, onDisk.CheckEnv, "on disk too: %+v", change)
 
 		// Back to open and checked, for the next change.
 		got.State, got.Closed, got.Check = task.Open, nil, &donecheck.Spec{Run: "true"}

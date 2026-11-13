@@ -42,9 +42,9 @@ type Spec struct {
 	Timeout string `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 	// Commit asks for a commit beyond the task's base as well: a branch nothing was committed on does not pass.
 	Commit bool `yaml:"commit,omitempty" json:"commit,omitempty"`
-	// EnvFaultRC is an exit status (1 to 255; 0 is unset) that this check uses to say it could not run its own
+	// EnvFaultRC is an exit status (3 to 255; 0 is unset) that this check uses to say it could not run its own
 	// tests: a missing tool, a service that is down. Like the shell's 126 and 127 it is an environment fault, not a
-	// failed check (Result.Kind).
+	// failed check (Result.Kind). 1 and 2 are the statuses of a check that ran and failed, and are refused.
 	EnvFaultRC int `yaml:"env_fault_rc,omitempty" json:"env_fault_rc,omitempty"`
 }
 
@@ -71,7 +71,7 @@ func (s *Spec) UnmarshalYAML(n *yaml.Node) error {
 		case "env_fault_rc":
 			// 0 is how an unset one reads, so a 0 written out is a mistake, not a choice.
 			if v, err := strconv.ParseInt(n.Content[i+1].Value, 0, 64); err == nil && v == 0 {
-				return fmt.Errorf("line %d: env_fault_rc is an exit status from 1 to 255, not 0", key.Line)
+				return fmt.Errorf("line %d: env_fault_rc is an exit status from 3 to 255, not 0", key.Line)
 			}
 		default:
 			return fmt.Errorf("line %d: a check has no key %q (run, timeout, commit, env_fault_rc)", key.Line, key.Value)
@@ -105,8 +105,10 @@ func (s Spec) Validate() error {
 			"file the command runs)")
 	}
 
-	if s.EnvFaultRC < 0 || s.EnvFaultRC > 255 {
-		return fmt.Errorf("check env_fault_rc %d: an exit status from 1 to 255", s.EnvFaultRC)
+	if s.EnvFaultRC != 0 {
+		if err := CheckEnvFaultRC(s.EnvFaultRC); err != nil {
+			return fmt.Errorf("check %w", err)
+		}
 	}
 
 	if s.Timeout == "" {
@@ -123,6 +125,22 @@ func (s Spec) Validate() error {
 	}
 
 	return nil
+}
+
+// CheckEnvFaultRC says what is wrong with a status named as env_fault_rc, nil when it can be one. 1 and 2 are refused: a
+// test runner, a compiler or make exit them (a general error, a misused command, a failed run) for a check that ran and
+// failed, and a spec that called them an environment fault would turn every failed check into one that judges nothing. The
+// shell's own 126 and 127 are faults without it.
+func CheckEnvFaultRC(rc int) error {
+	switch {
+	case rc == 1 || rc == 2:
+		return fmt.Errorf("env_fault_rc %d is the status of a check that ran and failed (a test run, a compiler, make): name "+
+			"a status from 3 to 255 that only a broken environment exits (126 and 127, the shell's, are faults already)", rc)
+	case rc < 0 || rc > 255:
+		return fmt.Errorf("env_fault_rc %d: an exit status from 3 to 255", rc)
+	default:
+		return nil
+	}
 }
 
 // unprintable is a rune that is no part of plain text: a control character (C0, DEL, C1), a format character (zero

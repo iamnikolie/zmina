@@ -1263,7 +1263,7 @@ which edit files in a repository checkout.
 
 | Command | Does |
 |---|---|
-| `zmina task new <role> <asked...>` | record a task; prints `T-14 · dev`. If the role is already running, also queues its current handoff packet for explicit acceptance, and delivers it at once when the role can take it (else with the beat); does not restart the role or change its working directory. A role that is down is not started: stderr names the `zmina --crew <file> up <role> --task T-14` that starts it on the task, and if the task still sits there unaccepted after 5 min the ticker tells the dispatcher once (`<role>: down, has not taken T-14; zmina --crew … up …`, one notice per task, dropped before delivery once the role is up or the task taken; not while the role sleeps or the shift is stopped). `--repo <name or path>` (a name is a directory under the crew's dir), `--note`, `--title "<short plain sentence>"`, `--project <name>`, `--url <live thing>`, `--budget <dollars>` (what it may cost, see Usage), `--criteria "<one line>"` (once for each criterion, see What done means), `--check "<command>"` with `--check-timeout 10m`, `--check-commit` and `--check-env-rc <1-255>` (the command closing it as done runs, see What checked means; the owner and the dispatcher only, and the task needs `--worktree`), `--json`. With `routes:` in the crew file the routes can pick the role (`--route`) and every task made records where it went against them (see Routes). |
+| `zmina task new <role> <asked...>` | record a task; prints `T-14 · dev`. If the role is already running, also queues its current handoff packet for explicit acceptance, and delivers it at once when the role can take it (else with the beat); does not restart the role or change its working directory. A role that is down is not started: stderr names the `zmina --crew <file> up <role> --task T-14` that starts it on the task, and if the task still sits there unaccepted after 5 min the ticker tells the dispatcher once (`<role>: down, has not taken T-14; zmina --crew … up …`, one notice per task, dropped before delivery once the role is up or the task taken; not while the role sleeps or the shift is stopped). `--repo <name or path>` (a name is a directory under the crew's dir), `--note`, `--title "<short plain sentence>"`, `--project <name>`, `--url <live thing>`, `--budget <dollars>` (what it may cost, see Usage), `--criteria "<one line>"` (once for each criterion, see What done means), `--check "<command>"` with `--check-timeout 10m`, `--check-commit` and `--check-env-rc <3-255>` (the command closing it as done runs, see What checked means; the owner and the dispatcher only, and the task needs `--worktree`), `--json`. With `routes:` in the crew file the routes can pick the role (`--route`) and every task made records where it went against them (see Routes). |
 | `zmina task new --route [--kind k] [--repo r] [--project p] [--after T-n] [--of T-n [--rereview]] <asked...>` | the role is left out and the crew file's routes pick it (`zmina route` takes the same flags, see Routes): prints `T-15 · dev2 (rule 6: claude 7d 41% < codex week 50%)`. Nothing is made when no rule matched or the answer is another crew's (`tell`): the error says so, and the task is made by hand with `zmina task new <role> …`. A role down is not started, as above (a copy `dev#2`: `up dev --as 2 --task T-15`). |
 | `zmina task new <role> [--because "<why>"] <asked...>` | a role picked by hand, with the routes' answer kept beside it (see Routes). `--because` says why it is not the routes' pick; optional unless the crew file has `route_override: required`. Without `routes:` it does nothing. |
 | `zmina task new <role> --repo r --worktree <asked...>` | also gives it its own git worktree `~/.zmina/worktrees/<repo>-T-14` on a new branch `zmina/t-14` (`zmina/<crew>-t-14` for a named crew) from the repo's current branch (`--base` another). The role works there, never in the repo's checkout. The task is written before the worktree is made: if git fails, it stays as `dropped` with the error in its note. |
@@ -1321,7 +1321,7 @@ current one.
 closed as done, in the task's worktree. It is the crew file's `done_check` (a command line, or `{run, timeout,
 commit, env_fault_rc}`; `off`, `none` or nothing is no check; a key it does not know is an error), or the task's own, which replaces
 it: `task new … --worktree --check "make test"` or `task set <id> --check "make test"` with `--check-timeout` (10m by
-default, 30m at most) and `--check-commit` (the branch also has a commit of the task's own) and `--check-env-rc` (an exit status, 1 to 255, that the check
+default, 30m at most) and `--check-commit` (the branch also has a commit of the task's own) and `--check-env-rc` (an exit status, 3 to 255, that the check
 uses to say it could not run its own tests: see below); `--check -` on `set` clears
 the task's, `--check true` is a task with nothing to check. A command is one line of plain text: a line break, tab,
 escape sequence or other control character (a bidirectional override, a zero-width character) in it is refused, and a
@@ -1368,16 +1368,22 @@ with no check closes as it always did.
 
 A check that could not run is not a failed check. When the shell could not run the command (exit status 126, found but not
 executable, or 127, not found), when the shell did not start at all, or when the command exits with the check's
-`env_fault_rc` (an exit status from 1 to 255 in the crew's `done_check` or the task's own check, for a check that exits it
-when a tool or service it needs is missing; 0 is not a choice and is refused), the environment is broken and the work was
-not judged: `task done` exits 6 (not 4), says so plainly with the end of the output, and the task stays open with no
-`closed.check` and no failed check on record. The run is kept on the open task as `check_env` (`kind: environment`, `run`,
-`commit`, `at`, `exit`, `error`, and the same bounded `output`), `task show` says it, and the event log has an
+`env_fault_rc` (an exit status from 3 to 255 in the crew's `done_check` or the task's own check, for a check that exits it
+when a tool or service it needs is missing; 0 is not a choice, and 1 and 2, which a test run, a compiler or make exit for a
+check that ran and failed, are refused with a message, in the crew file and in `--check-env-rc` alike), the check could not
+run, either because the environment is broken or because a file it runs is missing or not executable in the worktree, and
+the work was not judged: `task done` exits 6 (not 4), says so plainly with the end of the output, and the task stays open
+with no `closed.check` and no failed check on record. The run is kept on the open task as `check_env` (`kind: environment`,
+`run`, `commit`, `at`, `exit`, `error`, and the same bounded `output`), `task show` says it, and the event log has an
 `environment fault` line for the check. The dispatcher is told once for each task and cause, in a note that asks for nothing
-but a seat the check can run on (the same kind of note a late report is told in); the same fault again is kept, not told
-again, and a new cause is told. Closing the task, or changing its check, takes `check_env` away. A timeout is still an
-ordinary failure, and `--force` is as it was. A check that exits 126, 127 or its `env_fault_rc` for a reason of its own
-code, not the environment, is read as the environment's: pick an `env_fault_rc` the tests never exit with.
+but a seat the check can run on (the same kind of note a late report is told in), and the command says it has been told
+only when the note was queued and the state that holds it saved; then the cause is marked told in `check_env_told`, the last 8
+causes of the task, so that a cause that comes back after another (A, B, A) is not told a third time. A note that could not be
+queued is said so (`the dispatcher could not be told`), nothing is marked, and the next run of the check tries again. The same
+fault again is kept, not told again. Closing the task by any path, changing its check, or putting it away takes `check_env`
+and `check_env_told` away. A timeout is still an ordinary failure, and `--force` is as it was. A check that exits 126, 127 or
+its `env_fault_rc` for a reason of its own code, not the environment, is read as the environment's: pick an `env_fault_rc`
+the tests never exit with.
 
 What it says is this and no more: zmina ran that command at that commit in that worktree and it exited 0. It does not
 say the work is right or complete: the command and the files it runs are the worker's own repository's (a worker can

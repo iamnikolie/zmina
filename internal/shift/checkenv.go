@@ -2,49 +2,93 @@ package shift
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/iamnikolie/zmina/internal/donecheck"
 	"github.com/iamnikolie/zmina/internal/task"
 )
 
+// CheckEnvTell is what RecordCheckEnv did about telling the dispatcher.
+type CheckEnvTell struct {
+	// Queued says the dispatcher's note is queued: it is told when the state that holds the note is saved, and only then is the
+	// cause marked told (MarkCheckEnvTold).
+	Queued bool
+	// Already says the dispatcher was told this cause on this task before: nothing is queued.
+	Already bool
+	// Err is why the note could not be queued, when it could not. The fault is kept all the same, the dispatcher is not told, and
+	// the cause is not marked told, so that the next run of the check tries again.
+	Err error
+}
+
 // RecordCheckEnv keeps a done check that could not run (donecheck.KindEnvironment) on task t, which stays as it was: the
 // result is listed in the task's file as CheckEnv (its state, result, delivery and Updated are not touched, so a check run
-// again is still of this task), and the dispatcher is told once for each task and cause, in the note a late report is told
-// in, however often the check meets the same fault. The check's run is an event already (ledger.RunCheck). t is the task
-// as read under the lock; by is who ran the command. It returns whether the dispatcher was told now: false for a fault the
-// task has told of already, and for a task that is closed since the check began.
-func (s *Shift) RecordCheckEnv(t task.Task, by string, res donecheck.Result) (bool, error) {
-	if !res.Environment() || !t.State.Active() || s.Tasks == nil {
-		return false, nil
-	}
+// again is still of this task), and the dispatcher's note is queued, in the note a late report is told in, unless the task has
+// told this cause already. The event of the run is the ledger's (ledger.RunCheck). t is the task as read under the lock; by is
+// who ran the command.
+//
+// It does not say the cause was told: a note that could not be queued, or a state that could not be saved after it, would be
+// a dispatcher that was never told. The caller saves the state and then calls MarkCheckEnvTold, and says "told" only when the
+// note was queued and the save went. The error is the task file that could not be written.
+func (s *Shift) RecordCheckEnv(t task.Task, by string, res donecheck.Result) (CheckEnvTell, error) {
+	var out CheckEnvTell
 
-	told := t.CheckEnv != nil && t.CheckEnv.Fault() == res.Fault()
+	if !res.Environment() || !t.State.Active() || s.Tasks == nil {
+		return out, nil
+	}
 
 	t.CheckEnv = &res
 
 	if err := s.Tasks.Put(t); err != nil {
-		return false, err
+		return out, err
 	}
 
-	if told {
-		return false, nil
+	if slices.Contains(t.CheckEnvTold, res.Fault()) {
+		out.Already = true
+
+		return out, nil
 	}
 
 	if _, _, err := s.note(by, checkEnvText(t, res), false, true); err != nil {
-		if s.Warn != nil {
-			s.Warn(err)
-		}
+		out.Err = err
 
-		return false, nil
+		return out, nil
 	}
 
-	return true, nil
+	out.Queued = true
+
+	return out, nil
 }
 
-// checkEnvText is the dispatcher's note: one line, once for a task and a cause. It asks for nothing but a seat that can
-// run the check; the worker cannot mend it.
+// MarkCheckEnvTold records that the dispatcher was told of a cause on task id: it is in the task's set of told causes, the
+// last task.CheckEnvToldMax of them (a cause that comes back is told no more, a ninth distinct one makes the oldest forgotten).
+// Called once the state with the note is saved. A task that is not active any more, or has told it already, is left as it is.
+func (s *Shift) MarkCheckEnvTold(id, cause string) error {
+	if s.Tasks == nil {
+		return nil
+	}
+
+	t, err := s.Tasks.Get(id)
+	if err != nil {
+		return err
+	}
+
+	if !t.State.Active() || slices.Contains(t.CheckEnvTold, cause) {
+		return nil
+	}
+
+	t.CheckEnvTold = append(t.CheckEnvTold, cause)
+	if len(t.CheckEnvTold) > task.CheckEnvToldMax {
+		t.CheckEnvTold = t.CheckEnvTold[len(t.CheckEnvTold)-task.CheckEnvToldMax:]
+	}
+
+	return s.Tasks.Put(t)
+}
+
+// checkEnvText is the dispatcher's note: one line, once for a task and a cause. It asks for nothing but a seat that can run
+// the check; the worker cannot mend it.
 func checkEnvText(t task.Task, res donecheck.Result) string {
-	return fmt.Sprintf("%s (%s): its done check could not run, and the work was not judged: %s (%s); the environment of the "+
-		"check is broken, not the task, which stays open: fix it, then the role runs zmina task done %s again (zmina task show %s)",
-		t.ID, t.Role, donecheck.Line(res.Fault()), donecheck.Line(res.Run), t.ID, t.ID)
+	return fmt.Sprintf("%s (%s): its done check could not run, so the work was not judged: %s (%s); the environment of the "+
+		"check is broken or a file it runs is missing in the worktree, not the task, which stays open: mend it, then the role runs "+
+		"zmina task done %s again (zmina task show %s)", t.ID, t.Role, donecheck.Line(res.Fault()), donecheck.Line(res.Run), t.ID,
+		t.ID)
 }
