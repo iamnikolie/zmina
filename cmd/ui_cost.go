@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/iamnikolie/zmina/internal/cost"
+	"github.com/iamnikolie/zmina/internal/crew"
 )
 
 // uiCostEvery is how long the page's cost figures are kept before they are read again: reading a week of
@@ -74,15 +75,24 @@ func (a *app) readUICost() uiCost {
 
 	out.Prices = prices.Date
 
-	cells, _ := usageCells(uiCrews(a.extraCrew()), "", now.Add(-uiCostWeek), prices)
-	today := now.Format(time.DateOnly)
+	crews := uiCrews(a.extraCrew())
+	cells, _ := usageCells(crews, "", now.Add(-uiCostWeek), prices)
+
+	// A cell's day is its crew's, so today is too.
+	today := map[string]string{}
+
+	for _, uc := range crews {
+		if c, err := crew.Load(uc.Path); err == nil {
+			today[uc.Key] = now.In(c.Location()).Format(time.DateOnly)
+		}
+	}
 
 	for _, c := range cells {
 		s := out.Crews[c.Crew]
 		s.Week += c.Cost
 		out.Week += c.Cost
 
-		if c.Day == today {
+		if c.Day == today[c.Crew] {
 			s.Today += c.Cost
 			out.Today += c.Cost
 			out.Roles[c.Crew+"/"+c.Role] += c.Cost

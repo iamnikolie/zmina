@@ -38,6 +38,12 @@ func (f *Fill) Add(o Fill) {
 // Fills reads what the tools of a session and of its subagents put into their context from since until until (zero:
 // up to now), by tool kind (ToolKind).
 func Fills(t Transcript, since, until time.Time) (map[string]Fill, error) {
+	return FillsOnce(t, since, until, map[string]bool{})
+}
+
+// FillsOnce is Fills for a read of several transcripts that share seen, the ids of the calls and results read so far:
+// one in it is skipped, as a reply is in MessagesOnce.
+func FillsOnce(t Transcript, since, until time.Time, seen map[string]bool) (map[string]Fill, error) {
 	out := map[string]Fill{}
 
 	paths := []string{t.Path}
@@ -45,7 +51,7 @@ func Fills(t Transcript, since, until time.Time) (map[string]Fill, error) {
 	paths = append(paths, subs...)
 
 	for _, p := range paths {
-		if err := readFills(p, since, until, out); err != nil {
+		if err := readFills(p, since, until, seen, out); err != nil {
 			return nil, err
 		}
 	}
@@ -73,7 +79,7 @@ type fillBlock struct {
 	Content   json.RawMessage `json:"content"`
 }
 
-func readFills(path string, since, until time.Time, out map[string]Fill) error {
+func readFills(path string, since, until time.Time, seen map[string]bool, out map[string]Fill) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -86,7 +92,7 @@ func readFills(path string, since, until time.Time, out map[string]Fill) error {
 	for {
 		raw, err := rd.ReadBytes('\n')
 		if len(raw) > 0 && (bytes.Contains(raw, []byte(`"tool_use"`)) || bytes.Contains(raw, []byte(`"tool_result"`))) {
-			fillFrom(raw, since, until, kinds, out)
+			fillFrom(raw, since, until, kinds, seen, out)
 		}
 
 		if errors.Is(err, io.EOF) {
@@ -99,7 +105,7 @@ func readFills(path string, since, until time.Time, out map[string]Fill) error {
 	}
 }
 
-func fillFrom(raw []byte, since, until time.Time, kinds map[string]string, out map[string]Fill) {
+func fillFrom(raw []byte, since, until time.Time, kinds map[string]string, seen map[string]bool, out map[string]Fill) {
 	var l fillLine
 	if json.Unmarshal(raw, &l) != nil || l.Timestamp.Before(since) || !until.IsZero() && !l.Timestamp.Before(until) {
 		return
@@ -119,11 +125,20 @@ func fillFrom(raw []byte, since, until time.Time, kinds map[string]string, out m
 			}
 
 			kinds[b.ID] = k
+
+			if !once(seen, "use ", b.ID) {
+				continue
+			}
+
 			f := out[k]
 			f.Tool = k
 			f.Calls++
 			out[k] = f
 		case l.Type == "user" && b.Type == "tool_result":
+			if !once(seen, "result ", b.ToolUseID) {
+				continue
+			}
+
 			k, ok := kinds[b.ToolUseID]
 			if !ok {
 				k = "?"
@@ -142,6 +157,22 @@ func fillFrom(raw []byte, since, until time.Time, kinds map[string]string, out m
 			out[k] = f
 		}
 	}
+}
+
+// once reports whether a call or result is new to seen, and marks it: an id seen before is one transcript copied into
+// another. Without an id it is always new.
+func once(seen map[string]bool, kind, id string) bool {
+	if id == "" {
+		return true
+	}
+
+	if seen[kind+id] {
+		return false
+	}
+
+	seen[kind+id] = true
+
+	return true
 }
 
 // resultSize is a tool result's text in characters and its images: a picture's base64 is not text in the context.
