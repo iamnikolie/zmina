@@ -449,7 +449,8 @@ func TestPluginsRetryBackoffAndDrop(t *testing.T) {
 
 // A plugin past its deadline is a failure; its whole process group goes with it.
 func TestPluginsDeadline(t *testing.T) {
-	file := pluginCrew(t, "  dev: {}\n", "  - {name: slow, timeout: 1s, quiet_when_active: off}\n")
+	// A deadline far enough off that a loaded machine has started the script and let it note the event before it falls.
+	file := pluginCrew(t, "  dev: {}\n", "  - {name: slow, timeout: 4s, quiet_when_active: off}\n")
 	log := recorder(t, file, "slow", "sleep 30 & echo $! > "+filepath.Join(t.TempDir(), "child")+"; wait")
 	now := time.Now()
 
@@ -467,7 +468,7 @@ func TestPluginsDeadline(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, st.Last)
 	assert.False(t, st.Last.OK)
-	assert.Equal(t, "timed out after 1s", st.Last.Err)
+	assert.Equal(t, "timed out after 4s", st.Last.Err)
 }
 
 // A program that is not there is a mistake of the setup, not of an event: no try is spent, nothing is dropped, the problem is

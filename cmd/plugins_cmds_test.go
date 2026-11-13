@@ -92,7 +92,7 @@ func TestPluginTest(t *testing.T) {
 
 	out, _, err := zm(t, file, "plugin", "test", "pager")
 	require.NoError(t, err)
-	assert.Regexp(t, `pager: ask \(test\) → taken, \d+ms`, out)
+	assert.Regexp(t, `pager: ask \(test\) → taken, [0-9.]+(µs|ms|s)`, out, "how long it took, in whatever unit a loaded machine needs")
 	assert.Contains(t, out, "exit code: 0")
 	assert.Contains(t, out, "stdout:\n  got it")
 	assert.Contains(t, out, "stderr:\n  careful")
