@@ -1799,12 +1799,32 @@ and that role's conversation.
 |---|---|
 | `zmina later add <text...> [--note …] [--until <when>]` | park it; prints `L-3`. With `--until` (see Alarms) it comes back to the owner's todo at that time, through the notify command too: `L-3 · back Mon 2 Nov 09:00 (in 19h) · R-5`. |
 | `zmina later ls [--all] [--full] [--json]` | what is parked, oldest first: id, age, text (` · note`), one line of 100 characters (`--full`: whole); an item that comes back on a day (`--until`) starts `[back 11-12 09:00]`, in the crew's time zone. With items over 14 days a last line says how many, and how many have no day to come back. `--all`: closed too, with their state. |
-| `zmina later done <id>` / `later drop <id>` | take it off the list (`--note` replaces its note). Ids: `L-3`, `l-3` or `3`. |
+| `zmina later done <id>` / `later drop <id>` | take it off the list (`--note` replaces its note). Ids: `L-3`, `l-3` or `3`. An item an open sweep lists (below) is refused without a `--note`. |
+| `zmina later keep <id> --note "<why it still stands>"` | stamp an open item as reviewed now (`reviewed` in its file and in `later ls --json`; a file from before reads as never reviewed) and replace its note. `--note` is required. |
+| `zmina later sweep <role> [--older 14d] [--max 12] [--dry-run]` | hand `<role>` the stale items as one task (see Sweep). `--dry-run` lists the items and makes nothing. |
+| `zmina later swept <task-id>` | the sweep task's own check: exit 0 when every item it covers is closed, taken or kept since the task was made; else exit 1 naming those without a verdict. |
 | `zmina later take <id> <role> [--repo r --worktree --base b]` | turn the item into a task as `task new` would (asked = its text, note `from L-1: <its note>`) and close it as `taken T-n`. Carry its checkpoint, incomplete marker and conversation references into the new task; queue the current role-shaped handoff packet locator. If worktree creation fails, the item stays parked. |
 | `zmina later take <id> <role> --resume` | also start the down role on the stored conversation the item was parked from, then queue a short handoff packet locator (it goes with the first beat after the role has booted; `later take` without `--resume` to a role that is up delivers it at once). Read the packet and current `task show`/Note, and run its exact `task accept` command before work. Only for an item parked from a role task, into the same base role (or a copy such as `dev#2`), while the role is down. Prints `… · L-1 taken · dev#2 up on <session>`. |
 
 `zmina ls` ends with `later: N parked` while the list is not empty; nothing else reminds, but `--until`.
 `zmina log --task L-3` shows an item's history; `doctor` names damaged files.
+
+**Sweep.** Parked items go stale. `later sweep <role>` makes one task for the role, the way `task new` does (routes'
+record, handoff packet; the pick is not held to `route_override: required`), over the open items that are at least
+`--older` old and were not kept within it, are not waiting on a future `--until` and are not back on the owner's todo:
+oldest first, at most `--max` (1-25). The task keeps their ids (`sweep:` in its file) and its text lists each with its
+age, where it came from (`from T-12 (designer)`), text and note, each cut (`later ls --full` shows it whole). Per item the
+role gives exactly one verdict, after checking the code and the repo, not the text: resolved, `later done L-n --note
+"<evidence>"`; unwanted, `later drop L-n --note "<why>"`; real work, `later take L-n <role>` (the dispatcher's own
+sweep) or a `zmina note` to the dispatcher plus `later keep L-n --note "proposed to the dispatcher: …"` (any other role:
+handing out is the dispatcher's); the owner's call, `zmina todo add …` then `later keep L-n --note "asked: A-n"`;
+otherwise `later keep L-n --note "<why>"`. No stale item: it says so, makes nothing, exit 0. An open sweep refuses another.
+`later ls` ends with `sweep T-14 open: 5 of 12 without a verdict`; `task show` has a `check:` line for it.
+
+Closing the sweep: a sweep has no worktree to run a check in, so `task done`/`task set <id> done` itself asks
+`later swept` and is refused (`has parked items without a verdict`) while an item has none; the owner and the dispatcher
+`--force` it, recorded as `unchecked`. Dropping a sweep is not asked anything. A role that is down is not started: the
+usual unaccepted-task note follows. Event `later-sweep` in the log.
 
 ## Alarms — reminders and wake-ups
 
@@ -2645,6 +2665,9 @@ any time. It is not a field of `state.json`.
 - The owner parks a decision or an idea for later ("later", "park it", not for any role now):
   `zmina later add "<their words>"`, not a task. When they come back to one: `zmina later take
   L-3 <role> [--repo r --worktree]`.
+- A sweep of the parked list (`zmina later sweep <role>`) is a task titled `Sweep of N
+  parked items`. A role that is not you proposes ready work in a `zmina note` (`dev: L-3, L-5 …`) and keeps the items
+  (`later keep`): hand it out with `zmina later take L-3 <seat>`. If the dispatcher is the sweep's role, `take` is its own verdict.
 - `FYI released dev2 after 45m idle → L-15, L-16`: the ticker put an idle role down and parked its
   tasks (`release_idle_minutes`). Nothing to do, nothing to ack; the work waits on the later list. When the owner
   takes one back: `zmina later take L-15 dev2 --resume` continues the role's own conversation.

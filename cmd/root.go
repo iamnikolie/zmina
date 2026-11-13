@@ -366,6 +366,7 @@ func (a *app) ledger(s *shift.Shift) *ledger.Ledger {
 		Dispatcher: s.Crew.Dispatcher,
 		Env:        tmux.CleanEnv(os.Environ(), s.Crew.DropEnv),
 		InCheck:    os.Getenv(donecheck.InCheckEnv) != "",
+		Later:      laterStore(s.Crew),
 	}
 }
 

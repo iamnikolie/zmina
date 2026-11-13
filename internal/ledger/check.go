@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/iamnikolie/zmina/internal/donecheck"
+	"github.com/iamnikolie/zmina/internal/later"
 	"github.com/iamnikolie/zmina/internal/task"
 	"github.com/iamnikolie/zmina/internal/worktree"
 )
@@ -36,6 +37,9 @@ var (
 	ErrCheckSetter = errors.New("only the owner or the dispatcher sets a task's check")
 	// ErrCheckForce is returned when a role other than the dispatcher forces a close past a check.
 	ErrCheckForce = errors.New("only the owner or the dispatcher closes a task past its check")
+	// ErrUnswept is returned when a sweep task would close as done while an item it covers has no verdict: it is still
+	// parked and nobody kept, closed or took it since the sweep was made (zmina later swept).
+	ErrUnswept = errors.New("has parked items without a verdict")
 	// ErrInCheck is returned when a zmina that a check started would set a check or force past one.
 	ErrInCheck = errors.New("a zmina run by a check acts for no one: it sets no task's check and forces past none")
 )
@@ -344,6 +348,38 @@ func (l *Ledger) closeCheck(t task.Task, c Change, preflight bool) (*donecheck.R
 	res := c.Checked.Result
 
 	return &res, nil, nil
+}
+
+// closeSweep is what closing a sweep task as done asks of the parked list: every item it covers is closed, taken or kept
+// since the sweep was made (later.Unswept, the answer of zmina later swept), or the owner or the dispatcher closes it past
+// that (c.Force), which comes back as the Unchecked the closing keeps. nil, nil: a task that is no sweep, or no list to ask.
+func (l *Ledger) closeSweep(t task.Task, c Change) (*task.Unchecked, error) {
+	if len(t.Sweep) == 0 || l.Later == nil {
+		return nil, nil //nolint:nilnil // nothing to wait for is not an error
+	}
+
+	items, _, err := l.Later.Scan()
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", t.ID, err)
+	}
+
+	open := later.Unswept(items, t.Sweep, t.Created)
+	if len(open) == 0 {
+		return nil, nil //nolint:nilnil // every item has its verdict
+	}
+
+	run := "zmina later swept " + t.ID
+
+	if c.Force {
+		if err := l.refuseSetter(c.By, ErrCheckForce); err != nil {
+			return nil, fmt.Errorf("%s: %w", t.ID, err)
+		}
+
+		return &task.Unchecked{By: c.By, Run: run}, nil
+	}
+
+	return nil, fmt.Errorf("%s: %w: %d of %d (%s); give each a verdict, %s says which are left (--force closes it anyway, for "+
+		"the owner and the dispatcher)", t.ID, ErrUnswept, len(open), len(t.Sweep), strings.Join(open, ", "), run)
 }
 
 // cleanCheck is spec as it is kept, once who sets it may, it is a command, and the task has a worktree to run it in.

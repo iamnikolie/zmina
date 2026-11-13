@@ -55,9 +55,12 @@ type Item struct {
 	By      string `json:"by,omitempty"`
 	// Back is when its alarm (later add --until) brought it back: from then on, while it is parked, it is on the
 	// owner's todo.
-	Back    time.Time `json:"back,omitzero"`
-	Created time.Time `json:"created"`
-	Updated time.Time `json:"updated"`
+	Back time.Time `json:"back,omitzero"`
+	// Reviewed is when a sweep last found the item still standing (later keep); zero when none has. A file written
+	// before it was kept reads as never reviewed.
+	Reviewed time.Time `json:"reviewed,omitzero"`
+	Created  time.Time `json:"created"`
+	Updated  time.Time `json:"updated"`
 }
 
 // Open reports whether the item is still on the list.
@@ -224,6 +227,25 @@ func (s *Store) Close(id string, st State, note string, now time.Time) (Item, er
 	}
 
 	it.State, it.Updated = st, now
+	if note != "" {
+		it.Note = note
+	}
+
+	return it, s.Put(it)
+}
+
+// Keep stamps an open item as reviewed and still standing; note, when given, replaces its note, as Close's does.
+func (s *Store) Keep(id, note string, now time.Time) (Item, error) {
+	it, err := s.Get(id)
+	if err != nil {
+		return it, err
+	}
+
+	if !it.Open() {
+		return it, fmt.Errorf("%s is already %s", it.ID, it.State)
+	}
+
+	it.Reviewed, it.Updated = now, now
 	if note != "" {
 		it.Note = note
 	}

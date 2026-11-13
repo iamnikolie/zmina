@@ -121,6 +121,9 @@ type Task struct {
 	Ignored time.Time `json:"ignored,omitzero"`
 	// Later is the later item a parked task became.
 	Later string `json:"later,omitempty"`
+	// Sweep is the parked items (L-<n>, oldest first) a sweep of the parked list handed this task for a verdict each
+	// (zmina later sweep); a task that has some is a sweep, and closing it as done waits on zmina later swept.
+	Sweep []string `json:"sweep,omitempty"`
 	// Budget is what the task may cost, in API-equivalent dollars, before the ticker tells the dispatcher; 0: none.
 	Budget float64 `json:"budget,omitempty"`
 	// Closed is who closed the task, when, and with what note; nil while it is active, or closed by a zmina that
