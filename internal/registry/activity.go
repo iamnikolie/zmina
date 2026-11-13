@@ -126,6 +126,7 @@ func (a *Activity) read(b []byte, head bool, started []string, ended map[string]
 			Prompt string `json:"prompt"`
 			Origin *struct {
 				Kind string `json:"kind"`
+				From string `json:"from"`
 			} `json:"origin"`
 		} `json:"attachment"`
 		Result struct {
@@ -147,16 +148,22 @@ func (a *Activity) read(b []byte, head bool, started []string, ended map[string]
 	// attachment: it begins no turn, but it is said.
 	if l.Type == "attachment" {
 		if l.Attachment.Type == "queued_command" {
-			// Who sent it is in its origin, as on a user line: a peer's text (zmina's tagged lines too) may start
-			// with anything.
-			trigger, _ := textTrigger(strings.TrimSpace(l.Attachment.Prompt))
+			// Who sent it is in its origin, as on a user line: a peer's text may start with anything, zmina's tag
+			// included. Only a message from zmina is told by its text.
+			text := strings.TrimSpace(l.Attachment.Prompt)
+			trigger, _ := textTrigger(text)
+			delivered := tagged(text)
+
 			if o := l.Attachment.Origin; o != nil && o.Kind == "peer" {
 				trigger = TriggerPeer
+				if t, ok := postedTrigger(o.From, text); ok {
+					trigger, delivered = t, true
+				}
 			} else if o != nil && o.Kind == "task-notification" {
 				trigger = TriggerAgent
 			}
 
-			a.saw(l.Timestamp, l.Attachment.Prompt, trigger, ended, false, head)
+			a.saw(l.Timestamp, l.Attachment.Prompt, trigger, delivered, ended, false, head)
 		}
 
 		return started
@@ -187,17 +194,18 @@ func (a *Activity) read(b []byte, head bool, started []string, ended map[string]
 		return started
 	}
 
-	if trigger, _ := l.trigger(); trigger != "" {
-		a.saw(l.Timestamp, l.text(), trigger, ended, true, head)
+	if trigger, _, delivered := l.classify(); trigger != "" {
+		a.saw(l.Timestamp, l.text(), trigger, delivered, ended, true, head)
 	}
 
 	return started
 }
 
 // saw notes a line said to the session at a time: a background report ends its work, the owner's line is his, and a
-// line that begins a turn (prompt) is the turn's start. Before the transcript's last activitySize (head) only the ends
-// count.
-func (a *Activity) saw(at time.Time, text, trigger string, ended map[string]bool, prompt, head bool) {
+// line that begins a turn (prompt) is the turn's start. A line zmina delivered (delivered) is never the owner's, whatever
+// its text looks like: any role can queue one that reads as his chat line, and what shows that the owner wrote is his
+// receipt (shift.lastOwnerChat), not a shape. Before the transcript's last activitySize (head) only the ends count.
+func (a *Activity) saw(at time.Time, text, trigger string, delivered bool, ended map[string]bool, prompt, head bool) {
 	// A report with a status is the end of that work; a Monitor's event has none and the watch goes on.
 	if trigger == TriggerAgent {
 		for _, block := range strings.Split(text, "</task-notification>") {
@@ -215,7 +223,7 @@ func (a *Activity) saw(at time.Time, text, trigger string, ended map[string]bool
 		a.Prompt = at
 	}
 
-	if trigger == TriggerOwner && !commandLine(text) && !strings.Contains(text, BootMark) {
+	if trigger == TriggerOwner && !delivered && !commandLine(text) && !strings.Contains(text, BootMark) {
 		a.Owner = at
 	}
 }

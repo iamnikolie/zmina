@@ -59,6 +59,8 @@ type line struct {
 	Origin     *struct {
 		Kind string `json:"kind"`
 		Name string `json:"name"`
+		// From is the sender of a peer message: PostedBy when zmina posted it.
+		From string `json:"from"`
 	} `json:"origin"`
 	Message struct {
 		ID         string          `json:"id"`
@@ -490,6 +492,10 @@ const (
 	// TriggerNotice is a line of zmina's own: the ticker's health notes, idle and release notices, the owner's
 	// answers the dispatcher hears of.
 	TriggerNotice = "notice"
+	// TriggerDelivery is a line zmina delivered on the role's own channel that is none of the other kinds: a line
+	// another role queued with zmina send, a doorbell for lines kept in the inbox, or several joined lines of
+	// different kinds. A delivered handoff, schedule, remote line or notice keeps its own, joined or not.
+	TriggerDelivery = "delivery"
 	// TriggerRemote is a line from another crew (zmina tell); TriggerPeer a message from another Claude session.
 	TriggerRemote = "remote"
 	TriggerPeer   = "peer"
@@ -504,8 +510,17 @@ var fromNameRe = regexp.MustCompile(`^<cross-session-message[^>]*\sfrom-name="([
 // trigger is what a user line that opens a turn says started it; "" for a line that opens none: a tool's
 // result, a skill's text, a reminder. from is the sending session of a peer message.
 func (l *line) trigger() (trigger, from string) {
+	trigger, from, _ = l.classify()
+
+	return trigger, from
+}
+
+// classify is trigger with whether zmina delivered the line: posted to the session's inbox socket, or opening with
+// its channel tag. What the line says (the owner's chat line, say) only tells the kind of turn it started, for the
+// usage accounting: that zmina wrote it is the fact, and the text of a delivered line is whatever any role queued.
+func (l *line) classify() (trigger, from string, delivered bool) {
 	if l.Compact {
-		return TriggerCompact, ""
+		return TriggerCompact, "", false
 	}
 
 	text := ""
@@ -516,28 +531,39 @@ func (l *line) trigger() (trigger, from string) {
 	if l.Origin != nil {
 		switch l.Origin.Kind {
 		case "peer":
+			// A message zmina posted to the session's inbox socket is told by its text behind zmina's tag, as the
+			// same line is on a Codex role, whose bridge has no origin to say who sent it.
+			if t, ok := postedTrigger(l.Origin.From, text); ok {
+				return t, "", true
+			}
+
 			if from = l.Origin.Name; from == "" {
 				if m := fromNameRe.FindStringSubmatch(text); m != nil {
 					from = m[1]
 				}
 			}
 
-			return TriggerPeer, from
+			return TriggerPeer, from, false
 		case "task-notification":
-			return TriggerAgent, ""
+			return TriggerAgent, "", false
 		}
 	}
 
 	if l.Meta || l.toolResult() {
-		return "", ""
+		return "", "", false
 	}
 
-	return textTrigger(text)
+	trigger, from = textTrigger(text)
+
+	return trigger, from, tagged(text)
 }
 
 // TextTrigger classifies a prompt without storing its body in accounting records.
 func TextTrigger(text string) (string, string) { return textTrigger(text) }
 
+// textTrigger is what a prompt's text says started its turn, for a Claude role's typed line and a Codex role's
+// prompt alike (delivery.go reads the lines zmina delivers: tagged, joined, as a doorbell). The owner's is what
+// nothing else claims.
 func textTrigger(text string) (string, string) {
 	switch {
 	case strings.HasPrefix(text, "<cross-session-message"):
@@ -549,19 +575,9 @@ func textTrigger(text string) (string, string) {
 		return TriggerPeer, from
 	case strings.HasPrefix(text, "<task-notification"):
 		return TriggerAgent, ""
-	case strings.HasPrefix(text, "[zmina T-"):
-		if head, _, _ := strings.Cut(text, "]"); strings.HasSuffix(head, ", scheduled") {
-			return TriggerSchedule, ""
-		}
-
-		return TriggerHandoff, ""
-	case strings.HasPrefix(text, "[zmina] remote "):
-		return TriggerRemote, ""
-	case strings.HasPrefix(text, "[zmina]"):
-		return TriggerNotice, ""
 	}
 
-	return TriggerOwner, ""
+	return deliveryTrigger(text), ""
 }
 
 func (l *line) toolResult() bool {

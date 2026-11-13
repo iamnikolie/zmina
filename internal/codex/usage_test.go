@@ -84,3 +84,47 @@ func TestLateUsageUsesResolvedModel(t *testing.T) {
 	assert.Equal(t, registry.TriggerHandoff, us[0].Message.Trigger)
 	assert.Equal(t, 60, us[0].Message.Input)
 }
+
+// What started a Codex turn is told from the prompt as zmina's bridge inbox gave it: behind zmina's tag, one line or
+// several joined or a doorbell, none of it the owner's.
+func TestUsageTriggerOfInboxLines(t *testing.T) {
+	const (
+		tag  = "[zmina:abcdefghijkl] "
+		bell = "[zmina] 2 lines wait for you (dev on T-1): zmina inbox show in-0123456789ab"
+		chat = "[zmina chat 0123456789abcdef] go on"
+	)
+
+	for _, c := range []struct{ name, text, want string }{
+		{"handoff", tag + "[zmina T-1] fix", registry.TriggerHandoff},
+		{"notice", tag + "[zmina] dev idle 40m", registry.TriggerNotice},
+		{"remote line", tag + `[zmina] remote acme/ops: "hi"`, registry.TriggerRemote},
+		{"line of another role", tag + "[dispatcher] look at T-2", registry.TriggerDelivery},
+		{"joined handoffs", tag + "1. [zmina T-1] fix\n2. [zmina T-2] fix", registry.TriggerHandoff},
+		{"joined lines", tag + "1. [dispatcher] look at T-2\n2. [zmina] dev idle 40m", registry.TriggerDelivery},
+		{"joined with the owner's chat line", tag + "1. [zmina] dev idle 40m\n2. " + chat, registry.TriggerOwner},
+		{"doorbell", tag + bell, registry.TriggerDelivery},
+		{"owner's list", "1. buy milk\n2. call alex", registry.TriggerOwner},
+		{"owner quotes zmina", "see [zmina T-1] above", registry.TriggerOwner},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r, _, _ := testRunner(t)
+			r.o.Role, r.o.Dir, r.o.Model = "dev", "/work", "gpt-6.1-sol"
+			r.rec.Inbox = InboxDir(t.TempDir(), "zm-dev")
+			require.NoError(t, openInbox(r.rec.Inbox))
+			require.NoError(t, r.startThread(""))
+			response(t, r, `{"thread":{"id":"thread"},"model":"gpt-6.1-sol","modelProvider":"openai"}`)
+
+			_, err := Inbox{}.Post("", &registry.Session{Inbox: r.rec.Inbox}, c.text)
+			require.NoError(t, err)
+			require.NoError(t, r.drainInbox())
+			response(t, r, `{"turn":{"id":"t1"}}`)
+			notify(t, r, "turn/completed", `{"turn":{"id":"t1","status":"completed"}}`)
+			notify(t, r, "thread/tokenUsage/updated", `{"turnId":"t1","tokenUsage":{"last":{"inputTokens":100,"cachedInputTokens":40,"outputTokens":10,"totalTokens":110},"total":{"inputTokens":100,"cachedInputTokens":40,"outputTokens":10,"totalTokens":110}}}`)
+
+			us, err := r.o.Registry.UsageSessions(time.Time{})
+			require.NoError(t, err)
+			require.Len(t, us, 1)
+			assert.Equal(t, c.want, us[0].Message.Trigger)
+		})
+	}
+}

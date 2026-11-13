@@ -37,7 +37,7 @@ func TestActivity(t *testing.T) {
 		// Mid-turn, the agent's end comes as an attachment; a sidechain line is a subagent's own.
 		`{"type":"attachment","timestamp":"` + at(8) + `","attachment":{"type":"queued_command","commandMode":"task-notification","prompt":"<task-notification>\n<task-id>a1</task-id>\n<status>completed</status>\n</task-notification>"}}`,
 		`{"type":"user","isSidechain":true,"timestamp":"` + at(9) + `","message":{"role":"user","content":"hello from a subagent"}}`,
-		// zmina's tagged line mid-turn: a peer's by its origin, whatever its text starts with.
+		// zmina's tagged line mid-turn: its origin says zmina posted it, and its text what it is; never the owner's.
 		`{"type":"attachment","timestamp":"` + at(9) + `","attachment":{"type":"queued_command","commandMode":"prompt","isMeta":true,"origin":{"kind":"peer","from":"zmina"},"prompt":"[zmina:abcdefghijkl] T-1 ship it"}}`,
 		// A shell stopped with TaskStop reports no end of its own: the stop is its end.
 		`{"type":"user","timestamp":"` + at(9) + `","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t5","content":"running"}]},"toolUseResult":{"backgroundTaskId":"b2"}}`,
