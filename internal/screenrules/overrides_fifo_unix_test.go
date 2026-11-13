@@ -84,3 +84,22 @@ func TestOverrideThatIsASymlinkToAPlainFileIsRead(t *testing.T) {
 	require.NoError(t, o.Err)
 	assert.Equal(t, 1, o.Count)
 }
+
+// A symlink that points at nothing is a file that was meant to be there: it is refused and said, not taken for no file.
+func TestOverrideThatIsADanglingSymlinkIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	link := filepath.Join(dir, "screen-rules.yaml")
+	require.NoError(t, os.Symlink(filepath.Join(dir, "gone.yaml"), link))
+
+	got, o := LoadOverrides(Default(), link)
+	assert.True(t, o.Present, "the link is there")
+	require.Error(t, o.Err)
+	assert.Contains(t, o.Err.Error(), "symlink")
+	assert.False(t, o.InForce())
+	assert.Same(t, Default(), got)
+
+	// No path at all is still no file.
+	_, o = LoadOverrides(Default(), filepath.Join(dir, "nothing.yaml"))
+	assert.False(t, o.Present)
+	assert.NoError(t, o.Err)
+}

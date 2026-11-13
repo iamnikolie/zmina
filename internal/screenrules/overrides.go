@@ -9,7 +9,7 @@ import (
 )
 
 // overrideMax caps how much of an override file is read: it is a few rows.
-const overrideMax = 1 << 20
+const overrideMax = 64 << 10
 
 // Overrides says what a crew's override file did to the table.
 type Overrides struct {
@@ -39,10 +39,6 @@ func LoadOverrides(base *Table, path string) (*Table, Overrides) {
 	// Only a plain file is read. A FIFO would hold the command until something wrote to it, a device could be endless: what the
 	// path is, a symlink followed, is asked before it is opened.
 	fi, err := os.Lstat(path)
-	if err == nil && fi.Mode()&fs.ModeSymlink != 0 {
-		fi, err = os.Stat(path)
-	}
-
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return base, o
@@ -51,6 +47,21 @@ func LoadOverrides(base *Table, path string) (*Table, Overrides) {
 		o.Present, o.Err = true, err
 
 		return base, o
+	}
+
+	if fi.Mode()&fs.ModeSymlink != 0 {
+		// The link is there: one that points at nothing is a file that was meant to be, and is said, not taken for none.
+		if fi, err = os.Stat(path); err != nil {
+			o.Present = true
+
+			if errors.Is(err, fs.ErrNotExist) {
+				o.Err = fmt.Errorf("%s is a symlink that points at nothing: the file it should be is not there", path)
+			} else {
+				o.Err = err
+			}
+
+			return base, o
+		}
 	}
 
 	o.Present = true
@@ -139,6 +150,11 @@ func apply(base *Table, rows []Rule) (*Table, Overrides, error) {
 
 		seen[r.ID] = true
 		i := at(r.ID)
+
+		if r.Kind == KindBuiltin {
+			return nil, o, fmt.Errorf("rule %q: kind builtin names logic that stays in Go and lives in the embedded tables only: "+
+				"an override file adds, replaces or disables rows that match", r.ID)
+		}
 
 		if i >= 0 && next[i].Kind == KindBuiltin {
 			return nil, o, fmt.Errorf("rule %q: it is a builtin (%s): the logic stays in Go and cannot be disabled or replaced",

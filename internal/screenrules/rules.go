@@ -266,13 +266,14 @@ type fileDoc struct {
 }
 
 // decode reads a table file strictly: a field it does not know is an error, so that a misspelled one never passes for
-// a row that did what it was meant to.
+// a row that did what it was meant to. A file is one YAML document (a second would be dropped unread) and has no anchors,
+// aliases or merge keys: a few lines of them can name a tree of billions of nodes, and a table has no use for one. They are
+// looked for in a first read of the file as a tree, which expands nothing.
 func decode(name string, data []byte) ([]Rule, error) {
-	dec := yaml.NewDecoder(bytes.NewReader(data))
-	dec.KnownFields(true)
+	tree := yaml.NewDecoder(bytes.NewReader(data))
 
-	var doc fileDoc
-	if err := dec.Decode(&doc); err != nil {
+	var first yaml.Node
+	if err := tree.Decode(&first); err != nil {
 		if errors.Is(err, io.EOF) {
 			return nil, nil
 		}
@@ -280,7 +281,39 @@ func decode(name string, data []byte) ([]Rule, error) {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 
+	if line := aliasLine(&first); line > 0 {
+		return nil, fmt.Errorf("%s: line %d: a YAML anchor, alias or merge key: a screen rules file has none", name, line)
+	}
+
+	var second yaml.Node
+	if err := tree.Decode(&second); !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("%s: it has more than one YAML document, and only the first would be read", name)
+	}
+
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+
+	var doc fileDoc
+	if err := dec.Decode(&doc); err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+
 	return doc.Rules, nil
+}
+
+// aliasLine is the line of the first anchor or alias in a parsed document; zero when there is none.
+func aliasLine(n *yaml.Node) int {
+	if n.Kind == yaml.AliasNode || n.Anchor != "" {
+		return max(n.Line, 1)
+	}
+
+	for _, c := range n.Content {
+		if line := aliasLine(c); line > 0 {
+			return line
+		}
+	}
+
+	return 0
 }
 
 // compile checks a row and makes it ready to match; the error names the row's id.

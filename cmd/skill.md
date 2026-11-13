@@ -689,9 +689,10 @@ replaces or disables one is refused whole, naming its id. The input line, which 
 builtin and cannot be touched. And whatever a row captures, the exit answer is one digit, and the trust answer only moves the
 cursor (Down or Up, a few times) to the yes answer and presses Enter.
 
-It is read by every command and every beat of the ticker. A file that does not read (a field it does not know, a bad
-regexp, a builtin or an unknown id disabled, an id twice, a `sets` zmina never reads) is ignored whole: the embedded rules
-stay in force and nothing stops. A command says so once on its stderr (`zmina: warning: … screen-rules.yaml is ignored …`), the log has one `screen-rules-refused` event for each reason a day, and `zmina doctor` says so in its `screens` line (a warning naming the row), and for a good file
+It is read by every command and every beat of the ticker, and only when it is a plain file (or a link to one) of at most 64 KiB.
+A file that does not read (a field it does not know, a bad regexp, a builtin or an unknown id disabled, a row of `kind: builtin`,
+an id twice, a `sets` zmina never reads, a second YAML document, an anchor, alias or `<<` merge key, a symlink that points at
+nothing) is ignored whole: the embedded rules stay in force and nothing stops. A command says so once on its stderr (`zmina: warning: … screen-rules.yaml is ignored …`), the log has one `screen-rules-refused` event for each reason a day, and `zmina doctor` says so in its `screens` line (a warning naming the row), and for a good file
 `overrides in effect: N rules from …: added a, b; replaced c; disabled d` (at most twelve ids named, then `and N more`). `zmina explain <role>` names the row and the screen
 line behind a fact read from the screen.
 
