@@ -126,14 +126,14 @@ func Add(repo, path, branch, base string) (*Tree, error) {
 	return &Tree{Repo: top, Path: path, Branch: branch, Base: base}, nil
 }
 
-// Dirty lists the worktree's uncommitted changes (git status --short), empty when clean. A worktree that is gone
-// is clean.
+// Dirty lists the worktree's uncommitted changes (git status --short, every untracked file listed whatever the user's
+// status.showUntrackedFiles says), empty when clean. A worktree that is gone is clean.
 func (t *Tree) Dirty() (string, error) {
 	if _, err := os.Stat(t.Path); errors.Is(err, os.ErrNotExist) {
 		return "", nil
 	}
 
-	out, err := gitCtx(t.ctx(), t.Path, "status", "--short")
+	out, err := gitCtx(t.ctx(), t.Path, "status", "--short", "--untracked-files=all")
 
 	return strings.TrimSpace(out), err
 }

@@ -157,11 +157,22 @@ func TestPreserveSnapshotsUncommittedChangesWithoutTouchingAnything(t *testing.T
 	after := out(t, repo, "for-each-ref", "--format=%(refname)")
 	assert.Equal(t, refs+"\n"+got.Dirty, after)
 
-	// Kept again, they are kept again: a snapshot is a commit of its own, and the worktree is still as it was.
+	// Named by the tree of the snapshot: the same changes kept again are the same ref, and nothing else is made.
+	treeID := out(t, repo, "rev-parse", got.Dirty+"^{tree}")
+	assert.Equal(t, PreserveDirtyPrefix+"t-1-"+treeID[:8], got.Dirty)
+
 	again, err := tree.Preserve("T-1")
 	require.NoError(t, err)
-	require.NotEmpty(t, again.Dirty)
+	assert.Equal(t, got, again)
+	assert.Equal(t, after, out(t, repo, "for-each-ref", "--format=%(refname)"), "no second ref")
 	assert.Equal(t, "a changed", out(t, repo, "show", again.Dirty+":a.txt"))
+
+	// Other changes are another snapshot, another ref.
+	write(t, tree.Path, "more.txt", "more\n")
+
+	third, err := tree.Preserve("T-1")
+	require.NoError(t, err)
+	assert.NotEqual(t, got.Dirty, third.Dirty)
 }
 
 // Commits and changes together, and a detached HEAD with commits of its own while the task's branch has none: each is kept.
@@ -282,4 +293,171 @@ func mustRead(t *testing.T, path string) string {
 	require.NoError(t, err)
 
 	return string(raw)
+}
+
+// What is kept does not depend on the user's config: with status.showUntrackedFiles=no, git status shows no untracked file,
+// and a worktree whose only work is one is still not clean, for Dirty or for Preserve.
+func TestPreserveAndDirtyDoNotDependOnTheUsersStatusConfig(t *testing.T) {
+	repo, tree, _ := preserveFixture(t)
+
+	run(t, repo, "config", "status.showUntrackedFiles", "no")
+	write(t, tree.Path, "only-untracked.txt", "work\n")
+	write(t, tree.Path, "dir/inner.txt", "work\n")
+
+	assert.Empty(t, out(t, tree.Path, "status", "--short"), "the config hides it from git status")
+
+	dirty, err := tree.Dirty()
+	require.NoError(t, err)
+	assert.Contains(t, dirty, "?? only-untracked.txt")
+	assert.Contains(t, dirty, "?? dir/inner.txt", "every untracked file, not the directory")
+
+	got, err := tree.Preserve("T-1")
+	require.NoError(t, err)
+	require.NotEmpty(t, got.Dirty)
+	assert.Equal(t, "work", out(t, repo, "show", got.Dirty+":only-untracked.txt"))
+	assert.Equal(t, "work", out(t, repo, "show", got.Dirty+":dir/inner.txt"))
+}
+
+// A snapshot holds a nested repository or a submodule only as a commit id, so the work in it would be lost: it is refused,
+// naming the path, and nothing is made (no branch, no ref).
+func TestPreserveRefusesNestedRepositoriesAndSubmodules(t *testing.T) {
+	t.Run("an untracked directory with a repository of its own", func(t *testing.T) {
+		repo, tree, _ := preserveFixture(t)
+		write(t, tree.Path, "b.txt", "b")
+		run(t, tree.Path, "add", ".")
+		run(t, tree.Path, "commit", "-q", "-m", "b")
+
+		nested := filepath.Join(tree.Path, "vendor", "lib")
+		require.NoError(t, os.MkdirAll(nested, 0o700))
+		run(t, nested, "init", "-q", "-b", "main")
+		write(t, nested, "f.txt", "f")
+		run(t, nested, "add", ".")
+		run(t, nested, "commit", "-q", "-m", "f")
+
+		_, err := tree.Preserve("T-1")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "vendor/lib")
+		assert.Contains(t, err.Error(), "nested git repository or a submodule")
+		assert.Empty(t, out(t, repo, "branch", "--list", "zmina-preserve/*"), "nothing made, not even the branch of the commits")
+		assert.Empty(t, out(t, repo, "for-each-ref", "refs/zmina-preserve-dirty/"))
+	})
+
+	t.Run("a submodule entry", func(t *testing.T) {
+		repo, tree, _ := preserveFixture(t)
+
+		head := out(t, tree.Path, "rev-parse", "HEAD")
+		run(t, tree.Path, "update-index", "--add", "--cacheinfo", "160000,"+head+",deps/sub")
+		run(t, tree.Path, "commit", "-q", "-m", "a submodule")
+
+		// Its directory is there, as an uninitialised submodule's is: empty.
+		require.NoError(t, os.MkdirAll(filepath.Join(tree.Path, "deps", "sub"), 0o700))
+
+		_, err := tree.Preserve("T-1")
+		require.ErrorContains(t, err, "deps/sub")
+		assert.Empty(t, out(t, repo, "branch", "--list", "zmina-preserve/*"))
+	})
+
+	t.Run("two of them", func(t *testing.T) {
+		_, tree, _ := preserveFixture(t)
+
+		for _, name := range []string{"one", "two"} {
+			nested := filepath.Join(tree.Path, name)
+			require.NoError(t, os.MkdirAll(nested, 0o700))
+			run(t, nested, "init", "-q", "-b", "main")
+			write(t, nested, "f.txt", name)
+			run(t, nested, "add", ".")
+			run(t, nested, "commit", "-q", "-m", name)
+		}
+
+		_, err := tree.Preserve("T-1")
+		require.ErrorContains(t, err, "(and 1 more)")
+	})
+}
+
+// Only the task's own checkout is snapshotted: a directory that exists but is no worktree of its own, one inside another
+// checkout, is no worktree to keep, as a directory that is gone is none; the other checkout's changes are never taken. A path
+// that is a symlink to the worktree is the worktree.
+func TestPreserveNeverSnapshotsAnotherCheckout(t *testing.T) {
+	repo, tree, _ := preserveFixture(t)
+
+	// The path the task records is a plain directory inside the main checkout, which has work of its own.
+	write(t, repo, "main-work.txt", "not the task's\n")
+	plain := filepath.Join(repo, "left-over")
+	require.NoError(t, os.MkdirAll(plain, 0o700))
+	write(t, plain, "x.txt", "x")
+
+	stray := *tree
+	stray.Path = plain
+
+	got, err := stray.Preserve("T-1")
+	require.NoError(t, err)
+	assert.True(t, got.Empty(), "no worktree to keep: %+v", got)
+	assert.Empty(t, out(t, repo, "for-each-ref", "refs/zmina-preserve-dirty/"), "the main checkout's work was not taken")
+
+	// A symlink to the task's worktree is the worktree.
+	write(t, tree.Path, "wip.txt", "wip")
+
+	link := filepath.Join(t.TempDir(), "link")
+	require.NoError(t, os.Symlink(tree.Path, link))
+
+	viaLink := *tree
+	viaLink.Path = link
+
+	got, err = viaLink.Preserve("T-1")
+	require.NoError(t, err)
+	assert.Equal(t, "wip", out(t, repo, "show", got.Dirty+":wip.txt"))
+}
+
+// A path that cannot be read at all, for any reason but being gone, is a failure to keep, not a worktree with nothing in it.
+func TestPreserveRefusesAPathThatCannotBeRead(t *testing.T) {
+	_, tree, _ := preserveFixture(t)
+
+	bad := *tree
+	bad.Path = filepath.Join(t.TempDir(), "x\x00y") // a name no file system takes: not "no such file"
+
+	_, err := bad.Preserve("T-1")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot be read")
+}
+
+// A ref that is there already for the same tree is the same work kept, whatever commit it points at: a retry is not refused.
+func TestPreserveTakesARefOfTheSameTreeForTheSameWork(t *testing.T) {
+	repo, tree, _ := preserveFixture(t)
+	write(t, tree.Path, "wip.txt", "wip")
+
+	first, err := tree.Preserve("T-1")
+	require.NoError(t, err)
+
+	treeID := out(t, repo, "rev-parse", first.Dirty+"^{tree}")
+
+	// The ref is gone and another commit of the very same tree is put under the name: as a run that was cut off, or a clock
+	// that moved, leaves it.
+	run(t, repo, "update-ref", "-d", first.Dirty)
+	other := out(t, repo, "commit-tree", treeID, "-m", "made by another run")
+	run(t, repo, "update-ref", first.Dirty, other)
+
+	again, err := tree.Preserve("T-1")
+	require.NoError(t, err)
+	assert.Equal(t, first.Dirty, again.Dirty)
+	assert.Equal(t, other, out(t, repo, "rev-parse", first.Dirty), "what was there stays")
+}
+
+// A repository with no commit yet keeps its files; one with no file has nothing to keep.
+func TestPreserveOfAWorktreeWithNoCommit(t *testing.T) {
+	repo := t.TempDir()
+	run(t, repo, "init", "-q", "-b", "main")
+
+	tree := &Tree{Repo: repo, Path: repo, Branch: "main", Base: "main"}
+
+	got, err := tree.Preserve("T-1")
+	require.NoError(t, err)
+	assert.True(t, got.Empty())
+
+	write(t, repo, "first.txt", "first")
+
+	got, err = tree.Preserve("T-1")
+	require.NoError(t, err)
+	require.NotEmpty(t, got.Dirty)
+	assert.Empty(t, got.DirtyOver)
+	assert.Equal(t, "first", out(t, repo, "show", got.Dirty+":first.txt"))
 }

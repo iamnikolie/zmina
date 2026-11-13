@@ -937,7 +937,7 @@ func (a *app) printCollected(got []ledger.Collected, dryRun, dropGone bool) {
 			fmt.Fprintf(a.out, "%s: would remove %s\n", c.ID, c.Detail)
 
 			if c.WouldPreserve {
-				fmt.Fprintf(a.out, "%s: its unmerged commits and uncommitted changes, if it has any, would be kept in git first\n", c.ID)
+				fmt.Fprintf(a.out, "%s: its unmerged commits and uncommitted changes, if it has any, would be kept in git first (ignored files are not)\n", c.ID)
 			}
 		default:
 			removed++
@@ -1005,7 +1005,7 @@ func (a *app) printPreserved(c ledger.Collected) {
 			over = " (a commit over " + p.DirtyOver + ")"
 		}
 
-		fmt.Fprintf(a.out, "%s: kept its uncommitted changes, untracked files included, as %s%s; restore: git -C %s worktree add --detach %s %s\n",
+		fmt.Fprintf(a.out, "%s: kept its uncommitted changes, untracked files included (ignored files are not kept), as %s%s; restore: git -C %s worktree add --detach %s %s\n",
 			c.ID, p.Dirty, over, repo, dir, p.Dirty)
 	}
 }

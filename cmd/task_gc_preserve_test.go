@@ -72,7 +72,7 @@ func TestTaskGCForceKeepsTheWorkBeforeRemovingIt(t *testing.T) {
 	out, _, err := zm(t, c.file, "task", "gc", "--force", "--dry-run")
 	require.NoError(t, err)
 	assert.Contains(t, out, "T-1: would remove ")
-	assert.Contains(t, out, "would be kept in git first")
+	assert.Contains(t, out, "would be kept in git first (ignored files are not)")
 	assert.DirExists(t, wt, "a dry run removes nothing")
 	assert.Empty(t, gitIn(t, c.repo, "for-each-ref", "refs/zmina-preserve-dirty/"), "and keeps nothing")
 
@@ -83,7 +83,7 @@ func TestTaskGCForceKeepsTheWorkBeforeRemovingIt(t *testing.T) {
 	repo := "'" + taskRepo(t, c) + "'"
 	assert.Contains(t, out, "T-1: removed ")
 	assert.Contains(t, out, "T-1: kept 1 commit(s) beyond the base on branch "+branch+"; restore: git -C "+repo+" worktree add <a new directory> "+branch)
-	assert.Contains(t, out, "T-1: kept its uncommitted changes, untracked files included, as refs/zmina-preserve-dirty/t-1-")
+	assert.Contains(t, out, "T-1: kept its uncommitted changes, untracked files included (ignored files are not kept), as refs/zmina-preserve-dirty/t-1-")
 	assert.Contains(t, out, "(a commit over "+tip[:8]+"); restore: git -C "+repo+" worktree add --detach <a new directory> refs/zmina-preserve-dirty/t-1-")
 
 	assert.NoDirExists(t, wt)
@@ -155,4 +155,41 @@ func mustReadString(t *testing.T, path string) string {
 	t.Helper()
 
 	return string(mustRead(t, path))
+}
+
+// A worktree with a nested git repository in it cannot be kept in a snapshot: it is not removed, and the line names the path and
+// points at --no-preserve; and a user whose git config hides untracked files from git status still has them kept.
+func TestTaskGCForceRefusesANestedRepositoryAndKeepsWhatStatusConfigHides(t *testing.T) {
+	c := newCheckCrew(t, "")
+	wt := c.task(t)
+
+	nested := filepath.Join(wt, "vendor", "lib")
+	require.NoError(t, os.MkdirAll(nested, 0o700))
+	gitIn(t, nested, "init", "-q", "-b", "main")
+	require.NoError(t, os.WriteFile(filepath.Join(nested, "f.txt"), []byte("f"), 0o600))
+	gitIn(t, nested, "add", ".")
+	gitIn(t, nested, "commit", "-q", "-m", "f")
+
+	_, _, err := zm(t, c.file, "task", "drop", "1", "--force")
+	require.NoError(t, err)
+
+	out, _, err := zm(t, c.file, "task", "gc", "--force")
+	require.NoError(t, err)
+	assert.Contains(t, out, "T-1: kept: its work could not be kept first (vendor/lib is a nested git repository or a submodule")
+	assert.Contains(t, out, "so nothing was removed; --no-preserve removes it anyway")
+	assert.DirExists(t, nested)
+
+	// Without the nested repository, and with git status told to show no untracked file: they are kept all the same.
+	require.NoError(t, os.RemoveAll(nested))
+	gitIn(t, c.repo, "config", "status.showUntrackedFiles", "no")
+	require.NoError(t, os.WriteFile(filepath.Join(wt, "only-untracked.txt"), []byte("work"), 0o600))
+
+	out, _, err = zm(t, c.file, "task", "gc", "--force")
+	require.NoError(t, err)
+	assert.Contains(t, out, "T-1: kept its uncommitted changes")
+
+	ref := strings.TrimSpace(gitIn(t, c.repo, "for-each-ref", "--format=%(refname)", "refs/zmina-preserve-dirty/"))
+	require.NotEmpty(t, ref)
+	assert.Equal(t, "work", gitIn(t, c.repo, "show", ref+":only-untracked.txt"))
+	assert.NoDirExists(t, wt)
 }
