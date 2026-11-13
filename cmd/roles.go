@@ -1347,16 +1347,28 @@ func statusCell(v shift.View) string {
 }
 
 // statusWords is the role's status and, for one that waits, what on: `waiting (question)` or `waiting (permission)`;
-// for one idle since a turn that ended on an API error, that: `idle (last turn ended in an API error: …)`.
+// for one idle since a turn that ended on an API error, that: `idle (last turn ended in an API error: …)`; a usage limit says
+// so, with when it lifts when the message gave it, and an account problem says it needs the owner.
 func statusWords(v shift.View) string {
 	switch {
 	case v.WaitingFor != "":
 		return v.Status + " (" + v.WaitingFor + ")"
 	case v.TurnError != "":
-		return v.Status + " (last turn ended in an API error: " + clip(v.TurnError, 60) + ")"
+		return v.Status + " (last turn ended in an API error" + turnErrorKind(v) + ": " + clip(v.TurnError, 60) + ")"
 	}
 
 	return v.Status
+}
+
+// turnErrorKind is the words after "an API error" that say what kind it was, after a comma: nothing for a transient one.
+func turnErrorKind(v shift.View) string {
+	c := shift.FailureClass{Kind: shift.FailureKind(v.TurnErrorKind), Reset: v.TurnErrorReset}
+
+	if w := c.Words(); w != "" {
+		return ", " + w
+	}
+
+	return ""
 }
 
 func since(v shift.View) string {

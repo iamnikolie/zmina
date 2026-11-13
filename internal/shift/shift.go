@@ -258,6 +258,11 @@ type View struct {
 	// Claude Code's own words for it, empty when the role is not idle since such a turn or has no such hook. Computed on
 	// every look, and gone when the next turn starts; it is not kept in the state.
 	TurnError string `json:"turn_error,omitempty"`
+	// TurnErrorKind is what kind of error that was when it is not a transient one: "limit" (a usage or rate limit, with
+	// TurnErrorReset when the message gave the time it lifts) or "account" (billing, login, permission, a model that is not
+	// there: the owner mends it). Empty for a transient error, and when TurnError is empty.
+	TurnErrorKind  string    `json:"turn_error_kind,omitempty"`
+	TurnErrorReset time.Time `json:"turn_error_reset,omitzero"`
 	// Context is how many tokens the conversation fills (0: not known); ContextMax the role's context_max.
 	Context    int `json:"context,omitempty"`
 	ContextMax int `json:"context_max,omitempty"`
@@ -460,6 +465,10 @@ func (s *Shift) Views() []View {
 
 			if f := s.failureFor(name, sess); f != nil {
 				v.TurnError = f.Text()
+
+				if c := f.Class(); c.Kind != KindTransient {
+					v.TurnErrorKind, v.TurnErrorReset = string(c.Kind), c.Reset
+				}
 			}
 
 			// The question its hook recorded, when that is the one on screen; else what the screen reads as.

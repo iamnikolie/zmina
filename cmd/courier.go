@@ -644,11 +644,13 @@ func (a *app) courierDeliver(base *shift.Shift, try func(role string) bool) (cou
 }
 
 // queueGated reports whether a role that is up has something queued that waiting does not name: a line of its own,
-// or, for the dispatcher, a signal or a note. Waiting leaves such a role out only for a time (see gatedLook).
+// or, for the dispatcher, a signal or a note. Waiting leaves such a role out only for a time (see gatedLook), which a role
+// held for an account problem is not: nothing but its next turn, a restart or the owner's message lifts that, and each of
+// them changes the state or runs a hook.
 func queueGated(s *shift.Shift, waiting []string) bool {
 	for _, name := range s.Names() {
 		rs := s.State.Roles[name]
-		if rs == nil || !rs.Up || slices.Contains(waiting, name) {
+		if rs == nil || !rs.Up || slices.Contains(waiting, name) || s.HeldUntilNextTurn(name, s.Now()) {
 			continue
 		}
 

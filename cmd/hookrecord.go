@@ -81,8 +81,8 @@ func (a *app) permissionRequestCommand() *cobra.Command {
 
 // stopFailureCommand is the StopFailure hook of a Claude role (roleSettings): Claude Code runs it when a turn ends on an
 // API error, which runs no Stop hook. It only records: the error for the role (shift.RecordFailure), so the role's view
-// and the dispatcher's note say how the turn ended and delivery holds the role's queue for a while (shift.FailHold), and
-// one event in the log, the hold's start. It posts nothing, retries nothing, prints nothing, and exits 0 whatever goes
+// and the dispatcher's note say how the turn ended and delivery holds the role's queue for a while (shift.FailHold; for
+// a limit until it lifts, for an account problem until the role's next turn), and one event in the log, the hold's start. It posts nothing, retries nothing, prints nothing, and exits 0 whatever goes
 // wrong, a record that cannot be written included.
 func (a *app) stopFailureCommand() *cobra.Command {
 	var role string
@@ -110,7 +110,7 @@ func (a *app) stopFailureCommand() *cobra.Command {
 			}
 
 			_ = (&events.Log{Path: l.Events()}).Add(events.Event{Role: role, Event: "failure-hold", By: "hook",
-				Detail: "its turn ended on an API error (" + f.Text() + "): the lines queued for it wait " + shift.FailHold.String()})
+				Detail: "its turn ended on an API error (" + f.Text() + "): " + shift.HoldWords(f)})
 
 			return nil
 		},
