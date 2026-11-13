@@ -1,6 +1,7 @@
 package shift
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -370,15 +371,22 @@ func TestLimitsHoldEndsByTheClockWhenNoReadingConfirms(t *testing.T) {
 	assert.Empty(t, f.book(t).Holds)
 }
 
-func TestLimitsHoldEndsWhenAFreshReadingShowsTheWindowUnderTheShare(t *testing.T) {
+func TestLimitsHoldEndsWhenFreshReadingsShowTheWindowUnderTheShareTwice(t *testing.T) {
 	f, _ := heldDesigner(t)
 
+	// Seen once, under the share by more than two points: a candidate, not a release.
 	*f.now = f.now.Add(5 * time.Minute)
-	f.claudeLimits(95, 10)
+	f.claudeLimits(90, 10)
+	assert.Empty(t, f.s.limitsStep(*f.now))
+	assert.Len(t, f.book(t).Holds, 1)
+
+	// A reading drawn later, on the next beat, under it too: the hold ends.
+	*f.now = f.now.Add(time.Minute)
+	f.claudeLimits(90, 10)
 
 	did := f.s.limitsStep(*f.now)
 	require.Len(t, did, 1)
-	assert.Contains(t, did[0], "claude: 5h window is at 95%, under its hold share; ")
+	assert.Contains(t, did[0], "claude: 5h window is at 90%, under its hold share; ")
 	assert.Empty(t, f.book(t).Holds)
 
 	_, held := f.s.planHold("designer", *f.now)
@@ -1493,4 +1501,335 @@ func TestLimitsHoldQueuesASendThatIsNotTheOwners(t *testing.T) {
 	f.s.By = "hand"
 	require.NoError(t, f.s.Send("designer", "look at this first"))
 	assert.Equal(t, []string{"look at this first"}, p.posted["sid-designer"])
+}
+
+// An owner's receipt names a line by its words: a role that queues the exact words of an earlier owner line must not pass a hold with it. The
+// pass is the owner's card's — the queued line the owner wrote, not yet delivered — and it is gone once that line has gone.
+func TestAReceiptDoesNotPassARoleWhoQueuesTheOwnersExactWords(t *testing.T) {
+	const owner = "stop, look at this first"
+
+	t.Run("a plan hold", func(t *testing.T) {
+		f, _ := heldDesigner(t)
+		f.live("designer")
+		f.status("designer", "idle", *f.now)
+		f.live("designer")
+
+		ownerSays(t, f, "designer", owner)
+		require.True(t, slicesContain(f.s.Waiting(), "designer"))
+		require.NotEmpty(t, f.s.DeliverTo("designer"), "the owner's line goes")
+		assert.Equal(t, []string{owner}, f.tm.typed["designer"])
+
+		// A role sends the same words: the receipt is the owner's, its line is not.
+		f.s.By = "dev"
+		require.NoError(t, f.s.Queue("designer", owner))
+		f.s.By = "hand"
+
+		f.status("designer", "idle", *f.now)
+		f.live("designer")
+
+		assert.False(t, slicesContain(f.s.Waiting(), "designer"), "it waits behind the hold")
+		assert.Equal(t, -1, f.s.ownerLine("designer"))
+		assert.Empty(t, f.s.DeliverTo("designer"))
+		assert.Equal(t, []string{owner}, f.tm.typed["designer"], "nothing more was typed")
+	})
+
+	t.Run("a failed turn's hold", func(t *testing.T) {
+		f, _ := nativeFixture(t, crewYAML)
+		require.NoError(t, f.s.Up("designer"))
+
+		start := *f.now
+		f.status("designer", "idle", start)
+		f.rg.endedAt["sid-designer"] = start.Add(time.Second)
+		f.s.State.Role("designer").Booted = start
+
+		failedAt := start.Add(time.Minute)
+		*f.now = failedAt
+		f.status("designer", "idle", failedAt)
+		f.live("designer")
+		f.failed(t, "designer", failedInput, failedAt)
+
+		*f.now = failedAt.Add(time.Second)
+
+		ownerSays(t, f, "designer", owner)
+		require.True(t, slicesContain(f.s.Waiting(), "designer"))
+		require.NotEmpty(t, f.s.DeliverTo("designer"))
+
+		f.s.By = "dev"
+		require.NoError(t, f.s.Queue("designer", owner))
+		f.s.By = "hand"
+
+		f.status("designer", "idle", failedAt)
+		f.live("designer")
+
+		assert.False(t, slicesContain(f.s.Waiting(), "designer"))
+		assert.Equal(t, -1, f.s.ownerLine("designer"))
+	})
+}
+
+// One pass that ends a hold by the clock and, from a fresh reading of the next period, begins another says the new hold and nothing else: no
+// release note, no event, no turns to wait for.
+func TestLimitsAReleaseAndANewHoldInOnePassSaysOnlyTheHold(t *testing.T) {
+	f := fixtureWith(t, manyRoles)
+	f.s.Asks = &asks.Store{Dir: f.s.Crew.Layout().Asks()}
+
+	require.NoError(t, f.s.Queue("dev1", "[dispatcher] one"))
+
+	reset := f.now.Add(time.Hour)
+	f.claudeLimitsResetting(97, 10, reset, limitsReset7)
+	require.NotEmpty(t, f.s.limitsStep(*f.now))
+
+	first := f.book(t).Holds[0]
+	require.NotEmpty(t, first.Ask, "the dispatcher is held: an item for the owner")
+
+	notes := len(f.s.State.Notes)
+
+	// At the reset the next window is already at the share.
+	*f.now = reset
+	f.claudeLimitsResetting(98, 10, reset.Add(4*time.Hour), limitsReset7)
+
+	did := f.s.limitsStep(*f.now)
+	require.Len(t, did, 1)
+	assert.Contains(t, did[0], "claude: 5h window at 98%, holding its 7 roles until")
+	assert.Len(t, f.s.State.Notes, notes, "the new hold's note replaces the old one: no note more")
+	assert.Contains(t, f.s.State.Notes, "claude: 5h window at 98%, holding its 7 roles until "+limitClock(reset.Add(4*time.Hour), reset, time.UTC)+holdNoteTail)
+	assert.Equal(t, 1, f.ev.count("", "limit-hold")-1, "the second hold")
+	assert.Zero(t, f.ev.count("", "limit-release"))
+	assert.Empty(t, f.book(t).Waits, "nothing is let go in turn")
+	assert.True(t, f.s.planHeld("dev1", *f.now), "held by the new hold")
+
+	// The first hold's item for the owner is closed all the same, and the new one has its own.
+	got, err := f.s.Asks.(*asks.Store).Get(first.Ask)
+	require.NoError(t, err)
+	assert.False(t, got.Open())
+	assert.NotEmpty(t, f.book(t).Holds[0].Ask)
+	assert.NotEqual(t, first.Ask, f.book(t).Holds[0].Ask)
+}
+
+// drawFive is a status line drawn now with the 5-hour window at a figure, as the tap records it in the limits directory.
+func (f fix) drawFive(t *testing.T, used float64, resets time.Time) {
+	t.Helper()
+
+	_, err := limits.Tap(f.s.Crew.Layout().Limits(), []byte(fmt.Sprintf(`{"rate_limits":{"five_hour":{"used_percentage":%v,"resets_at":%d}}}`,
+		used, resets.Unix())), *f.now)
+	require.NoError(t, err)
+}
+
+// beatLimits is one beat of a process of its own: the file as it stands is read, judged and acted on.
+func (f fix) beatLimits(t *testing.T) []string {
+	t.Helper()
+
+	r, err := limits.Collect(f.s.Crew.Layout().Limits(), nil, limits.DefaultPolicy(), *f.now)
+	require.NoError(t, err)
+
+	f.s.Limits, f.s.limitBook = &r, nil
+
+	return f.s.limitsStep(*f.now)
+}
+
+// Usage inside one period only grows: a lower figure at the same reset is an older one, a session redrawing the last figure it saw. It must neither
+// delay a hold (a lower figure overwriting a higher before the beat looked) nor end one and set it flapping, with a note, a todo item and a push each time.
+func TestLimitsAStaleRedrawDoesNotDelayOrFlapAHold(t *testing.T) {
+	f := fixtureWith(t, limitsCrew)
+	store := &asks.Store{Dir: f.s.Crew.Layout().Asks()}
+	f.s.Asks = store
+
+	// A real draw at 98% and, seconds on and before any beat has looked, a stale redraw of 85%: the hold is not delayed by it.
+	f.drawFive(t, 98, limitsReset5)
+	*f.now = f.now.Add(30 * time.Second)
+	f.drawFive(t, 85, limitsReset5)
+
+	did := f.beatLimits(t)
+	require.Len(t, did, 1, "held at once: the higher figure stood in the file")
+	assert.Contains(t, did[0], "holding its 4 roles")
+
+	notes, item := len(f.s.State.Notes), f.book(t).Holds[0].Ask
+	require.NotEmpty(t, item)
+
+	// A minute on, the stale redraw again: the stored figure is fresh, the higher stays.
+	*f.now = f.now.Add(time.Minute)
+	f.drawFive(t, 85, limitsReset5)
+	assert.Empty(t, f.beatLimits(t))
+
+	// Fifteen minutes with no real draw (every role held draws nothing): the stored reading is old, the stale 85% replaces it in the file. One beat
+	// that sees it, and another that sees the same reading, do not end the hold.
+	*f.now = f.now.Add(15 * time.Minute)
+	f.drawFive(t, 85, limitsReset5)
+	assert.Empty(t, f.beatLimits(t), "seen once: a candidate, not a release")
+
+	*f.now = f.now.Add(time.Minute)
+	assert.Empty(t, f.beatLimits(t), "the same reading seen again: nothing new")
+
+	// A real draw at 98% again: the candidate is gone, and still nothing was said.
+	*f.now = f.now.Add(time.Minute)
+	f.drawFive(t, 98, limitsReset5)
+	assert.Empty(t, f.beatLimits(t))
+
+	// The stale figure again, as often as it comes: never two beats on readings with different times in a row.
+	for i := 0; i < 3; i++ {
+		*f.now = f.now.Add(15 * time.Minute)
+		f.drawFive(t, 85, limitsReset5)
+		assert.Empty(t, f.beatLimits(t), "round %d", i)
+
+		*f.now = f.now.Add(time.Minute)
+		f.drawFive(t, 98, limitsReset5)
+		assert.Empty(t, f.beatLimits(t), "round %d", i)
+	}
+
+	assert.Len(t, f.s.State.Notes, notes, "no note more")
+	assert.Zero(t, f.ev.count("", "limit-release"))
+	assert.Equal(t, 1, f.ev.count("", "limit-hold"))
+	require.Len(t, f.book(t).Holds, 1)
+	assert.Equal(t, item, f.book(t).Holds[0].Ask, "the same item for the owner")
+
+	items, _, err := store.Scan()
+	require.NoError(t, err)
+	assert.Len(t, items, 1, "no item more")
+	assert.True(t, items[0].Open())
+}
+
+// A genuine drop — the window read lower on two beats, by readings drawn at different times, each two points under the share — does end the hold.
+func TestLimitsAGenuineDropEndsAHoldOnTheSecondBeat(t *testing.T) {
+	f := fixtureWith(t, limitsCrew)
+
+	f.drawFive(t, 98, limitsReset5)
+	require.Len(t, f.beatLimits(t), 1)
+
+	// The plan was changed: the same window reads 40%, drawn after a long silence (the first draw replaces the old reading) and again later.
+	*f.now = f.now.Add(15 * time.Minute)
+	f.drawFive(t, 40, limitsReset5)
+	assert.Empty(t, f.beatLimits(t), "the first sighting")
+
+	*f.now = f.now.Add(6 * time.Minute)
+	f.drawFive(t, 40, limitsReset5) // drawn again after the heartbeat: a reading of its own time
+	did := f.beatLimits(t)
+	require.Len(t, did, 1)
+	assert.Contains(t, did[0], "claude: 5h window is at 40%, under its hold share; ")
+	assert.Empty(t, f.book(t).Holds)
+}
+
+// If recording the id of a hold's todo item in the book fails, the item just made is closed, and the beats after do not make one every time: one
+// item at most, nothing left open to be pushed again.
+func TestLimitsAFailedSecondWriteDoesNotOpenAnItemEveryBeat(t *testing.T) {
+	f := fixtureWith(t, limitsCrew)
+	store := &asks.Store{Dir: f.s.Crew.Layout().Asks()}
+	f.s.Asks = store
+
+	calls := 0
+	real := writeLimitsBook
+	writeLimitsBook = func(dir string, b limits.Book) error {
+		calls++
+		if calls >= 2 {
+			return errors.New("no space left on device")
+		}
+
+		return real(dir, b)
+	}
+
+	t.Cleanup(func() { writeLimitsBook = real })
+
+	for i := 0; i < 3; i++ {
+		f.claudeLimits(97, 10)
+		f.s.limitBook = nil
+		f.s.limitsStep(*f.now)
+
+		open := 0
+
+		for _, a := range store.Pending() {
+			if a.By == holdAskBy {
+				open++
+			}
+		}
+
+		assert.Zero(t, open, "beat %d: nothing is left open to be pushed", i)
+
+		*f.now = f.now.Add(time.Minute)
+	}
+
+	items, _, err := store.Scan()
+	require.NoError(t, err)
+	assert.LessOrEqual(t, len(items), 1, "one item at most, made once")
+	assert.Equal(t, 1, f.ev.count("", "limits-problem"), "said once")
+	assert.True(t, f.s.planHeld("dispatcher", *f.now), "the hold itself stands")
+}
+
+// An item of the hold's kind that is open already (the beat that made it died before it recorded the id) is the hold's: no second one is made.
+func TestLimitsAdoptsAnOpenItemOfTheHold(t *testing.T) {
+	f := fixtureWith(t, limitsCrew)
+	store := &asks.Store{Dir: f.s.Crew.Layout().Asks()}
+	f.s.Asks = store
+
+	f.claudeLimits(97, 10)
+	require.NotEmpty(t, f.s.limitsStep(*f.now))
+
+	made := f.book(t).Holds[0].Ask
+	require.NotEmpty(t, made)
+
+	// The id is lost from the book (the beat died before the second write); the item is open.
+	b := f.book(t)
+	b.Holds[0].Ask = ""
+	require.NoError(t, limits.WriteBook(f.s.Crew.Layout().Limits(), b))
+
+	*f.now = f.now.Add(time.Minute)
+	f.claudeLimits(97, 10)
+	f.s.limitBook = nil
+	f.s.limitsStep(*f.now)
+
+	assert.Equal(t, made, f.book(t).Holds[0].Ask, "adopted")
+
+	items, _, err := store.Scan()
+	require.NoError(t, err)
+	assert.Len(t, items, 1, "no second item")
+	assert.True(t, items[0].Open())
+}
+
+// The note of a hold is kept past the cap for as long as its hold is on, and no longer; a new hold of the same window replaces the note of the
+// one before, so that notes of holds do not pile up unread.
+func TestLimitsHoldNotesReplaceEachOtherAndOnlyAnActiveHoldsIsPinned(t *testing.T) {
+	f := fixtureWith(t, limitsCrew)
+
+	reset1 := f.now.Add(time.Hour)
+	f.claudeLimitsResetting(97, 10, reset1, limitsReset7)
+	require.NotEmpty(t, f.s.limitsStep(*f.now))
+
+	first := "claude: 5h window at 97%, holding its 4 roles until 13:00" + holdNoteTail
+	require.Contains(t, f.s.State.Notes, first)
+
+	// An hour on the window rolled over and the next is at the share at once (the dispatcher read nothing meanwhile): the note is replaced.
+	*f.now = reset1
+	reset2 := reset1.Add(4 * time.Hour)
+	f.claudeLimitsResetting(98, 10, reset2, limitsReset7)
+	require.NotEmpty(t, f.s.limitsStep(*f.now))
+
+	second := "claude: 5h window at 98%, holding its 4 roles until 17:00" + holdNoteTail
+	assert.Contains(t, f.s.State.Notes, second)
+	assert.NotContains(t, f.s.State.Notes, first, "replaced")
+
+	holdNotes := 0
+
+	for _, n := range f.s.State.Notes {
+		if strings.HasSuffix(n, holdNoteTail) {
+			holdNotes++
+		}
+	}
+
+	assert.Equal(t, 1, holdNotes)
+
+	// While its hold is on the note outlasts the health notes behind it.
+	for i := 0; i < 2*notesMax; i++ {
+		f.s.addNotes([]string{fmt.Sprintf("dev%d: busy for 95 min", i)})
+	}
+
+	assert.Contains(t, f.s.State.Notes, second)
+
+	// Once the hold is over (the reset passes, and the dispatcher is not held) it is a note like the others, and goes when they pile up.
+	*f.now = reset2.Add(time.Minute)
+	f.claudeLimitsResetting(2, 10, reset2.Add(4*time.Hour), limitsReset7)
+	f.s.limitsStep(*f.now)
+	f.s.State.Notes = append([]string{second}, f.s.State.Notes...)
+
+	for i := 0; i < 2*notesMax; i++ {
+		f.s.addNotes([]string{fmt.Sprintf("rev%d: busy for 95 min", i)})
+	}
+
+	assert.NotContains(t, f.s.State.Notes, second, "an ended hold's note is not pinned")
 }

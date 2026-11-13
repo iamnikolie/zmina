@@ -55,6 +55,8 @@ type Action struct {
 	Confirmed bool
 	// Seen is when the reading was taken (the last one, for a release that is not confirmed); zero when there was none.
 	Seen time.Time
+	// Superseded is set on a release in a pass that also began a hold of the same plan: the caller says only the hold.
+	Superseded bool
 }
 
 // Label is the action's window in words: "claude 5h window".
@@ -197,7 +199,14 @@ func Evaluate(in Input) Result {
 	released := map[relKey]relInfo{}
 
 	for _, h := range book.Holds {
-		if a, ended := release(h, find(h.Plan, h.Window, h.Home), in.Thresholds.For(h.Plan), now); ended {
+		reading, marks := find(h.Plan, h.Window, h.Home), in.Thresholds.For(h.Plan)
+
+		a, ended := release(h, reading, marks, now)
+		if !ended {
+			h, a, ended = judgeBelow(h, reading, marks)
+		}
+
+		if ended {
 			acts = append(acts, a)
 
 			k := relKey{h.Plan, h.Home}
@@ -218,8 +227,6 @@ func Evaluate(in Input) Result {
 
 	book.Holds = kept
 
-	book.pace(rs, released, in, now)
-
 	for _, r := range rs {
 		if !slices.Contains(in.Plans, r.plan) || r.w.Stale {
 			continue
@@ -227,6 +234,16 @@ func Evaluate(in Input) Result {
 
 		acts = book.trigger(acts, r, in.Thresholds.For(r.plan), now)
 	}
+
+	// A hold that begins in the pass that ends another of its plan says the new one and nothing of the old: no roles are let go in turn
+	// (pace sees the plan held), and the release is marked, so that its caller closes what it opened and says nothing.
+	for i, a := range acts {
+		if a.Kind == KindRelease && slices.ContainsFunc(acts, func(b Action) bool { return b.Kind == KindHold && b.Plan == a.Plan && b.Home == a.Home }) {
+			acts[i].Superseded = true
+		}
+	}
+
+	book.pace(rs, released, in, now)
 
 	book.prune(now)
 	book.Postponed = slices.DeleteFunc(book.Postponed, func(p Postponed) bool { return now.Sub(p.Run) > postponedKeep })
@@ -256,7 +273,8 @@ func release(h Hold, r *windowReading, marks Shares, now time.Time) (Action, boo
 		return a, true
 	case !now.Before(h.Reset):
 		// The clock ends it. A fresh reading of another period says the window did roll over; none says nothing, and the data is stale.
-		a.Confirmed = fresh && (r.w.Resets == nil || !sameReset(*r.w.Resets, h.Reset))
+		// A reading with no reset (the reader dropped it as no window's) says nothing of the window having rolled over.
+		a.Confirmed = fresh && r.w.Resets != nil && !sameReset(*r.w.Resets, h.Reset)
 		if fresh {
 			a.Used = r.w.Used
 		}
@@ -267,13 +285,35 @@ func release(h Hold, r *windowReading, marks Shares, now time.Time) (Action, boo
 		a.Confirmed, a.Used = true, r.w.Used
 
 		return a, true
-	case fresh && r.w.Resets != nil && sameReset(*r.w.Resets, h.Reset) && r.w.Used < float64(marks.HoldOf(h.Window)):
-		a.Reason, a.Confirmed, a.Used = ReasonBelow, true, r.w.Used
-
-		return a, true
 	}
 
 	return a, false
+}
+
+// belowMargin is how many points under the hold share a reading must be to count for the window having fallen: a figure just under it is a
+// reading that wavers, not a window that emptied.
+const belowMargin = 2
+
+// judgeBelow is the release of a hold on a reading of its own period that shows the window well under the hold share. Usage inside one period
+// only grows, so a lower figure is more likely an old one — a session redrawing what its last reply showed — than a window that emptied; it is
+// not believed at once. The first such reading drawn after the hold began is kept in the hold as a candidate; the release is a second one, drawn
+// at another time, on a later beat. A beat that finds the window not under the share (or no fresh reading of it) drops the candidate.
+func judgeBelow(h Hold, r *windowReading, marks Shares) (Hold, Action, bool) {
+	share := float64(marks.HoldOf(h.Window))
+
+	low := r != nil && !r.w.Stale && r.w.Resets != nil && sameReset(*r.w.Resets, h.Reset) && r.at.After(h.Since) && r.w.Used <= share-belowMargin
+
+	switch {
+	case !low:
+		h.Below = time.Time{}
+	case h.Below.IsZero():
+		h.Below = r.at
+	case r.at.After(h.Below):
+		return h, Action{Kind: KindRelease, Plan: h.Plan, Window: h.Window, Home: h.Home, Used: r.w.Used, Reset: h.Reset, Hold: h, Reason: ReasonBelow,
+			Confirmed: true, Seen: r.at}, true
+	}
+
+	return h, Action{}, false
 }
 
 // relKey is a plan's holds of one Codex home (empty for Claude), the unit a release is paced for.

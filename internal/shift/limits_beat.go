@@ -57,11 +57,29 @@ func (s *Shift) signalRefused(most int) {
 		signalsRefusedNote, n, most)})
 }
 
-// pinnedNote reports a note the cap on the health notes keeps while the dispatcher's plan is held: the note of a hold and the one that says
-// signals were refused. The dispatcher reads neither until the hold is over, and they are what it must read first.
-func (s *Shift) pinnedNote(note string) bool {
-	return (strings.HasSuffix(note, holdNoteTail) || strings.HasPrefix(note, signalsRefusedNote)) && s.Now != nil && s.planHeld(s.Crew.Dispatcher, s.Now())
+// holdNotePrefix is how the note of a hold begins: its plan and window.
+func holdNotePrefix(h limits.Hold) string {
+	return fmt.Sprintf("%s: %s at ", h.Plan, limits.WindowLabel(h.Window))
 }
+
+// pinnedNote reports a note the cap on the health notes keeps while the dispatcher's plan is held: the note of a hold that is on, and the one that
+// says signals were refused. The dispatcher reads neither until the hold is over, and they are what it must read first. The note of a hold that has
+// ended is a note like the others.
+func (s *Shift) pinnedNote(note string) bool {
+	if s.Now == nil || !s.planHeld(s.Crew.Dispatcher, s.Now()) {
+		return false
+	}
+
+	if strings.HasPrefix(note, signalsRefusedNote) {
+		return true
+	}
+
+	return strings.HasSuffix(note, holdNoteTail) &&
+		slices.ContainsFunc(s.holdBook().Active(s.Now()), func(h limits.Hold) bool { return strings.HasPrefix(note, holdNotePrefix(h)) })
+}
+
+// writeLimitsBook keeps the book; a test replaces it to make a write fail.
+var writeLimitsBook = limits.WriteBook
 
 // holdAskBy marks the todo items a plan hold opens for the owner: the beat closes one that no hold on the book answers for any more.
 const holdAskBy = "limits-hold"
@@ -114,13 +132,16 @@ func (s *Shift) limitsStep(now time.Time) []string {
 		Order: s.releaseOrder})
 
 	if res.Changed {
-		if err := limits.WriteBook(dir, res.Book); err != nil {
+		if err := writeLimitsBook(dir, res.Book); err != nil {
 			s.limitsProblem("write", time.Hour, "the holds file was not written, so nothing was told or held this beat: "+err.Error(), now)
 
 			s.limitBook = &book
 
 			return nil
 		}
+
+		// Writable again: a problem said of writing is over, and what it held back (the todo item of a hold) is no longer held back.
+		s.limitsProblemClear("write")
 	}
 
 	s.limitBook = &res.Book
@@ -144,9 +165,14 @@ func (s *Shift) limitsStep(now time.Time) []string {
 
 	// The owner's todo, once the book stands: an item for each hold of the dispatcher's plan that has none (the one that just began, or one
 	// whose item could not be written then), and the close of any that no hold answers for.
-	if s.openAsks(&res.Book, now) {
-		if err := limits.WriteBook(dir, res.Book); err != nil {
+	if changed, made := s.openAsks(&res.Book, now); changed {
+		if err := writeLimitsBook(dir, res.Book); err != nil {
 			s.limitsProblem("write", time.Hour, "the holds file was not written with the todo item of a hold: "+err.Error(), now)
+
+			// An item the book cannot answer for is closed, not left open: the next beat would make another, and the first would be pushed.
+			for _, id := range made {
+				_, _ = s.Asks.Close(id, asks.Done, "the holds file could not record it; zmina closed it", now)
+			}
 		} else {
 			s.limitBook = &res.Book
 		}
@@ -164,16 +190,16 @@ func (s *Shift) limitsStep(now time.Time) []string {
 // limitsProblem says why the holds file cannot be kept: one event, not one a beat. The last time a kind of problem was said is kept in
 // limits.problem in the crew's directory (the limits directory may be what cannot be written), and it is said again after every.
 func (s *Shift) limitsProblem(kind string, every time.Duration, text string, now time.Time) {
-	path := filepath.Join(s.Crew.StateDir(), "limits.problem")
+	if s.limitsProblemWithin(kind, every, now) {
+		return
+	}
 
 	var last struct {
 		Kind string    `json:"kind"`
 		At   time.Time `json:"at"`
 	}
 
-	if raw, err := os.ReadFile(path); err == nil && json.Unmarshal(raw, &last) == nil && last.Kind == kind && now.Sub(last.At) < every {
-		return
-	}
+	path := filepath.Join(s.Crew.StateDir(), "limits.problem")
 
 	s.log("", "limits-problem", "", text)
 
@@ -185,6 +211,32 @@ func (s *Shift) limitsProblem(kind string, every time.Duration, text string, now
 	if raw, err := json.Marshal(last); err == nil {
 		_ = fsx.WriteFile(path, raw, 0o600)
 	}
+}
+
+// limitsProblemClear forgets a problem of the kind that was said: it is said again if it comes back.
+func (s *Shift) limitsProblemClear(kind string) {
+	var last struct {
+		Kind string    `json:"kind"`
+		At   time.Time `json:"at"`
+	}
+
+	path := filepath.Join(s.Crew.StateDir(), "limits.problem")
+
+	if raw, err := os.ReadFile(path); err == nil && json.Unmarshal(raw, &last) == nil && last.Kind == kind {
+		_ = os.Remove(path)
+	}
+}
+
+// limitsProblemWithin reports whether a problem of the kind was said less than every ago.
+func (s *Shift) limitsProblemWithin(kind string, every time.Duration, now time.Time) bool {
+	var last struct {
+		Kind string    `json:"kind"`
+		At   time.Time `json:"at"`
+	}
+
+	raw, err := os.ReadFile(filepath.Join(s.Crew.StateDir(), "limits.problem"))
+
+	return err == nil && json.Unmarshal(raw, &last) == nil && last.Kind == kind && now.Sub(last.At) < every
 }
 
 // limitPlans are the plans the crew's roles bill: nothing is said of a plan none of them does.
@@ -209,19 +261,36 @@ func (s *Shift) dispatcherHeldBy(h limits.Hold) bool {
 
 // openAsks puts an item on the owner's todo for each active hold of the dispatcher's own plan that has none: the dispatcher cannot read the
 // note that tells of it, so the owner is told by the path the other owner alarms take (a todo item that blocks the role, which the crew's
-// notify command pushes). The item's id goes in the hold, so that its release closes it. A todo that cannot be written is warned of; the
-// event and zmina doctor say it all the same. It reports whether it changed the book.
-func (s *Shift) openAsks(book *limits.Book, now time.Time) bool {
+// notify command pushes). An item of the hold's kind that is open already, made for this plan and window since the hold began (the beat that made it
+// died before it recorded the id), is the hold's: it is adopted, not made again. Nothing is made within an hour of a write of the book that failed,
+// whose second write would fail the same way. The item's id goes in the hold, so that its release closes it. A todo that cannot be written is warned
+// of; the event and zmina doctor say it all the same. It reports whether it changed the book, and the ids of the items it made (as against adopted).
+func (s *Shift) openAsks(book *limits.Book, now time.Time) (changed bool, made []string) {
 	if s.Asks == nil {
-		return false
+		return false, nil
 	}
 
-	changed := false
 	loc := s.Crew.Location()
+
+	var open []asks.Ask
 
 	for i := range book.Holds {
 		h := &book.Holds[i]
 		if h.Ask != "" || !h.Active(now) || !s.dispatcherHeldBy(*h) {
+			continue
+		}
+
+		if open == nil {
+			open = s.Asks.Pending()
+		}
+
+		if a, ok := adoptable(open, *h, book.Holds); ok {
+			h.Ask, changed = a.ID, true
+
+			continue
+		}
+
+		if s.limitsProblemWithin("write", time.Hour, now) {
 			continue
 		}
 
@@ -241,9 +310,23 @@ func (s *Shift) openAsks(book *limits.Book, now time.Time) bool {
 		}
 
 		h.Ask, changed = ask.ID, true
+		made = append(made, ask.ID)
 	}
 
-	return changed
+	return changed, made
+}
+
+// adoptable is the open item of the hold kind that a hold may take for its own: made for its plan and window, since the hold began, and not the
+// item of another hold on the book.
+func adoptable(open []asks.Ask, h limits.Hold, holds []limits.Hold) (asks.Ask, bool) {
+	for _, a := range open {
+		if a.By == holdAskBy && strings.HasPrefix(a.Title, h.Label()+" at ") && !a.Created.Before(h.Since) &&
+			!slices.ContainsFunc(holds, func(o limits.Hold) bool { return o.Ask == a.ID }) {
+			return a, true
+		}
+	}
+
+	return asks.Ask{}, false
 }
 
 // closeOrphanAsks closes the todo items a hold opened that no hold on the book answers for: the holds file was lost, or a hold ended
@@ -293,9 +376,23 @@ func (s *Shift) act(a limits.Action, book limits.Book, now time.Time) (kind, tex
 		// A checkpoint asked a few minutes ago and not yet read would be read after the reset, about a window that is over.
 		s.dropCheckpointAsks(roles, "the plan is held: it would be read after the reset")
 
+		// The note of an earlier hold of this window that the dispatcher has not read is the old news: this one replaces it.
+		s.State.Notes = slices.DeleteFunc(s.State.Notes, func(n string) bool {
+			return strings.HasSuffix(n, holdNoteTail) && strings.HasPrefix(n, holdNotePrefix(a.Hold))
+		})
+
 		return "limit-hold", fmt.Sprintf("%s: %s at %s, holding its %d %s until %s%s", a.Plan,
 			limits.WindowLabel(a.Window), percent(a.Used), len(roles), plural(len(roles), "role", "roles"), limitClock(a.Reset, now, loc), holdNoteTail)
 	case limits.KindRelease:
+		if a.Superseded {
+			// Another hold of the plan began in the same pass: the one that ended is only closed, and the hold says all there is to say.
+			if a.Hold.Ask != "" && s.Asks != nil {
+				_, _ = s.Asks.Close(a.Hold.Ask, asks.Done, "the hold ended; zmina closed it", now)
+			}
+
+			return "", ""
+		}
+
 		return "limit-release", s.holdEnded(a, book, now)
 	}
 

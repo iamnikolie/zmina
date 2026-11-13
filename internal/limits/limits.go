@@ -21,9 +21,6 @@ const (
 	// replaceAfter is how long a stored window may go undrawn before any newer reading replaces it, an earlier reset included: a
 	// reading that old is no evidence against a newer one (another account, a reset the stored one had wrong).
 	replaceAfter = 10 * time.Minute
-	// raceWindow is how close two draws of one window may be for the figure to decide between them: the sessions that drew them
-	// are not told apart by their clocks, and a window only fills.
-	raceWindow = 10 * time.Second
 	// sameResetWithin is how far two reset times of one window may be apart and still be the same period.
 	sameResetWithin = 2 * time.Minute
 )
@@ -88,28 +85,28 @@ func (w *Window) same(o *Window) bool {
 	return w.Resets == nil || w.Resets.Equal(*o.Resets)
 }
 
-// latest is the window that stands when w, a reading drawn at at, meets o, the one stored, drawn at oldAt: o when w is older by
-// its own evidence, else w. A stored window nobody has drawn for replaceAfter yields to any newer reading. Inside that time w is
-// older when it resets before o does (an old status line input redrawn) or was drawn before o was; at the same reset the newer
-// reading stands whatever it spent, but two draws within raceWindow keep the higher figure, since a window only fills and the
-// two are not told apart by time. A window that says nothing of its reset has no evidence of age, and w stands.
+// latest is the window that stands when w, a reading drawn at at, meets o, the one stored, drawn at oldAt: o when w is older by its own
+// evidence, else w. Usage inside one period only grows, so at the same reset the higher figure stands, and a lower one is an older one (a
+// session redrawing the last figure it saw): it replaces the stored only when the stored reading is itself older than replaceAfter. A window
+// whose reset is earlier than the stored one's is an old input redrawn, and stays out unless the stored reading is that old; one drawn before the
+// stored was is out. A window that says nothing of its reset has no evidence of age, and w stands.
 func (w *Window) latest(o *Window, at, oldAt time.Time) *Window {
 	if w == nil || o == nil || w.Resets == nil || o.Resets == nil {
 		return w
 	}
 
-	if at.Sub(oldAt) > replaceAfter {
-		return w
-	}
+	age := at.Sub(oldAt)
 
 	switch {
 	case at.Before(oldAt):
 		return o
 	case sameReset(*w.Resets, *o.Resets):
-		if at.Sub(oldAt) < raceWindow && w.Used < o.Used {
+		if w.Used < o.Used && age <= replaceAfter {
 			return o
 		}
 
+		return w
+	case age > replaceAfter:
 		return w
 	case w.Resets.Before(*o.Resets):
 		return o

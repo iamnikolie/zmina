@@ -553,3 +553,48 @@ func TestLsAndDoctorSayTheRolesWaitingTheirTurnAfterARelease(t *testing.T) {
 	assert.Equal(t, "ok", got[0].Level)
 	assert.Contains(t, got[0].Detail, "release: claude plan: 2 roles let go in turn")
 }
+
+// zmina note past the cap of a held dispatcher is refused, and the one note that counts what was refused is saved with the state: it is not
+// dropped with a command that failed.
+func TestNotePastTheHeldCapSavesTheCountingNote(t *testing.T) {
+	crewFile := testCrew(t, "  dev:\ntimezone: UTC\n")
+
+	c, err := crew.Load(crewFile)
+	require.NoError(t, err)
+
+	holdBook(t, c, time.Now().UTC().Add(time.Hour).Truncate(time.Minute), "")
+
+	l, err := shift.Lock(c.StateDir())
+	require.NoError(t, err)
+
+	l.SignalCounts = map[string]int{}
+
+	for i := 0; i < 100; i++ {
+		sig := fmt.Sprintf("dev: result %d", i)
+		l.Signals = append(l.Signals, sig)
+		l.SignalCounts[sig] = 1
+	}
+
+	require.NoError(t, l.Save())
+
+	for i := 0; i < 2; i++ {
+		_, _, err = zm(t, crewFile, "note", "--from", "dev", fmt.Sprintf("one too many %d", i))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "100 notes already wait for the dispatcher")
+	}
+
+	st, err := shift.Read(c.StateDir())
+	require.NoError(t, err)
+	assert.Len(t, st.Signals, 100)
+
+	var summaries []string
+
+	for _, n := range st.Notes {
+		if strings.Contains(n, "signals from the roles were refused while the dispatcher was held") {
+			summaries = append(summaries, n)
+		}
+	}
+
+	require.Len(t, summaries, 1, "saved, once")
+	assert.Contains(t, summaries[0], "2 signals from the roles were refused")
+}

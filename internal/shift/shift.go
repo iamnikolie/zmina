@@ -1634,11 +1634,16 @@ func (s *Shift) note(from, text string, ifUp, info bool) (string, bool, error) {
 	}
 
 	if most := s.signalsCap(); len(s.State.Signals) >= most {
+		err := fmt.Errorf("%d notes already wait for the dispatcher; it is not reading them", most)
+
 		if most > signalsMax {
+			// The count of what was refused is the part of the state that is kept (Partial: the command fails, the note it changed is saved).
 			s.signalRefused(most)
+
+			return "", false, Partial(err)
 		}
 
-		return "", false, fmt.Errorf("%d notes already wait for the dispatcher; it is not reading them", most)
+		return "", false, err
 	}
 
 	// The id comes with the note, not with its delivery: zmina queue ls and the recovery pack show it, and a line

@@ -2054,11 +2054,13 @@ hold     claude 5h window at 97%, until 21:40 (6 roles, 14 lines waiting); the o
 ```
 
 - **Claude** is the 5-hour and the 7-day window as the status line of a Claude role last drew them. The status-line
-  tap writes them to `limits/claude.json` in the crew's directory. A draw does not take the file back: within ten
-  minutes of the stored reading, a window whose reset is earlier than the stored one's (a session redrawing with an old
-  status line input) is not taken, and at the same reset two draws less than 10 seconds apart keep the higher `used`; a draw with
-  nothing newer leaves the file, `at` included, as it is. A stored window nobody drew for ten minutes yields to any newer reading
-  (another account, a reset it had wrong), and at the same reset a newer reading stands whatever it spent.
+  tap writes them to `limits/claude.json` in the crew's directory. A draw does not take the file back: usage inside
+  one period only grows, so at the same reset the higher `used` stands and a lower figure is taken for an older one (a session
+  redraws the figure of its last reply), and within ten minutes of the stored reading a window whose reset is earlier than the stored
+  one's (a session redrawing with an old status line input) is not taken either; a draw with nothing newer leaves the file, `at`
+  included, as it is. Only a stored reading nobody has drawn for ten minutes yields to any newer one, a lower figure and an earlier
+  reset included (another account, a reset it had wrong). Two Claude accounts cannot share one crew: the file holds one reading, so a
+  crew whose Claude seats use different accounts should set `hold: off` for claude until there are readings per account.
 - **Codex** is the weekly window (10080 minutes), read from the newest rollout under `sessions/` of each Codex home the
   crew knows: `~/.codex` and every Codex seat's `codex_home`. The newest is found by modification time across all days'
   folders, and in it the last `rate_limits` line counts. Of the homes, the reading recorded last wins; `(codex-dev)`
@@ -2130,17 +2132,27 @@ hold     claude 5h window at 97%, until 21:40 (6 roles, 14 lines waiting); the o
     `zmina up` is the owner's own act and goes on, with the hold named on stderr. One note: `claude: 5h window at 97%, holding its 6 roles
     until 14:00; lines wait, the owner's pass` (event `limit-hold`). When the dispatcher's own plan is the held one it cannot read that
     note (it is queued, and goes when the hold ends), so the owner is told as for any other owner alarm: a todo item that
-    blocks the dispatcher (made after the holds file is written, its id recorded with a second write), which the crew's notify
-    command pushes (`notify_on: blocking`, the default), closed by zmina when the hold ends, and by the next beat when no hold answers
-    for it (the holds file was lost); with no todo that can be written, the event and `zmina doctor` say it. While the dispatcher is held
-    its note of the hold and one note saying how many signals were refused are kept by the cap on the health notes (20), and signals
-    are taken up to 100 (20 as ever when it is not held); past 100 a signal is refused and that one note counts them.
+    blocks the dispatcher (made after the holds file is written, its id recorded with a second write; an open item of the kind made for
+    the same plan and window since the hold began is adopted, not made again, and one whose id could not be recorded is closed, with no
+    new one for an hour), which the crew's notify command pushes (`notify_on: blocking`, the default), closed by zmina when the hold ends,
+    and by the next beat when no hold answers for it (the holds file was lost); with no todo that can be written, the event and `zmina
+    doctor` say it. While the dispatcher is held, the note of each hold that is on (a new hold of the same window replaces the note of the one
+    before) and one note saying how many signals were refused are kept by the cap on the health notes (20), and signals are taken up to 100
+    (20 as ever when it is not held); past 100 a signal is refused, `zmina note` fails with that, and the one note that counts them is saved
+    all the same. The owner's own line is the line the owner queued: besides his receipt it must have a delivery card that says it came from him
+    and is still queued, so a role that queues the same words after his line has gone waits behind the hold, for a failed turn's hold too.
   - **Release**: the hold ends by the clock at the window's reset time, whether or not a beat has run; or when a fresh
-    reading of the same period shows the window under the hold share; or when a fresh reading shows a later period; or when
+    reading shows the window of the same period under the hold share, but not on one reading: a lower figure within a period is
+    more likely an old one than a window that emptied, so the first reading drawn after the hold began that is at least 2 points under
+    the share is kept in the hold as a candidate, and a second one, drawn at another time (a later `at`), on the beat after, ends it; a
+    beat that finds the window higher, or reads nothing fresh, drops the candidate (`holds.json`, `below`); or when a fresh reading shows a later period; or when
     `hold` is turned off for the window in the crew file (no reading needed; the next beat ends it); or when its reset time is one
     no such window can have. Stale data alone never ends it before its reset time. One note: `claude: 5h window reset, 14 lines go:
     the dispatcher now, the other 6 roles 3 at a time, a minute apart` (event `limit-release`; `go now` when no role waits a turn);
-    at the reset time with no fresh reading since, `reset time 14:00 passed and no fresh reading has come, so its data is stale`.
+    at the reset time with no fresh reading since (a reading whose reset was dropped as no window's counts as none), `reset time
+    14:00 passed and no fresh reading has come, so its data is stale`. A pass that ends one hold and, from a fresh reading of the next
+    period, begins another of the plan says only the new hold: no release note or event, no turns, and the old hold's todo item is
+    closed.
     Two windows held at once keep the plan until the later reset; the first to end says what still holds it.
   - **The release is paced**: when the last hold of a plan ends the dispatcher goes at once, then three roles a minute, the role whose
     oldest waiting line is oldest first, those with nothing waiting last. The book keeps a time each role waits until (`waits`), and

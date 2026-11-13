@@ -198,13 +198,19 @@ func TestTapKeepsTheStoredReadingWhenTheIncomingOneIsOlder(t *testing.T) {
 	assert.Equal(t, 41.0, c.SevenDay.Used)
 	assert.True(t, c.At.Equal(noon), "the file still says when its figures were seen")
 
-	// The same reset with less spent, seconds after, is the same window seen earlier by another session.
-	wrote, err = Tap(dir, reading(15, 1893500000, 30, 1894000000), noon.Add(3*time.Second))
-	require.NoError(t, err)
-	assert.False(t, wrote)
+	// The same reset with less spent is the same window seen earlier by another session: usage only grows within a period.
+	for _, later := range []time.Duration{3 * time.Second, time.Minute, 2 * Heartbeat} {
+		wrote, err = Tap(dir, reading(15, 1893500000, 30, 1894000000), noon.Add(later))
+		require.NoError(t, err)
+		assert.False(t, wrote, "%v after", later)
+	}
 
-	// Minutes later it is a newer reading of the window, and stands (TestTapTakesALowerFigureAtTheSameResetFromANewerReading).
-	wrote, err = Tap(dir, reading(15, 1893500000, 30, 1894000000), noon.Add(2*Heartbeat))
+	c, err = ReadClaude(dir)
+	require.NoError(t, err)
+	assert.Equal(t, 20.0, c.FiveHour.Used)
+
+	// Only when the stored reading is older than ten minutes does a lower figure replace it (TestTapReplacesAStoredWindowNobodyDrewForTenMinutes).
+	wrote, err = Tap(dir, reading(15, 1893500000, 30, 1894000000), noon.Add(2*Heartbeat+time.Second))
 	require.NoError(t, err)
 	assert.True(t, wrote)
 
@@ -386,29 +392,38 @@ func TestCollectDropsAResetThatWasWrittenBeforeTheBoundExisted(t *testing.T) {
 	assert.NotNil(t, r.Claude.SevenDay.Resets, "two days off for a week is fine")
 }
 
-// The same reset with less spent is a newer reading when the stored one is not a draw of the last seconds: an account that
-// was switched, or a figure that was corrected, is not discarded for ever.
-func TestTapTakesALowerFigureAtTheSameResetFromANewerReading(t *testing.T) {
+// Usage inside one period only grows: a lower figure at the same reset is an older one (a session redrawing the figure of its last reply). It
+// replaces the stored reading only when that is itself older than ten minutes.
+func TestTapKeepsTheHigherFigureAtTheSameResetUntilTheStoredReadingIsOld(t *testing.T) {
 	dir := t.TempDir()
 	reset := noon.Add(3 * time.Hour)
 
 	_, err := Tap(dir, fiveAt(90, reset), noon)
 	require.NoError(t, err)
 
-	// Seconds later, out of order: the figure that was there stays.
-	wrote, err := Tap(dir, fiveAt(20, reset), noon.Add(5*time.Second))
-	require.NoError(t, err)
-	assert.False(t, wrote, "two draws seconds apart are not told apart by time: a window only fills")
-
-	// A minute later it is a newer reading, and it wins.
-	wrote, err = Tap(dir, fiveAt(20, reset), noon.Add(time.Minute))
-	require.NoError(t, err)
-	assert.True(t, wrote)
+	for _, later := range []time.Duration{5 * time.Second, time.Minute, 10 * time.Minute} {
+		wrote, err := Tap(dir, fiveAt(20, reset), noon.Add(later))
+		require.NoError(t, err)
+		assert.False(t, wrote, "%v after: the higher figure stands", later)
+	}
 
 	c, err := ReadClaude(dir)
 	require.NoError(t, err)
+	assert.Equal(t, 90.0, c.FiveHour.Used)
+
+	// A higher figure at the same reset is the window filling: it stands at once.
+	wrote, err := Tap(dir, fiveAt(95, reset), noon.Add(time.Minute))
+	require.NoError(t, err)
+	assert.True(t, wrote)
+
+	// Eleven minutes after the stored reading nobody has drawn: the lower figure is what there is to go by.
+	wrote, err = Tap(dir, fiveAt(20, reset), noon.Add(time.Minute+11*time.Minute))
+	require.NoError(t, err)
+	assert.True(t, wrote)
+
+	c, err = ReadClaude(dir)
+	require.NoError(t, err)
 	assert.Equal(t, 20.0, c.FiveHour.Used)
-	assert.True(t, c.At.Equal(noon.Add(time.Minute)))
 }
 
 // A stored window nobody has redrawn for ten minutes yields to whatever is drawn, an earlier reset included: another account.

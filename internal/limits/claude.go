@@ -146,10 +146,11 @@ func ReadClaude(dir string) (*Claude, error) {
 //
 // Sessions share the file, and one that redraws with figures it saw long ago (a stale status line input) must not
 // take back a newer reading: a window whose reset is earlier than the stored one's is the stored window's past, and
-// at the same reset two draws seconds apart keep the higher percentage (a window only fills). The stored window stays then,
-// and a draw that brought nothing newer than the file leaves it as it is, At included: the file says when its figures
-// were seen, not when an old one was drawn again. A stored window nobody drew for ten minutes yields to any newer reading, and at
-// the same reset a newer reading stands whatever it spent (Window.latest).
+// at the same reset the higher percentage stands (a window only fills, and a lower figure is an older one: a session shows the figure of its last
+// reply). The stored window stays then, and a draw that brought nothing newer than the file leaves it as it is, At included: the file says
+// when its figures were seen, not when an old one was drawn again. A stored window nobody drew for ten minutes yields to any newer reading, a
+// lower figure at the same reset included (Window.latest); the beat does not take such a drop for the window having emptied before it has seen it
+// twice (limits.Evaluate).
 func Tap(dir string, raw []byte, now time.Time) (bool, error) {
 	c := ParseStatusline(raw, now)
 	if c == nil {

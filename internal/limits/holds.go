@@ -47,6 +47,9 @@ type Hold struct {
 	Since  time.Time `json:"since"`
 	Used   float64   `json:"used"`
 	Ask    string    `json:"ask,omitempty"`
+	// Below is when the reading was drawn that first showed the window under the hold share, well under (belowMargin points), since the hold began:
+	// the candidate of a release, which a second such reading, drawn at another time, on the beat after, makes one. Zero when no reading has.
+	Below time.Time `json:"below,omitzero"`
 }
 
 // credible reports whether the hold's reset time can be its window's: no further from the moment the hold began than the window
