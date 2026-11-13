@@ -681,10 +681,18 @@ only to `usage_limit`, `trust_question` and `exit_dialog`; `region.input_box` on
 only sets `usage_limit` (every other flag is read for Claude screens). A row that names what its flag ignores is refused at load,
 with its id, like a bad regexp.
 
+What an override can change is the words zmina reads: a usage-limit wording (`usage_limit`), the markers of the role's last words
+(`say_mark`, `tool_call`, `say_cont`, `say_stop`), peek's footer (`footer_hint`, `footer_option`, `footer_model`, `footer_path`).
+It cannot change what zmina presses or types. The rows that decide a key — the exit question's answer (`exit_dialog`), the trust
+question's (`trust_*`) — or the dialog a key is pressed into (`dialog_*`, `chat_dialog_*`) are protected: a file that adds,
+replaces or disables one is refused whole, naming its id. The input line, which gates every line typed into a role, is a
+builtin and cannot be touched. And whatever a row captures, the exit answer is one digit, and the trust answer only moves the
+cursor (Down or Up, a few times) to the yes answer and presses Enter.
+
 It is read by every command and every beat of the ticker. A file that does not read (a field it does not know, a bad
 regexp, a builtin or an unknown id disabled, an id twice, a `sets` zmina never reads) is ignored whole: the embedded rules
 stay in force and nothing stops. `zmina doctor` says so in its `screens` line (a warning naming the row), and for a good file
-`overrides in effect: N rules from … (1 added, 1 replaced, 1 disabled)`. `zmina explain <role>` names the row and the screen
+`overrides in effect: N rules from …: added a, b; replaced c; disabled d` (at most twelve ids named, then `and N more`). `zmina explain <role>` names the row and the screen
 line behind a fact read from the screen.
 
 ## Roles

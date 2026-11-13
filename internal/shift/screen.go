@@ -240,6 +240,10 @@ func (s *Shift) trust(name string) bool {
 // trustLines is how much of the screen the trust question is read from when no row names a count.
 const trustLines = 30
 
+// trustKeysMax is the most keys the trust answer presses: up to eight moves of the cursor, and Enter. The keys are only ever
+// Down, Up and Enter, counted from where the cursor stands to the answer that says yes.
+const trustKeysMax = 9
+
 // trustKeys is the keys that answer Claude Code's folder-trust question with yes on a screen that shows it: the cursor
 // is moved from the answer it stands on to the one that says yes, and Enter takes it. Nil when the screen shows no such
 // question, or no cursor or no yes in it (claude.trust.answer; the markers are the claude.trust.* rows).
@@ -271,6 +275,11 @@ func trustKeys(rules *screenrules.Table, screen string) []string {
 	}
 
 	if sel < 0 || yes < 0 {
+		return nil
+	}
+
+	// The cursor moves between a trust question's few answers: a screen that lists more is not the question.
+	if d := yes - sel; d >= trustKeysMax || -d >= trustKeysMax {
 		return nil
 	}
 

@@ -125,6 +125,15 @@ func apply(base *Table, rows []Rule) (*Table, Overrides, error) {
 				r.ID, next[i].Means)
 		}
 
+		// An override changes the words zmina reads, never the keys it presses: a row that decides a key, or gates the dialog a key
+		// is pressed into, is not the file's to add, replace or disable.
+		for _, sets := range []string{rowSets(next, i), rowSetsOf(r)} {
+			if effects[sets].keys {
+				return nil, o, fmt.Errorf("rule %q: it sets %s, which decides the keys zmina presses (or the dialog they are pressed into): "+
+					"an override cannot add, replace or disable such a row", r.ID, sets)
+			}
+		}
+
 		switch {
 		case r.Disabled && i < 0:
 			return nil, o, fmt.Errorf("rule %q: disabled, but no embedded rule has that id", r.ID)
@@ -148,4 +157,22 @@ func apply(base *Table, rows []Rule) (*Table, Overrides, error) {
 	o.Count = len(rows)
 
 	return t, o, nil
+}
+
+// rowSets is the flag the row at i of the rows sets; empty for none (no such row, or a builtin).
+func rowSets(rows []Rule, i int) string {
+	if i < 0 {
+		return ""
+	}
+
+	return rows[i].Sets
+}
+
+// rowSetsOf is the flag an override row sets; none for a row that only disables.
+func rowSetsOf(r Rule) string {
+	if r.Disabled {
+		return ""
+	}
+
+	return r.Sets
 }

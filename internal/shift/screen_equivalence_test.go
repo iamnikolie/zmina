@@ -75,8 +75,15 @@ func sameReading(t testing.TB, label, text string) {
 		}
 	}
 
-	if want, got := legacyTrustKeys(text), trustKeys(screenrules.Default(), text); !assert.ObjectsAreEqual(want, got) {
-		t.Errorf("%s: trustKeys %v, was %v\n%s", label, got, want, text)
+	// The one deliberate difference from the old reader: a screen that lists more answers than a trust question has is not the
+	// question, and presses nothing (TestTrustAnswerPressesNoMoreThanAFewMoves).
+	wantKeys, gotKeys := legacyTrustKeys(text), trustKeys(screenrules.Default(), text)
+	if len(wantKeys) > trustKeysMax {
+		wantKeys = nil
+	}
+
+	if !assert.ObjectsAreEqual(wantKeys, gotKeys) {
+		t.Errorf("%s: trustKeys %v, was %v\n%s", label, gotKeys, wantKeys, text)
 	}
 
 	wantKey, wantOK := legacyExitKey(text)
@@ -262,4 +269,50 @@ func TestAddedScreenRuleIsReadByTheWatch(t *testing.T) {
 
 	assert.Equal(t, []string{"designer: stopped by a usage limit: ⎿ Plan exhausted until 9pm"}, told())
 	assert.Equal(t, 12, table.Window(screenrules.Claude, screenrules.UsageLimit, limitLines))
+}
+
+// The exit answer is one digit: the key pressed is the digit the question numbers the answer with, whatever a table's regexp
+// captures.
+func TestExitAnswerIsOneDigit(t *testing.T) {
+	rules, err := screenrulesWith(screenrules.Rule{ID: "claude.test.exit", Engine: screenrules.Claude, Sets: screenrules.ExitDialog,
+		Means: "m", Match: screenrules.Match{Regexp: `(\d+)\. Exit and stop tasks`}})
+	require.NoError(t, err)
+
+	for screen, want := range map[string]string{
+		"1. Exit and stop tasks":  "1",
+		"9. Exit and stop tasks":  "9",
+		"12. Exit and stop tasks": "",
+		"Exit and stop tasks":     "",
+	} {
+		key, ok := exitKey(rules, screen)
+		assert.Equal(t, want, key, screen)
+		assert.Equal(t, want != "", ok, screen)
+	}
+
+	letters, err := screenrulesWith(screenrules.Rule{ID: "claude.test.exit2", Engine: screenrules.Claude, Sets: screenrules.ExitDialog,
+		Means: "m", Match: screenrules.Match{Regexp: `(.)\. Exit and stop tasks`}})
+	require.NoError(t, err)
+
+	for _, bad := range []string{"x", "\x1b", "C", "-", " "} {
+		_, ok := exitKey(letters, bad+". Exit and stop tasks")
+		assert.False(t, ok, "%q is no key of the question", bad)
+	}
+}
+
+// The trust answer presses only the cursor's moves to the yes answer and Enter, and never more than a trust question has
+// answers for: a screen that lists many answers is not the question.
+func TestTrustAnswerPressesNoMoreThanAFewMoves(t *testing.T) {
+	var rows []string
+
+	rows = append(rows, "Do you trust this folder?", "❯ 1. No, exit")
+	for i := 2; i < 12; i++ {
+		rows = append(rows, fmt.Sprintf("  %d. No, exit", i))
+	}
+
+	rows = append(rows, "  12. Yes, proceed")
+
+	assert.Nil(t, trustKeys(screenrules.Default(), strings.Join(rows, "\n")), "twelve answers: not the trust question")
+
+	assert.Equal(t, []string{"Down", "Enter"}, trustKeys(screenrules.Default(), "Do you trust this folder?\n❯ 1. No, exit\n  2. Yes, proceed"))
+	assert.Equal(t, []string{"Enter"}, trustKeys(screenrules.Default(), "Do you trust this folder?\n❯ 1. Yes, proceed\n  2. No, exit"))
 }

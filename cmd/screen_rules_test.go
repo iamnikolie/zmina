@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -42,7 +43,8 @@ func TestDoctorSaysScreenRuleOverridesAreInForce(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "screen-rules.yaml"), []byte(goodScreenRules), 0o600))
 
 	out, _, _ = zm(t, crewFile, "doctor")
-	assert.Regexp(t, `ok +screens +overrides in effect: 3 rules from \S+screen-rules\.yaml \(1 added, 1 replaced, 1 disabled\)`, out)
+	assert.Regexp(t, `ok +screens +overrides in effect: 3 rules from \S+screen-rules\.yaml: added acme\.limit\.wording; `+
+		`replaced claude\.peek\.hint-update; disabled claude\.peek\.hint-todos$`, strings.TrimSpace(lineOf(out, "screens")))
 	assert.Equal(t, 1, countLines(out, "screens"), "one line")
 
 	// The shift built for the crew carries its rows.
@@ -102,4 +104,39 @@ func countLines(out, check string) int {
 	}
 
 	return n
+}
+
+// lineOf is the line of a doctor report for the named check.
+func lineOf(out, check string) string {
+	for _, l := range strings.Split(out, "\n") {
+		if f := strings.Fields(l); len(f) > 1 && f[1] == check {
+			return l
+		}
+	}
+
+	return ""
+}
+
+// The ids a file added, replaced and disabled are listed, so that a reader sees what it changes; a long list is cut.
+func TestDoctorListsTheRowsAnOverrideChangesUpToAFew(t *testing.T) {
+	crewFile := testCrew(t, "")
+
+	var body strings.Builder
+
+	body.WriteString("rules:\n")
+
+	for i := range 20 {
+		fmt.Fprintf(&body, "  - id: acme.limit.%02d\n    engine: claude\n    sets: usage_limit\n    means: m\n    match: {contains: \"w%02d\"}\n", i, i)
+	}
+
+	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(crewFile), "screen-rules.yaml"), []byte(body.String()), 0o600))
+
+	out, _, _ := zm(t, crewFile, "doctor")
+	line := lineOf(out, "screens")
+
+	assert.Contains(t, line, "overrides in effect: 20 rules from")
+	assert.Contains(t, line, "added acme.limit.00, acme.limit.01")
+	assert.Contains(t, line, "acme.limit.11")
+	assert.NotContains(t, line, "acme.limit.12", "twelve ids, then the count of the rest")
+	assert.Contains(t, line, "and 8 more")
 }

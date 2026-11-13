@@ -1311,7 +1311,12 @@ func exitKey(rules *screenrules.Table, screen string) (string, bool) {
 		return "", false
 	}
 
-	return hit.Sub[1], true
+	// The key is one digit, the number the question gives the answer: whatever a table's regexp captured, nothing else is pressed.
+	if key := hit.Sub[1]; len(key) == 1 && key[0] >= '0' && key[0] <= '9' {
+		return key, true
+	}
+
+	return "", false
 }
 
 // forget drops an instance once it is down: instances are not seats.

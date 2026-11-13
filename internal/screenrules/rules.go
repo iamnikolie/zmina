@@ -157,6 +157,9 @@ type effectInfo struct {
 	// text is that the reader tests the effect on the region's text as a whole, not a row at a time: the only scope a row of
 	// it may name.
 	text bool
+	// keys is that the effect decides keys zmina presses, or gates the dialog they are pressed into: a crew's override may not add,
+	// replace or disable a row of it. Overrides change the words zmina reads, never what it presses.
+	keys bool
 	// lastLines and inputBox are the regions the reader honours: how much of the bottom it captures, and the input box. A
 	// row names no region its reader ignores.
 	lastLines, inputBox bool
@@ -193,24 +196,24 @@ var effects = map[string]effectInfo{
 	ToolCall: {doc: "the words after a say mark that are a tool call, not words (NowLine skips such a line)"},
 	SayCont:  {doc: "a row wrapped under a say line (NowLine joins it), tested as it stands on the screen"},
 	SayStop:  {doc: "a row that ends the rows wrapped under a say line (NowLine)"},
-	TrustQuestion: {doc: "the screen asks whether to trust the folder (the answer to it is pressed for a worktree zmina made)",
+	TrustQuestion: {keys: true, doc: "the screen asks whether to trust the folder (the answer to it is pressed for a worktree zmina made)",
 		text: true, lastLines: true},
-	TrustOption:   {doc: "an answer of the trust question"},
-	TrustSelected: {doc: "the answer the cursor stands on"},
-	TrustYes:      {doc: "the answer that says yes (tested lower-cased)"},
-	ExitDialog: {doc: "the exit question's answer that stops the background work; group 1 is its key", groups: 1, text: true,
+	TrustOption:   {keys: true, doc: "an answer of the trust question"},
+	TrustSelected: {keys: true, doc: "the answer the cursor stands on"},
+	TrustYes:      {keys: true, doc: "the answer that says yes (tested lower-cased)"},
+	ExitDialog: {keys: true, doc: "the exit question's answer that stops the background work; group 1 is its key", groups: 1, text: true,
 		lastLines: true},
-	DialogOption: {doc: "a numbered choice of a dialog; groups: 1 the cursor, 2 the number, 3 the words", groups: 3},
-	DialogFooter: {doc: "the footer line a live dialog ends with"},
-	DialogFree:   {doc: "a choice that asks for words, not a pick (the terminal answers it)"},
-	DialogTitle:  {doc: "the title mark of a dialog's question"},
+	DialogOption: {keys: true, doc: "a numbered choice of a dialog; groups: 1 the cursor, 2 the number, 3 the words", groups: 3},
+	DialogFooter: {keys: true, doc: "the footer line a live dialog ends with"},
+	DialogFree:   {keys: true, doc: "a choice that asks for words, not a pick (the terminal answers it)"},
+	DialogTitle:  {keys: true, doc: "the title mark of a dialog's question"},
 	FooterHint:   {doc: "a hint Claude Code draws under its input box (peek cuts the footer)"},
 	FooterOption: {doc: "a line that reads as a dialog's option (peek keeps a dialog whole)"},
 	FooterModel:  {doc: "a status line's model name in brackets"},
 	FooterPath:   {doc: "the start of a status line's path"},
-	ChatRow: {doc: "a numbered row of the question dialog, for answering it from the browser chat; groups: 1 cursor, 2 number, 3 tick, 4 words",
+	ChatRow: {keys: true, doc: "a numbered row of the question dialog, for answering it from the browser chat; groups: 1 cursor, 2 number, 3 tick, 4 words",
 		groups: 4},
-	ChatFrame: {doc: "the frame a dialog's question is drawn in; removed before its words are read"},
+	ChatFrame: {keys: true, doc: "the frame a dialog's question is drawn in; removed before its words are read"},
 }
 
 // The ids of the rows of kind builtin: the logic that stays in Go, each named where it runs.
@@ -458,6 +461,10 @@ func build(rows []Rule) (*Table, error) {
 
 	return t, nil
 }
+
+// NewTable is a table of the given rows, checked as the embedded ones are and with none of the protections a crew's override
+// file has (LoadOverrides): for tests and tools that need a table of their own.
+func NewTable(rows []Rule) (*Table, error) { return build(rows) }
 
 // Load reads the embedded tables. Any row that does not read, or a file that does not, is an error that names it.
 func Load() (*Table, error) {

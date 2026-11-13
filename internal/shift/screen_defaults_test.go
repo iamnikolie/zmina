@@ -18,3 +18,8 @@ func WaitGone(t Tmux, names []string, timeout time.Duration) {
 }
 
 func answerExit(t Tmux, name string) bool { return pressExit(screenrules.Default(), t, name) }
+
+// screenrulesWith is a table of the rows given, with none of the protections of a crew's override file.
+func screenrulesWith(rows ...screenrules.Rule) (*screenrules.Table, error) {
+	return screenrules.NewTable(rows)
+}
