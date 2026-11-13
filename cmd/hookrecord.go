@@ -47,7 +47,9 @@ func (a *app) hookLayout() (crew.Layout, bool) {
 // permissionRequestCommand is the PermissionRequest hook of a Claude role (roleSettings). Claude Code runs it when a
 // dialog is about to be shown, with the tool and its input on stdin. For AskUserQuestion it writes the questions and
 // their options as the role's record (shift.RecordQuestion), which is how zmina knows the question on a screen without
-// reading the screen. It never decides anything: it prints no allow or deny, nothing at all, and exits 0 whatever
+// reading the screen; for any other tool it writes the call, its tool and what it was asked to do, as the role's permission
+// record (shift.RecordPermission), which is the only way zmina knows what a permission prompt is about: a plugin is told of one
+// only with it. It never decides anything: it prints no allow or deny, nothing at all, and exits 0 whatever
 // goes wrong — a hook that failed or answered would break or settle the dialog it is run for. A Go panic exits 2, which
 // a hook reads as a refusal, so it is recovered.
 func (a *app) permissionRequestCommand() *cobra.Command {
@@ -67,7 +69,9 @@ func (a *app) permissionRequestCommand() *cobra.Command {
 			input := readHookInput(cmd.InOrStdin())
 
 			if l, ok := a.hookLayout(); ok && len(input) > 0 {
-				_ = shift.RecordQuestion(l, role, input, time.Now())
+				now := time.Now()
+				_ = shift.RecordQuestion(l, role, input, now)
+				_ = shift.RecordPermission(l, role, input, now)
 			}
 
 			return nil

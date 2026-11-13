@@ -7,7 +7,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/iamnikolie/zmina/internal/registry"
 	"github.com/iamnikolie/zmina/internal/screenrules"
+	"github.com/iamnikolie/zmina/internal/tmux"
 )
 
 // Dialog is a question Claude Code shows instead of the input line (AskUserQuestion, a permission prompt): its words and
@@ -17,8 +19,24 @@ type Dialog struct {
 	Options  []DialogOption `json:"options"`
 	Cursor   int            `json:"cursor"`
 	// ID is the dialog's fingerprint (its question and every choice): an answer names it, so it is never taken by
-	// another question that happens to have the same choices.
+	// another question that happens to have the same choices. For a permission prompt whose tool call its hook recorded, the
+	// fingerprint covers the call too: two commands never share one.
 	ID string `json:"id"`
+	// Tool and Subject are, for a permission prompt, the tool and what it was asked to do, from the hook's record; empty when
+	// there is none, and then nothing says what is being approved (View.WaitingFor says it is a permission prompt).
+	Tool    string `json:"tool,omitempty"`
+	Subject string `json:"subject,omitempty"`
+	// SubjectCut: the subject is not all of what is being approved (see AskedPermission.Cut). SubjectChecked: the prompt's own block
+	// was compared with it, word for word (a shell call); of any other tool nothing on the screen is compared. A card may press a
+	// permission prompt only when its subject is checked and not cut.
+	SubjectCut     bool `json:"subject_cut,omitempty"`
+	SubjectChecked bool `json:"subject_checked,omitempty"`
+	// Asked: the question is the one its hook recorded for this very wait (an AskUserQuestion call), and the screen shows it: words and
+	// choices. It is what a card may press a question by; a prompt that is only a screen's reading, whatever the session file says it
+	// waits on, is not one a card may press.
+	Asked bool `json:"asked,omitempty"`
+	// Multi: several choices can be ticked, which Enter on one does not settle: it needs the terminal.
+	Multi bool `json:"multi,omitempty"`
 }
 
 // DialogOption is one numbered choice.
@@ -160,6 +178,73 @@ func parseDialog(rules *screenrules.Table, screen string) *Dialog {
 	d.ID = dialogID(d.Question, opts)
 
 	return d
+}
+
+// dialogOf is the dialog on a role's screen as the role's session and hook records complete it: what it waits on, and for a permission
+// prompt whose call the hook recorded, the tool and its subject, folded into the fingerprint. nil when the screen shows none.
+func (s *Shift) dialogOf(name string, sess *registry.Session, screen string) *Dialog {
+	d := s.ParseDialog(screen)
+	if d == nil {
+		return nil
+	}
+
+	if p := s.permissionLook(name, sess); p != nil {
+		if m := checkPermissionScreen(p, screen, d); m != matchNone {
+			d.Tool, d.Subject = p.Tool, p.Input
+			d.SubjectChecked = m == matchWhole
+			d.SubjectCut = p.Cut || m == matchPartial
+			d.ID = permissionDialogID(p, d.ID)
+		}
+	}
+
+	d.Multi = boxedChoices(d.Options)
+
+	return d
+}
+
+// DialogOn reads the dialog on a screen just captured for a role, as its view does: the same fingerprint, so that a press can
+// be held to the dialog the owner was shown. nil when the screen shows none, or the role is not up.
+func (s *Shift) DialogOn(name, screen string) *Dialog {
+	p, err := s.probe(name)
+	if err != nil || p.State != tmux.Up {
+		return nil
+	}
+
+	sess, _ := s.registryFor(name).ByPID(p.PID)
+
+	return s.dialogOf(name, sess, screen)
+}
+
+// permissionDialogID is the fingerprint of a permission prompt: the screen's, with the tool and a sum of its whole input.
+func permissionDialogID(p *AskedPermission, screen string) string {
+	sum := sha256.Sum256([]byte("permission\x00" + p.Tool + "\x00" + p.InputSum + "\x00" + screen))
+
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+// boxedChoices reports whether every choice is drawn with a box before it: a question whose choices are ticked, not taken.
+func boxedChoices(opts []DialogOption) bool {
+	if len(opts) == 0 {
+		return false
+	}
+
+	for _, o := range opts {
+		if !boxed(o.Label) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func boxed(label string) bool {
+	for _, b := range []string{"☐", "☑", "☒", "◻", "◼", "▢", "[ ]", "[x]", "[X]"} {
+		if strings.HasPrefix(label, b) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // dialogID is the fingerprint of a question and every choice with its description.

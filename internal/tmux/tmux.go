@@ -537,6 +537,12 @@ func noAnswer(err error) bool {
 	return errors.As(err, &n)
 }
 
+// NewNoAnswer is the error of a call that got no answer in time, for a fake of tmux to give.
+func NewNoAnswer(msg string) error { return &noAnswerError{msg: msg} }
+
+// NoAnswer reports a call that got no answer within Timeout: tmux may still have run it, so a key it was to send may have landed.
+func NoAnswer(err error) bool { return noAnswer(err) }
+
 // typePiece is the most characters typed in one go, typePause the wait after each: well under what Claude Code takes
 // for a paste even when a few pieces reach it in one read.
 const (
@@ -621,11 +627,21 @@ var DefaultDrop = []string{
 	"CLAUDE_CODE_MESSAGING_*", "CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_EXECPATH", "CLAUDE_PID", "CLAUDE_EFFORT",
 	"CLAUDE_CONFIG_DIR", "ZMINA_ROLE", "TMUX", "TMUX_PANE", "CMUX_*", "TERM_SESSION_ID", "ITERM_SESSION_ID",
 	"__CFBundleIdentifier", "CODEX_THREAD_ID", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE", "ZMINA_UI_*",
+	// A plugin's own run names itself (ZMINA_PLUGIN, ZMINA_PLUGIN_EVENT): a role that inherited it would sign for the plugin.
+	"ZMINA_PLUGIN*",
 }
+
+// SecretEnv are the variables that hold a credential of zmina's own (the cockpit's token and code command): a program
+// zmina runs that is not the cockpit — a role, a check, a plugin — never gets them.
+var SecretEnv = []string{"ZMINA_UI_*"}
 
 // CleanEnv drops DefaultDrop and the extra names (NAME, or PREFIX*) from env.
 func CleanEnv(env, extra []string) []string {
-	drop := append(append([]string{}, DefaultDrop...), extra...)
+	return WithoutEnv(env, append(append([]string{}, DefaultDrop...), extra...))
+}
+
+// WithoutEnv drops the named variables (NAME, or PREFIX*) from env.
+func WithoutEnv(env, drop []string) []string {
 	out := make([]string, 0, len(env))
 
 	for _, kv := range env {

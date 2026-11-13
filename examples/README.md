@@ -11,6 +11,7 @@ through zmina's task ledger. Nothing here is a live crew; copy it and change it.
 | `agents/designer/AGENT.md` | a judgment seat: answers as a decision, asks the owner only with a proposed answer |
 | `agents/reviewer/AGENT.md` | a read-only seat that reviews another task's worktree |
 | `agents/scribe/AGENT.md` | a scheduled seat: the ticker starts it and types its prompt; it closes its run's task |
+| `plugins/zmina-plugin-log` | the smallest plugin: appends each event zmina tells it to a file (`zmina skill plugins`) |
 
 ## Try it
 

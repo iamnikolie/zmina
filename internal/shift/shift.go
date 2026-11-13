@@ -525,7 +525,7 @@ func (s *Shift) look(name string, held map[string][]string) (View, Reasoning, bo
 
 		if err == nil {
 			if v.Prompt && !s.isCodex(name) {
-				screen = s.ParseDialog(text)
+				screen = s.dialogOf(name, sess, text)
 			}
 			if line := s.NowLine(text); line != "" {
 				v.Now = line

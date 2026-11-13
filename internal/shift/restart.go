@@ -519,6 +519,21 @@ func (s *Shift) activity(name string, sess *registry.Session) registry.Activity 
 	return registry.Activity{}
 }
 
+// OwnerLine is when the owner last wrote to the role: the newest line typed at its prompt, in a terminal, Chat or Remote
+// Control (what the owner's activity postpones a restart by); zero when none is known, the role is not up or its
+// registry cannot tell.
+func (s *Shift) OwnerLine(name string) time.Time {
+	owner := s.lastOwnerChat(name)
+
+	if sess := s.session(name); sess != nil {
+		if act := s.activity(name, sess); act.Owner.After(owner) {
+			owner = act.Owner
+		}
+	}
+
+	return owner
+}
+
 // lastOwnerChat is when the owner's newest Chat message to the role was accepted.
 func (s *Shift) lastOwnerChat(name string) time.Time {
 	var at time.Time

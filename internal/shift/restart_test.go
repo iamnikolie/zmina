@@ -1879,3 +1879,24 @@ func TestRestartReplacesAnOlderPacketOnlyOnceStarted(t *testing.T) {
 		assert.Equal(t, []string{older}, f.s.State.Role("designer").Inbox, "what waited, as it was")
 	})
 }
+
+// OwnerLine is when the owner last wrote to a role: the newer of the last line he typed at its prompt and the last Chat message
+// that was accepted; nothing for a role that is down, or whose registry cannot tell.
+func TestOwnerLine(t *testing.T) {
+	f := restarting(t, "", 100_000, 30*time.Minute)
+
+	assert.True(t, f.s.OwnerLine("designer").IsZero(), "nothing of his in the conversation")
+
+	typed := f.now.Add(-20 * time.Minute)
+	f.rg.activity["sid-designer"] = registry.Activity{Prompt: typed, Owner: typed}
+	assert.True(t, f.s.OwnerLine("designer").Equal(typed))
+
+	chatted := f.now.Add(-5 * time.Minute)
+	f.s.State.Role("designer").ChatReceipts = []chat.Receipt{{ID: "c1", At: chatted}}
+	assert.True(t, f.s.OwnerLine("designer").Equal(chatted), "a Chat message newer than the typed line")
+
+	f.s.State.Role("designer").ChatReceipts = []chat.Receipt{{ID: "c1", At: typed.Add(-time.Hour)}}
+	assert.True(t, f.s.OwnerLine("designer").Equal(typed), "the typed line newer than Chat")
+
+	assert.True(t, f.s.OwnerLine("nobody").IsZero(), "no such role")
+}

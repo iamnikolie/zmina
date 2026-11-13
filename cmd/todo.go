@@ -11,10 +11,12 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/iamnikolie/zmina/internal/asks"
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/later"
+	"github.com/iamnikolie/zmina/internal/plugin"
 	"github.com/iamnikolie/zmina/internal/shift"
 	"github.com/iamnikolie/zmina/internal/task"
 )
@@ -37,10 +39,12 @@ type todoItem struct {
 	// Rec and Reason are a decision's recommendation; Note is a waiting task's note.
 	Rec    string `json:"rec,omitempty"`
 	Reason string `json:"reason,omitempty"`
-	Note   string `json:"note,omitempty"`
-	Role   string `json:"role,omitempty"`
-	Task   string `json:"task,omitempty"`
-	Blocks string `json:"blocks,omitempty"`
+	// Options are the answers the asker offered (an ask's --option).
+	Options []string `json:"options,omitempty"`
+	Note    string   `json:"note,omitempty"`
+	Role    string   `json:"role,omitempty"`
+	Task    string   `json:"task,omitempty"`
+	Blocks  string   `json:"blocks,omitempty"`
 	// Holds is set on the ui page: something stands until the owner answers (a waiting task, a blocking ask).
 	Holds   bool      `json:"holds,omitempty"`
 	Created time.Time `json:"created"`
@@ -81,7 +85,7 @@ func todo(c *crew.Crew, now time.Time, views []shift.View) ([]todoItem, []string
 			}
 
 			items = append(items, todoItem{ID: a.ID, Kind: string(a.Kind), Text: a.Text, Title: a.Title, Rec: a.Rec,
-				Reason: a.Reason, Role: a.Role, Task: a.Task, Blocks: a.Blocks, Project: a.Project, Created: a.Created,
+				Reason: a.Reason, Options: a.Options, Role: a.Role, Task: a.Task, Blocks: a.Blocks, Project: a.Project, Created: a.Created,
 				byAlarm: a.By == "alarm", named: a.Title})
 		}
 	}
@@ -164,6 +168,32 @@ func askStore(c *crew.Crew) *asks.Store {
 	return &asks.Store{Dir: c.Layout().Asks()}
 }
 
+// recommendIsRec lets --recommend stand for --rec.
+func recommendIsRec(_ *pflag.FlagSet, name string) pflag.NormalizedName {
+	if name == "recommend" {
+		name = "rec"
+	}
+
+	return pflag.NormalizedName(name)
+}
+
+// cleanOptions is the options an ask is given: each trimmed to one line, none empty, no more than a phone can show.
+func cleanOptions(in []string) ([]string, error) {
+	var out []string
+
+	for _, o := range in {
+		if o = oneLine(o); o != "" {
+			out = append(out, o)
+		}
+	}
+
+	if len(out) > plugin.OptionsMax {
+		return nil, fmt.Errorf("at most %d options", plugin.OptionsMax)
+	}
+
+	return out, nil
+}
+
 func (a *app) todoCommand() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "todo",
@@ -187,6 +217,18 @@ func (a *app) todoAddCommand() *cobra.Command {
 		Short: "Ask the owner: a decision (--rec, --reason) or a check; prints its id (A-3)",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			opts, err := cleanOptions(ask.Options)
+			if err != nil {
+				return err
+			}
+
+			ask.Options = opts
+
+			// A question with answers to pick from is a decision, with or without a recommendation among them.
+			if kind == "" && len(opts) > 0 {
+				kind = string(asks.Decision)
+			}
+
 			k, err := asks.ParseKind(kind, ask.Rec)
 			if err != nil {
 				return err
@@ -218,7 +260,9 @@ func (a *app) todoAddCommand() *cobra.Command {
 	c.Flags().StringVar(&kind, "kind", "", "decision or check (default: decision with --rec, else check)")
 	c.Flags().StringVar(&ask.Role, "from", "", "the role that asks (default $ZMINA_ROLE, else hand)")
 	c.Flags().StringVar(&ask.Task, "task", "", "the task it is about")
-	c.Flags().StringVar(&ask.Rec, "rec", "", "the recommended answer: yes takes it")
+	c.Flags().StringVar(&ask.Rec, "rec", "", "the recommended answer: yes takes it (also --recommend)")
+	c.Flags().StringArrayVar(&ask.Options, "option", nil, "an answer the owner can pick, in a few words (repeat it for each; a phone shows them as buttons)")
+	c.Flags().SetNormalizeFunc(recommendIsRec)
 	c.Flags().StringVar(&ask.Reason, "reason", "", "why, in one line")
 	c.Flags().StringVar(&ask.Blocks, "blocks", "", "the role it holds up until answered")
 	c.Flags().StringVar(&ask.Title, "title", "", "the ask in a few plain words (the page shows it, the text on expand)")
@@ -228,10 +272,13 @@ func (a *app) todoAddCommand() *cobra.Command {
 }
 
 func (a *app) todoEditCommand() *cobra.Command {
-	var e struct{ text, title, rec, reason, blocks, project string }
+	var e struct {
+		text, title, rec, reason, blocks, project string
+		options                                   []string
+	}
 
 	c := &cobra.Command{
-		Use:   "edit <id> [--title …] [--text …] [--rec …] [--reason …] [--blocks …] [--project …]",
+		Use:   "edit <id> [--title …] [--text …] [--rec …] [--option …] [--reason …] [--blocks …] [--project …]",
 		Short: "Change an open ask's words (- clears a field)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -270,12 +317,28 @@ func (a *app) todoEditCommand() *cobra.Command {
 					}
 				}
 
-				if len(changed) == 0 {
-					return errors.New("nothing to change: give --title, --text, --rec, --reason, --blocks or --project")
+				// --option replaces the list; --option - clears it.
+				if len(e.options) > 0 {
+					if len(e.options) == 1 && e.options[0] == "-" {
+						ask.Options = nil
+						changed = append(changed, "options cleared")
+					} else {
+						opts, err := cleanOptions(e.options)
+						if err != nil {
+							return err
+						}
+
+						ask.Options = opts
+						changed = append(changed, "options")
+					}
 				}
 
-				// A recommendation makes it a decision; without one it is a check.
-				if ask.Rec != "" {
+				if len(changed) == 0 {
+					return errors.New("nothing to change: give --title, --text, --rec, --option, --reason, --blocks or --project")
+				}
+
+				// A recommendation or answers to pick from make it a decision; without either it is a check.
+				if ask.Rec != "" || len(ask.Options) > 0 {
 					ask.Kind = asks.Decision
 				} else {
 					ask.Kind = asks.Check
@@ -296,7 +359,9 @@ func (a *app) todoEditCommand() *cobra.Command {
 
 	c.Flags().StringVar(&e.title, "title", "", "the ask in a few plain words")
 	c.Flags().StringVar(&e.text, "text", "", "the question or the check")
-	c.Flags().StringVar(&e.rec, "rec", "", "the recommended answer (a decision; - makes it a check)")
+	c.Flags().StringVar(&e.rec, "rec", "", "the recommended answer (a decision; - makes it a check; also --recommend)")
+	c.Flags().StringArrayVar(&e.options, "option", nil, "the answers the owner can pick, replacing the list (repeat it; - alone clears it)")
+	c.Flags().SetNormalizeFunc(recommendIsRec)
 	c.Flags().StringVar(&e.reason, "reason", "", "why, in one line")
 	c.Flags().StringVar(&e.blocks, "blocks", "", "the role it holds up")
 	c.Flags().StringVar(&e.project, "project", "", "the project it is for")
@@ -370,6 +435,10 @@ func (a *app) todoLsCommand() *cobra.Command {
 						line += " · " + it.Note
 					}
 
+					if full && len(it.Options) > 0 {
+						line += " · options: " + optionsLine(it.Options)
+					}
+
 					if !full {
 						line = clip(oneLine(line), 160)
 					}
@@ -396,6 +465,16 @@ func (a *app) todoLsCommand() *cobra.Command {
 	return c
 }
 
+// optionsLine is an ask's options for a line: 1) yes  2) no.
+func optionsLine(opts []string) string {
+	parts := make([]string, len(opts))
+	for i, o := range opts {
+		parts[i] = fmt.Sprintf("%d) %s", i+1, o)
+	}
+
+	return strings.Join(parts, "  ")
+}
+
 func (a *app) todoAnswerCommand(action string) *cobra.Command {
 	short := map[string]string{
 		"yes":    "Take a decision's recommendation",
@@ -410,7 +489,7 @@ func (a *app) todoAnswerCommand(action string) *cobra.Command {
 		use, args = "answer <id> <text...>", cobra.MinimumNArgs(2)
 	}
 
-	var from string
+	var from, voice string
 
 	c := &cobra.Command{
 		Use:   use,
@@ -422,7 +501,18 @@ func (a *app) todoAnswerCommand(action string) *cobra.Command {
 			}
 
 			return a.withState(func(s *shift.Shift) error {
-				out, err := answerTodo(s, from, action, args[0], strings.Join(args[1:], " "))
+				// A plugin's answer is the owner's own, given through it: it is recorded as his, and as through the plugin.
+				via, err := pluginVoice(s.Crew, voice)
+				if err != nil {
+					return err
+				}
+
+				who := from
+				if via != "" {
+					who = "hand"
+				}
+
+				out, err := answerTodo(s, who, via, action, args[0], strings.Join(args[1:], " "))
 				if err != nil {
 					return err
 				}
@@ -435,14 +525,56 @@ func (a *app) todoAnswerCommand(action string) *cobra.Command {
 	}
 
 	c.Flags().StringVar(&from, "from", "", "who answers (default $ZMINA_ROLE, else hand)")
+	c.Flags().StringVar(&voice, "by", "", "a plugin answering in the owner's voice: its name, with ZMINA_PLUGIN=<name> set (see Plugins)")
 
 	return c
 }
 
+// pluginVoice is the plugin an answer is given through (--by): empty when none is named. The name must be a plugin of the
+// crew file and ZMINA_PLUGIN must say it too, which the plugin's own run does: so an answer is never taken for a plugin's by
+// a mistake. It is no proof of who is speaking: any process of the owner's can set it, and a plugin is trusted with the
+// owner's voice and must itself check who is talking to it.
+func pluginVoice(c *crew.Crew, by string) (string, error) {
+	by = strings.TrimSpace(by)
+	if by == "" {
+		return "", nil
+	}
+
+	if _, ok := c.PluginNamed(by); !ok {
+		return "", fmt.Errorf("--by %s: the crew file has no plugin of that name", by)
+	}
+
+	if os.Getenv("ZMINA_PLUGIN") != by {
+		return "", fmt.Errorf("--by %s: only a plugin's own run answers in its voice; ZMINA_PLUGIN=%s is not set", by, by)
+	}
+
+	// A role is never a plugin: whatever a role's environment says, it does not speak with the owner's voice.
+	if role := os.Getenv("ZMINA_ROLE"); role != "" {
+		return "", fmt.Errorf("--by %s: a role (%s) does not answer in a plugin's voice", by, role)
+	}
+
+	return by, nil
+}
+
+// answeredBy is who an answer is recorded as coming from: the owner (his hand or the cockpit), a plugin he answered
+// through, or the role that recorded what he said in chat.
+func answeredBy(from, via string) string {
+	switch {
+	case via != "":
+		return "plugin " + via
+	case from == "hand" || from == "ui":
+		return "owner"
+	}
+
+	return "role " + from
+}
+
 // answerTodo closes an ask (yes, done, answer, park) or answers a waiting task (answer, park), and queues the
 // answer for the dispatcher as a note from `from` — "A-3 · yes: <rec>", "T-62 · <words>", "A-4 · later" — unless
-// `from` is the dispatcher itself. The caller holds the state lock. It returns the line to print.
-func answerTodo(s *shift.Shift, from, action, id, words string) (string, error) {
+// `from` is the dispatcher itself. via is the plugin the owner answered through, when he did: the note says so. The first
+// answer wins: an item that is closed or answered already is refused, whoever answers. The caller holds the state lock. It
+// returns the line to print.
+func answerTodo(s *shift.Shift, from, via, action, id, words string) (string, error) {
 	id = asks.Normalize(id)
 	if action == "answer" && strings.TrimSpace(words) == "" {
 		return "", errors.New("an answer needs words")
@@ -465,7 +597,7 @@ func answerTodo(s *shift.Shift, from, action, id, words string) (string, error) 
 			return "", fmt.Errorf("%s has no recommendation to say yes to: answer it", ask.ID)
 		}
 
-		if ask, err = store.Close(ask.ID, st, words, s.Now()); err != nil {
+		if ask, err = store.CloseBy(ask.ID, st, words, answeredBy(from, via), s.Now()); err != nil {
 			return "", err
 		}
 
@@ -495,6 +627,14 @@ func answerTodo(s *shift.Shift, from, action, id, words string) (string, error) 
 			return "", err
 		}
 
+		// The first answer wins over a plugin's: a waiting task the owner has answered, or set aside, since it last changed
+		// waits on him no more, and a late tap on a phone does not answer it again. At the keyboard a follow-up answer, or one
+		// after he set it aside, is his to give as it always was.
+		if via != "" && t.State == task.Waiting && (action == "answer" || action == "park" || action == "ignore") &&
+			(t.Answered.After(t.Updated) || t.Ignored.After(t.Updated)) {
+			return "", fmt.Errorf("%s is already answered (a plugin's answer is its first: answer it in a terminal to say more)", t.ID)
+		}
+
 		switch action {
 		case "answer":
 			note = t.ID + " · " + words
@@ -502,7 +642,7 @@ func answerTodo(s *shift.Shift, from, action, id, words string) (string, error) 
 			note = t.ID + " · later"
 		case "ignore":
 			// Off the todo only: the task itself stays as it is.
-			t.Ignored = s.Now()
+			t.Ignored, t.AnsweredBy = s.Now(), answeredBy(from, via)
 			if err := taskStore(s.Crew).Put(t); err != nil {
 				return "", err
 			}
@@ -567,8 +707,12 @@ func answerTodo(s *shift.Shift, from, action, id, words string) (string, error) 
 		return "", fmt.Errorf("%s: not an ask (A-n), a waiting task (T-n) or a parked item (L-n)", id)
 	}
 
-	// A role that records what the owner said in chat says so: the answer is his words relayed, not his own click.
-	if from != "hand" && from != "ui" && os.Getenv("ZMINA_ROLE") != "" {
+	switch {
+	case via != "":
+		// Through a plugin: the owner's own answer, given on his phone or wherever the plugin reaches him.
+		note += " (answered through plugin " + via + ")"
+	case from != "hand" && from != "ui" && os.Getenv("ZMINA_ROLE") != "":
+		// A role that records what the owner said in chat says so: the answer is his words relayed, not his own click.
 		note += " (the owner's answer in chat, recorded by " + from + ")"
 	}
 
@@ -586,7 +730,7 @@ func answerTodo(s *shift.Shift, from, action, id, words string) (string, error) 
 	if tid := taskOf(s, id); tid != "" {
 		store := taskStore(s.Crew)
 		if t, err := store.Get(tid); err == nil && t.State == task.Waiting {
-			t.Answered = s.Now()
+			t.Answered, t.AnsweredBy = s.Now(), answeredBy(from, via)
 			if err := store.Put(t); err != nil {
 				return "", shift.Partial(err) // the ask is closed and the dispatcher's note queued: keep the note
 			}
@@ -594,6 +738,11 @@ func answerTodo(s *shift.Shift, from, action, id, words string) (string, error) 
 	}
 
 	s.Log(from, "answered", taskOf(s, id), note)
+
+	// An answer given in a terminal says the owner is at the machine, which holds a plugin's pushes for a while.
+	if from == "hand" && via == "" {
+		touchOwner(s)
+	}
 
 	if self {
 		return id + " · " + action + " · recorded", nil

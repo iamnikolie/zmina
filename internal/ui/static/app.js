@@ -53,7 +53,7 @@ const W = {
   alAsWords: (w) => "set as «" + w + "»", alDue: "due now", backTag: "back",
   seen: (a) => "seen " + a, staleN: (a) => "stale" + (a ? " " + a : ""), stale: "stale", offline: "offline", stoppedList: "stopped:",
   silent: (a) => "ticker stopped" + (a ? " " + a : ""),
-  spare: "spare", retiredW: "retired", choicesN: (n) => n + " choices", chose: (r, l) => r + ": " + l, notUpN: (n) => "+" + n + " not up", fixTicker: (c) => "zmina" + (c === "default" ? "" : " --config " + c.split("/").pop()) + " ticker status",
+  spare: "spare", retiredW: "retired", choicesN: (n) => n + " choices", subjectCut: " (not all of it: see the terminal)", subjectUnchecked: " (not checked against the screen)", chose: (r, l) => r + ": " + l, notUpN: (n) => "+" + n + " not up", fixTicker: (c) => "zmina" + (c === "default" ? "" : " --config " + c.split("/").pop()) + " ticker status",
   fixDown: (r) => "start it, or hand its task on: zmina up " + r, onScreenN: (n) => n + " on screen", crewsN: (n) => n + " crews", nothingOn: (w) => "Nothing waits on you on " + w + ".",
   elsewhere: (h, q) => "Elsewhere: " + h + " hold · " + q + " answer → All", downHolds: (r, ts) => r + ": down, holds " + ts,
   answerOn: (n) => "answer on " + n, detailsOn: (n) => "details on " + n,
@@ -1249,6 +1249,12 @@ function screenRow(c, r) {
   const p = el("div");
   if (d) {
     if (d.question) p.append(el("p", "pn", d.question));
+    // What a permission prompt asks to approve, as its hook recorded it, when it is certainly the prompt's: the screen above the
+    // question is not read. Said as cut when it is not all of the call, and as unchecked when no block of the screen was compared with it.
+    if (d.subject) {
+      const note = d.subject_cut ? W.subjectCut : d.subject_checked ? "" : W.subjectUnchecked;
+      p.append(el("p", "pn", (d.tool ? d.tool + ": " : "") + d.subject + note));
+    }
     const ch = el("div", "choices");
     for (const o of d.options) {
       const b = button("btn choice", o.n + ". " + o.label, () => chooseDialog(c, r, o));

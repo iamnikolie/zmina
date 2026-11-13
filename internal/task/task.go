@@ -119,6 +119,9 @@ type Task struct {
 	// Ignored is when the owner set the waiting task aside on the todo; it stays off the todo until the task
 	// changes, and the task itself is left as it is.
 	Ignored time.Time `json:"ignored,omitzero"`
+	// AnsweredBy is who made the newer of those two marks: owner, plugin <name>, role <name>; empty on a task marked
+	// before this was kept.
+	AnsweredBy string `json:"answered_by,omitempty"`
 	// Later is the later item a parked task became.
 	Later string `json:"later,omitempty"`
 	// Sweep is the parked items (L-<n>, oldest first) a sweep of the parked list handed this task for a verdict each

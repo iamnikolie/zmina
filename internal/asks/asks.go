@@ -76,16 +76,22 @@ type Ask struct {
 	// Rec is the recommended answer, Reason why in one line.
 	Rec    string `json:"rec,omitempty"`
 	Reason string `json:"reason,omitempty"`
+	// Options are the answers the asker offers, each a few words (--option, repeated): a phone shows them as buttons.
+	// An older ask has none, and reads as before.
+	Options []string `json:"options,omitempty"`
 	// Role is who asks, Task the task it is about, Blocks the role it holds up until answered.
 	Role   string `json:"role,omitempty"`
 	Task   string `json:"task,omitempty"`
 	Blocks string `json:"blocks,omitempty"`
 	// State is open until answered; an unknown state is taken as open, so nothing is lost.
-	State   State     `json:"state"`
-	Answer  string    `json:"answer,omitempty"`
-	By      string    `json:"by,omitempty"`
-	Created time.Time `json:"created"`
-	Updated time.Time `json:"updated"`
+	State  State  `json:"state"`
+	Answer string `json:"answer,omitempty"`
+	// By is who asked. ClosedBy is who closed it: owner (in a terminal or the cockpit), plugin <name>, role <name>; empty
+	// when zmina closed it itself, or for an ask closed before this was kept.
+	By       string    `json:"by,omitempty"`
+	ClosedBy string    `json:"closed_by,omitempty"`
+	Created  time.Time `json:"created"`
+	Updated  time.Time `json:"updated"`
 }
 
 // Open reports whether the ask still waits on the owner.
@@ -266,16 +272,22 @@ func (s *Store) Pending() []Ask {
 
 // Close takes an open ask off the list as done, yes, answered or parked; answer, when given, is the owner's words.
 func (s *Store) Close(id string, st State, answer string, now time.Time) (Ask, error) {
+	return s.CloseBy(id, st, answer, "", now)
+}
+
+// CloseBy is Close that keeps who closed the ask. The first answer wins: an ask that is not open any more is refused,
+// whoever answers, with how it was closed.
+func (s *Store) CloseBy(id string, st State, answer, by string, now time.Time) (Ask, error) {
 	it, err := s.Get(id)
 	if err != nil {
 		return it, err
 	}
 
 	if !it.Open() {
-		return it, fmt.Errorf("%s is already %s", it.ID, it.State)
+		return it, fmt.Errorf("%s is already %s (an ask takes its first answer)", it.ID, it.State)
 	}
 
-	it.State, it.Updated = st, now
+	it.State, it.Updated, it.ClosedBy = st, now, by
 	if answer != "" {
 		it.Answer = answer
 	}

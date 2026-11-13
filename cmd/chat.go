@@ -19,6 +19,7 @@ import (
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/inbox"
 	"github.com/iamnikolie/zmina/internal/mesh"
+	"github.com/iamnikolie/zmina/internal/plugin"
 	"github.com/iamnikolie/zmina/internal/registry"
 	"github.com/iamnikolie/zmina/internal/screenrules"
 	"github.com/iamnikolie/zmina/internal/shift"
@@ -334,25 +335,81 @@ func chooseDialog(s *shift.Shift, role, pick string) error {
 	if !ok || err != nil || n < 1 || n > 9 {
 		return errors.New("choose:<n>:<label>")
 	}
-	screen, err := s.Tmux.Capture(role, 80)
+	d, since, err := pressChoice(s, role, n, id, true, nil)
 	if err != nil {
 		return err
 	}
+	// A press has gone into this wait: no card of it presses again while the question is still on the screen.
+	spendMarks(s, role, d, since)
+	label := ""
+	for _, o := range d.Options {
+		if o.N == n {
+			label = o.Label
+		}
+	}
+	// The cockpit's button is the owner's own choice: a plugin that was told of this question hears it was chosen, and by him.
+	noteChosen(s, role, plugin.DialogID(role, d.ID), "owner", n, label)
+	return nil
+}
+
+// pressChoice is chooseDialog's work: it presses choice n of the dialog on the role's screen and returns the dialog it
+// pressed in. With check the dialog's id must be id (a question that changed is refused); without it any dialog that has
+// the choice takes it, as the owner who reads the screen himself means it. The id is the one the view carries, which for a
+// permission prompt covers the tool call the hook recorded. The screen is read last, right before the keys, and must still
+// have that fingerprint. before, when given, is the last word before the keys go (a plugin's one-shot mark is spent there): an
+// error from it presses nothing. It also returns when the wait on the screen began, which is what a one-shot mark is of.
+func pressChoice(s *shift.Shift, role string, n int, id string, check bool, before func(d *shift.Dialog, since time.Time) error) (*shift.Dialog, time.Time, error) {
+	v := viewOf(s, role)
+	if v == nil || v.Status != "waiting" {
+		return nil, time.Time{}, errors.New("it is not waiting on a question now")
+	}
 	if _, ok, err := s.Tmux.Prompt(role); err != nil || ok {
-		return errors.New("no question on its screen now")
+		return nil, time.Time{}, errors.New("no question on its screen now")
 	}
-	if v := viewOf(s, role); v == nil || v.Status != "waiting" {
-		return errors.New("it is not waiting on a question now")
+	if v.Dialog == nil {
+		return nil, time.Time{}, errors.New("no question on its screen now")
 	}
-	d := s.ParseDialog(screen)
+	i := slices.IndexFunc(v.Dialog.Options, func(o shift.DialogOption) bool { return o.N == n })
+	if i < 0 || check && v.Dialog.ID != id {
+		return nil, time.Time{}, errors.New("the question on its screen changed: look again")
+	}
+	screen, err := s.Tmux.Capture(role, 80)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	d := s.DialogOn(role, screen)
 	if d == nil {
-		return errors.New("no question on its screen now")
+		return nil, time.Time{}, errors.New("no question on its screen now")
 	}
-	i := slices.IndexFunc(d.Options, func(o shift.DialogOption) bool { return o.N == n })
-	if i < 0 || d.ID != id {
-		return errors.New("the question on its screen changed: look again")
+	if d.ID != v.Dialog.ID {
+		return nil, time.Time{}, errors.New("the question on its screen changed: look again")
 	}
-	return s.PressKeys(role, d.ChooseKeys(n))
+	// A card presses only what it is certainly the card of. A permission prompt: the call it shows is the only one recorded for this
+	// wait and is the very block the prompt draws. A question: the one the hook recorded for this wait, shown on the screen, with no sign
+	// of a permission prompt under the same words (the session file is not written again while a session stays waiting). The record and
+	// the screen are read again here, whatever the card was told.
+	if before != nil {
+		switch v.WaitingFor {
+		case shift.WaitPermission:
+			if d.Subject == "" || !d.SubjectChecked || d.SubjectCut {
+				return nil, time.Time{}, errors.New("nothing shows that this permission prompt is the call the card showed, or the card could not show it " +
+					"whole: answer it in a terminal")
+			}
+		case shift.WaitQuestion:
+			if !v.Dialog.Asked || s.PermissionHinted(role, v.Since, screen) {
+				return nil, time.Time{}, errors.New("nothing shows that this is the question the card showed (it is not the one the role asked, or " +
+					"it looks like a permission prompt): answer it in a terminal")
+			}
+		default:
+			return nil, time.Time{}, errors.New("the session does not say what it waits on: answer it in a terminal")
+		}
+	}
+	if before != nil {
+		if err := before(d, v.Since); err != nil {
+			return nil, time.Time{}, err
+		}
+	}
+	return d, v.Since, s.PressKeys(role, d.ChooseKeys(n))
 }
 
 // questionAnswer is the owner's answer to the question on a role's screen, from Chat: per item the chosen options

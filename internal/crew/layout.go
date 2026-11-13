@@ -82,6 +82,12 @@ func (l Layout) HookQuestion(role string) string {
 	return filepath.Join(l.Hooks(), role+".question.json")
 }
 
+// HookPermission is the tool call a role's PermissionRequest hook saw a permission prompt put on its screen: which tool, and what
+// it was asked to do.
+func (l Layout) HookPermission(role string) string {
+	return filepath.Join(l.Hooks(), role+".permission.json")
+}
+
 // HookFailure is the API error a role's StopFailure hook saw end its turn.
 func (l Layout) HookFailure(role string) string {
 	return filepath.Join(l.Hooks(), role+".failure.json")
@@ -135,3 +141,33 @@ func (l Layout) CourierLog() string { return filepath.Join(l.Dir, "courier.log")
 
 // TickLog is where the ticker's output goes.
 func (l Layout) TickLog() string { return filepath.Join(l.Dir, "tick.log") }
+
+// Plugins is the plugins' directory: the programs a crew keeps of its own (plugins/<name>, an executable), and what zmina
+// keeps of them — each plugin's lock and its told file, and the owner's mark (PluginOwner).
+func (l Layout) Plugins() string { return filepath.Join(l.Dir, "plugins") }
+
+// PluginTold is what one plugin was told of and what is owed it (plugins/<name>.told.json): so that each event goes once and
+// an `answered` goes only to a plugin that was told. A plugin's file is written only by the run that holds its lock
+// (PluginLock), apart from state.json; nothing decides by it but what to send next.
+func (l Layout) PluginTold(name string) string { return filepath.Join(l.Plugins(), name+".told.json") }
+
+// PluginLock is held by the run that delivers to one plugin, so that one event is on its way at a time and a run that
+// outlasts a beat is not met by the next.
+func (l Layout) PluginLock(name string) string { return filepath.Join(l.Plugins(), name+".lock") }
+
+// PluginArmed is the one-shot marks of a plugin's dialogs (plugins/<name>.armed.json): each dialog event it was told carries one,
+// and the first press made with it disarms it. It is written by the delivery that told the event and by the choose that pressed,
+// apart from the told file, under a lock of its own (PluginArmedLock).
+func (l Layout) PluginArmed(name string) string {
+	return filepath.Join(l.Plugins(), name+".armed.json")
+}
+
+// PluginArmedLock is the short lock the two writers of PluginArmed take.
+func (l Layout) PluginArmedLock(name string) string {
+	return filepath.Join(l.Plugins(), name+".armed.lock")
+}
+
+// PluginOwner is the owner's mark (plugins/owner.json): when he last answered in a terminal, and what he chose of a dialog,
+// written by the answer commands under the state lock and read by the plugins' run for quiet_when_active and for how a
+// dialog was closed.
+func (l Layout) PluginOwner() string { return filepath.Join(l.Plugins(), "owner.json") }
