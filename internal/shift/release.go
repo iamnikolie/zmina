@@ -88,6 +88,14 @@ func (s *Shift) release(name string, r *crew.Role, now time.Time) (did, note str
 			return s.putDown(name)
 		}
 
+		// Asking the role to park its tasks is a model call: it does not begin while the role's plan is held. Putting down a role with
+		// none asks nothing, and is not held.
+		if s.planHeld(name, now) {
+			rs.ReleaseIdle = 0
+
+			return "", ""
+		}
+
 		rs.Releasing, rs.ReleaseTasks = now, ids
 		request, err := s.releaseCheckpointRequest(name, mine)
 		if err != nil {

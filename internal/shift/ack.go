@@ -184,7 +184,7 @@ func (s *Shift) renotify(now time.Time) {
 
 	for _, id := range slices.SortedFunc(maps.Keys(s.State.Acks), func(a, b string) int { return ackNum(a) - ackNum(b) }) {
 		a := s.State.Acks[id]
-		if a.Last.IsZero() || a.Renotes >= renotesMax || !s.has(a.Role) || s.inFlight(a) {
+		if a.Last.IsZero() || a.Renotes >= renotesMax || s.planHeld(a.Role, now) || !s.has(a.Role) || s.inFlight(a) {
 			continue
 		}
 

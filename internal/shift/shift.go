@@ -20,6 +20,7 @@ import (
 	"github.com/iamnikolie/zmina/internal/events"
 	"github.com/iamnikolie/zmina/internal/inbox"
 	"github.com/iamnikolie/zmina/internal/later"
+	"github.com/iamnikolie/zmina/internal/limits"
 	"github.com/iamnikolie/zmina/internal/registry"
 	"github.com/iamnikolie/zmina/internal/screenrules"
 	"github.com/iamnikolie/zmina/internal/task"
@@ -38,6 +39,9 @@ const (
 
 	// SignalsMax is signalsMax for a command that tells the owner how many signals the dispatcher takes.
 	SignalsMax = signalsMax
+	// signalsHeldMax is how many signals wait for a dispatcher whose plan is held (limits: hold): nothing reads them for as long as the hold
+	// lasts, up to a week, and the roles' reports are the work they would otherwise have to repeat.
+	signalsHeldMax = 100
 
 	// typeTries is how many tries a queued line gets before it moves to the failed list. A try is a pass that fails
 	// at least countedGap after the one before it: passes that run seconds apart (a command's delivery and the beat)
@@ -140,6 +144,10 @@ type Alarms interface {
 // Asks are what waits on the owner.
 type Asks interface {
 	Add(a asks.Ask, now time.Time) (asks.Ask, error)
+	// Close takes an open ask off the list (the hold of a plan closes the item it opened for the owner).
+	Close(id string, st asks.State, answer string, now time.Time) (asks.Ask, error)
+	// Pending is every ask still open (the beat closes the item of a hold that is gone).
+	Pending() []asks.Ask
 }
 
 // Events is the shift's history.
@@ -225,6 +233,12 @@ type Shift struct {
 	// lastStop is the stop Start just lifted, lastBeat the beat before this one: the boot either goes on to is still
 	// the boot of a crew that stood still.
 	lastStop, lastBeat time.Time
+	// Limits is how full the plans were when this beat began, read by the caller outside the state lock (limits.Collect: a
+	// Codex rollout is a directory walk). The beat judges the crew's thresholds by it (limitsStep); nil: it judges none, and
+	// the holds already on the book still hold until their reset time.
+	Limits *limits.Report
+	// limitBook is the holds file as this shift read it, once (holdBook); the beat replaces it when it writes the file.
+	limitBook *limits.Book
 }
 
 // Presence is where a role is.
@@ -301,6 +315,11 @@ type View struct {
 	// says so (when the ticker first read it; the time of this read when the line is newer than the last beat).
 	Now   string    `json:"now,omitempty"`
 	NowAt time.Time `json:"now_at,omitzero"`
+	// PlanHeld says that nothing is delivered to the role because a window of its plan is at the hold share (the crew file's
+	// limits: hold): that window in words (`claude 5h window`), PlanHeldUntil when it resets, in the crew's location. Read from
+	// the holds file on every look; it is not kept in the state. The owner's own line still goes through.
+	PlanHeld      string    `json:"plan_held,omitempty"`
+	PlanHeldUntil time.Time `json:"plan_held_until,omitzero"`
 	// Rotation is the role's newest rotation (rotation.go): the one in flight, else how the last one ended. Read from the
 	// role's record on every look (the beat's cached reader, a few KiB at most, a record that is not there costs a failed
 	// open); it is not kept in the state, and nothing writes the record for it.
@@ -443,6 +462,10 @@ func (s *Shift) look(name string, held map[string][]string) (View, Reasoning, bo
 		v.Dir = rs.Dir
 	} else if err := r.DirErr(); err != nil {
 		v.Problem = err.Error()
+	}
+
+	if what, until, ok := s.planHeldWhy(name, s.Now()); ok {
+		v.PlanHeld, v.PlanHeldUntil = what, until.In(s.Crew.Location())
 	}
 
 	var sess *registry.Session
@@ -1374,6 +1397,16 @@ func (s *Shift) Send(name, text string) error {
 		return fmt.Errorf("%s: %w", name, ErrNotUp)
 	}
 
+	// A line typed now would pass a hold of the role's plan, which keeps every line but the owner's own: from anyone else it is queued
+	// instead, behind the others, and the caller is told (SendQueued is not a failure).
+	if what, until, held := s.planHeldWhy(name, s.Now()); held && s.By != "hand" && s.By != "ui" {
+		if err := s.QueueFrom(name, text, Facts{}); err != nil {
+			return err
+		}
+
+		return &SendQueued{What: what, Until: until.In(s.Crew.Location())}
+	}
+
 	// Posted to its inbox socket, the line arrives as a message from zmina whatever its input line holds; a post
 	// that never started is typed instead.
 	if sess := s.native(name, s.Now()); sess != nil && postable(text) {
@@ -1476,7 +1509,7 @@ func (s *Shift) QueueOwner(name, line string) error {
 		return err
 	}
 
-	if n := len(s.State.Role(name).Inbox); n >= inboxMax && n < inboxMax+ownerRoom && s.failureHeld(name, s.Now()) {
+	if n := len(s.State.Role(name).Inbox); n >= inboxMax && n < inboxMax+ownerRoom && s.deliveryHeld(name, s.Now()) {
 		s.enqueue(name, line, Facts{From: "owner"})
 		s.log(name, "queued", "", line)
 
@@ -1600,8 +1633,17 @@ func (s *Shift) note(from, text string, ifUp, info bool) (string, bool, error) {
 		return sig, false, nil
 	}
 
-	if len(s.State.Signals) >= signalsMax {
-		return "", false, fmt.Errorf("%d notes already wait for the dispatcher; it is not reading them", signalsMax)
+	if most := s.signalsCap(); len(s.State.Signals) >= most {
+		err := fmt.Errorf("%d notes already wait for the dispatcher; it is not reading them", most)
+
+		if most > signalsMax {
+			// The count of what was refused is the part of the state that is kept (Partial: the command fails, the note it changed is saved).
+			s.signalRefused(most)
+
+			return "", false, Partial(err)
+		}
+
+		return "", false, err
 	}
 
 	// The id comes with the note, not with its delivery: zmina queue ls and the recovery pack show it, and a line
@@ -1669,6 +1711,10 @@ type QueueView struct {
 	// Unfetched are the cards of the lines of a doorbell that was shown to the role and whose text it has not fetched: the
 	// bell is no record in flight any more, and these are the lines that wait for it to read them (bell.go).
 	Unfetched []Card `json:"unfetched,omitempty"`
+	// PlanHeld says that nothing of this queue is delivered because a window of the role's plan is at the hold share
+	// (`claude 5h window`), PlanHeldUntil until when, in the crew's location; the owner's own line still goes.
+	PlanHeld      string    `json:"plan_held,omitempty"`
+	PlanHeldUntil time.Time `json:"plan_held_until,omitzero"`
 
 	rows rowCards
 	// joined is that a record of this view made of parts is a joined post (a role's, postJoined): each part is a queued
@@ -1877,6 +1923,12 @@ func (s *Shift) Queues() []QueueView {
 	for _, name := range s.Names() {
 		rs := s.State.Role(name)
 		q := QueueView{Role: name, Inbox: rs.Inbox, Sent: rs.Sent, Posted: rs.Posted, joined: name != s.Crew.Dispatcher}
+
+		if s.Now != nil {
+			if what, until, held := s.planHeldWhy(name, s.Now()); held {
+				q.PlanHeld, q.PlanHeldUntil = what, until.In(s.Crew.Location())
+			}
+		}
 
 		for _, f := range rs.Failed {
 			q.Failed = append(q.Failed, FailedView{Failed: f, Unclear: f.Unclear()})

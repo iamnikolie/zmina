@@ -297,21 +297,57 @@ func (s *Shift) FailureHolds(now time.Time) []FailureHold {
 }
 
 // ownerLine is the place in a role's queue of the first line that is the owner's own message (the cockpit's chat), -1 when
-// there is none.
+// there is none. A line a receipt was made for is the owner's whichever runtime the role has (ownerMessage): a Codex seat has no input line
+// the message is typed into, but a hold lets it through all the same, as a post of its own. A receipt names a line by its words, so the line must
+// also be the one the owner queued (ownerQueued): a role that queues the same words after the owner's line has gone does not pass a hold with them.
 func (s *Shift) ownerLine(name string) int {
 	rs, ok := s.State.Roles[name]
 	if !ok {
 		return -1
 	}
 
+	seen := map[string]int{}
+
 	for i, line := range rs.Inbox {
-		if s.ownerChat(name, line) {
+		k := seen[line]
+		seen[line]++
+
+		if rs.ownerMessage(line) && s.ownerQueued(name, line, k) {
 			return i
 		}
 	}
 
 	return -1
 }
+
+// ownerQueued reports whether the k-th line of these words in a role's queue is one the owner wrote: lines of the same words are told apart by the
+// order they were queued in, as their cards are (CardsOf), and the cards that are queued — not delivered, not seen, not closed, and not waiting for
+// a look because the line failed with its outcome unclear (the line is then in the failed list, not in the queue) — are the lines of the queue. The
+// k-th of them must not say it came from another: a card that names its sender as anyone but the owner blocks the pass, and one that names none (a build
+// that did not keep it, a card made again when a line was given back with none of the line's to copy it from) leaves the receipt standing, as it did
+// before cards were checked. Words no card was ever made for (queued before cards were kept) stand on the receipt alone. Cards of the same words are
+// paired with lines by order, not by identity: a role's line of the same words queued before the owner's and delivered out of order may stand in the
+// owner's place once, and what it sends is the owner's own words.
+func (s *Shift) ownerQueued(name, line string, k int) bool {
+	all := CardsOf(s.cardList(name), name, line)
+	if len(all) == 0 {
+		return true
+	}
+
+	var queued []Card
+
+	for _, c := range all {
+		if c.Accepted == nil && !c.done() && c.Attention == nil {
+			queued = append(queued, c)
+		}
+	}
+
+	return k < len(queued) && (queued[k].From == "" || queued[k].From == "owner")
+}
+
+// cardList is a role's cards as this shift has them: the ones loaded, with what this pass made and has not written yet, else the file's, read once for
+// the pass (cardsPeek) — a courier that looks again every few seconds reads a held role's cards once a look, not once a call.
+func (s *Shift) cardList(name string) []Card { return s.cardsPeek(name) }
 
 // sameTurn reports whether the transcript's last error is the failed turn the record is of: written within failSame of
 // it. An error line that carries no time is taken for it.

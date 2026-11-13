@@ -18,6 +18,7 @@ import (
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/events"
 	"github.com/iamnikolie/zmina/internal/lesson"
+	"github.com/iamnikolie/zmina/internal/limits"
 	"github.com/iamnikolie/zmina/internal/shift"
 	"github.com/iamnikolie/zmina/internal/task"
 )
@@ -863,7 +864,8 @@ func (a *app) lessonsBeat(now time.Time) {
 			}
 		}
 
-		due = lessonsDue(c, st, waiting, now)
+		// The day's run is a model call: none while the Claude plan is held.
+		due = lessonsDue(c, st, waiting, now) && !s.PlanHeldFor(limits.PlanClaude, now)
 
 		return nil
 	})

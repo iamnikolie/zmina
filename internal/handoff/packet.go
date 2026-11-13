@@ -46,6 +46,18 @@ func Release(dir, role string, packets []Packet) (string, error) {
 	}{role, packets, "Write each requested checkpoint, then park each task with what remains. Do not invent missing information."})
 }
 
+// Checkpoint writes one short-locator request for the role's checkpoints while its plan's window fills: the same request a
+// restart's is, in the same directory (the retention pass keeps it clean), with the words that say no restart follows.
+func Checkpoint(dir, role string, packets []Packet) (string, error) {
+	return publish(filepath.Join(dir, RestartsDir), struct {
+		Role         string   `json:"role"`
+		Tasks        []Packet `json:"tasks"`
+		Instructions string   `json:"instructions"`
+	}{role, packets, "Write each requested checkpoint as a note a fresh session could start from: what is done, what is left, " +
+		"where things are, open questions. Then stop: no restart follows and your next line is work as usual. " +
+		"Do not park the tasks or start new work. Do not invent missing information."})
+}
+
 // Restart writes one short-locator request for the role's handoff notes before zmina restarts it fresh.
 func Restart(dir, role string, packets []Packet) (string, error) {
 	return publish(filepath.Join(dir, RestartsDir), struct {

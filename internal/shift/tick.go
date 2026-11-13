@@ -78,9 +78,13 @@ func (s *Shift) Tick() []string {
 	s.State.LastTick = now
 	s.pruneAbsent(now)
 
+	// The plans' thresholds before anything is delivered or started: a hold that begins now is on the book for every step below.
+	limited := s.limitsStep(now)
+
 	// Alarms first: a role an alarm starts is up for the rest of the beat.
 	s.mark("alarms", "")
 	did, notes := s.ring(now, stopped)
+	did = append(limited, did...)
 	did = append(did, s.reportUnreadable(now)...)
 
 	// The roles this beat probed up, for the age sweep: a role skipped below (tmux did not answer) is not among them.
@@ -148,8 +152,9 @@ func (s *Shift) Tick() []string {
 			s.settleEnded(name, now)
 		}
 
+		// A role of a held plan is not started: a fresh start's boot line is a model call (planHeld).
 		if !up && !stopped && r.Keep == crew.KeepAlways && !rs.Held && !rs.Broken && s.flushErr == nil &&
-			s.registryFor(name).LiveByName(r.Session) == nil && now.Sub(rs.Started) >= reopenPause {
+			s.registryFor(name).LiveByName(r.Session) == nil && now.Sub(rs.Started) >= reopenPause && !s.planHeld(name, now) {
 			// The conversation it was on, read before the start: the record of the reopen names it, and a fresh start hands the
 			// tasks the role holds.
 			from, tasks := s.rotationFrom(name), s.heldTasks(name)
@@ -299,6 +304,11 @@ func (s *Shift) trim(name string, r *crew.Role, now time.Time, tasks []string) s
 
 	// A role asked for its note before a restart, or being restarted, is left to that.
 	if !rs.RestartAsked.IsZero() || !rs.Downing.IsZero() {
+		return ""
+	}
+
+	// A /compact or a /clear and its boot line are model calls: none while its plan is held.
+	if s.planHeld(name, now) {
 		return ""
 	}
 
@@ -499,8 +509,21 @@ func (s *Shift) addNotes(notes []string) {
 		}
 	}
 
-	if len(s.State.Notes) > notesMax {
-		s.State.Notes = s.State.Notes[len(s.State.Notes)-notesMax:]
+	// Past notesMax the oldest go, bar the notes of a hold the dispatcher is held by (pinnedNote).
+	if excess := len(s.State.Notes) - notesMax; excess > 0 {
+		kept := make([]string, 0, len(s.State.Notes))
+
+		for _, n := range s.State.Notes {
+			if excess > 0 && !s.pinnedNote(n) {
+				excess--
+
+				continue
+			}
+
+			kept = append(kept, n)
+		}
+
+		s.State.Notes = kept
 	}
 	for key := range s.State.NoticeMeta {
 		if !slices.Contains(s.State.Notes, key) {
@@ -620,6 +643,18 @@ func (s *Shift) schedule(name string, r *crew.Role, now time.Time, tasks []strin
 	}
 
 	if now.Before(rs.NextRun) {
+		return "", "", false
+	}
+
+	// Its plan is held: the run is postponed, not skipped. NextRun stays where it is, so the run is due at every beat and goes
+	// once, when the hold ends, however many times of the schedule passed meanwhile. Said once for each run, whenever the beat that
+	// first finds it due comes (the book remembers it).
+	if what, until, held := s.planHeldWhy(name, now); held && !stopped {
+		if s.postponedOnce(name, rs.NextRun) {
+			s.log(name, "schedule-postponed", "", "its plan is held ("+what+" until "+limitClock(until, now, s.Crew.Location())+"): the run of "+
+				limitClock(rs.NextRun, now, s.Crew.Location())+" goes once it is over")
+		}
+
 		return "", "", false
 	}
 
@@ -876,8 +911,9 @@ func (s *Shift) deliverOnce(now time.Time) string {
 		return ""
 	}
 
-	// Its last turn ended on an API error a moment ago: nothing goes until the hold is over (failureHeld).
-	if s.failureHeld(d, now) {
+	// Its last turn ended on an API error a moment ago, or a window of its plan is at the hold share: nothing goes until the hold
+	// is over (failureHeld, planHeld).
+	if s.deliveryHeld(d, now) {
 		return ""
 	}
 
@@ -1402,10 +1438,10 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 		return ""
 	}
 
-	// Its last turn ended on an API error a moment ago: no line is posted or typed until the hold is over (failureHeld),
-	// whoever asks, the beat, a pass or a turn's end. The owner's own message is the one thing that goes, wherever it stands:
-	// typed, never posted, and taken to the head only when it is about to be typed (below).
-	held := s.failureHeld(name, now)
+	// Its last turn ended on an API error a moment ago, or a window of its plan is at the hold share: no line is posted or typed
+	// until the hold is over (failureHeld, planHeld), whoever asks, the beat, a pass or a turn's end. The owner's own message is the
+	// one thing that goes, wherever it stands: typed, never posted, and taken to the head only when it is about to be typed (below).
+	held := s.deliveryHeld(name, now)
 	if held && s.ownerLine(name) < 0 {
 		return ""
 	}
@@ -1421,13 +1457,22 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 	}
 
 	// A line posted to the inbox socket needs no empty input line and no Enter: it goes once the one before it
-	// showed in the conversation and the role is between turns. A slash command is typed.
+	// showed in the conversation and the role is between turns. A slash command is typed. Held, the owner's own line of a role that is
+	// posted to (a Codex seat's: ownerChat is Claude's) goes as a post of its own, the lines before and after it staying where they are.
 	if sess := s.native(name, now); sess != nil && rs.Sent == nil {
 		pending := s.followPosted(name, now)
 
 		switch {
 		case len(rs.Inbox) == 0:
 			return ""
+		case held && s.postableFor(name, rs.Inbox[ownerAt]):
+			if pending || !s.quiet(name, sess) {
+				return ""
+			}
+
+			defer s.ownerToHead(name, ownerAt)()
+
+			return s.postInboxRun(name, sess, now, true)
 		case !held && s.postableFor(name, rs.Inbox[0]):
 			if pending || !s.quiet(name, sess) {
 				return ""
@@ -1457,28 +1502,7 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 	// tries counted are the first line's, which is not the one that goes, so they neither hold the owner's line back nor are
 	// forgotten. What the typing leaves of it is put right when this returns (below): the line that did not go is back in its
 	// place and the first line has its tries again.
-	if ownerAt > 0 {
-		was, tried, queued, owner := rs.Attempts, rs.TriedAt, len(rs.Inbox), rs.Inbox[ownerAt]
-
-		s.moveToHead(name, ownerAt)
-
-		// The line is tried as a head line is: its own tries (kept by the line, ownerTry) are the counters while it is the head, so
-		// that the spacing and the three tries before the failed list are those of any line, and the first line's are put back.
-		rs.Attempts, rs.TriedAt = s.ownerTried(name, owner)
-
-		defer func() {
-			if len(rs.Inbox) == queued {
-				// It stays queued: its failed tries are kept for it, and it is back in its place.
-				s.setOwnerTried(name, owner, rs.Attempts, rs.TriedAt)
-				s.moveBack(name, ownerAt)
-			} else {
-				// It went (typed, or failed for good, or kept for a look): nothing of its tries is left to keep.
-				s.setOwnerTried(name, owner, 0, time.Time{})
-			}
-
-			rs.Attempts, rs.TriedAt = was, tried
-		}()
-	}
+	defer s.ownerToHead(name, ownerAt)()
 
 	// A line that failed a moment ago is neither tried nor counted again yet.
 	if rs.triedLately(now) {
@@ -1490,6 +1514,12 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 	// More than one line that may be read together, or a long one, is typed as a doorbell, one line, and what it is for is
 	// read with its command (bell.go).
 	run := s.joinRun(name)
+
+	// Held, only the owner's line is to go: the lines queued after it, which a run would join to it, wait.
+	if held && len(run) > 1 {
+		run = run[:1]
+	}
+
 	marks := s.crossMarks(name, run)
 
 	if b := s.bellFor(name, run, marks, true, now); b != nil {
@@ -1582,6 +1612,43 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 // beat (typeTries beats, then kept as failed); one whose write broke is followed as posted (post), since the role may
 // have it; any other error keeps it as failed at once.
 func (s *Shift) postInbox(name string, sess *registry.Session, now time.Time) string {
+	return s.postInboxRun(name, sess, now, false)
+}
+
+// ownerToHead takes the owner's line at place at of a role's queue, when it is not the head, to the head for the try that is about to be made
+// (the one line a hold lets through, typed or posted), and returns what puts things right when the try is over: the line that did not go is
+// back in its place and the first line has its tries again. The tries counted are the first line's, which is not the one that goes, so they
+// neither hold the owner's line back nor are forgotten; the owner's line is tried as a head line is, by its own tries (ownerTry), the same
+// spacing and the same three before the failed list. At the head or not held (at < 1) it does nothing.
+func (s *Shift) ownerToHead(name string, at int) func() {
+	rs := s.State.Role(name)
+	if at < 1 || at >= len(rs.Inbox) {
+		return func() {}
+	}
+
+	was, tried, queued, owner := rs.Attempts, rs.TriedAt, len(rs.Inbox), rs.Inbox[at]
+
+	s.moveToHead(name, at)
+
+	rs.Attempts, rs.TriedAt = s.ownerTried(name, owner)
+
+	return func() {
+		if len(rs.Inbox) == queued {
+			// It stays queued: its failed tries are kept for it, and it is back in its place.
+			s.setOwnerTried(name, owner, rs.Attempts, rs.TriedAt)
+			s.moveBack(name, at)
+		} else {
+			// It went (typed, or failed for good, or kept for a look): nothing of its tries is left to keep.
+			s.setOwnerTried(name, owner, 0, time.Time{})
+		}
+
+		rs.Attempts, rs.TriedAt = was, tried
+	}
+}
+
+// postInboxRun is postInbox; single posts the head line alone, whatever follows it in the queue that a run would join to it (a hold lets one
+// line through).
+func (s *Shift) postInboxRun(name string, sess *registry.Session, now time.Time, single bool) string {
 	rs := s.State.Role(name)
 	head := rs.Inbox[0]
 
@@ -1594,6 +1661,10 @@ func (s *Shift) postInbox(name string, sess *registry.Session, now time.Time) st
 	// Several lines that may be read together go as one numbered message (join.go); one goes as it is. What is big goes
 	// as a doorbell, one line or several (bell.go).
 	run := s.joinRun(name)
+	if single && len(run) > 1 {
+		run = run[:1]
+	}
+
 	marks := s.crossMarks(name, run)
 
 	if b := s.bellFor(name, run, marks, false, now); b != nil {

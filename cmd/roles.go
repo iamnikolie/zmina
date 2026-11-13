@@ -204,6 +204,10 @@ func (a *app) lsCompact(s *shift.Shift, views []shift.View, all bool) error {
 		fmt.Fprintln(a.out, line)
 	}
 
+	for _, line := range holdFooter(s) {
+		fmt.Fprintln(a.out, line)
+	}
+
 	return nil
 }
 
@@ -349,6 +353,10 @@ func (a *app) lsWide(s *shift.Shift, views []shift.View, now bool) error {
 		}
 	}
 
+	for _, line := range holdFooter(s) {
+		fmt.Fprintln(a.out, line)
+	}
+
 	if now {
 		for _, v := range views {
 			if v.Now != "" {
@@ -462,6 +470,12 @@ func (a *app) upCommand() *cobra.Command {
 					up := s.UpWith
 					if t.ID == "" {
 						up = s.UpHanding
+					}
+
+					// A start is the owner's own act and goes on; the role's plan is held, and zmina says that nothing it is sent is delivered.
+					if what, until, held := s.PlanHeldWhy(n, s.Now()); held {
+						fmt.Fprintf(a.err, "zmina: warning: %s: its plan is held (%s until %s): nothing is delivered to it but your own line, "+
+							"and its boot is a model call you chose (zmina limits)\n", n, what, until.In(s.Crew.Location()).Format("15:04"))
 					}
 
 					if err := up(n, opts); err != nil {
@@ -1011,7 +1025,16 @@ func (a *app) sendCommand() *cobra.Command {
 					return nil
 				}
 
-				return s.Send(args[0], text)
+				err := s.Send(args[0], text)
+
+				// A line a held plan would not have: queued instead of typed, and said so.
+				if queued := (*shift.SendQueued)(nil); errors.As(err, &queued) {
+					fmt.Fprintln(a.out, queued.Say(s.Crew.Location()))
+
+					return nil
+				}
+
+				return err
 			})
 		},
 	}
@@ -1270,7 +1293,19 @@ func (a *app) tickCommand() *cobra.Command {
 				return a.deliverPass()
 			}
 
-			err := shift.RunTick(a.withState, runWatches, a.rang, a.printTick)
+			// How full the plans are, read before the lock is taken: the beat judges the crew's thresholds by it.
+			locked := a.withState
+			if snap := a.limitsSnapshot(time.Now()); snap != nil {
+				locked = func(fn func(s *shift.Shift) error) error {
+					return a.withState(func(s *shift.Shift) error {
+						s.Limits = snap
+
+						return fn(s)
+					})
+				}
+			}
+
+			err := shift.RunTick(locked, runWatches, a.rang, a.printTick)
 			if errors.Is(err, shift.ErrStateFuture) {
 				// The state is a newer zmina's: the rest of the beat would run on an empty one.
 				return err
@@ -1380,7 +1415,12 @@ func turnErrorKind(v shift.View) string {
 	c := shift.FailureClass{Kind: shift.FailureKind(v.TurnErrorKind), Reset: v.TurnErrorReset}
 
 	w := c.Words()
-	if w != "" && !v.TurnErrorHeldUntil.IsZero() {
+
+	switch {
+	case w != "" && !v.TurnErrorHeldUntil.IsZero() && !v.PlanHeldUntil.IsZero() && !v.TurnErrorHeldUntil.After(v.PlanHeldUntil):
+		// The plan's hold keeps the queue as long: it is the one said, and the line waits for whichever ends later.
+		w += ", queue held for the " + v.PlanHeld + " until " + v.PlanHeldUntil.Format("15:04 MST")
+	case w != "" && !v.TurnErrorHeldUntil.IsZero():
 		w += ", queue held until " + v.TurnErrorHeldUntil.Format("15:04 MST")
 	}
 

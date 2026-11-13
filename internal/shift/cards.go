@@ -751,7 +751,16 @@ func (s *Shift) cardBack(name, line, why string, at time.Time) {
 	}
 
 	if c == nil {
-		c = rc.add(Card{ID: id, Head: cardHead(line)})
+		// Made again: it keeps the sender of the newest card the line had, so that the owner's retried line is still the owner's.
+		from := ""
+
+		for i := len(rc.cards) - 1; i >= 0 && from == ""; i-- {
+			if rc.cards[i].ID == id {
+				from = rc.cards[i].From
+			}
+		}
+
+		c = rc.add(Card{ID: id, Head: cardHead(line), From: from})
 	}
 
 	n := 1

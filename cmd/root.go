@@ -58,6 +58,8 @@ type app struct {
 	spawn func(args []string) error
 	// parent reads a process's parent pid (nil: procParent; tests set a fake).
 	parent func(pid int) (int, error)
+	// crewOnce is a crew the beat loaded to read the limits by: the next shift is built over it instead of parsing the crew file again (takeCrew).
+	crewOnce *crew.Crew
 	// shiftSeams replaces what a new shift talks to (its tmux, session registry, inbox socket) once it is built
 	// (nil: the real ones; tests set fakes).
 	shiftSeams func(s *shift.Shift)
@@ -224,10 +226,22 @@ func (a *app) loadCrew() (*crew.Crew, error) {
 	return c, nil
 }
 
+// takeCrew is loadCrew, except that a crew the beat loaded to read the limits by (limitsSnapshot) is used once: the crew file is parsed once a
+// beat for that, not twice.
+func (a *app) takeCrew() (*crew.Crew, error) {
+	if c := a.crewOnce; c != nil {
+		a.crewOnce = nil
+
+		return c, nil
+	}
+
+	return a.loadCrew()
+}
+
 // newShift builds the shift over the crew file, with a fresh state that is not saved. tmux is found on first use,
 // so commands that never touch it (tasks, log, seat) work without it.
 func (a *app) newShift() (*shift.Shift, error) {
-	c, err := a.loadCrew()
+	c, err := a.takeCrew()
 	if err != nil {
 		return nil, err
 	}

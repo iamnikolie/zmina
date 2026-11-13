@@ -114,6 +114,11 @@ func (a *app) queueCommand() *cobra.Command {
 				for _, q := range qs {
 					fmt.Fprintln(a.out, q.Role+":")
 
+					if q.PlanHeld != "" {
+						fmt.Fprintf(a.out, "  held: the %s is at its hold share, nothing is delivered until %s (the owner's own line goes through)\n",
+							q.PlanHeld, q.PlanHeldUntil.Format("Mon 15:04 MST"))
+					}
+
 					for _, l := range q.Signals {
 						line("signal   ", l, "")
 					}

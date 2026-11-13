@@ -192,16 +192,31 @@ func TestTapKeepsTheStoredReadingWhenTheIncomingOneIsOlder(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, string(before), string(after))
 
-	// The same reset with less spent is the same window seen earlier.
-	wrote, err = Tap(dir, reading(15, 1893500000, 30, 1894000000), noon.Add(2*Heartbeat))
-	require.NoError(t, err)
-	assert.False(t, wrote)
-
 	c, err := ReadClaude(dir)
 	require.NoError(t, err)
 	assert.Equal(t, 20.0, c.FiveHour.Used)
 	assert.Equal(t, 41.0, c.SevenDay.Used)
 	assert.True(t, c.At.Equal(noon), "the file still says when its figures were seen")
+
+	// The same reset with less spent is the same window seen earlier by another session: usage only grows within a period.
+	for _, later := range []time.Duration{3 * time.Second, time.Minute, 2 * Heartbeat} {
+		wrote, err = Tap(dir, reading(15, 1893500000, 30, 1894000000), noon.Add(later))
+		require.NoError(t, err)
+		assert.False(t, wrote, "%v after", later)
+	}
+
+	c, err = ReadClaude(dir)
+	require.NoError(t, err)
+	assert.Equal(t, 20.0, c.FiveHour.Used)
+
+	// Only when the stored reading is older than ten minutes does a lower figure replace it (TestTapReplacesAStoredWindowNobodyDrewForTenMinutes).
+	wrote, err = Tap(dir, reading(15, 1893500000, 30, 1894000000), noon.Add(2*Heartbeat+time.Second))
+	require.NoError(t, err)
+	assert.True(t, wrote)
+
+	c, err = ReadClaude(dir)
+	require.NoError(t, err)
+	assert.Equal(t, 15.0, c.FiveHour.Used)
 }
 
 // Each window is judged on its own reset: a stale one is kept while the other moves on.
@@ -317,4 +332,142 @@ func TestReadClaudeNeverTrustsAStaleFlagInTheFile(t *testing.T) {
 	c, err := ReadClaude(dir)
 	require.NoError(t, err)
 	assert.False(t, c.SevenDay.Stale)
+}
+
+// resetsOf is a status line with only the 5-hour window, its reset at the given moment.
+func fiveAt(used int, resets time.Time) []byte {
+	return []byte(fmt.Sprintf(`{"rate_limits":{"five_hour":{"used_percentage":%d,"resets_at":%d}}}`, used, resets.Unix()))
+}
+
+// A status line that sends milliseconds for seconds lands in the year 50000: it is read as the moment it means.
+func TestParseStatuslineReadsAMillisecondEpochAsTheMomentItMeans(t *testing.T) {
+	soon := noon.Add(2 * time.Hour)
+
+	c := ParseStatusline([]byte(fmt.Sprintf(`{"rate_limits":{"five_hour":{"used_percentage":5,"resets_at":%d}}}`, soon.UnixMilli())), noon)
+	require.NotNil(t, c)
+	require.NotNil(t, c.FiveHour.Resets)
+	assert.True(t, c.FiveHour.Resets.Equal(soon), "%v", c.FiveHour.Resets)
+
+	// Anything else that is too big to be seconds or milliseconds is no moment at all.
+	for _, big := range []string{"1893500000000000", "99999999999999999999", `"1893500000000000"`} {
+		c = ParseStatusline([]byte(`{"rate_limits":{"five_hour":{"used_percentage":5,"resets_at":`+big+`}}}`), noon)
+		require.NotNil(t, c, big)
+		assert.Nil(t, c.FiveHour.Resets, big)
+	}
+}
+
+// A reset further off than the window is long (and a little slack) cannot be this window's: it is no reset.
+func TestParseStatuslineDropsAResetBeyondTheWindowsLength(t *testing.T) {
+	line := func(five, seven time.Time) []byte {
+		return []byte(fmt.Sprintf(`{"rate_limits":{"five_hour":{"used_percentage":5,"resets_at":%d},"seven_day":{"used_percentage":5,"resets_at":%d}}}`,
+			five.Unix(), seven.Unix()))
+	}
+
+	ok := ParseStatusline(line(noon.Add(5*time.Hour+10*time.Minute), noon.Add(7*24*time.Hour+30*time.Minute)), noon)
+	require.NotNil(t, ok)
+	assert.NotNil(t, ok.FiveHour.Resets, "within the slack")
+	assert.NotNil(t, ok.SevenDay.Resets, "within the slack")
+
+	far := ParseStatusline(line(noon.Add(5*time.Hour+16*time.Minute), noon.Add(7*24*time.Hour+61*time.Minute)), noon)
+	require.NotNil(t, far)
+	assert.Nil(t, far.FiveHour.Resets)
+	assert.Nil(t, far.SevenDay.Resets)
+	assert.Equal(t, 5.0, far.FiveHour.Used, "the figure is kept: it is only the reset that cannot be")
+}
+
+// A file an older tap wrote with a bad reset is judged again when read: it never makes a hold that cannot end.
+func TestCollectDropsAResetThatWasWrittenBeforeTheBoundExisted(t *testing.T) {
+	dir := t.TempDir()
+	bad := noon.Add(400 * 24 * time.Hour)
+
+	raw := fmt.Sprintf(`{"five_hour":{"used":97,"resets":%q},"seven_day":{"used":41,"resets":%q},"at":%q,"source":"statusline"}`,
+		bad.Format(time.RFC3339), noon.Add(48*time.Hour).Format(time.RFC3339), noon.Format(time.RFC3339))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "claude.json"), []byte(raw), 0o600))
+
+	r, err := Collect(dir, nil, DefaultPolicy(), noon.Add(time.Minute))
+	require.NoError(t, err)
+	require.NotNil(t, r.Claude)
+	assert.Nil(t, r.Claude.FiveHour.Resets, "a year off for a 5-hour window")
+	assert.Equal(t, 97.0, r.Claude.FiveHour.Used)
+	assert.NotNil(t, r.Claude.SevenDay.Resets, "two days off for a week is fine")
+}
+
+// Usage inside one period only grows: a lower figure at the same reset is an older one (a session redrawing the figure of its last reply). It
+// replaces the stored reading only when that is itself older than ten minutes.
+func TestTapKeepsTheHigherFigureAtTheSameResetUntilTheStoredReadingIsOld(t *testing.T) {
+	dir := t.TempDir()
+	reset := noon.Add(3 * time.Hour)
+
+	_, err := Tap(dir, fiveAt(90, reset), noon)
+	require.NoError(t, err)
+
+	for _, later := range []time.Duration{5 * time.Second, time.Minute, 10 * time.Minute} {
+		wrote, err := Tap(dir, fiveAt(20, reset), noon.Add(later))
+		require.NoError(t, err)
+		assert.False(t, wrote, "%v after: the higher figure stands", later)
+	}
+
+	c, err := ReadClaude(dir)
+	require.NoError(t, err)
+	assert.Equal(t, 90.0, c.FiveHour.Used)
+
+	// A higher figure at the same reset is the window filling: it stands at once.
+	wrote, err := Tap(dir, fiveAt(95, reset), noon.Add(time.Minute))
+	require.NoError(t, err)
+	assert.True(t, wrote)
+
+	// Eleven minutes after the stored reading nobody has drawn: the lower figure is what there is to go by.
+	wrote, err = Tap(dir, fiveAt(20, reset), noon.Add(time.Minute+11*time.Minute))
+	require.NoError(t, err)
+	assert.True(t, wrote)
+
+	c, err = ReadClaude(dir)
+	require.NoError(t, err)
+	assert.Equal(t, 20.0, c.FiveHour.Used)
+}
+
+// A stored window nobody has redrawn for ten minutes yields to whatever is drawn, an earlier reset included: another account.
+func TestTapReplacesAStoredWindowNobodyDrewForTenMinutes(t *testing.T) {
+	dir := t.TempDir()
+
+	_, err := Tap(dir, fiveAt(95, noon.Add(4*time.Hour)), noon)
+	require.NoError(t, err)
+
+	// Within ten minutes an earlier reset is an old input redrawn: the stored window stays.
+	wrote, err := Tap(dir, fiveAt(3, noon.Add(2*time.Hour)), noon.Add(9*time.Minute))
+	require.NoError(t, err)
+	assert.False(t, wrote)
+
+	// After ten minutes of silence it is another account (or a reset the stored reading got wrong): it wins.
+	wrote, err = Tap(dir, fiveAt(3, noon.Add(2*time.Hour)), noon.Add(11*time.Minute))
+	require.NoError(t, err)
+	assert.True(t, wrote)
+
+	c, err := ReadClaude(dir)
+	require.NoError(t, err)
+	assert.Equal(t, 3.0, c.FiveHour.Used)
+	assert.True(t, c.FiveHour.Resets.Equal(noon.Add(2*time.Hour)))
+}
+
+// A reset that cannot be this window's never gets into the file, so it cannot poison it.
+func TestTapNeverWritesAResetBeyondTheBound(t *testing.T) {
+	dir := t.TempDir()
+
+	wrote, err := Tap(dir, []byte(fmt.Sprintf(`{"rate_limits":{"five_hour":{"used_percentage":97,"resets_at":%d}}}`,
+		noon.Add(500*24*time.Hour).UnixMilli())), noon)
+	require.NoError(t, err)
+	assert.True(t, wrote)
+
+	c, err := ReadClaude(dir)
+	require.NoError(t, err)
+	assert.Nil(t, c.FiveHour.Resets)
+
+	// And the next honest reading is not held back by it.
+	_, err = Tap(dir, fiveAt(40, noon.Add(3*time.Hour)), noon.Add(time.Minute))
+	require.NoError(t, err)
+
+	c, err = ReadClaude(dir)
+	require.NoError(t, err)
+	assert.Equal(t, 40.0, c.FiveHour.Used)
+	assert.True(t, c.FiveHour.Resets.Equal(noon.Add(3*time.Hour)))
 }

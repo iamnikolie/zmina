@@ -210,13 +210,14 @@ func (s *Shift) requeuePosted(name string, p Posted, gone bool) []string {
 }
 
 // What zmina writes to one conversation only. Matched by the words each line opens with, the way queueRecovery knows
-// its own line: the producers are releaseLine, releaseCheckpointRequest, restartLine, earlyLine and recoveryLine
+// its own line: the producers are releaseLine, releaseCheckpointRequest, restartLine, earlyLine, the limits' checkpoint request and recoveryLine
 // (TestSessionBoundLinesAreThoseZminaWrites ties them to this list).
 var sessionBoundOpenings = []string{
 	"[zmina release] ",
 	"[zmina recovery] ",
 	"[zmina] restart: ",
 	"[zmina] restart ahead: ",
+	limitCheckpointOpening,
 }
 
 // sessionBound reports a line that only made sense to the conversation it was posted to: a slash command (it acts on

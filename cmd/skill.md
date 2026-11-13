@@ -87,9 +87,9 @@ later_sweep: {role: dispatcher, every: 7d, older: 14d, max: 12}  # the ticker ha
 done_check: make test                    # closing a task with a worktree as done runs this there and needs exit 0 (or {run, timeout: 10m, commit: true, env_fault_rc: 3}; off or none: no check, the default; see What checked means)
 courier: off                             # no courier service beside the ticker: a line for a role waits for the beat, up to a minute (on or off; default on; see The ticker)
 retention: 45d                           # how long finished work stays where it is before the ticker's daily pass moves it to archive/ (30d at least, or off; default 30d; see Retention)
-limits:                                  # how the crew spends its plans, in % of the 7-day (Claude) and weekly (Codex) window; see Limits
-  claude: {pinned: 80, stop: 99}         # from pinned only work that needs Claude goes to it, from stop nothing (defaults 80 and 99)
-  codex: {pinned: 80}                    # from pinned only work that needs Codex goes to it (default 80)
+limits:                                  # how the crew spends its plans; pinned and stop in % of the 7-day (Claude) and weekly (Codex) window; see Limits
+  claude: {pinned: 80, stop: 99, warn: 75, checkpoint: 90, hold: 97}   # from pinned only work that needs Claude goes to it, from stop nothing (defaults 80 and 99); warn, checkpoint: % of every window the plan reports, tell the dispatcher / ask for checkpoints; hold: deliver nothing until the reset, a number for the short window, off, or {five_hour: 97, seven_day: off} (defaults 75, 90, 97 on the 5-hour window only)
+  codex: {pinned: 80, warn: 75, checkpoint: 90}                        # from pinned only work that needs Codex goes to it (default 80); the same warn and checkpoint for its weekly window; hold: {week: 97} to hold it (Codex has no short window, so by default nothing is held)
 routes:                                  # the dispatcher's routing rules in order, the first that matches and yields a seat wins; see Routes
   - other_crew: {repo_under: ~/work/acme-lg, tell: box/acme}   # a repo under it is another crew's: tell its dispatcher
   - continuation: {fresh_over: 80}       # --after T-n: the seat that did it, a fresh copy once its context is over 80%
@@ -2049,29 +2049,137 @@ spending them. The dispatcher reads it before it routes work by plan; no status 
 claude   5h 12%  7d 41%   5h resets 21:40 · 7d resets Tue 13:15   seen 2m ago
 codex    week 50%         resets Thu 09:00                        seen 3h ago (codex-dev)
 policy   claude: pinned work only from 80%, nothing from 99% · codex: pinned work only from 80%
+marks    claude: warn 75%, checkpoint 90%, hold 5h 97%, 7d off · codex: warn 75%, checkpoint 90%, hold week off
+hold     claude 5h window at 97%, until 21:40 (6 roles, 14 lines waiting); the owner's own line passes
 ```
 
 - **Claude** is the 5-hour and the 7-day window as the status line of a Claude role last drew them. The status-line
-  tap writes them to `limits/claude.json` in the crew's directory. The file never goes back: a window whose reset is
-  earlier than the stored one's (a session redrawing with an old status line input) is not taken, and at the same reset
-  the higher `used` stays; a draw with nothing newer leaves the file, `at` included, as it is.
+  tap writes them to `limits/claude.json` in the crew's directory. A draw does not take the file back: usage inside
+  one period only grows, so at the same reset the higher `used` stands and a lower figure is taken for an older one (a session
+  redraws the figure of its last reply), and within ten minutes of the stored reading a window whose reset is earlier than the stored
+  one's (a session redrawing with an old status line input) is not taken either; a draw with nothing newer leaves the file, `at`
+  included, as it is. Only a stored reading nobody has drawn for ten minutes yields to any newer one, a lower figure and an earlier
+  reset included (another account, a reset it had wrong). Two Claude accounts cannot share one crew: the file holds one reading, so a
+  crew whose Claude seats use different accounts should set `hold: off` for claude until there are readings per account.
 - **Codex** is the weekly window (10080 minutes), read from the newest rollout under `sessions/` of each Codex home the
   crew knows: `~/.codex` and every Codex seat's `codex_home`. The newest is found by modification time across all days'
   folders, and in it the last `rate_limits` line counts. Of the homes, the reading recorded last wins; `(codex-dev)`
-  names the seats that run with that home (`~/.codex` when none does).
+  names the seats that run with that home (`~/.codex` when none does). Only the weekly window is read: Codex has no short
+  window in this data. The beat does not walk a home's tree every minute: it keeps what it found in `limits/codex-cache.json`,
+  looks at the newest rollout alone (a stat; read again only when it grew) and walks a home again after 5 minutes; `zmina limits`
+  and `zmina route` read afresh.
 - **Nothing is guessed.** A window is stale when its reset has passed since the reading, or when the reading is older
   than 6 hours. A stale window prints `unknown (last 41% at Tue 14:02)` and carries `"stale": true` in `--json`, and its
   reset is not shown. A plan with no reading at all prints `unknown (…)` and is `null` in `--json`. Unknown stays
-  unknown: route by the other plan, or ask the owner.
+  unknown: route by the other plan, or ask the owner. A reset further off than its window is long (5 hours and 15 minutes for
+  the 5-hour window, a week and an hour for the others, from when it was read) cannot be that window's: it is read as no reset,
+  the figure kept (a status line that sent milliseconds for seconds is read as seconds when that makes sense, else dropped).
 - **`--json`**: `claude` (`five_hour` and `seven_day`, each with `used` in percent, `resets` and, when stale, `stale`;
   `at`, when it was seen; `source`, `statusline`), `codex` (`week` the same way, `plan`, `at`, `source`, `rollout
-  <seat>`) and `policy`. Times are on the crew's `timezone:`.
+  <seat>`), `policy`, `thresholds` (`warn`, `checkpoint` for each plan, a number or `"off"`, and `hold`, a share for each window:
+  `{"five_hour": 97, "seven_day": "off"}`) and `holds` (the holds that are on, each with `plan`, `window`, `used`, `since`, `reset`, `roles`,
+  `lines`, and `ask` when it opened a todo item). Times are on the crew's `timezone:`.
 - **Policy** is the crew file's `limits:` key, in percent of the 7-day window for Claude and of the weekly window for
   Codex. From `pinned` only work that needs that plan goes to it; from Claude's `stop` nothing does. The defaults are
   the rules the dispatcher has always followed: Claude `pinned: 80`, `stop: 99`, Codex `pinned: 80` (Codex has no
   `stop`). A share is 1 to 100 and Claude's `pinned` may not be above its `stop`; a crew file that breaks this is
   refused. A seat bills the plan of its `runtime:`, so there is no key to name one. A crew file without the key keeps
   the defaults.
+- **Marks: warn, checkpoint, hold.** The same `limits:` key has three more shares, per plan, in percent of a window spent,
+  each window on its own and judged by its own reset time. `warn` and `checkpoint` apply to **every** window the plan
+  reports (Claude's 5-hour and 7-day, Codex's weekly): defaults `warn: 75`, `checkpoint: 90`. `hold` is **per window** and by
+  default only the short one is held: a number is the share for the short window (Claude's 5-hour one), `off` holds none, and a map
+  names the windows, by the names the limits data uses (`five_hour`, `seven_day`, `week`), a number for a long window opting
+  it in. A window the map leaves out keeps its default: the 5-hour window `97`, the long ones not held. Codex reports only a
+  weekly window, so by default nothing of Codex is held, a number for it is refused, and `hold: {week: 97}` opts its week in. Each share is
+  1 to 100 or `off`; where set they must read `warn <= checkpoint <= each hold share` (a crew file that breaks this, names a window the plan
+  does not report, or sets a share outside 1 to 100, is refused; a share left out has its default, so `warn: 95` alone is refused for
+  its default checkpoint of 90). They do not touch `pinned` and `stop`: routing is as it was. A plan no role of the crew bills is
+  not judged.
+
+  ```
+  limits:
+    claude: {pinned: 80, stop: 99, warn: 75, checkpoint: 90, hold: 97}   # hold: 97 is the 5-hour window
+    codex:  {pinned: 80, warn: 75, checkpoint: 90, hold: {week: 97}}     # or claude: {hold: {five_hour: 97, seven_day: 99}}, {hold: off}
+  ```
+
+  The beat reads the limits once (the tap's file, and the Codex rollouts outside the state lock, the crew file parsed once) and acts
+  once per (plan, window, reset time): two reset times less than two minutes apart are one period (the later is kept), a reset
+  that moves further is a new period and fires again. The beat judges all of it by its own clock, and a hold is only ever
+  made on a reset that lies ahead of it and within the window's length. A stale window (its reset passed since the reading, or the
+  reading is over 6 hours old) triggers nothing new and releases nothing; a window found past several marks at once does the
+  highest only (found at 98% it holds, and neither warns nor asks for a checkpoint nobody could take). A window that gives no reset
+  time can warn and ask for a checkpoint, never hold.
+  - **warn**: one note to the dispatcher, `claude 5h window at 76%, resets 14:00 (in 1h12m)` (event `limit-warn`).
+  - **checkpoint**: every role of that plan that is up and holds an active task is asked, now, to save a checkpoint: the
+    request file a restart's note uses (`[zmina] limit checkpoint: … Read "<file>", save each checkpoint it asks for …`),
+    with words that say no restart follows. A role with no task gets nothing. One note says whom it asked (event
+    `limit-checkpoint`, one for each role asked). A role that gets its task after the mark was crossed is not asked in that period.
+    A checkpoint saved in the two hours after the ask is not taken by a restart for its own note (it asks for one); a request still
+    queued when the hold begins, or when it ends, is dropped: it would be read about a window that is over.
+  - **hold**: from this share until the window's reset time, zmina delivers nothing to the plan's roles (for Codex, to the seats
+    of the home whose reading made the hold: seats of another `codex_home` bill another account). Their queues stay
+    as they are (no doorbell, no try counted against a line, no post, no typing); a busy role is not interrupted, it
+    finishes its turn and gets nothing more. The ticker also postpones what would call a model for them: a scheduled run
+    (it stays due and goes once when the hold ends; one event `schedule-postponed` for each run, however late the beat that
+    finds it), a wake alarm for the role, a `/compact` or `/clear`, a restart or a release that would ask for something (an
+    ask already made starts its 10 minutes again when the hold ends; putting down an idle role that holds no task asks
+    nothing and is not held), a role `keep: always` that is down (a start's boot line is a model call), a line said again for
+    want of an ack, the later sweep (a role of the plan) and the day's lessons run (the Claude plan). The owner's own line (the
+    cockpit's chat) goes through, to a Codex seat as to a Claude one (posted alone, the lines after it staying), as through a
+    failed turn's hold, and a held role's full queue takes it past the bound. `zmina send <role> <text>` without `--when-idle`
+    from anyone but the owner queues the line instead of typing it and says `queued: claude 5h window held until 14:00`;
+    `zmina up` is the owner's own act and goes on, with the hold named on stderr. One note: `claude: 5h window at 97%, holding its 6 roles
+    until 14:00; lines wait, the owner's pass` (event `limit-hold`). When the dispatcher's own plan is the held one it cannot read that
+    note (it is queued, and goes when the hold ends), so the owner is told as for any other owner alarm: a todo item that
+    blocks the dispatcher (made after the holds file is written, its id recorded with a second write; an open item of the kind made for
+    the same plan and window since the hold began is adopted, not made again, and one whose id could not be recorded is closed, with no
+    new one for an hour), which the crew's notify command pushes (`notify_on: blocking`, the default), closed by zmina when the hold ends,
+    and by the next beat when no hold answers for it (the holds file was lost); with no todo that can be written, the event and `zmina
+    doctor` say it. While the dispatcher is held, the note of each hold that is on (a new hold of the same window replaces the note of the one
+    before) and one note saying how many signals were refused are kept by the cap on the health notes (20), and signals are taken up to 100
+    (20 as ever when it is not held); past 100 a signal is refused, `zmina note` fails with that, and the one note that counts them is saved
+    all the same. The owner's own line is the line the owner queued: besides his receipt it must have a delivery card that is still queued (not
+    delivered, seen, closed, or waiting for a look after a failure of unclear outcome) and does not name another sender, so a role that queues
+    the same words after his line has gone waits behind the hold, for a failed turn's hold too. A card that names no sender (written by an older build,
+    or made again when a line was given back, which keeps the sender of the line's newest card) stands on the receipt, as before.
+  - **Release**: the hold ends by the clock at the window's reset time, whether or not a beat has run; or when a fresh
+    reading of a **different** period, drawn after the hold began, shows the window rolled over (its reset is later than the hold's by more
+    than two minutes: a new window, or another account); or when `hold` is turned off for the window in the crew file (no reading needed; the next
+    beat ends it); or when its reset time is one no such window can have; or by hand (below). A lower figure of the same period never ends a
+    hold, however low, however often drawn: usage inside one period only grows, so a lower figure is an old one (a session redraws what its
+    last reply showed, and its status line's heartbeat keeps refreshing its time), and a reading of an earlier period is an old input
+    redrawn. Stale data alone never ends it before its reset time. One note: `claude: 5h window reset, 14 lines go:
+    the dispatcher now, the other 6 roles 3 at a time, a minute apart` (event `limit-release`; `go now` when no role waits a turn);
+    at the reset time with no fresh reading since (a reading whose reset was dropped as no window's counts as none), `reset time
+    14:00 passed and no fresh reading has come, so its data is stale`. A pass that ends one hold and, from a fresh reading of the next
+    period, begins another of the plan says only the new hold: no release note or event, no turns, and the old hold's todo item is
+    closed.
+    Two windows held at once keep the plan until the later reset; the first to end says what still holds it.
+  - **The release is paced**: when the last hold of a plan ends the dispatcher goes at once, then three roles a minute, the role whose
+    oldest waiting line is oldest first, those with nothing waiting last. The book keeps a time each role waits until (`waits`), and
+    the delivery, the courier's included, the schedules, the alarms and the ticker's starts hold the role until then exactly as for a hold
+    (`ls` says `release: claude plan: 6 roles let go in turn …`). A release by the clock with no fresh reading lets the dispatcher and
+    one role go and keeps the rest until a fresh reading of the new period (a reset after the old one's), or 10 minutes.
+  - **By hand**: `zmina limits release <plan> [<window>]` (the owner and the dispatcher; a role is refused) is the way out when the owner
+    knows better than the readings (an account that changed with the same reset, a figure he knows is old): it lifts the holds of the plan
+    that are on, those of one window when it is named (`five_hour`, `seven_day`, `week`, or `5h`, `7d`). The period is marked lifted in
+    the book: it is not held again, whatever the window reads, and a later period (a later reset) may be. The roles go in turn as after
+    any release, roles still waiting their turn go at once, the todo item of the hold closes, the dispatcher is told, and the event is
+    `limit-release` with `hold lifted by hand`. It prints what it lifted, or `nothing is held for <plan>`.
+  - **With a failed turn's hold** (see Delivery): a line waits for whichever ends later. What `zmina ls`, `explain` and
+    `doctor` say is the plan hold while it lasts, and the failed turn's too when it ends later.
+  - **Where it is kept**: `limits/holds.json` in the crew's directory (the periods told or lifted, the holds on, the roles waiting
+    their turn, the postponed runs), written by the beat, whole or not at all, and read by every delivery, the courier's included; it is
+    pruned of periods a day past their reset. It is no part of `state.json`, and it has a version of its own: one of a newer zmina is
+    not read, not touched, and said once (event `limits-problem`, `zmina doctor`). One that does not parse holds nothing; a reader says
+    nothing of it, the beat moves it aside as `holds.json.bad-<time>` (the newest three kept), writes a new one and says so once
+    (`limits-file-bad`). A book that cannot be written does nothing else that beat (nothing is told, held or opened on the todo) and says
+    why once an hour (`limits-problem`).
+  - **Shown**: `zmina limits` (the `marks` and `hold` lines, `thresholds` and `holds` in `--json`), `zmina ls` (a `hold:` footer, a
+    `release:` footer while roles wait their turn, `plan_held` and `plan_held_until` in `--json`, and the role's row names the plan hold
+    when it ends later than a failed turn's), `zmina ls --wide`, `zmina queue ls` (`held:` under the role, `plan_held` in `--json`), `zmina explain
+    <role>` (its `queue:` line, `queue.plan_hold` in `--json`) and `zmina doctor` (`holds`, warn).
 - **The tap** is `zmina _limits-tap [-- command...]`, plumbing no one types. Claude Code runs a status line on every redraw
   with a JSON on stdin; the tap reads the limits in it, writes `limits/claude.json` in the crew's directory when a
   figure changed (and, to say the status line is still drawn, at most every 5 minutes when none did), then runs the

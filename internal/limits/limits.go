@@ -18,7 +18,43 @@ const (
 	// Heartbeat is how often the tap refreshes a reading whose values did not change: the file then says when a
 	// status line was last drawn, not when the figures last moved, and an idle crew is not mistaken for a silent one.
 	Heartbeat = 5 * time.Minute
+	// replaceAfter is how long a stored window may go undrawn before any newer reading replaces it, an earlier reset included: a
+	// reading that old is no evidence against a newer one (another account, a reset the stored one had wrong).
+	replaceAfter = 10 * time.Minute
+	// sameResetWithin is how far two reset times of one window may be apart and still be the same period.
+	sameResetWithin = 2 * time.Minute
 )
+
+// The longest a window can have left, as it is spoken of by its length and a little slack: the 5-hour window, and the week.
+const (
+	fiveHourMax = 5*time.Hour + 15*time.Minute
+	weekMax     = 7*24*time.Hour + time.Hour
+)
+
+// MaxReset is how far off a reset time can be from the moment its window was read: the window's length and slack. A reset
+// beyond it cannot be this window's (a status line that sent milliseconds for seconds, a garbled figure) and is no reset.
+func MaxReset(window string) time.Duration {
+	if window == WindowFiveHour {
+		return fiveHourMax
+	}
+
+	return weekMax
+}
+
+// sameReset reports whether two reset times are the same period's: a reset that moves by less than two minutes is a rounding,
+// one that moves further is another window.
+func sameReset(a, b time.Time) bool {
+	d := a.Sub(b)
+
+	return d > -sameResetWithin && d < sameResetWithin
+}
+
+// bound drops a reset further off than the window can have left at the moment it was read (MaxReset); the figure stays.
+func (w *Window) bound(window string, at time.Time) {
+	if w != nil && w.Resets != nil && w.Resets.Sub(at) > MaxReset(window) {
+		w.Resets = nil
+	}
+}
 
 // Window is one rate-limit window as a source last saw it.
 type Window struct {
@@ -49,15 +85,30 @@ func (w *Window) same(o *Window) bool {
 	return w.Resets == nil || w.Resets.Equal(*o.Resets)
 }
 
-// latest is the window that stands when w, a reading just drawn, meets o, the one stored: o when w is older by its own
-// evidence (it resets before o does, or at the same moment with less spent), else w. A window that says nothing of its
-// reset has no evidence of age, and w stands.
-func (w *Window) latest(o *Window) *Window {
+// latest is the window that stands when w, a reading drawn at at, meets o, the one stored, drawn at oldAt: o when w is older by its own
+// evidence, else w. Usage inside one period only grows, so at the same reset the higher figure stands, and a lower one is an older one (a
+// session redrawing the last figure it saw): it replaces the stored only when the stored reading is itself older than replaceAfter. A window
+// whose reset is earlier than the stored one's is an old input redrawn, and stays out unless the stored reading is that old; one drawn before the
+// stored was is out. A window that says nothing of its reset has no evidence of age, and w stands.
+func (w *Window) latest(o *Window, at, oldAt time.Time) *Window {
 	if w == nil || o == nil || w.Resets == nil || o.Resets == nil {
 		return w
 	}
 
-	if w.Resets.Before(*o.Resets) || (w.Resets.Equal(*o.Resets) && w.Used < o.Used) {
+	age := at.Sub(oldAt)
+
+	switch {
+	case at.Before(oldAt):
+		return o
+	case sameReset(*w.Resets, *o.Resets):
+		if w.Used < o.Used && age <= replaceAfter {
+			return o
+		}
+
+		return w
+	case age > replaceAfter:
+		return w
+	case w.Resets.Before(*o.Resets):
 		return o
 	}
 
@@ -78,6 +129,9 @@ const SourceStatusline = "statusline"
 
 // Judge marks each window stale or not as of now.
 func (c *Claude) Judge(now time.Time) {
+	c.FiveHour.bound(WindowFiveHour, c.At)
+	c.SevenDay.bound(WindowSevenDay, c.At)
+
 	for _, w := range []*Window{c.FiveHour, c.SevenDay} {
 		if w != nil {
 			w.judge(c.At, now)
@@ -100,10 +154,15 @@ type Codex struct {
 	At time.Time `json:"at"`
 	// Source names the rollout's home: "rollout <seat>".
 	Source string `json:"source"`
+	// Home is the directory of the Codex home the reading came from. Seats of another home bill another account: a hold made
+	// by this reading keeps only the seats of this one. Not printed.
+	Home string `json:"-"`
 }
 
 // Judge marks the window stale or not as of now.
 func (c *Codex) Judge(now time.Time) {
+	c.Week.bound(WindowWeek, c.At)
+
 	if c.Week != nil {
 		c.Week.judge(c.At, now)
 	}
@@ -115,6 +174,18 @@ type Report struct {
 	Claude *Claude `json:"claude"`
 	Codex  *Codex  `json:"codex"`
 	Policy Policy  `json:"policy"`
+	// Thresholds and Holds are what the commands add after Collect: the shares the crew acts on as a window fills, and the
+	// holds that are on (Collect itself reads neither, so routing never waits on them).
+	Thresholds *Thresholds `json:"thresholds,omitempty"`
+	Holds      []HoldInfo  `json:"holds,omitempty"`
+}
+
+// HoldInfo is a hold that is on, with what it keeps: the roles of its plan and the lines waiting for them.
+type HoldInfo struct {
+	Hold
+	Roles []string `json:"roles,omitempty"`
+	// Lines is how many queued lines (and, for the dispatcher's plan, signals and notes) wait for the hold to end.
+	Lines int `json:"lines"`
 }
 
 // Collect reads both plans as of now: Claude's from the tap's file in dir, Codex's from the rollouts under homes.
@@ -129,6 +200,24 @@ func Collect(dir string, homes []Home, policy Policy, now time.Time) (Report, er
 	}
 
 	if r.Codex = ReadCodex(homes); r.Codex != nil {
+		r.Codex.Judge(now)
+	}
+
+	return r, err
+}
+
+// CollectCached is Collect for the beat, which asks every minute: the Codex homes are not walked each time (ReadCodexCached). The commands that show
+// the limits (zmina limits) and route work by them read afresh.
+func CollectCached(dir string, homes []Home, policy Policy, now time.Time) (Report, error) {
+	r := Report{Policy: policy}
+
+	var err error
+
+	if r.Claude, err = ReadClaude(dir); r.Claude != nil {
+		r.Claude.Judge(now)
+	}
+
+	if r.Codex = ReadCodexCached(dir, homes, now); r.Codex != nil {
 		r.Codex.Judge(now)
 	}
 
@@ -161,6 +250,16 @@ func (r Report) In(loc *time.Location) Report {
 		c := *r.Codex
 		c.Week, c.At = window(c.Week), c.At.In(loc)
 		r.Codex = &c
+	}
+
+	if len(r.Holds) > 0 {
+		holds := make([]HoldInfo, len(r.Holds))
+		for i, h := range r.Holds {
+			h.Reset, h.Since = h.Reset.In(loc), h.Since.In(loc)
+			holds[i] = h
+		}
+
+		r.Holds = holds
 	}
 
 	return r

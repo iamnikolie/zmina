@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/iamnikolie/zmina/internal/fsx"
 )
 
 // Home is one Codex home zmina knows: the directory whose sessions/ holds the rollouts, and who runs with it (the
@@ -37,26 +39,120 @@ func ReadCodex(homes []Home) *Codex {
 	var best *Codex
 
 	for _, h := range homes {
-		for i, path := range newestRollouts(filepath.Join(h.Path, "sessions")) {
-			if i >= rolloutsTried {
-				break
-			}
-
-			c, ok := lastCodexReading(path)
-			if !ok {
-				continue
-			}
-
-			c.Source = "rollout " + h.Label
-			if best == nil || c.At.After(best.At) {
-				best = c
-			}
-
-			break
+		if c, _ := readHome(h); c != nil && (best == nil || c.At.After(best.At)) {
+			best = c
 		}
 	}
 
 	return best
+}
+
+// readHome is the reading of one home, and the rollout it came from (empty with no reading): its newest rollouts are looked into until one holds
+// limits.
+func readHome(h Home) (*Codex, string) {
+	for i, path := range newestRollouts(filepath.Join(h.Path, "sessions")) {
+		if i >= rolloutsTried {
+			break
+		}
+
+		c, ok := lastCodexReading(path)
+		if !ok {
+			continue
+		}
+
+		c.Source, c.Home = "rollout "+h.Label, h.Path
+
+		return c, path
+	}
+
+	return nil, ""
+}
+
+// CodexCacheFile is the file in the limits directory that keeps what ReadCodexCached found of each home, so that the beat does not walk a
+// home's whole sessions tree every minute.
+const CodexCacheFile = "codex-cache.json"
+
+// codexRescan is how long a home's walk is trusted: a rollout of a session that began since is found within it, and the readings a hold
+// is judged by are never nearer than a status line is (StaleAfter is hours).
+const codexRescan = 5 * time.Minute
+
+type codexCacheEntry struct {
+	Walked  time.Time `json:"walked"`
+	Rollout string    `json:"rollout,omitempty"`
+	Mod     time.Time `json:"mod,omitzero"`
+	Size    int64     `json:"size,omitempty"`
+	Reading *Codex    `json:"reading,omitempty"`
+}
+
+// ReadCodexCached is ReadCodex with what it found of each home kept in dir (CodexCacheFile): a home is walked again after five minutes, and
+// in between its newest rollout is looked at alone (one stat; the file is read again only when its size or time changed). A cache that is
+// missing, does not read or cannot be written costs only the walk. Readings are the same as ReadCodex's within the five minutes it trusts.
+func ReadCodexCached(dir string, homes []Home, now time.Time) *Codex {
+	path := filepath.Join(dir, CodexCacheFile)
+	cache := map[string]codexCacheEntry{}
+
+	if raw, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(raw, &cache)
+	}
+
+	next := map[string]codexCacheEntry{}
+
+	var best *Codex
+
+	for _, h := range homes {
+		e, known := cache[h.Path]
+		e = refreshHome(h, e, known, now)
+		next[h.Path] = e
+
+		if c := e.Reading; c != nil && (best == nil || c.At.After(best.At)) {
+			c := *c
+			c.Source, c.Home = "rollout "+h.Label, h.Path
+			best = &c
+		}
+	}
+
+	if raw, err := json.Marshal(next); err == nil {
+		old, _ := json.Marshal(cache)
+		if string(old) != string(raw) {
+			_ = fsx.MkdirAll(dir, 0o700)
+			_ = fsx.WriteFile(path, raw, 0o600)
+		}
+	}
+
+	return best
+}
+
+// refreshHome is a home's cache entry as of now: the old one when its walk is recent and its newest rollout did not move, the newest rollout
+// read again when it did, else a new walk.
+func refreshHome(h Home, e codexCacheEntry, known bool, now time.Time) codexCacheEntry {
+	if known && e.Rollout != "" && now.Sub(e.Walked) >= 0 && now.Sub(e.Walked) < codexRescan {
+		info, err := os.Stat(e.Rollout)
+		switch {
+		case err != nil:
+			// gone: walked again, below
+		case info.ModTime().Equal(e.Mod) && info.Size() == e.Size:
+			return e
+		default:
+			if c, ok := lastCodexReading(e.Rollout); ok {
+				e.Mod, e.Size, e.Reading = info.ModTime(), info.Size(), c
+
+				return e
+			}
+		}
+	}
+
+	if known && e.Rollout == "" && now.Sub(e.Walked) >= 0 && now.Sub(e.Walked) < codexRescan {
+		return e // a home with no reading: looked at again in five minutes
+	}
+
+	c, path := readHome(h)
+	out := codexCacheEntry{Walked: now, Rollout: path, Reading: c}
+
+	if info, err := os.Stat(path); path != "" && err == nil {
+		out.Mod, out.Size = info.ModTime(), info.Size()
+	}
+
+	return out
 }
 
 // newestRollouts lists the rollout files under dir, the most recently modified first.

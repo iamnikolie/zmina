@@ -72,6 +72,11 @@ func (s *Shift) ring(now time.Time, stopped bool) (did, notes []string) {
 			continue
 		}
 
+		// A wake of a role whose plan is held waits as it waits for a stopped shift: it rings once the hold is over.
+		if a.Role != "" && a.To == "" && a.Kind != alarm.Later && s.planHeld(a.Role, now) {
+			continue
+		}
+
 		late := ""
 		if now.Sub(a.At) > lateAfter {
 			late = " (due " + a.At.In(s.Crew.Location()).Format("Mon 2 Jan 15:04") + ")"
