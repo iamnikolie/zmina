@@ -1403,12 +1403,22 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 	}
 
 	// Its last turn ended on an API error a moment ago: no line is posted or typed until the hold is over (failureHeld),
-	// whoever asks, the beat, a pass or a turn's end. The owner's own message is the one thing that goes, wherever it stands.
-	if s.failureHeld(name, now) && !s.ownerThroughHold(name) {
+	// whoever asks, the beat, a pass or a turn's end. The owner's own message is the one thing that goes, wherever it stands:
+	// typed, never posted, and taken to the head only when it is about to be typed (below).
+	held := s.failureHeld(name, now)
+	if held && s.ownerLine(name) < 0 {
 		return ""
 	}
 
 	s.pruneTaskInbox(name)
+
+	ownerAt := -1
+
+	if held {
+		if ownerAt = s.ownerLine(name); ownerAt < 0 {
+			return ""
+		}
+	}
 
 	// A line posted to the inbox socket needs no empty input line and no Enter: it goes once the one before it
 	// showed in the conversation and the role is between turns. A slash command is typed.
@@ -1418,7 +1428,7 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 		switch {
 		case len(rs.Inbox) == 0:
 			return ""
-		case s.postableFor(name, rs.Inbox[0]):
+		case !held && s.postableFor(name, rs.Inbox[0]):
 			if pending || !s.quiet(name, sess) {
 				return ""
 			}
@@ -1441,6 +1451,25 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 
 	if draft, ok, err := s.Tmux.Prompt(name); err != nil || !ok || draft != "" {
 		return ""
+	}
+
+	// The owner's line that stands behind others is taken to the head now that it is going to be typed, and not before: the
+	// tries counted are the first line's, which is not the one that goes, so they neither hold the owner's line back nor are
+	// forgotten. What the typing leaves of it is put right when this returns (below): the line that did not go is back in its
+	// place and the first line has its tries again.
+	if ownerAt > 0 {
+		was, tried, queued := rs.Attempts, rs.TriedAt, len(rs.Inbox)
+
+		s.moveToHead(name, ownerAt)
+		rs.clearTries()
+
+		defer func() {
+			if len(rs.Inbox) == queued {
+				s.moveBack(name, ownerAt)
+			}
+
+			rs.Attempts, rs.TriedAt = was, tried
+		}()
 	}
 
 	// A line that failed a moment ago is neither tried nor counted again yet.

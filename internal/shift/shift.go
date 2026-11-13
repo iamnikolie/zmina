@@ -476,8 +476,9 @@ func (s *Shift) Views() []View {
 				if c := f.Class(); c.Kind != KindTransient {
 					v.TurnErrorKind, v.TurnErrorReset = string(c.Kind), c.Reset
 
+					// In the crew's location, as every time the owner reads is: the instant is the same.
 					if f.holds(s.Now()) {
-						v.TurnErrorHeldUntil = f.holdEnd()
+						v.TurnErrorHeldUntil = f.holdEnd().In(s.Crew.Location())
 					}
 				}
 			}
@@ -1395,7 +1396,7 @@ const ownerRoom = 5
 
 // QueueOwner queues the owner's own message (the cockpit's chat) for a role. It is QueueFrom, except for a role whose queue
 // is full and held for a failed turn (failureHeld): the lines that fill it cannot be read until the hold is over, and the
-// owner's message, which goes through the hold (ownerThroughHold), is not refused for them. It takes up to ownerRoom of them
+// owner's message, which goes through the hold (deliverInboxOnce), is not refused for them. It takes up to ownerRoom of them
 // past inboxMax.
 func (s *Shift) QueueOwner(name, line string) error {
 	if _, err := s.Role(name); err != nil {

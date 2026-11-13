@@ -489,18 +489,21 @@ The queue of a held role waits a time, always: a transient error 5 minutes; an a
 ever); a limit until its reset time, never under 5 minutes nor over 6 hours, and 5 minutes when the record has no reset. Then
 one line goes, and a turn that fails the same way is a record of its own and holds the role again. The role's next turn
 ending, or a restart (which removes the record), ends the hold sooner. The owner's own message (the cockpit's chat) goes
-through any hold: while a role is held, the first of the owner's lines anywhere in its queue is taken to the head, out of its
-order, and typed (the queue's order is untouched whenever no hold is on), and a held role's full queue (20) takes the owner's
-message up to 5 past the bound. The courier looks again every few seconds while a hold lasts, and reads no record for a role
+through any hold: while a role is held, the first of the owner's lines anywhere in its queue is typed, and is taken to the head,
+out of its order, only at the moment it is typed; a line that was not typed (a draft in the input line, a typing that failed)
+leaves the queue in its order, and the failed tries counted for the first line are neither held against the owner's line nor
+lost. The queue's order is untouched whenever no hold is on. A held role's full queue (20) takes the owner's message up to 5
+past the bound. The courier looks again every few seconds while a hold lasts, and reads no record for a role
 with nothing queued.
 
-`zmina ls` adds the kind to the status: `… an API error, usage limit, resets Fri 15:00 UTC, queue held until 15:00 UTC: <text>`
-or `… an API error, account problem, needs the owner, queue held until 12:30 UTC: <text>`; `--json` has `turn_error_kind`
+`zmina ls` adds the kind to the status: `… an API error, usage limit, resets Fri 15:00 UTC, queue held until 20:30 IST: <text>`
+or `… an API error, account problem, needs the owner, queue held until 18:00 IST: <text>` (the end of the hold, here, in
+the doctor line and in the event, is in the crew's timezone, else the machine's; a reset is in the zone its notice named); `--json` has `turn_error_kind`
 (`limit`, `account`; none for a transient one), `turn_error_held_until` and, for a limit with a time, `turn_error_reset`. The
 dispatcher is told once, in the line the ticker's step 9 describes: an account error as one that needs the owner, and, when
 the role is held for it, for how long. A held dispatcher cannot read that note, and its signals (at most 20, past which a new
 one is refused) and notes pile up behind it, so for it the owner is also told by a `dispatcher-held` event in the log, by `zmina
-ls` and by `zmina doctor` (`holds`, with what waits behind it).
+ls` and by `zmina doctor` (`holds`, with what waits behind it; listed only while the delivery would still hold, by the test ls uses).
 
 ### The crossing mark: a line that crossed a newer one
 

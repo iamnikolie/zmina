@@ -379,7 +379,8 @@ func TestAHeldDispatcherIsGivenTheOwnersLineWhereverItStands(t *testing.T) {
 func TestAHeldDispatcherIsSurfacedToTheOwnerNotOnlyByANote(t *testing.T) {
 	dispatcherInput := strings.Replace(failedInput, "sid-designer", "sid-dispatcher", 1)
 
-	f := fixtureWith(t, crewYAML)
+	// The crew keeps its own clock: the times the owner reads are in it, not in UTC.
+	f := fixtureWith(t, crewYAML+"timezone: Asia/Kolkata\n")
 	require.NoError(t, f.s.Up("dispatcher"))
 	f.status("dispatcher", "idle", *f.now)
 	f.live("dispatcher")
@@ -409,16 +410,15 @@ func TestAHeldDispatcherIsSurfacedToTheOwnerNotOnlyByANote(t *testing.T) {
 
 	require.NotEmpty(t, held, "an event in the log")
 	assert.Contains(t, held, "account problem, needs the owner")
-	assert.Contains(t, held, "the crew's signals and the health notes wait for it until 12:30 UTC")
+	assert.Contains(t, held, "the crew's signals and the health notes wait for it until 18:00 IST")
+	assert.NotContains(t, held, "UTC")
 	assert.Contains(t, held, "zmina ls, zmina doctor")
 
-	// The view.
-	for _, v := range f.s.Views() {
-		if v.Role == "dispatcher" {
-			assert.Equal(t, "account", v.TurnErrorKind)
-			assert.True(t, f.now.Add(-time.Minute).Add(AccountHold).Equal(v.TurnErrorHeldUntil), "%v", v.TurnErrorHeldUntil)
-		}
-	}
+	// The view, in the crew's location too: the same instant.
+	v := mustViewOf(t, f.s, "dispatcher")
+	assert.Equal(t, "account", v.TurnErrorKind)
+	assert.True(t, f.now.Add(-time.Minute).Add(AccountHold).Equal(v.TurnErrorHeldUntil), "%v", v.TurnErrorHeldUntil)
+	assert.Equal(t, "18:00 IST", v.TurnErrorHeldUntil.Format("15:04 MST"))
 
 	// Not the dispatcher, or not an account error: no such event.
 	g := fixtureWith(t, crewYAML)
@@ -459,27 +459,23 @@ func TestViewSaysTheKindOfAFailedTurn(t *testing.T) {
 			f.status("designer", "idle", *f.now)
 			f.failed(t, "designer", tc.input, *f.now)
 
-			for _, v := range f.s.Views() {
-				if v.Role != "designer" {
-					continue
-				}
+			v := mustViewOf(t, f.s, "designer")
 
-				assert.NotEmpty(t, v.TurnError)
-				assert.Equal(t, tc.kind, v.TurnErrorKind)
-				assert.True(t, tc.reset.Equal(v.TurnErrorReset), "%v", v.TurnErrorReset)
-				assert.True(t, tc.until.Equal(v.TurnErrorHeldUntil), "%v", v.TurnErrorHeldUntil)
+			assert.NotEmpty(t, v.TurnError)
+			assert.Equal(t, tc.kind, v.TurnErrorKind)
+			assert.True(t, tc.reset.Equal(v.TurnErrorReset), "%v", v.TurnErrorReset)
+			assert.True(t, tc.until.Equal(v.TurnErrorHeldUntil), "%v", v.TurnErrorHeldUntil)
 
-				raw, err := json.Marshal(v)
-				require.NoError(t, err)
+			raw, err := json.Marshal(v)
+			require.NoError(t, err)
 
-				if tc.kind == "" {
-					assert.NotContains(t, string(raw), "turn_error_kind")
-					assert.NotContains(t, string(raw), "turn_error_reset")
-					assert.NotContains(t, string(raw), "turn_error_held_until")
-				} else {
-					assert.Contains(t, string(raw), `"turn_error_kind":"`+tc.kind+`"`)
-					assert.Contains(t, string(raw), `"turn_error_held_until"`)
-				}
+			if tc.kind == "" {
+				assert.NotContains(t, string(raw), "turn_error_kind")
+				assert.NotContains(t, string(raw), "turn_error_reset")
+				assert.NotContains(t, string(raw), "turn_error_held_until")
+			} else {
+				assert.Contains(t, string(raw), `"turn_error_kind":"`+tc.kind+`"`)
+				assert.Contains(t, string(raw), `"turn_error_held_until"`)
 			}
 		})
 	}
@@ -552,6 +548,10 @@ func TestAPIErrorNoteSaysTheKind(t *testing.T) {
 func TestHoldWords(t *testing.T) {
 	at := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
 
+	// The times are in the location the caller gives, the crew's.
+	kolkata, err := time.LoadLocation("Asia/Kolkata")
+	require.NoError(t, err)
+
 	for _, tc := range []struct {
 		name string
 		f    TurnFailure
@@ -562,16 +562,16 @@ func TestHoldWords(t *testing.T) {
 		{name: "account", f: TurnFailure{At: at, Error: "billing_error"},
 			want: "an account problem that needs the owner: the lines queued for it wait 30m, or less when its next turn ends or it is restarted"},
 		{name: "a limit with its time", f: TurnFailure{At: at, Kind: "limit", Reset: at.Add(3 * time.Hour)},
-			want: "a usage limit: the lines queued for it wait until Sat 15:00 UTC (at least 5m, at most 6h)"},
+			want: "a usage limit: the lines queued for it wait until Sat 20:30 IST (at least 5m, at most 6h)"},
 		{name: "a limit that lifts in a minute", f: TurnFailure{At: at, Kind: "limit", Reset: at.Add(time.Minute)},
-			want: "a usage limit: the lines queued for it wait until Sat 12:05 UTC (at least 5m, at most 6h)"},
+			want: "a usage limit: the lines queued for it wait until Sat 17:35 IST (at least 5m, at most 6h)"},
 		{name: "a limit that lifts far off", f: TurnFailure{At: at, Kind: "limit", Reset: at.Add(20 * time.Hour)},
-			want: "a usage limit: the lines queued for it wait until Sat 18:00 UTC (at least 5m, at most 6h)"},
+			want: "a usage limit: the lines queued for it wait until Sat 23:30 IST (at least 5m, at most 6h)"},
 		{name: "a limit with none", f: TurnFailure{At: at, Error: "rate_limit"},
 			want: "a usage limit with no reset time given: the lines queued for it wait 5m0s"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, HoldWords(&tc.f))
+			assert.Equal(t, tc.want, HoldWords(&tc.f, kolkata))
 		})
 	}
 }
@@ -601,34 +601,157 @@ func TestRecordFailureKeepsErrorDetailsApart(t *testing.T) {
 	assert.Equal(t, KindAccount, old.Class().Kind)
 }
 
-// The records of the failures that still hold, for zmina doctor: the roles of the crew only, none past the longest hold.
-func TestFailureHoldsListsTheRecordsThatStillHold(t *testing.T) {
-	l := crew.Layout{Dir: t.TempDir()}
-	at := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
+// The roles held for a failed turn, for zmina doctor, by the delivery's own test: a record of the role's live session that is
+// still how it stands. Not the records alone: a role that has been through a turn since, whose session changed, that is not up,
+// or whose hold ran out is not listed, so that doctor and ls agree (TestViewSaysTheKindOfAFailedTurn is ls).
+func TestFailureHoldsListsOnlyTheHoldsStillInForce(t *testing.T) {
+	f := fixtureWith(t, crewYAML+"timezone: Asia/Kolkata\n")
+	at := *f.now
 
-	for role, input := range map[string]string{"alpha": failedInput, "beta": transientInput, "gamma": limitInput(at.Add(2 * time.Hour))} {
-		_, err := RecordFailure(l, role, []byte(input), at)
-		require.NoError(t, err)
+	for role, input := range map[string]string{
+		"designer":   strings.Replace(failedInput, "sid-designer", "sid-designer", 1),
+		"harvester":  strings.Replace(limitInput(at.Add(2*time.Hour)), "sid-designer", "sid-harvester", 1),
+		"dispatcher": strings.Replace(transientInput, "sid-designer", "sid-dispatcher", 1),
+	} {
+		require.NoError(t, f.s.Up(role))
+		f.status(role, "idle", at)
+		f.live(role)
+		f.failed(t, role, input, at)
 	}
 
-	got := FailureHolds(l, []string{"alpha", "beta", "gamma", "delta"}, at.Add(time.Minute))
-	require.Len(t, got, 3)
+	holds := func(now time.Time) map[string]FailureHold {
+		t.Helper()
 
-	byRole := map[string]FailureHold{}
-	for _, h := range got {
-		byRole[h.Role] = h
+		out := map[string]FailureHold{}
+		for _, h := range f.s.FailureHolds(now) {
+			out[h.Role] = h
+		}
+
+		return out
 	}
 
-	assert.Equal(t, KindAccount, byRole["alpha"].Class.Kind)
-	assert.True(t, at.Add(AccountHold).Equal(byRole["alpha"].Until))
-	assert.Equal(t, KindTransient, byRole["beta"].Class.Kind)
-	assert.True(t, at.Add(2*time.Hour).Equal(byRole["gamma"].Until))
+	now := at.Add(time.Minute)
+	got := holds(now)
+	require.Len(t, got, 3, "%v", got)
 
-	got = FailureHolds(l, []string{"alpha", "beta", "gamma"}, at.Add(AccountHold+time.Minute))
-	require.Len(t, got, 1, "only the limit is still on")
-	assert.Equal(t, "gamma", got[0].Role)
+	assert.Equal(t, KindAccount, got["designer"].Class.Kind)
+	assert.True(t, at.Add(AccountHold).Equal(got["designer"].Until))
+	assert.Equal(t, "18:00 IST", got["designer"].Until.Format("15:04 MST"), "in the crew's location")
+	assert.Equal(t, KindLimit, got["harvester"].Class.Kind)
+	assert.True(t, at.Add(2*time.Hour).Equal(got["harvester"].Until))
+	assert.Equal(t, KindTransient, got["dispatcher"].Class.Kind)
 
-	assert.Empty(t, FailureHolds(l, []string{"alpha", "beta", "gamma"}, at.Add(LimitHoldMax+time.Minute)), "past the longest hold: none")
+	// Each of these takes a hold away.
+	f.status("designer", "idle", at.Add(10*time.Minute)) // a turn went through since
+	f.live("designer")
+	f.rg.byPID[f.tm.up["harvester"]].SessionID = "sid-after-a-clear" // the session changed
+	f.status("dispatcher", "busy", at.Add(time.Second))
+	f.live("dispatcher")
+
+	assert.Empty(t, holds(now), "no hold is in force any more")
+
+	// The hold that ran out.
+	f.status("designer", "idle", at)
+	f.live("designer")
+	require.Len(t, holds(now), 1)
+	assert.Empty(t, holds(at.Add(AccountHold+time.Minute)))
+	assert.Empty(t, holds(at.Add(LimitHoldMax+time.Minute)), "past the longest hold: none")
 }
 
 func slicesClone(s []string) []string { return append([]string(nil), s...) }
+
+// mustViewOf is the view of a role, which the test fails without: an assertion made inside a loop over the views, on the one that
+// matches, passes for a view that is not there.
+func mustViewOf(t *testing.T, s *Shift, role string) View {
+	t.Helper()
+
+	found := false
+
+	var out View
+
+	for _, v := range s.Views() {
+		if v.Role == role {
+			out, found = v, true
+		}
+	}
+
+	require.True(t, found, "no view of %s", role)
+
+	return out
+}
+
+// The owner's line behind others is taken to the head only at the moment it is typed. A line that was not typed leaves the
+// queue in its order; the tries counted (Attempts, TriedAt) are the first line's, which is not the one that goes: they neither
+// hold the owner's line back, nor are cleared, nor become the owner's. The pass that names the role (Waiting) and the delivery
+// that follows agree.
+func TestTheOwnersLineMovesOnlyWhenTypedAndNeverTakesAnotherLinesTries(t *testing.T) {
+	const owner = "the owner's own words"
+
+	lines := []string{"[dispatcher] first", "[dispatcher] second", owner, "[dispatcher] third"}
+	inOrder := func(f fix) []string { return slicesClone(f.s.State.Role("designer").Inbox) }
+
+	// held is the fixture: the role is held, and the first line of its queue failed a moment ago.
+	held := func(t *testing.T) (fix, time.Time) {
+		t.Helper()
+
+		f, _, _ := ownerHeld(t, failedInput, lines, owner)
+		rs := f.s.State.Role("designer")
+		rs.Attempts, rs.TriedAt = 2, *f.now
+		require.True(t, rs.triedLately(*f.now), "the first line failed a moment ago")
+		require.True(t, f.s.failureHeld("designer", *f.now))
+
+		return f, rs.TriedAt
+	}
+
+	t.Run("typed: the first line keeps its tries and its place", func(t *testing.T) {
+		f, tried := held(t)
+
+		assert.True(t, slicesContain(f.s.Waiting(), "designer"), "its tries do not hold the owner's line back: a pass names the role")
+		assert.NotEmpty(t, f.s.DeliverTo("designer"), "and the delivery gives it")
+		assert.Equal(t, []string{owner}, f.tm.typed["designer"])
+
+		rs := f.s.State.Role("designer")
+		assert.Equal(t, []string{"[dispatcher] first", "[dispatcher] second", "[dispatcher] third"}, rs.Inbox)
+		assert.Equal(t, 2, rs.Attempts, "the tries are the first line's still")
+		assert.True(t, tried.Equal(rs.TriedAt))
+	})
+
+	t.Run("a draft in the input line: not typed, nothing moved", func(t *testing.T) {
+		f, tried := held(t)
+		before := inOrder(f)
+		f.tm.drafts["designer"] = "half-typed words of the owner's own"
+
+		assert.Empty(t, f.s.DeliverTo("designer"))
+		assert.Empty(t, f.tm.typed["designer"])
+		assert.Equal(t, before, inOrder(f), "the order the queue had, not the owner's line at its head")
+
+		rs := f.s.State.Role("designer")
+		assert.Equal(t, 2, rs.Attempts)
+		assert.True(t, tried.Equal(rs.TriedAt))
+	})
+
+	t.Run("typing fails: the line is back in its place and the tries are the first line's", func(t *testing.T) {
+		f, tried := held(t)
+		before := inOrder(f)
+		f.tm.typeErr = errNotTyped("tmux would not take it")
+
+		assert.Empty(t, f.s.DeliverTo("designer"))
+		assert.Empty(t, f.tm.typed["designer"])
+		assert.Equal(t, before, inOrder(f), "put back where it stood")
+
+		rs := f.s.State.Role("designer")
+		assert.Equal(t, 2, rs.Attempts, "the failed try of the owner's line is not counted on the first line")
+		assert.True(t, tried.Equal(rs.TriedAt))
+	})
+
+	t.Run("the owner's line at the head, failed a moment ago itself: not named, not given", func(t *testing.T) {
+		f, _, _ := ownerHeld(t, failedInput, []string{owner, "[dispatcher] first"}, owner)
+		rs := f.s.State.Role("designer")
+		rs.Attempts, rs.TriedAt = 1, *f.now
+
+		assert.False(t, slicesContain(f.s.Waiting(), "designer"), "its own failed try gates it, as any line's")
+		assert.Empty(t, f.s.DeliverTo("designer"))
+		assert.Equal(t, []string{owner, "[dispatcher] first"}, rs.Inbox)
+		assert.Equal(t, 1, rs.Attempts)
+	})
+}

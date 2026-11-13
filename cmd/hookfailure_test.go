@@ -85,8 +85,8 @@ func TestStopFailureHookOnlyRecords(t *testing.T) {
 }
 
 // The event the hook logs says how long the queue behind the failed turn waits, by the kind of the error: five minutes for a
-// transient one, as it always said; until the reset time for a limit that gave one; until the role's next turn for an
-// account problem.
+// transient one, as it always said; until the reset time for a limit that gave one (never under five minutes nor over six
+// hours); thirty minutes, or less when the role's next turn comes first, for an account problem.
 func TestStopFailureHookEventSaysHowLongTheQueueWaits(t *testing.T) {
 	for name, tc := range map[string]struct{ input, want string }{
 		"transient": {`{"session_id":"s-1","error":"server_error","last_assistant_message":"API Error: 529 Overloaded"}`,
@@ -359,20 +359,41 @@ func TestCourierGateReadsNoRecordForAnEmptyQueue(t *testing.T) {
 	assert.Equal(t, []string{"dev"}, s.Waiting())
 }
 
-// zmina doctor says which roles' queues wait for a usage limit or an account error, and for the dispatcher what that keeps
-// from the owner: its queue, the crew's signals and the notes. A transient error, which is over in minutes, is not a line.
-func TestDoctorSaysWhichQueuesWaitForAFailedTurn(t *testing.T) {
+// zmina doctor says which roles' queues wait for a usage limit or an account error, and for the dispatcher what that keeps from
+// the owner: its queue, the crew's signals and the notes. It lists a hold only while the delivery would still hold: the same
+// test zmina ls uses, a record of the role's live session that still stands. A hold the owner's message went through, a turn
+// that ended since, a session that changed (a /clear, a restart) and a hold that ran out are not lines. A transient error is
+// over in minutes and is no line. The times are in the crew's location.
+func TestDoctorSaysWhichQueuesAreStillHeldForAFailedTurn(t *testing.T) {
 	crewFile := testCrew(t, "  dev:\n")
+	raw, err := os.ReadFile(crewFile)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(crewFile, append([]byte("timezone: Asia/Kolkata\n"), raw...), 0o600))
+
 	layout := crew.Layout{Dir: filepath.Dir(crewFile)}
-	now := time.Now()
-
-	_, err := shift.RecordFailure(layout, "dispatcher", []byte(strings.Replace(stopFailure, "s-1", "s-d", 1)), now)
-	require.NoError(t, err)
-
-	_, err = shift.RecordFailure(layout, "dev", []byte(`{"session_id":"s-2","error":"server_error","last_assistant_message":"API Error: 529 Overloaded"}`), now)
-	require.NoError(t, err)
+	ns := filepath.Join(filepath.Dir(crewFile), "ns")
+	failedAt := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
 
 	c, err := crew.Load(crewFile)
+	require.NoError(t, err)
+
+	// The two roles' sessions are alive (this process and its parent stand for them), idle since the failures.
+	require.NoError(t, os.MkdirAll(filepath.Join(ns, "sessions"), 0o700))
+
+	session := func(role string, pid int, id, status string, since time.Time) {
+		t.Helper()
+
+		require.NoError(t, os.WriteFile(filepath.Join(ns, "sessions", strconv.Itoa(pid)+".json"), []byte(`{"pid": `+strconv.Itoa(pid)+
+			`, "sessionId": "`+id+`", "name": "`+c.Roles[role].Session+`", "status": "`+status+`", "statusUpdatedAt": `+
+			strconv.FormatInt(since.UnixMilli(), 10)+`}`), 0o600))
+	}
+
+	self, parent := os.Getpid(), os.Getppid()
+
+	_, err = shift.RecordFailure(layout, "dispatcher", []byte(strings.Replace(stopFailure, "s-1", "s-d", 1)), failedAt)
+	require.NoError(t, err)
+
+	_, err = shift.RecordFailure(layout, "dev", []byte(`{"session_id":"s-2","error":"server_error","last_assistant_message":"API Error: 529 Overloaded"}`), failedAt)
 	require.NoError(t, err)
 
 	st := shift.NewState()
@@ -380,26 +401,54 @@ func TestDoctorSaysWhichQueuesWaitForAFailedTurn(t *testing.T) {
 	st.Notes = []string{"a note"}
 	st.Role("dispatcher").Inbox = []string{"[zmina] a line"}
 
-	var got []check
+	lines := func(now time.Time) []check {
+		t.Helper()
 
-	checkFailureHolds(c, st, now.Add(time.Minute), func(name, level, format string, args ...any) {
-		got = append(got, check{Name: name, Level: level, Detail: fmt.Sprintf(format, args...)})
-	})
+		var got []check
 
+		checkFailureHolds(c, st, failureHolds(c, st, now), func(name, level, format string, args ...any) {
+			got = append(got, check{Name: name, Level: level, Detail: fmt.Sprintf(format, args...)})
+		})
+
+		return got
+	}
+
+	// In force: the dispatcher's account hold is a line, the transient one of dev is not, and the time is the crew's.
+	session("dispatcher", self, "s-d", "idle", failedAt)
+	session("dev", parent, "s-2", "idle", failedAt)
+
+	got := lines(failedAt.Add(time.Minute))
 	require.Len(t, got, 1, "the transient error is no line: %v", got)
 	assert.Equal(t, "holds", got[0].Name)
 	assert.Equal(t, "warn", got[0].Level)
 	assert.Contains(t, got[0].Detail, "dispatcher: its last turn ended in an API error, account problem, needs the owner (model_not_found:")
-	assert.Contains(t, got[0].Detail, "its queue, the crew's signals and the health notes wait (2 signals of at most 20, 1 notes, 1 lines of its own waiting; a new signal past the most is refused) until ")
+	assert.Contains(t, got[0].Detail, "its queue, the crew's signals and the health notes wait (2 signals of at most 20, 1 notes, 1 lines of its own waiting; a new signal past the most is refused) until 18:00 IST,")
+	assert.NotContains(t, got[0].Detail, "UTC")
 	assert.Contains(t, got[0].Detail, "this is the owner's to look at: zmina peek dispatcher")
 
-	// Past the hold: nothing to say.
-	got = nil
+	// No longer in force: each of these makes the delivery let the queue go, so that doctor says nothing of it.
+	for name, move := range map[string]func(){
+		"the role went through a turn since (the owner's message went in, and it answered)": func() {
+			session("dispatcher", self, "s-d", "idle", failedAt.Add(10*time.Minute))
+		},
+		"the role is busy again":                    func() { session("dispatcher", self, "s-d", "busy", failedAt.Add(time.Second)) },
+		"the session changed (a /clear, a restart)": func() { session("dispatcher", self, "s-new", "idle", failedAt) },
+		"the role is not up":                        func() { require.NoError(t, os.Remove(filepath.Join(ns, "sessions", strconv.Itoa(self)+".json"))) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			session("dispatcher", self, "s-d", "idle", failedAt)
+			require.Len(t, lines(failedAt.Add(time.Minute)), 1, "in force before")
 
-	checkFailureHolds(c, st, now.Add(shift.AccountHold+time.Minute), func(name, level, format string, args ...any) {
-		got = append(got, check{Name: name, Level: level, Detail: fmt.Sprintf(format, args...)})
-	})
-	assert.Empty(t, got)
+			move()
+
+			assert.Empty(t, lines(failedAt.Add(time.Minute)))
+		})
+	}
+
+	// The hold ran out.
+	session("dispatcher", self, "s-d", "idle", failedAt)
+	require.Len(t, lines(failedAt.Add(time.Minute)), 1)
+	assert.Empty(t, lines(failedAt.Add(shift.AccountHold+time.Minute)))
 }
 
 // ls says what kind of error ended the turn, when it is not a transient one, and until when the queue waits for it.

@@ -33,20 +33,42 @@ func (s *Shift) Waiting() []string {
 		if name == s.Crew.Dispatcher {
 			// The cheap tests first: a record is read only for a dispatcher that has something to give. Held, it is the owner's
 			// own line, wherever it stands in its queue, that it can still be given.
-			if !rs.dispatchTriedLately(now) && s.dispatcherWaits(rs, now) &&
-				(!s.failureHeld(name, now) || len(rs.Inbox) > 0 && !rs.triedLately(now) && s.ownerLine(name) >= 0) {
+			if !rs.dispatchTriedLately(now) && s.dispatcherWaits(rs, now) && (!s.failureHeld(name, now) || s.ownerWaits(name, rs, now)) {
 				out = append(out, name)
 			}
 
 			continue
 		}
 
-		if len(rs.Inbox) > 0 && !rs.triedLately(now) && (!s.failureHeld(name, now) || s.ownerLine(name) >= 0) {
+		if s.queueWaits(name, rs, now) {
 			out = append(out, name)
 		}
 	}
 
 	return out
+}
+
+// queueWaits reports whether a role that is not the dispatcher has a line a pass could give it now: one queued that did not
+// fail less than countedGap ago, and not held for a failed turn, bar the owner's own line (ownerWaits).
+func (s *Shift) queueWaits(name string, rs *RoleState, now time.Time) bool {
+	if len(rs.Inbox) == 0 {
+		return false
+	}
+
+	if !s.failureHeld(name, now) {
+		return !rs.triedLately(now)
+	}
+
+	return s.ownerWaits(name, rs, now)
+}
+
+// ownerWaits reports whether a role held for a failed turn has the owner's own line to be given: the first of them, wherever it
+// stands. One behind other lines is given whatever those lines' failed tries say, as deliverInboxOnce gives it, since the
+// tries counted are the first line's; one at the head is given unless it failed a moment ago itself.
+func (s *Shift) ownerWaits(name string, rs *RoleState, now time.Time) bool {
+	i := s.ownerLine(name)
+
+	return i > 0 || i == 0 && !rs.triedLately(now)
 }
 
 // dispatcherWaits reports whether deliver has something for the dispatcher: a queued line of its own that did not fail

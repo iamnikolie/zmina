@@ -207,9 +207,9 @@ func (f *TurnFailure) current(sess *registry.Session) bool {
 
 // HoldWords is how long the lines queued for a role wait because of the failure, in the words of the failure-hold event:
 // "the lines queued for it wait 5m0s" for a transient error, as it always said; for a limit until its reset time (never less
-// than FailHold, never more than LimitHoldMax) when the record has one; for an account problem AccountHold, or less when the
-// role's next turn ends or it is restarted, and the owner to mend it.
-func HoldWords(f *TurnFailure) string {
+// than FailHold, never more than LimitHoldMax) when the record has one, shown in loc (the crew's location); for an account
+// problem AccountHold, or less when the role's next turn ends or it is restarted, and the owner to mend it.
+func HoldWords(f *TurnFailure, loc *time.Location) string {
 	c := f.Class()
 
 	switch {
@@ -217,7 +217,7 @@ func HoldWords(f *TurnFailure) string {
 		return "an account problem that needs the owner: the lines queued for it wait " + span(AccountHold) + ", or less when its " +
 			"next turn ends or it is restarted"
 	case c.Kind == KindLimit && c.Reset.After(f.At):
-		return "a usage limit: the lines queued for it wait until " + f.holdEnd().In(c.Reset.Location()).Format("Mon 15:04 MST") +
+		return "a usage limit: the lines queued for it wait until " + f.holdEnd().In(loc).Format("Mon 15:04 MST") +
 			" (at least " + span(FailHold) + ", at most " + span(LimitHoldMax) + ")"
 	case c.Kind == KindLimit:
 		return "a usage limit with no reset time given: the lines queued for it wait " + FailHold.String()
@@ -230,7 +230,7 @@ func HoldWords(f *TurnFailure) string {
 // them (TurnFailure.holds: FailHold for a transient one, AccountHold for an account problem, until the reset time for a
 // limit that gave one), a record of the hook that is of its current session and still how it stands (failureFor): a turn the
 // role goes through since ends it, and so does a restart, which takes the record away. A role started anew has no record, and
-// the owner's own message goes as ever (ownerThroughHold). Delivery of any kind — the beat's, the pass's, a turn end's —
+// the owner's own message goes as ever (deliverInboxOnce). Delivery of any kind — the beat's, the pass's, a turn end's —
 // leaves the role alone while it holds. It asks no tmux: the role's session is found by its name in Claude Code's session
 // files, as Waiting needs, and only for a role that has such a record, and a record past the longest hold is not even
 // sorted. A record of another session, an older one, or a role the hook never ran for holds nothing.
@@ -273,19 +273,18 @@ type FailureHold struct {
 	Until time.Time
 }
 
-// FailureHolds lists the roles whose last failed turn still holds their queues at now, going by the records alone (no
-// session is asked, so a role that has been through a turn since is listed until its record runs out: the next beat
-// delivers to it). Only the roles the crew file has, and only records within the longest hold.
-func FailureHolds(l crew.Layout, roles []string, now time.Time) []FailureHold {
+// FailureHolds lists the roles whose queues are held for a failed turn at now, by the very test the delivery uses
+// (failureRecord): a record of the role's current session, still how the session stands (idle since that turn) and within its
+// hold. A role the owner's message went through, one that has been through a turn since, one whose session changed (a /clear,
+// a restart), or whose hold ran out, is not listed, so that zmina doctor and zmina ls agree. Until is in the crew's location
+// (the crew file's timezone, else this machine's). It needs the registry (Reg) as the delivery does.
+func (s *Shift) FailureHolds(now time.Time) []FailureHold {
 	var out []FailureHold
 
-	for _, name := range roles {
-		var f TurnFailure
-		if !hookRole(name) || !readRecord(l.HookFailure(name), &f) || f.SessionID == "" || !f.holds(now) {
-			continue
+	for _, name := range s.Names() {
+		if f, held := s.failureRecord(name, now); held {
+			out = append(out, FailureHold{Role: name, Class: f.Class(), Text: f.Text(), Until: f.holdEnd().In(s.Crew.Location())})
 		}
-
-		out = append(out, FailureHold{Role: name, Class: f.Class(), Text: f.Text(), Until: f.holdEnd()})
 	}
 
 	return out
@@ -306,23 +305,6 @@ func (s *Shift) ownerLine(name string) int {
 	}
 
 	return -1
-}
-
-// ownerThroughHold is what the hold after a failed turn does with the owner's words: it is for what zmina would feed the role
-// by itself, and what the owner sends goes, as their typing into the pane would, wherever it stands in the queue. The first
-// of the owner's lines is taken to the head, out of its order, and only now, while the role is held; the lines before it stay
-// held, and the queue's order is what it was whenever no hold is on. It reports whether the queue has such a line.
-func (s *Shift) ownerThroughHold(name string) bool {
-	i := s.ownerLine(name)
-	if i < 0 {
-		return false
-	}
-
-	if i > 0 {
-		s.moveToHead(name, i)
-	}
-
-	return true
 }
 
 // sameTurn reports whether the transcript's last error is the failed turn the record is of: written within failSame of
@@ -395,7 +377,7 @@ func (s *Shift) apiErrorNote(name string, rs *RoleState) string {
 	// A dispatcher that is held hears nothing of it: the owner must see it in the log (and zmina ls, zmina doctor).
 	if held && name == s.Crew.Dispatcher && class.Kind != KindTransient {
 		s.log(name, "dispatcher-held", "", "its turn ended on an API error ("+class.Words()+") and its queue, the crew's signals "+
-			"and the health notes wait for it until "+rec.holdEnd().Format("15:04 MST")+" or its next turn: the owner has to "+
+			"and the health notes wait for it until "+rec.holdEnd().In(s.Crew.Location()).Format("15:04 MST")+" or its next turn: the owner has to "+
 			"look (zmina ls, zmina doctor): "+clip(text))
 	}
 
