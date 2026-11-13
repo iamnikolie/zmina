@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // failureNow is the clock the classification tests read reset times against: a fixed moment in UTC, never the host's zone.
@@ -159,11 +160,15 @@ func TestClassifyFailureOrder(t *testing.T) {
 }
 
 // A time with no zone is read where the clock is, and one with a zone named is the same instant wherever the clock is:
-// nothing depends on the zone of the host. A clock time with no date that has passed is no time; a date that is none is no
-// time; a unit that is not a whole word of the list is no span.
+// nothing depends on the zone of the host. A clock time with no date that has passed is tomorrow's when that is within
+// LimitHoldMax of the record, and no time otherwise; a date that is none is no time; a unit that is not a whole word of the
+// list is no span.
 func TestParseResetReadsZonesFromTheTextAndTheClock(t *testing.T) {
 	east := time.FixedZone("east", 3*3600)
 	nowEast := time.Date(2026, 11, 13, 10, 0, 0, 0, east)
+
+	ny, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
 
 	for _, tc := range []struct {
 		name, text string
@@ -171,7 +176,7 @@ func TestParseResetReadsZonesFromTheTextAndTheClock(t *testing.T) {
 		want       time.Time
 	}{
 		{name: "no zone, the clock's", text: "resets 3pm", now: nowEast, want: time.Date(2026, 11, 13, 15, 0, 0, 0, east)},
-		{name: "no zone, passed: no time, not tomorrow's", text: "resets 9am", now: nowEast},
+		{name: "no zone, passed: tomorrow's is a day off, so no time", text: "resets 9am", now: nowEast},
 		{name: "a zone named, the same instant", text: "resets 3pm (UTC)", now: nowEast, want: time.Date(2026, 11, 13, 15, 0, 0, 0, time.UTC)},
 		{name: "the same on a clock in UTC", text: "resets 3pm (UTC)", now: failureNow, want: time.Date(2026, 11, 13, 15, 0, 0, 0, time.UTC)},
 		{name: "an abbreviation after the time", text: "resets 3pm UTC", now: nowEast, want: time.Date(2026, 11, 13, 15, 0, 0, 0, time.UTC)},
@@ -183,7 +188,24 @@ func TestParseResetReadsZonesFromTheTextAndTheClock(t *testing.T) {
 			want: time.Date(2026, 11, 13, 15, 0, 0, 0, time.UTC)},
 		{name: "the reader's own zone is no zone", text: "resets 3pm (Local)", now: failureNow},
 		{name: "24 hour clock", text: "limit will reset at 15:04 (UTC)", now: failureNow, want: time.Date(2026, 11, 13, 15, 4, 0, 0, time.UTC)},
-		{name: "midnight has passed", text: "resets 12am (UTC)", now: failureNow},
+		{name: "midnight has passed: 12 hours off, no time", text: "resets 12am (UTC)", now: failureNow},
+		{name: "2am recorded at 23:00 is tomorrow's, 3 hours ahead", text: "resets 2am (UTC)", now: time.Date(2026, 11, 13, 23, 0, 0, 0, time.UTC),
+			want: time.Date(2026, 11, 14, 2, 0, 0, 0, time.UTC)},
+		{name: "2am recorded at 23:00 on the last day of a month", text: "resets 2am (UTC)", now: time.Date(2026, 11, 30, 23, 0, 0, 0, time.UTC),
+			want: time.Date(2026, 12, 1, 2, 0, 0, 0, time.UTC)},
+		{name: "6 hours ahead exactly is still within the cap", text: "resets 5am (UTC)", now: time.Date(2026, 11, 13, 23, 0, 0, 0, time.UTC),
+			want: time.Date(2026, 11, 14, 5, 0, 0, 0, time.UTC)},
+		{name: "just over 6 hours ahead is no time", text: "resets 5:01am (UTC)", now: time.Date(2026, 11, 13, 23, 0, 0, 0, time.UTC)},
+		{name: "11:59am recorded at 12:00 is a day off, no time", text: "resets 11:59am (UTC)", now: failureNow},
+		{name: "the same minute is not ahead: a day off, no time", text: "resets 12:00pm (UTC)", now: failureNow},
+		{name: "tomorrow's by the zone's clock", text: "resets 2am (America/New_York)", now: time.Date(2026, 11, 13, 3, 0, 0, 0, time.UTC),
+			want: time.Date(2026, 11, 13, 7, 0, 0, 0, time.UTC).In(ny)},
+		{name: "tomorrow's across the clocks going back: 4 hours, not 3", text: "resets 2am (America/New_York)",
+			now: time.Date(2026, 11, 1, 3, 0, 0, 0, time.UTC), want: time.Date(2026, 11, 1, 7, 0, 0, 0, time.UTC).In(ny)},
+		{name: "tomorrow's across the clocks going forward: 2:30 does not exist then", text: "resets 2:30am (America/New_York)",
+			now: time.Date(2026, 3, 8, 4, 0, 0, 0, time.UTC)},
+		{name: "tomorrow's across the clocks going forward, a time that does exist", text: "resets 4am (America/New_York)",
+			now: time.Date(2026, 3, 8, 4, 0, 0, 0, time.UTC), want: time.Date(2026, 3, 8, 8, 0, 0, 0, time.UTC).In(ny)},
 		{name: "noon, still ahead", text: "resets 12:30pm (UTC)", now: failureNow, want: time.Date(2026, 11, 13, 12, 30, 0, 0, time.UTC)},
 		{name: "noon, passed", text: "resets 12pm (UTC)", now: failureNow},
 		{name: "a date with at", text: "resets Nov 15 at 8:30am (UTC)", now: failureNow, want: time.Date(2026, 11, 15, 8, 30, 0, 0, time.UTC)},

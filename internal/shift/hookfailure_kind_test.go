@@ -137,6 +137,24 @@ func TestTheHookRecordKeepsTheKindAndTheResetItReadOnce(t *testing.T) {
 	assert.Contains(t, string(raw), `"kind":"limit"`)
 	assert.Contains(t, string(raw), `"reset":"2026-10-24T15:00:00Z"`, "an RFC 3339 instant")
 
+	// "resets 2am" recorded at 23:00 is a real reset three hours ahead, across midnight: the record keeps it and the hold lasts
+	// until then; "resets 11:59am" recorded at noon would be a day off, and is no time (FailHold).
+	late := time.Date(2026, 10, 24, 23, 0, 0, 0, time.UTC)
+
+	across, err := RecordFailure(l, "designer", []byte(`{"session_id":"s","error":"rate_limit","last_assistant_message":"5-hour limit reached ∙ resets 2am (UTC)"}`), late)
+	require.NoError(t, err)
+	assert.True(t, late.Add(3*time.Hour).Equal(across.Reset), "%v", across.Reset)
+	assert.Equal(t, 3*time.Hour, across.holdFor())
+	assert.True(t, across.holds(late.Add(3*time.Hour-time.Second)))
+	assert.False(t, across.holds(late.Add(3*time.Hour+time.Second)))
+
+	noon := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
+
+	dayOff, err := RecordFailure(l, "designer", []byte(`{"session_id":"s","error":"rate_limit","last_assistant_message":"5-hour limit reached ∙ resets 11:59am (UTC)"}`), noon)
+	require.NoError(t, err)
+	assert.True(t, dayOff.Reset.IsZero(), "%v", dayOff.Reset)
+	assert.Equal(t, FailHold, dayOff.holdFor())
+
 	// An old record: the same words, no kind and no reset. Its kind is read from its words, its reset is not read at all.
 	old := TurnFailure{SessionID: "s", At: at, Error: "rate_limit", Details: "You've hit your limit · resets 3pm (UTC)"}
 	assert.Equal(t, FailureClass{Kind: KindLimit}, old.Class())

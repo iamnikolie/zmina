@@ -204,8 +204,9 @@ func zoneOf(name string) *time.Location {
 // parseReset is the moment a limit lifts, as the message says it, or the zero time when it does not say, says it in a form
 // not known here, or says one that cannot be right (not after now, more than a month off, a date that is no date, a zone not
 // known). A time with a zone named is read in that zone and returned in it; a time with none is read in the location of
-// now, which is where the one who sees the notice is, and returned there. A clock time with no date that has passed already
-// is no time: it is not read as tomorrow's.
+// now, which is where the one who sees the notice is, and returned there. A clock time with no date that has passed today is
+// tomorrow's, by the wall clock of its zone, only when that is within LimitHoldMax of now ("resets 2am" at 23:00 is a real
+// reset three hours ahead); otherwise it is no time, as "resets 11:59am" at 12:00, which would be a day off, is none.
 func parseReset(text string, now time.Time) time.Time {
 	var at time.Time
 
@@ -281,13 +282,22 @@ func readClock(m []string, now time.Time) time.Time {
 	local := now.In(loc)
 
 	if m[1] == "" {
-		// Today's; one that has passed is no time, and not tomorrow's.
+		// Today's; one that has passed is tomorrow's only when that is within LimitHoldMax, and none otherwise.
 		at := time.Date(local.Year(), local.Month(), local.Day(), hour, minute, 0, 0, loc)
 		if at.Hour() != hour || at.Minute() != minute {
 			return time.Time{}
 		}
 
-		return at
+		if at.After(now) {
+			return at
+		}
+
+		next := time.Date(local.Year(), local.Month(), local.Day()+1, hour, minute, 0, 0, loc)
+		if next.Hour() != hour || next.Minute() != minute || next.Sub(now) > LimitHoldMax {
+			return time.Time{}
+		}
+
+		return next
 	}
 
 	months := []string{"jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"}

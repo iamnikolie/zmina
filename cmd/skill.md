@@ -478,8 +478,9 @@ recognised. `limit`: `rate_limit`, `rate_limit_error`, `usage limit`, `hit your 
 once and kept (`reset`, an RFC 3339 instant) from `resets 3pm (Europe/Berlin)`, `resets 3pm PST` (a zone in brackets or an
 abbreviation right after the time, from one table: UTC, GMT, EST, EDT, CST, CDT, MST, MDT, PST, PDT, CET, CEST, and the IANA
 names; any other zone is no time), `resets Oct 9, 10am`, `|<unix seconds>`, `try again in 2 hours` (whole units only: ms, s,
-m, h, d, w). A clock time with no date that has already passed, a date that is none (Feb 31), a time over a month off are no
-time. `account`: a pair that belongs together (401 with `authentication_error`; 402, `billing_error` or a credit balance too
+m, h, d, w). A clock time with no date that has passed today is tomorrow's, by the clock of its zone, only when that is within 6 hours of
+the record (`resets 2am` recorded at 23:00 is a real reset 3 hours ahead; `resets 11:59am` at noon would be a day off); a date that
+is none (Feb 31) and a time over a month off are no time. `account`: a pair that belongs together (401 with `authentication_error`; 402, `billing_error` or a credit balance too
 low; 403 with `permission_error`; 404 with a `not_found_error` that names a model), or words that say it outright (an
 invalid or expired API key or OAuth token, `please run /login`), or Claude Code's codes `billing_error`,
 `authentication_failed`, `model_not_found`. Bare words (billing, forbidden, unauthorized) and a status alone are none.
