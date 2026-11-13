@@ -111,6 +111,7 @@ func apply(base *Table, rows []Rule) (*Table, Overrides, error) {
 	}
 
 	seen := map[string]bool{}
+	program := 0 // the instructions the file's regexps unroll to, all rows added
 	next := make([]Rule, 0, len(base.rules)+len(rows))
 
 	for _, c := range base.rules {
@@ -150,6 +151,21 @@ func apply(base *Table, rows []Rule) (*Table, Overrides, error) {
 			if effects[sets].keys {
 				return nil, o, fmt.Errorf("rule %q: it sets %s, which decides the keys zmina presses (or the dialog they are pressed into): "+
 					"an override cannot add, replace or disable such a row", r.ID, sets)
+			}
+		}
+
+		// What the file costs a beat is its rows' programs added up: each is bounded, and so is their sum. (A regexp that is too long
+		// or does not read is left to build, which says so.)
+		if n, err := programSize(r.Match.Regexp); !r.Disabled && r.Match.Regexp != "" && len(r.Match.Regexp) <= maxRegexpSource && err == nil {
+			program += n
+
+			switch {
+			case n > maxOverrideProgram:
+				return nil, o, fmt.Errorf("rule %q: the regexp unrolls to a program of %d instructions, more than the %d a row of an override file may have",
+					r.ID, n, maxOverrideProgram)
+			case program > maxOverrideBudget:
+				return nil, o, fmt.Errorf("rule %q: the regexps of the override file unroll to %d instructions in all, more than the %d the file may have",
+					r.ID, program, maxOverrideBudget)
 			}
 		}
 

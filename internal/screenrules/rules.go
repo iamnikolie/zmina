@@ -54,8 +54,16 @@ const (
 	maxRegexpSource = 512
 	// maxProgram is the most instructions a regexp may compile to, repeats unrolled.
 	maxProgram = 1000
+	// maxOverrideProgram is the most one row of an override file may compile to, and maxOverrideBudget the most all the rows of
+	// the file may, summed: a beat reads every line of a pane with every row, so what the file costs is its rows added up, not
+	// the largest. The embedded rows (the largest is 200) are held to maxProgram only.
+	maxOverrideProgram = 250
+	maxOverrideBudget  = 2000
 	// maxOverrideRows is the most rows an override file lists.
 	maxOverrideRows = 64
+	// maxLineRunes is how much of a line a row reads: its first 512 characters. A pane can be wider than any line a notice is
+	// worded in, and what a regexp costs grows with the text it is run over.
+	maxLineRunes = 512
 	// MaxLastLines is the most rows from the bottom a row may read: the capture both the ticker's watch and zmina explain take
 	// of a screen. A row that asked for more would be read differently by the two.
 	MaxLastLines = 80
@@ -588,13 +596,56 @@ func (t *Table) Window(engine, effect string, def int) int {
 	return most
 }
 
-// test tries the row on a text; the hit keeps the text as it was given.
+// capLines cuts each line of a text to maxLineRunes characters: the text itself when none is longer.
+func capLines(text string) string {
+	// A byte is at least a character: a text that short has no line to cut.
+	if len(text) <= maxLineRunes {
+		return text
+	}
+
+	lines := strings.Split(text, "\n")
+	cut := false
+
+	for i, l := range lines {
+		if c := firstRunes(l, maxLineRunes); len(c) < len(l) {
+			lines[i], cut = c, true
+		}
+	}
+
+	if !cut {
+		return text
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// firstRunes is the first n characters of a line.
+func firstRunes(line string, n int) string {
+	if len(line) <= n {
+		return line
+	}
+
+	for i := range line {
+		if n == 0 {
+			return line[:i]
+		}
+
+		n--
+	}
+
+	return line
+}
+
+// test tries the row on a text; the hit keeps the text as it was given. Each line of it is read to its first maxLineRunes
+// characters, and no further.
 func (c *compiled) test(raw string) (Hit, bool) {
 	m, text := c.Match, raw
 
 	if m.Trim {
 		text = strings.TrimSpace(text)
 	}
+
+	text = capLines(text)
 
 	if m.Lower {
 		text = strings.ToLower(text)

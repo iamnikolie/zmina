@@ -43,7 +43,8 @@ func TestOverrideRegexpsAreBounded(t *testing.T) {
 	refused(t, row("acme.longliteral", "claude", "usage_limit", `contains: '`+strings.Repeat("a", 513)+`'`), "acme.longliteral", "512")
 
 	accepted(t, row("acme.fine", "claude", "usage_limit", `regexp: '(?i)(plan|quota) (exhausted|used up){1,3}'`))
-	accepted(t, row("acme.longish", "claude", "usage_limit", `regexp: '`+strings.Repeat("a", 512)+`'`))
+	accepted(t, row("acme.longish", "claude", "usage_limit", `regexp: '`+strings.Repeat("a", 240)+`'`))
+	accepted(t, row("acme.longliteral-fine", "claude", "usage_limit", `contains: '`+strings.Repeat("a", 512)+`'`))
 }
 
 // The embedded rows pass the bounds with room to spare, so the bounds are not set to the rows' own size.
