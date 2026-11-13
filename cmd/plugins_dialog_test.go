@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/plugin"
 	"github.com/iamnikolie/zmina/internal/registry"
 	"github.com/iamnikolie/zmina/internal/shift"
@@ -40,6 +41,11 @@ type dialogScreenTmux struct {
 	screen string
 	input  bool
 	keys   [][]string
+
+	// waitingFor is what the session file says it waits on: "input needed" (a question) or "permission prompt"; since is when the
+	// wait began, as the session file has it.
+	waitingFor string
+	since      time.Time
 }
 
 func (f *dialogScreenTmux) Probe(name string) (tmux.Pane, error) {
@@ -76,22 +82,52 @@ func (f *dialogScreenTmux) Keys(_ string, keys ...string) error {
 	return nil
 }
 
-// show puts a dialog on the screen (and the session file says it waits), or takes it off (the input line is back).
+// show puts a dialog on the screen (and the session file says it waits, a new wait each time), or takes it off (the input line
+// is back).
 func (f *dialogScreenTmux) show(t *testing.T, ns string, dialog bool) {
 	t.Helper()
 
 	f.mu.Lock()
 	f.input = !dialog
+
+	// A new wait is later than the one before, as the file's own milliseconds say.
+	if now := time.Now(); !now.After(f.since) {
+		f.since = f.since.Add(time.Millisecond)
+	} else {
+		f.since = now
+	}
+
+	waiting := f.waitingFor
+	if waiting == "" {
+		waiting = "input needed"
+	}
+
+	since := f.since
 	f.mu.Unlock()
 
 	status := `"status": "idle"`
 	if dialog {
-		status = `"status": "waiting", "waitingFor": "permission prompt"`
+		status = `"status": "waiting", "waitingFor": "` + waiting + `"`
 	}
 
-	body := `{"pid": ` + strconv.Itoa(f.pid) + `, "sessionId": "sid-1", ` + status + `, "statusUpdatedAt": 1}`
+	body := `{"pid": ` + strconv.Itoa(f.pid) + `, "sessionId": "sid-1", ` + status + `, "statusUpdatedAt": ` + strconv.FormatInt(since.UnixMilli(), 10) + `}`
 	require.NoError(t, os.MkdirAll(filepath.Join(ns, "sessions"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(ns, "sessions", strconv.Itoa(f.pid)+".json"), []byte(body), 0o600))
+}
+
+// permission makes the wait a permission prompt of a tool call, as its hook recorded it: the command, written the moment the wait
+// began.
+func (f *dialogScreenTmux) permission(t *testing.T, crewFile, ns, command string) {
+	t.Helper()
+
+	f.mu.Lock()
+	f.waitingFor = "permission prompt"
+	f.mu.Unlock()
+
+	f.show(t, ns, true)
+
+	input := `{"session_id":"sid-1","hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":` + strconv.Quote(command) + `}}`
+	require.NoError(t, shift.RecordPermission(crew.Layout{Dir: filepath.Dir(crewFile)}, "dev", []byte(input), f.since))
 }
 
 func (f *dialogScreenTmux) pressed() [][]string {
@@ -148,7 +184,8 @@ func TestPluginsTellOfADialogAfterItStoodAMinute(t *testing.T) {
 	ev := told(t, log)[0]
 	assert.Equal(t, "dialog", ev.Event)
 	id := ev.Line["id"].(string)
-	assert.Regexp(t, `^dev:[0-9a-f]{16}$`, id)
+	assert.Regexp(t, `^dev:[0-9a-f]{16}:[0-9a-f]{16}$`, id, "role:fingerprint:one-shot mark")
+	assert.Equal(t, "question", ev.Line["prompt"])
 	assert.Equal(t, "dev", ev.Line["role"])
 	assert.Contains(t, ev.Line["question"], "Ship it?")
 	require.Len(t, ev.Line["options"], 3, "the choice that asks for words is not offered")
@@ -166,12 +203,15 @@ func TestPluginsTellOfADialogAfterItStoodAMinute(t *testing.T) {
 
 	t.Setenv("ZMINA_PLUGIN", "pager")
 
-	// A tap for another question, or with no question named, or from a run that is not the plugin's, presses nothing.
-	_, err := runWith(t, file, seams, "choose", "dev", "3", "--dialog", "dev:0000000000000000", "--by", "pager")
+	// A tap for another question, or with no question named, or with no mark, or from a run that is not the plugin's, presses nothing.
+	_, err := runWith(t, file, seams, "choose", "dev", "3", "--dialog", "dev:0000000000000000:"+strings.Split(id, ":")[2], "--by", "pager")
 	require.ErrorContains(t, err, "the question on its screen changed: look again")
 
 	_, err = runWith(t, file, seams, "choose", "dev", "3", "--by", "pager")
 	require.ErrorContains(t, err, "--by needs --dialog")
+
+	_, err = runWith(t, file, seams, "choose", "dev", "3", "--dialog", strings.Join(strings.Split(id, ":")[:2], ":"), "--by", "pager")
+	require.ErrorContains(t, err, "no one-shot mark")
 
 	t.Setenv("ZMINA_PLUGIN", "")
 	_, err = runWith(t, file, seams, args...)
@@ -234,7 +274,12 @@ func TestPluginsADialogThatGoesAway(t *testing.T) {
 	deliver(t, file, now.Add(6*time.Minute), seams)
 	assert.Len(t, told(t, log), 2)
 	deliver(t, file, now.Add(7*time.Minute), seams)
-	assert.Equal(t, []string{"dialog " + id, "answered " + id, "dialog " + id}, toldIDs(t, log))
+
+	ids := toldIDs(t, log)
+	require.Len(t, ids, 3)
+	assert.Equal(t, []string{"dialog " + id, "answered " + id}, ids[:2])
+	assert.True(t, strings.HasPrefix(ids[2], "dialog "+strings.Join(strings.Split(id, ":")[:2], ":")+":"), "the same question")
+	assert.NotEqual(t, "dialog "+id, ids[2], "with a mark of its own: a card of the first does not press the second")
 }
 
 // The owner's own choose, by hand, needs no --dialog, and says he is at the machine; one that names a dialog is held to it.
@@ -269,7 +314,7 @@ func TestChooseByHand(t *testing.T) {
 	// Nothing on the screen: nothing pressed.
 	f.show(t, ns, false)
 	_, err = runWith(t, file, seams, "choose", "dev", "1")
-	require.ErrorContains(t, err, "no question on its screen now")
+	require.ErrorContains(t, err, "not waiting on a question now")
 	assert.Len(t, f.pressed(), 1)
 }
 
@@ -323,4 +368,201 @@ func TestChooseRecordsWhoChose(t *testing.T) {
 
 	assert.Equal(t, "owner", chosen.By)
 	assert.Equal(t, "No", chosen.Text)
+}
+
+// A permission prompt is told to a plugin only with the call its hook recorded: the screen says "Do you want to proceed?" and not
+// of what, and a plugin shown that would be asked to approve blind. With the record, the event carries the tool and the command,
+// and two commands never share an id.
+func TestPluginsTellOfAPermissionPromptOnlyWithItsSubject(t *testing.T) {
+	file, f, seams, ns := dialogWorld(t, "  - {name: pager, quiet_when_active: off}\n")
+	log := recorder(t, file, "pager", "")
+	now := time.Now().Add(-30 * time.Minute)
+
+	// No record: it stands for as long as it likes, and is never told.
+	f.mu.Lock()
+	f.waitingFor = "permission prompt"
+	f.mu.Unlock()
+	f.show(t, ns, true)
+
+	for _, m := range []int{0, 1, 2, 10} {
+		deliver(t, file, now.Add(time.Duration(m)*time.Minute), seams)
+	}
+
+	assert.Empty(t, told(t, log), "a permission prompt with no hook record is not told: no blind approvals")
+
+	// The hook's record of the call, of this very wait: now it is.
+	f.permission(t, file, ns, "rm -rf build")
+	deliver(t, file, now.Add(11*time.Minute), seams)
+	deliver(t, file, now.Add(12*time.Minute), seams)
+	require.Len(t, told(t, log), 1)
+
+	ev := told(t, log)[0].Line
+	assert.Equal(t, "permission", ev["prompt"])
+	assert.Equal(t, "Bash", ev["tool"])
+	assert.Equal(t, "rm -rf build", ev["subject"], "what is being approved")
+	assert.Contains(t, ev["question"], "Ship it?")
+
+	first := ev["id"].(string)
+
+	// Another command under the very same words: another dialog, told as one; the old card is closed.
+	f.permission(t, file, ns, "rm -rf ~/x")
+	deliver(t, file, now.Add(13*time.Minute), seams)
+	deliver(t, file, now.Add(14*time.Minute), seams)
+	deliver(t, file, now.Add(15*time.Minute), seams)
+
+	ids := toldIDs(t, log)
+	require.Len(t, ids, 3, "%v", ids)
+	assert.Equal(t, "answered "+first, ids[1], "the first card is closed")
+
+	second := told(t, log)[2]
+	assert.Equal(t, "dialog", second.Event)
+	assert.Equal(t, "rm -rf ~/x", second.Line["subject"])
+	assert.NotEqual(t, first, second.Line["id"])
+	assert.NotEqual(t, strings.Join(strings.Split(first, ":")[:2], ":"), strings.Join(strings.Split(second.Line["id"].(string), ":")[:2], ":"),
+		"the fingerprint is of the command too: two commands never share one")
+
+	// The first card's press, now: the screen asks about another command.
+	t.Setenv("ZMINA_PLUGIN", "pager")
+
+	_, err := runWith(t, file, seams, "choose", "dev", "1", "--dialog", first, "--by", "pager")
+	require.ErrorContains(t, err, "the question on its screen changed: look again")
+	assert.Empty(t, f.pressed(), "a stale card presses nothing")
+
+	// The second card's press, at once.
+	out, err := runWith(t, file, seams, "choose", "dev", "1", "--dialog", second.Line["id"].(string), "--by", "pager")
+	require.NoError(t, err)
+	assert.Equal(t, "dev · chose 1: Yes\n", out)
+	assert.Len(t, f.pressed(), 1)
+}
+
+// A press made through a plugin is one-shot: the first disarms its mark; a second press, a stale card, one with no mark or another's,
+// is refused with its own words and presses nothing, though the very same question is still on the screen.
+func TestPluginPressIsOneShot(t *testing.T) {
+	file, f, seams, ns := dialogWorld(t, "  - {name: pager, quiet_when_active: off}\n  - {name: other, quiet_when_active: off}\n")
+	log := recorder(t, file, "pager", "")
+	recorder(t, file, "other", "")
+	now := time.Now().Add(-10 * time.Minute)
+
+	f.permission(t, file, ns, "make deploy")
+	deliver(t, file, now, seams)
+	deliver(t, file, now.Add(time.Minute), seams)
+	require.Len(t, told(t, log), 1)
+
+	id := told(t, log)[0].Line["id"].(string)
+	t.Setenv("ZMINA_PLUGIN", "pager")
+
+	press := func() error {
+		_, err := runWith(t, file, seams, "choose", "dev", "1", "--dialog", id, "--by", "pager")
+
+		return err
+	}
+
+	// A mark of another plugin, or a made-up one, is no mark of this.
+	_, err := runWith(t, file, seams, "choose", "dev", "1", "--dialog", strings.Join(strings.Split(id, ":")[:2], ":")+":0123456789abcdef", "--by", "pager")
+	require.ErrorContains(t, err, "not armed")
+	assert.Empty(t, f.pressed())
+
+	require.NoError(t, press(), "the first press")
+	assert.Equal(t, [][]string{{"Enter"}}, f.pressed())
+
+	// The very same question is still on the screen (the role has not moved): the same card, tapped again, goes nowhere.
+	err = press()
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "used already")
+	assert.ErrorContains(t, err, "a press goes once")
+	assert.Len(t, f.pressed(), 1, "a double tap, or a retry of the plugin's own network call, presses once")
+
+	// Keys that could not be sent give the press back.
+	g := &failingKeys{dialogScreenTmux: f}
+	seamsFailing := func(s *shift.Shift) { s.Tmux, s.Reg = g, &registry.Registry{Namespace: ns} }
+
+	f.permission(t, file, ns, "make deploy 2")
+	deliver(t, file, now.Add(2*time.Minute), seams)
+	deliver(t, file, now.Add(3*time.Minute), seams)
+
+	var second string
+
+	for _, g := range told(t, log) {
+		if g.Event == "dialog" && g.Line["subject"] == "make deploy 2" {
+			second = g.Line["id"].(string)
+		}
+	}
+
+	require.NotEmpty(t, second)
+
+	_, err = runWith(t, file, seamsFailing, "choose", "dev", "1", "--dialog", second, "--by", "pager")
+	require.Error(t, err, "the keys could not be sent")
+
+	out, err := runWith(t, file, seams, "choose", "dev", "1", "--dialog", second, "--by", "pager")
+	require.NoError(t, err, "the mark was given back")
+	assert.Equal(t, "dev · chose 1: Yes\n", out)
+}
+
+// failingKeys is a tmux whose keys do not go.
+type failingKeys struct{ *dialogScreenTmux }
+
+func (f *failingKeys) Keys(string, ...string) error { return os.ErrClosed }
+
+// A prompt answered and asked again in the same breath, with the very same words and call, is a new wait: the old card is closed in
+// the same beat and the new one is told, with a mark of its own, once it has stood.
+func TestPluginsAPromptReplacedByItsTwinWithinABeat(t *testing.T) {
+	file, f, seams, ns := dialogWorld(t, "  - {name: pager, quiet_when_active: off}\n")
+	log := recorder(t, file, "pager", "")
+	now := time.Now().Add(-10 * time.Minute)
+
+	f.permission(t, file, ns, "make deploy")
+	deliver(t, file, now, seams)
+	deliver(t, file, now.Add(time.Minute), seams)
+	require.Len(t, told(t, log), 1)
+
+	first := told(t, log)[0].Line["id"].(string)
+
+	// The same command is asked again: a new wait, the same screen.
+	f.permission(t, file, ns, "make deploy")
+	deliver(t, file, now.Add(2*time.Minute), seams)
+
+	assert.Equal(t, []string{"dialog " + first, "answered " + first}, toldIDs(t, log), "the old card is closed in the beat")
+	assert.Equal(t, "gone", told(t, log)[1].Line["how"])
+
+	deliver(t, file, now.Add(3*time.Minute), seams)
+
+	ids := toldIDs(t, log)
+	require.Len(t, ids, 3)
+	assert.NotEqual(t, "dialog "+first, ids[2], "a mark of its own")
+}
+
+// A question whose choices are ticked is told, and says it needs the terminal: no argv to press one choice of it.
+func TestPluginsTellOfAMultipleChoiceWithoutAnArgv(t *testing.T) {
+	file, f, seams, ns := dialogWorld(t, "  - {name: pager, quiet_when_active: off}\n")
+	log := recorder(t, file, "pager", "")
+	now := time.Now().Add(-10 * time.Minute)
+
+	f.screen = " ☐ Tabs\n│ Which tabs?\n❯ 1. ☐ Home\n  2. ☐ Talk\n  3. Type something.\nEnter to select · ↑/↓ to navigate · Esc to cancel"
+	f.show(t, ns, true)
+	deliver(t, file, now, seams)
+	deliver(t, file, now.Add(time.Minute), seams)
+	require.Len(t, told(t, log), 1)
+
+	ev := told(t, log)[0].Line
+	assert.Equal(t, true, ev["needs_terminal"])
+	assert.Nil(t, ev["answer"])
+	assert.Len(t, ev["options"], 2)
+}
+
+// A prompt the session does not say what it waits on is not told: it may be a permission.
+func TestPluginsDoNotTellOfAPromptThatIsNotSaidToBeAQuestion(t *testing.T) {
+	file, f, seams, ns := dialogWorld(t, "  - {name: pager, quiet_when_active: off}\n")
+	log := recorder(t, file, "pager", "")
+	now := time.Now().Add(-10 * time.Minute)
+
+	f.mu.Lock()
+	f.waitingFor = "something else"
+	f.mu.Unlock()
+	f.show(t, ns, true)
+
+	for _, m := range []int{0, 1, 2} {
+		deliver(t, file, now.Add(time.Duration(m)*time.Minute), seams)
+	}
+
+	assert.Empty(t, told(t, log))
 }

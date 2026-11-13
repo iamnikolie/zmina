@@ -391,7 +391,9 @@ gets, and asks the process (`ps`) of a role an earlier zmina started.
 The settings also carry a `PermissionRequest` hook, `zmina _permission-request --role <role>` (timeout 5 s, output to
 `/dev/null`, `|| true`). For an `AskUserQuestion` it writes the questions and options as the tool had them, with the
 session id and the time, to `hooks/<role>.question.json` next to the crew file (one write replaces the last); any other
-tool or input records nothing. It prints nothing, never allows or denies, and exits 0 on any error, so it neither settles
+tool's call it records as `hooks/<role>.permission.json` (the tool, its command or path cut to 1000 characters, a sum of the whole
+input, the session and the time: what a plugin is shown of a permission prompt, see Plugins), and input that is not a call
+records nothing. It prints nothing, never allows or denies, and exits 0 on any error, so it neither settles
 nor breaks the dialog. `zmina ls --json` and the cockpit take the role's `dialog` from that file while the session file
 says it waits on a question (`waitingFor: input needed`), the file is of the current session and was written within 1 s
 of that wait's start; otherwise the screen is read as before. Where the screen reads as a dialog too, the file is used
@@ -401,7 +403,7 @@ the screen's dialog as it is. Of several questions in one call the first is show
 this one: …)`; a multiple choice says `(several can be chosen)`. `choose` still answers by the dialog read from the screen,
 the file's choice order not being proven to be the screen's numbering: a dialog only the file describes (an id no screen
 has) is never answered blind. A file is never deleted while its role runs, a stale one is ignored; a role's start removes
-its two records (this one and the failure's).
+its records (the question's, the permission's and the failure's).
 
 A turn that ends on an API error runs no `Stop` hook, so the settings carry a `StopFailure` hook too, `zmina
 _stop-failure --role <role>` (same timeout and silence). It only records: the error's code and the words Claude Code
@@ -1528,7 +1530,8 @@ role that asked, moves a waiting task on. Event `answered` in the log.
 The owner is reached by one `notify` command (a push), and answers in a terminal. A **plugin** is a program zmina runs with one
 event on its stdin whenever something reaches the owner — a question on his todo, one on a role's screen, a reminder — and
 that can answer back, so a bridge to a chat app lets him answer from a phone. zmina has the mechanism only: no plugin
-store, catalog, download or install command, and no network code. `notify` keeps working unchanged; a crew may have both.
+store, catalog, download or install command, and no network code. `notify` keeps working unchanged; a crew may have both. An older zmina ignores `plugins:` with a warning (an unknown key): no
+plugin is told of anything there, so every zmina that runs the crew's ticker must be this build.
 
 ```yaml
 plugins:
@@ -1558,28 +1561,41 @@ rest less). Nothing in it is an instruction to the plugin, and a plugin never ev
 
 | `event` | when | fields besides `v`, `event`, `id` |
 |---|---|---|
-| `ask` | a question on the todo: an ask, a decision, a check, a task that waits on the owner | `role`, `title`, `text`, `why` (what it holds up: the role, the task id and title), `reason`, `recommendation`, `options` (`[{n, text}]`), `answer`, `opened` (RFC 3339), `blocking` |
+| `ask` | a question on the todo: an ask, a decision, a check, a task that waits on the owner | `role`, `title`, `text`, `note` (a waiting task's note, a field of its own), `why` (what it holds up: the role, the task id and title), `reason`, `recommendation`, `options` (`[{n, text}]`), `answer`, `opened` (RFC 3339), `blocking` |
 | `blocking` | the same while it holds a role up; sent **instead of** `ask`, never as well | as `ask`, `blocking: true` |
-| `dialog` | a question on a role's screen that zmina does not answer itself (a permission prompt, AskUserQuestion), once it has stood `dialog_after`, so what the role settles itself never pages. `id` is `<role>:<fingerprint of the question and every choice>` | `role`, `question`, `options` (`[{n, text, detail}]`), `answer`, `task`, `task_title` |
-| `reminder` | a reminder ringing, a parked item brought back by its alarm (as `notify`'s reminder) | as `ask`; for a parked item (`L-3`) only `answer.done` |
+| `dialog` | a question on a role's screen that zmina does not answer itself (a permission prompt, AskUserQuestion), once it has stood `dialog_after`, so what the role settles itself never pages. `id` is `<role>:<fingerprint>:<mark>`: the fingerprint is of the question, every choice and, for a permission prompt, the tool call; the mark is this event's one-shot mark | `role`, `question`, `prompt` (`permission` or `question`), `tool` and `subject` (a permission prompt: what is being approved, the call's command or path), `options` (`[{n, text, detail}]`), `answer`, `needs_terminal`, `task`, `task_title` |
+| `reminder` | a reminder ringing, a parked item brought back by its alarm (as `notify`'s reminder); a plugin whose `on` lacks `reminder` (the default) is told of it as an `ask` | as `ask`; for a parked item (`L-3`) only `answer.done` |
 | `answered` | an item or dialog the plugin was **told of** is closed, so it can mark its card | `for` (the event it was sent as), `how` (`answered`, `done`, `dropped` — parked or set aside —, `chosen`, `gone`), `by` (`owner`, `plugin <name>`, `role <name>`, empty when zmina closed it), `text` (the answer when there is one), `closed` |
 
 `"test": true` marks an event `zmina plugin test` made up. `answer` is the exact argv to run, with `ZMINA_PLUGIN=<name>` in
-the environment: `text` is `["zmina","--crew","<crew file>","todo","answer","A-3","--by","pager","--","<text>"]` (`<text>`
-is the owner's words); `options` is one `{n, argv}` per option, the argv with that option's words; `yes` takes the
-recommendation; `done` says a check is done; for a dialog `options[n].argv` is `["zmina","--crew","<file>","choose",
-"<role>","<n>","--dialog","<role>:<fingerprint>","--by","pager"]`.
+the environment, every flag before the `--` and after it the id and the words: `text` is `["zmina","--crew","<crew file>",
+"todo","answer","--by","pager","--","A-3","<text>"]` (`<text>` is the owner's words); `options` is one `{n, argv}` per option,
+the argv with that option's words; `yes` takes the recommendation; `done` says a check is done; for a dialog `options[n].argv` is
+`["zmina","--crew","<file>","choose","<role>","<n>","--dialog","<role>:<fingerprint>:<mark>","--by","pager"]`, and none is given
+when `needs_terminal` (several choices can be ticked: pressing one answers nothing). An item id that is not `A-n`, `T-n` or `L-n`
+gets no argv.
 
 **Answering.** `todo answer`, `todo yes`, `todo done` and the other `todo` verbs, and `zmina choose <role> <n> --dialog <id>`,
-take `--by <name>`, accepted only when `ZMINA_PLUGIN=<name>` is set and the crew file has a plugin of that name; the answer
-is recorded as the owner's, with `(answered through plugin pager)` in the dispatcher's note and the log. **A plugin is trusted
-with the owner's voice** — anything it passes on as his answer is taken as his — **and must itself check who is talking to
-it** (zmina cannot: `--by` guards against a mistake, not a forger). The first answer wins: the ledger refuses a second answer
-to a closed ask, and a plugin's answer to a waiting task already answered. `--by` is refused when `ZMINA_ROLE` is set: a role is never a plugin. `choose --dialog` re-reads the screen and presses nothing unless the question on
-it is still that dialog (`the question on its screen changed: look again`), so a late tap on a phone never lands in another
-question; `--by` requires `--dialog`. `zmina choose <role> <n>` by hand needs no `--dialog`: the owner reads the screen
-himself. It presses choice n as the arrows and Enter would, only while the session says it waits on a dialog; it is the
-CLI of Chat's `choose`.
+take `--by <name>`, accepted only when `ZMINA_PLUGIN=<name>` is set, the crew file has a plugin of that name and no role is
+speaking (`ZMINA_ROLE` unset); the answer is recorded as the owner's, with `(answered through plugin pager)` in the dispatcher's
+note and the log. **A plugin is trusted with the owner's voice** — anything it passes on as his answer is taken as his — **and must
+itself check who is talking to it** (zmina cannot: `--by` guards against a mistake, not a forger). The first answer wins: the
+ledger refuses a second answer to a closed ask, and a plugin's answer to a waiting task already answered.
+
+**Permission prompts and one-shot presses.** The screen of a permission prompt says "Do you want to proceed?" and not of what, so
+the role's `PermissionRequest` hook records the call (`hooks/<role>.permission.json`: the tool, its command or path, a sum of the
+whole input), and a permission prompt is told to a plugin only when that record is of this very wait: without it nothing says what
+would be approved, and nothing is told (so is a prompt the session file does not say what it waits on; a role started before
+the hook has none: answer in a terminal). The call is the event's `subject` and is in the fingerprint, so two commands never share
+an id. A press through a plugin is **one-shot**: the event's id carries a mark kept armed in `plugins/<name>.armed.json` (apart
+from the told file: the delivery and the choose both write it, each under a short lock), and `choose --by` spends it right before
+the keys go, so a second press, a double tap, a retry of the plugin's own network call or a card from yesterday is refused (`this
+card was used already`), though the same question is still on the screen; keys that could not be sent give it back. `choose
+--dialog` reads the screen last, right before the press, and presses nothing unless it still has the fingerprint (`the question on
+its screen changed: look again`); `--by` requires `--dialog` with a mark. A prompt answered and asked again in the same breath is a
+new wait: the old card is closed (`answered`, `gone`) and the new one told with a mark of its own. `zmina choose <role> <n>` by
+hand needs no `--dialog`: the owner reads the screen himself; it presses choice n as the arrows and Enter would, only while the
+session says it waits on a dialog, and is the CLI of Chat's `choose`.
 
 **Delivery.** The beat starts `zmina plugin deliver --beat` (hidden; a role refuses it: it is the ticker's and the owner's, and the log names who
 ran it) detached, as it starts the lessons run, and never waits for it:
@@ -1587,9 +1603,10 @@ a plugin may take its whole deadline. It reads the todo and the screens under no
 parallel, each one's events one at a time, each in a process group of its own that is killed at `timeout`; one that fails
 is not asked again that beat; at most 10 events per plugin per beat (the rest wait). A delivery that outlasts its beat keeps
 its plugin's lock (`plugins/<name>.lock`): the next beat skips that plugin. What was told is kept in `plugins/<name>.told.json`,
-one small file a plugin, apart from `state.json` (nothing in the state moved), pruned after 7 days: each event goes once, and
-`answered` goes only to a plugin that was told. An ask open before the plugin was first looked at is not new to it (only one
-that holds a role up is told, as `notify_on: blocking` does); `notify_again` has no counterpart: an event goes once. A run
+one small file a plugin, apart from `state.json` (nothing in the state moved), pruned after 7 days: an event goes once and
+`answered` goes only to a plugin that was told — but delivery is **at-least-once**: a run that timed out after the plugin had
+acted, or a crash between a run and its record, sends the event again with the same line, so a plugin dedupes by `id`. An ask open before the plugin was first looked at is not new to it (only one
+that holds a role up is told, as `notify_on: blocking` does); `notify_again` has no counterpart: an event is not repeated. A run
 that fails (non-zero, past the deadline, a program that is not there) is tried again after 1, 5 and 15 minutes, then dropped
 with one event `plugin-failed` in the log; a delivery is `plugin-told` there, each with the plugin's stdout and stderr cut to
 4 KB; what else the delivery has to say (a try that failed and will be repeated, a program that does not resolve, a file that did
@@ -1646,7 +1663,9 @@ A machine without peers is a mesh of one. It opens the page in the browser.
 - **A question on a session's screen** (a dialog with numbered choices) stands first in your move: the row says the
   question, and opened offers each choice as a button (`chat/action choose`, on the node the session runs on); choices
   that ask for words (Type something, Chat about this) are left to Talk and its Terminal. `zmina ls --json` carries
-  it as `dialog: {question, options (n, label, detail), cursor, id}`. A role started with the `PermissionRequest` hook
+  it as `dialog: {question, options (n, label, detail), cursor, id, tool, subject, multi}` (a permission prompt whose call its hook
+  recorded within 1 s of the wait's start shows the `tool` and the `subject` — the command or path — and its id covers them; the
+  cockpit shows the subject under the question; `multi`: several choices can be ticked). A role started with the `PermissionRequest` hook
   has the words of its question from the hook, whole (see the hook paragraph under Delivery), the screen's otherwise.
 - **Talk**: every session card, and the holder line of an opened task, has «Talk»: the role's conversation (Chat) opens
   in a panel beside the cockpit, which stays in view and keeps updating behind it; on a phone the panel is the whole

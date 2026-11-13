@@ -109,7 +109,7 @@ func TestPluginTest(t *testing.T) {
 		require.NoError(t, err, kind)
 	}
 
-	assert.Equal(t, []string{"ask A-0", "blocking A-0", "dialog dev:0000000000000000", "reminder A-0", "answered A-0"}, toldIDs(t, log))
+	assert.Equal(t, []string{"ask A-0", "blocking A-0", "dialog dev:0000000000000000:0000000000000000", "reminder A-0", "answered A-0"}, toldIDs(t, log))
 
 	for _, g := range told(t, log) {
 		assert.Equal(t, true, g.Line["test"], g.Event)

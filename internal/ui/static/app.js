@@ -1249,6 +1249,8 @@ function screenRow(c, r) {
   const p = el("div");
   if (d) {
     if (d.question) p.append(el("p", "pn", d.question));
+    // What a permission prompt asks to approve, as its hook recorded it: the screen does not say.
+    if (d.subject) p.append(el("p", "pn", (d.tool ? d.tool + ": " : "") + d.subject));
     const ch = el("div", "choices");
     for (const o of d.options) {
       const b = button("btn choice", o.n + ". " + o.label, () => chooseDialog(c, r, o));

@@ -19,6 +19,7 @@ import (
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/inbox"
 	"github.com/iamnikolie/zmina/internal/mesh"
+	"github.com/iamnikolie/zmina/internal/plugin"
 	"github.com/iamnikolie/zmina/internal/registry"
 	"github.com/iamnikolie/zmina/internal/screenrules"
 	"github.com/iamnikolie/zmina/internal/shift"
@@ -334,7 +335,7 @@ func chooseDialog(s *shift.Shift, role, pick string) error {
 	if !ok || err != nil || n < 1 || n > 9 {
 		return errors.New("choose:<n>:<label>")
 	}
-	d, err := pressChoice(s, role, n, id, true)
+	d, err := pressChoice(s, role, n, id, true, nil)
 	if err != nil {
 		return err
 	}
@@ -345,31 +346,46 @@ func chooseDialog(s *shift.Shift, role, pick string) error {
 		}
 	}
 	// The cockpit's button is the owner's own choice: a plugin that was told of this question hears it was chosen, and by him.
-	noteChosen(s, role, d.ID, "owner", n, label)
+	noteChosen(s, role, plugin.DialogID(role, d.ID), "owner", n, label)
 	return nil
 }
 
 // pressChoice is chooseDialog's work: it presses choice n of the dialog on the role's screen and returns the dialog it
 // pressed in. With check the dialog's id must be id (a question that changed is refused); without it any dialog that has
-// the choice takes it, as the owner who reads the screen himself means it.
-func pressChoice(s *shift.Shift, role string, n int, id string, check bool) (*shift.Dialog, error) {
-	screen, err := s.Tmux.Capture(role, 80)
-	if err != nil {
-		return nil, err
+// the choice takes it, as the owner who reads the screen himself means it. The id is the one the view carries, which for a
+// permission prompt covers the tool call the hook recorded. The screen is read last, right before the keys, and must still
+// have that fingerprint. before, when given, is the last word before the keys go (a plugin's one-shot mark is spent there): an
+// error from it presses nothing.
+func pressChoice(s *shift.Shift, role string, n int, id string, check bool, before func(d *shift.Dialog) error) (*shift.Dialog, error) {
+	v := viewOf(s, role)
+	if v == nil || v.Status != "waiting" {
+		return nil, errors.New("it is not waiting on a question now")
 	}
 	if _, ok, err := s.Tmux.Prompt(role); err != nil || ok {
 		return nil, errors.New("no question on its screen now")
 	}
-	if v := viewOf(s, role); v == nil || v.Status != "waiting" {
-		return nil, errors.New("it is not waiting on a question now")
+	if v.Dialog == nil {
+		return nil, errors.New("no question on its screen now")
 	}
-	d := s.ParseDialog(screen)
+	i := slices.IndexFunc(v.Dialog.Options, func(o shift.DialogOption) bool { return o.N == n })
+	if i < 0 || check && v.Dialog.ID != id {
+		return nil, errors.New("the question on its screen changed: look again")
+	}
+	screen, err := s.Tmux.Capture(role, 80)
+	if err != nil {
+		return nil, err
+	}
+	d := s.DialogOn(role, screen)
 	if d == nil {
 		return nil, errors.New("no question on its screen now")
 	}
-	i := slices.IndexFunc(d.Options, func(o shift.DialogOption) bool { return o.N == n })
-	if i < 0 || check && d.ID != id {
+	if d.ID != v.Dialog.ID {
 		return nil, errors.New("the question on its screen changed: look again")
+	}
+	if before != nil {
+		if err := before(d); err != nil {
+			return nil, err
+		}
 	}
 	return d, s.PressKeys(role, d.ChooseKeys(n))
 }

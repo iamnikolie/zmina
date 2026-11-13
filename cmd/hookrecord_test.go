@@ -54,20 +54,43 @@ func TestPermissionRequestHookRecordsTheQuestionAndSaysNothing(t *testing.T) {
 	assert.Contains(t, string(raw), `"at":"`)
 }
 
-// Whatever it is given, the hook returns 0 and prints nothing, and records only an AskUserQuestion of a role. A flag this
+// The same hook, for any other tool, records the call as the role's permission record: the tool, what it was asked to do and a
+// sum of the whole input — what a plugin is shown of a permission prompt, and what its fingerprint covers.
+func TestPermissionRequestHookRecordsTheCallOfAPermissionPrompt(t *testing.T) {
+	crewFile := testCrew(t, "")
+	layout := crew.Layout{Dir: filepath.Dir(crewFile)}
+	call := `{"session_id":"s-1","hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"rm -rf build"}}`
+
+	out, errOut := runHook(t, crewFile, call, "_permission-request", "--role", "dev")
+	assert.Empty(t, out, "no allow, no deny, nothing")
+	assert.Empty(t, errOut)
+
+	raw, err := os.ReadFile(layout.HookPermission("dev"))
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"session_id":"s-1"`)
+	assert.Contains(t, string(raw), `"tool":"Bash"`)
+	assert.Contains(t, string(raw), `"input":"rm -rf build"`)
+	assert.Contains(t, string(raw), `"input_sum":"`)
+	assert.NoFileExists(t, layout.HookQuestion("dev"))
+}
+
+// Whatever it is given, the hook returns 0 and prints nothing, and records only an AskUserQuestion of a role, or another tool's
+// call as its permission record. A flag this
 // zmina does not know — a line of a newer zmina run by this one — is ignored and the rest of the line still runs.
 func TestPermissionRequestHookIsSilentAndRecordsNothingElse(t *testing.T) {
 	for name, tc := range map[string]struct {
 		stdin   string
 		args    []string
 		records bool
+		// permission: another tool's call is the role's permission record, not a question.
+		permission bool
 	}{
-		"another tool":     {strings.Replace(permissionAsk, "AskUserQuestion", "Bash", 1), []string{"--role", "dev"}, false},
-		"not json":         {"not json", []string{"--role", "dev"}, false},
-		"nothing":          {"", []string{"--role", "dev"}, false},
-		"no role":          {permissionAsk, nil, false},
-		"a path as a role": {permissionAsk, []string{"--role", "../dev"}, false},
-		"an unknown flag":  {permissionAsk, []string{"--role", "dev", "--nope"}, true},
+		"another tool":     {strings.Replace(permissionAsk, "AskUserQuestion", "Bash", 1), []string{"--role", "dev"}, false, true},
+		"not json":         {"not json", []string{"--role", "dev"}, false, false},
+		"nothing":          {"", []string{"--role", "dev"}, false, false},
+		"no role":          {permissionAsk, nil, false, false},
+		"a path as a role": {permissionAsk, []string{"--role", "../dev"}, false, false},
+		"an unknown flag":  {permissionAsk, []string{"--role", "dev", "--nope"}, true, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			crewFile := testCrew(t, "")
@@ -77,9 +100,14 @@ func TestPermissionRequestHookIsSilentAndRecordsNothingElse(t *testing.T) {
 			assert.Empty(t, out)
 			assert.Empty(t, errOut)
 
-			if tc.records {
+			switch {
+			case tc.records:
 				assert.FileExists(t, layout.HookQuestion("dev"))
-			} else {
+				assert.NoFileExists(t, layout.HookPermission("dev"))
+			case tc.permission:
+				assert.FileExists(t, layout.HookPermission("dev"))
+				assert.NoFileExists(t, layout.HookQuestion("dev"))
+			default:
 				assert.NoDirExists(t, layout.Hooks())
 			}
 		})

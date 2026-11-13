@@ -137,9 +137,9 @@ func TestPluginsTellOnceAndTellTheEnd(t *testing.T) {
 	assert.Equal(t, "short", first.Line["reason"])
 
 	ans := first.Line["answer"].(map[string]any)
-	assert.Equal(t, []any{"zmina", "--crew", file, "todo", "answer", blocking, "--by", "pager", "--", "<text>"}, ans["text"])
+	assert.Equal(t, []any{"zmina", "--crew", file, "todo", "answer", "--by", "pager", "--", blocking, "<text>"}, ans["text"])
 	assert.Len(t, ans["options"], 2)
-	assert.Equal(t, "acme-lab", ans["options"].([]any)[1].(map[string]any)["argv"].([]any)[9])
+	assert.Equal(t, "acme-lab", ans["options"].([]any)[1].(map[string]any)["argv"].([]any)[len(ans["options"].([]any)[1].(map[string]any)["argv"].([]any))-1])
 
 	// The owner answers one at the keyboard, the other through the plugin.
 	_, _, err = zm(t, file, "todo", "answer", blocking, "acme")
@@ -803,7 +803,7 @@ func TestPluginsTellOfReminders(t *testing.T) {
 	assert.Equal(t, "Renew the domain", back["title"])
 
 	answer := back["answer"].(map[string]any)
-	assert.Equal(t, []any{"zmina", "--crew", file, "todo", "done", it.ID, "--by", "bell"}, answer["done"])
+	assert.Equal(t, []any{"zmina", "--crew", file, "todo", "done", "--by", "bell", "--", it.ID}, answer["done"])
 	assert.Nil(t, answer["text"], "a parked item is not answered in words")
 
 	t.Setenv("ZMINA_PLUGIN", "bell")
@@ -844,7 +844,7 @@ func TestPluginsTellOfAWaitingTask(t *testing.T) {
 	for _, g := range told(t, log) {
 		if g.Line["id"] == "T-1" {
 			assert.Equal(t, "about T-1 pick a region", g.Line["why"])
-			assert.Contains(t, g.Line["text"], "which region?")
+			assert.Equal(t, "which region?", g.Line["note"], "the task's note is a field of its own")
 		}
 	}
 

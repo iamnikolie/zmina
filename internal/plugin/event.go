@@ -7,6 +7,7 @@ package plugin
 import (
 	"bytes"
 	"encoding/json"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -46,6 +47,8 @@ const (
 	DetailMax   = 300
 	AnswerMax   = 500
 	OptionsMax  = 12
+	SubjectMax  = 1000
+	NoteMax     = 1000
 	roleMax     = 64
 	textHolder  = "<text>"
 	timeLayout  = time.RFC3339
@@ -85,8 +88,10 @@ type Event struct {
 	ID   string `json:"id"`
 	Role string `json:"role,omitempty"`
 
-	Title          string   `json:"title,omitempty"`
-	Text           string   `json:"text,omitempty"`
+	Title string `json:"title,omitempty"`
+	Text  string `json:"text,omitempty"`
+	// Note is a waiting task's note, kept apart from the question it adds to.
+	Note           string   `json:"note,omitempty"`
 	Why            string   `json:"why,omitempty"`
 	Reason         string   `json:"reason,omitempty"`
 	Recommendation string   `json:"recommendation,omitempty"`
@@ -95,10 +100,16 @@ type Event struct {
 	Opened         string   `json:"opened,omitempty"`
 	Blocking       *bool    `json:"blocking,omitempty"`
 
-	// A dialog: the question on the role's screen, and the task the role holds.
-	Question  string `json:"question,omitempty"`
-	Task      string `json:"task,omitempty"`
-	TaskTitle string `json:"task_title,omitempty"`
+	// A dialog: the question on the role's screen, and the task the role holds. Prompt says what it is, permission (a tool's
+	// approval: Tool and Subject are the call, what is being approved) or question; NeedsTerminal says a choice of it cannot be
+	// pressed from here (several can be ticked), so the event offers no argv for it.
+	Question      string `json:"question,omitempty"`
+	Prompt        string `json:"prompt,omitempty"`
+	Tool          string `json:"tool,omitempty"`
+	Subject       string `json:"subject,omitempty"`
+	NeedsTerminal bool   `json:"needs_terminal,omitempty"`
+	Task          string `json:"task,omitempty"`
+	TaskTitle     string `json:"task_title,omitempty"`
 
 	// An answered: what it closes (the event it went as), how, by whom, the words of the answer, when.
 	For    string `json:"for,omitempty"`
@@ -130,7 +141,7 @@ type Builder struct {
 
 // Item is something on the owner's todo.
 type Item struct {
-	ID, Role, Title, Text string
+	ID, Role, Title, Text, Note string
 	// Why says what it holds up, Reason why the recommendation, Rec the recommended answer.
 	Why, Reason, Rec string
 	Options          []string
@@ -146,7 +157,7 @@ type Item struct {
 // Item is the event of a todo item as kind: Ask, Blocking or Reminder.
 func (b Builder) Item(kind string, it Item) Event {
 	ev := Event{V: Version, Event: kind, ID: it.ID, Role: b.clean(it.Role, roleMax), Title: b.clean(it.Title, TitleMax),
-		Text: b.clean(it.Text, TextMax), Why: b.clean(it.Why, WhyMax), Reason: b.clean(it.Reason, ReasonMax),
+		Text: b.clean(it.Text, TextMax), Note: b.clean(it.Note, NoteMax), Why: b.clean(it.Why, WhyMax), Reason: b.clean(it.Reason, ReasonMax),
 		Recommendation: b.clean(it.Rec, RecMax), Opened: stamp(it.Opened)}
 
 	blocking := it.Blocking
@@ -165,10 +176,18 @@ func (b Builder) Item(kind string, it Item) Event {
 	return ev
 }
 
-// answer is the argv that answer the item.
+// itemIDRe is what an item's id looks like: an ask, a task or a parked item. An id that is not one is never put in an argv.
+var itemIDRe = regexp.MustCompile(`^[ATL]-[0-9]+$`)
+
+// answer is the argv that answer the item: every flag before the `--`, and after it the id and the words, so that nothing in
+// either can be read as a flag.
 func (b Builder) answer(it Item, opts []Option) *Answer {
+	if !itemIDRe.MatchString(it.ID) {
+		return nil
+	}
+
 	todo := func(verb string, rest ...string) []string {
-		argv := []string{zminaBinary, "--crew", b.Crew, "todo", verb, it.ID, "--by", b.Plugin}
+		argv := []string{zminaBinary, "--crew", b.Crew, "todo", verb, "--by", b.Plugin, "--", it.ID}
 
 		return append(argv, rest...)
 	}
@@ -176,10 +195,10 @@ func (b Builder) answer(it Item, opts []Option) *Answer {
 	a := &Answer{}
 
 	if !it.Later {
-		a.Text = todo("answer", "--", textHolder)
+		a.Text = todo("answer", textHolder)
 
 		for _, o := range opts {
-			a.Options = append(a.Options, OptionAnswer{N: o.N, Argv: todo("answer", "--", o.Text)})
+			a.Options = append(a.Options, OptionAnswer{N: o.N, Argv: todo("answer", o.Text)})
 		}
 	}
 
@@ -194,22 +213,35 @@ func (b Builder) answer(it Item, opts []Option) *Answer {
 	return a
 }
 
-// DialogFacts is a question on a role's screen: id is the dialog's fingerprint (the screen's, a hash of its question and
-// every choice), the event's id is the role's with it.
+// DialogFacts is a question on a role's screen: id is the dialog's fingerprint (the screen's, with the call's for a permission
+// prompt), the event's id is the role's with it and a nonce, the one-shot mark of this event (see Armed). Prompt is permission or
+// question; Tool and Subject are what a permission prompt is about.
 type DialogFacts struct {
-	Role, ID, Question string
-	Options            []Option
-	Task, TaskTitle    string
+	Role, ID, Question, Nonce string
+	Prompt, Tool, Subject     string
+	Multi                     bool
+	Options                   []Option
+	Task, TaskTitle           string
 }
 
-// DialogID is the id of a dialog in an event and in --dialog: the role, a colon and the fingerprint.
+// DialogID is the id of a dialog in the plan and in the ledger: the role, a colon and the fingerprint.
 func DialogID(role, fingerprint string) string { return role + ":" + fingerprint }
+
+// EventDialogID is the id an event carries, and --dialog names: the dialog's, a colon and the event's nonce.
+func EventDialogID(role, fingerprint, nonce string) string {
+	if nonce == "" {
+		return DialogID(role, fingerprint)
+	}
+
+	return DialogID(role, fingerprint) + ":" + nonce
+}
 
 // Dialog is the event of a question on a role's screen.
 func (b Builder) Dialog(d DialogFacts) Event {
-	id := DialogID(d.Role, d.ID)
+	id := EventDialogID(d.Role, d.ID, d.Nonce)
 	ev := Event{V: Version, Event: Dialog, ID: id, Role: b.clean(d.Role, roleMax), Question: b.clean(d.Question, TextMax),
-		Task: b.clean(d.Task, roleMax), TaskTitle: b.clean(d.TaskTitle, TitleMax)}
+		Prompt: b.clean(d.Prompt, roleMax), Tool: b.clean(d.Tool, roleMax), Subject: b.clean(d.Subject, SubjectMax),
+		Task: b.clean(d.Task, roleMax), TaskTitle: b.clean(d.TaskTitle, TitleMax), NeedsTerminal: d.Multi}
 
 	a := &Answer{}
 
@@ -219,11 +251,17 @@ func (b Builder) Dialog(d DialogFacts) Event {
 		}
 
 		ev.Options = append(ev.Options, Option{N: o.N, Text: b.clean(o.Text, OptionMax), Detail: b.clean(o.Detail, DetailMax)})
-		a.Options = append(a.Options, OptionAnswer{N: o.N, Argv: []string{zminaBinary, "--crew", b.Crew, "choose", d.Role,
-			strconv.Itoa(o.N), "--dialog", id, "--by", b.Plugin}})
+
+		// A question whose choices are ticked is settled in the terminal: pressing one choice would tick it, and answer nothing.
+		if !d.Multi {
+			a.Options = append(a.Options, OptionAnswer{N: o.N, Argv: []string{zminaBinary, "--crew", b.Crew, "choose", d.Role,
+				strconv.Itoa(o.N), "--dialog", id, "--by", b.Plugin}})
+		}
 	}
 
-	ev.Answer = a
+	if len(a.Options) > 0 {
+		ev.Answer = a
+	}
 
 	return ev
 }
@@ -272,8 +310,9 @@ func (b Builder) Sample(kind string, now time.Time) (Event, bool) {
 			Why: "nothing: a test", Rec: "yes", Options: []string{"yes", "no"}, Opened: now, Blocking: kind == Blocking,
 			Check: kind == Reminder})
 	case Dialog:
-		ev = b.Dialog(DialogFacts{Role: "dev", ID: "0000000000000000", Question: "Is this a test?",
-			Options: []Option{{N: 1, Text: "Yes"}, {N: 2, Text: "No"}}, Task: "T-0", TaskTitle: "A test"})
+		ev = b.Dialog(DialogFacts{Role: "dev", ID: "0000000000000000", Nonce: "0000000000000000", Question: "Do you want to proceed?",
+			Prompt: "permission", Tool: "Bash", Subject: "echo this is a test", Options: []Option{{N: 1, Text: "Yes"}, {N: 2, Text: "No"}},
+			Task: "T-0", TaskTitle: "A test"})
 	case Answered:
 		ev = b.Answered(Closure{ID: "A-0", For: Ask, How: HowAnswered, By: "owner", Text: "yes", At: now})
 	default:

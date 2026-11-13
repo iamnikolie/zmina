@@ -88,7 +88,7 @@ func (a *app) pluginWorld(c *crew.Crew, now time.Time) (*pluginWorld, error) {
 			key := plugin.DialogKey(plugin.DialogID(facts.Role, facts.ID))
 			w.dialogs[key] = facts
 			w.things = append(w.things, plugin.Thing{Key: key, ID: plugin.DialogID(facts.Role, facts.ID), Class: plugin.DialogThing,
-				Role: facts.Role})
+				Role: facts.Role, Opened: v.Since})
 		}
 
 		owner := c.Layout().PluginOwner()
@@ -171,11 +171,28 @@ func itemOpen(c *crew.Crew, id string) bool {
 	return true
 }
 
-// standingDialog is the question a role's screen shows that a plugin can be told of: the dialog its choose command would
-// press into (the one on the screen, with the fingerprint it names), while the session says it waits. known is false when the
-// screen could not be read.
+// standingDialog is the question a role's screen shows that a plugin can be told of: the dialog its choose command would press
+// into (the one on the screen, with the fingerprint it names, read again here), while the session says it waits. A permission
+// prompt is told only with the call its hook recorded: a plugin that is shown "Do you want to proceed?" and no command would be
+// asked to approve blind. A prompt the session does not say what it waits on is not told either. known is false when the screen
+// could not be read.
 func standingDialog(s *shift.Shift, c *crew.Crew, v shift.View) (plugin.DialogFacts, bool, bool) {
 	if v.State != shift.PresenceUp || !v.Prompt || v.Dialog == nil || v.Status != "waiting" {
+		return plugin.DialogFacts{}, false, true
+	}
+
+	prompt := ""
+
+	switch v.WaitingFor {
+	case shift.WaitPermission:
+		if v.Dialog.Subject == "" {
+			return plugin.DialogFacts{}, false, true
+		}
+
+		prompt = "permission"
+	case shift.WaitQuestion:
+		prompt = "question"
+	default:
 		return plugin.DialogFacts{}, false, true
 	}
 
@@ -184,13 +201,14 @@ func standingDialog(s *shift.Shift, c *crew.Crew, v shift.View) (plugin.DialogFa
 		return plugin.DialogFacts{}, false, false
 	}
 
-	d := s.ParseDialog(screen)
+	d := s.DialogOn(v.Role, screen)
 	if d == nil || d.ID != v.Dialog.ID {
 		// Only the file's words, or a screen that moved on between the two looks: nothing a choose could answer.
 		return plugin.DialogFacts{}, false, true
 	}
 
-	f := plugin.DialogFacts{Role: v.Role, ID: d.ID, Question: cmp.Or(v.Dialog.Question, d.Question)}
+	f := plugin.DialogFacts{Role: v.Role, ID: d.ID, Question: cmp.Or(v.Dialog.Question, d.Question), Prompt: prompt, Tool: d.Tool,
+		Subject: d.Subject, Multi: d.Multi || v.Dialog.Multi}
 
 	for _, o := range d.Options {
 		f.Options = append(f.Options, plugin.Option{N: o.N, Text: o.Label, Detail: o.Detail})
@@ -226,12 +244,7 @@ func (w *pluginWorld) itemFacts(it todoItem) plugin.Item {
 		why = "about " + ref
 	}
 
-	text := it.Text
-	if it.Note != "" {
-		text += "\n\n" + it.Note
-	}
-
-	return plugin.Item{ID: it.ID, Role: it.Role, Title: cmp.Or(it.Title, clip(oneLine(it.Text), 80)), Text: text, Why: why,
+	return plugin.Item{ID: it.ID, Role: it.Role, Title: cmp.Or(it.Title, clip(oneLine(it.Text), 80)), Text: it.Text, Note: it.Note, Why: why,
 		Reason: it.Reason, Rec: it.Rec, Options: it.Options, Opened: it.Created, Blocking: it.Blocks != "",
 		Check: it.Kind == "check", Later: it.Kind == "later"}
 }
@@ -242,7 +255,11 @@ func closureOf(c *crew.Crew, e plugin.Entry, at time.Time) plugin.Closure {
 	cl := plugin.Closure{ID: e.ID, For: e.Kind, How: plugin.HowGone, At: at}
 
 	if e.Kind == plugin.Dialog {
-		if ch, ok := plugin.ReadOwner(c.Layout().PluginOwner()).Chosen[e.ID]; ok && ch.At.After(e.Told) {
+		// What was chosen is under the id the plugin was told (a plugin's press), or under the dialog's own (a hand's, the cockpit's).
+		chosen := plugin.ReadOwner(c.Layout().PluginOwner()).Chosen
+		if ch, ok := chosen[e.ID]; ok && ch.At.After(e.Told) {
+			cl.How, cl.By, cl.Text, cl.At = plugin.HowChosen, ch.By, ch.Text, ch.At
+		} else if ch, ok := chosen[dialogOfEvent(e.ID)]; ok && ch.At.After(e.Told) {
 			cl.How, cl.By, cl.Text, cl.At = plugin.HowChosen, ch.By, ch.Text, ch.At
 		}
 
@@ -291,6 +308,26 @@ func closureOf(c *crew.Crew, e plugin.Entry, at time.Time) plugin.Closure {
 	}
 
 	return cl
+}
+
+// dialogOfEvent is the dialog's own id (role:fingerprint) of the id an event carries (role:fingerprint:nonce); the one given when
+// it has no nonce.
+func dialogOfEvent(id string) string {
+	parts := strings.SplitN(id, ":", 3)
+	if len(parts) < 3 {
+		return id
+	}
+
+	return parts[0] + ":" + parts[1]
+}
+
+// nonceOfEvent is the nonce of an event's dialog id, empty when it has none.
+func nonceOfEvent(id string) string {
+	if parts := strings.SplitN(id, ":", 3); len(parts) == 3 {
+		return parts[2]
+	}
+
+	return ""
 }
 
 // lockPlugin takes a plugin's delivery lock without waiting; false when another run holds it. The release is the caller's.
@@ -413,6 +450,7 @@ func (a *app) pluginDeliverOne(c *crew.Crew, pl crew.Plugin, w *pluginWorld, now
 
 	prog, perr := plugin.Resolve(pl, c.Layout().Dir)
 	b := plugin.Builder{Crew: c.Path, Plugin: pl.Name, Clean: shift.QuoteN}
+	armed := plugin.Armed{Path: c.Layout().PluginArmed(pl.Name), Lock: c.Layout().PluginArmedLock(pl.Name)}
 
 	// A program that does not resolve is a mistake of the setup, not of an event: nothing is run, no try is spent and nothing is
 	// dropped; what waits goes once the program is there. It is said once, and doctor and plugin ls say it as long as it lasts.
@@ -437,10 +475,14 @@ func (a *app) pluginDeliverOne(c *crew.Crew, pl crew.Plugin, w *pluginWorld, now
 			continue
 		}
 
-		line, ok := w.line(b, d, now)
+		line, entryID, ok := w.line(b, d, now, armed, clock())
 		if !ok {
+			problem("%s %s could not be armed for a one-shot press (%s): not told", d.Kind, d.Entry.ID, c.Layout().PluginArmed(pl.Name))
+
 			continue
 		}
+
+		d.Entry.ID = entryID
 
 		res := plugin.Exec(plugin.Spec{Program: prog, Dir: c.Dir, Stdin: line, Timeout: pl.TimeoutD(),
 			Env: plugin.Env(os.Environ(), pl.Name, d.Kind, c.Path)})
@@ -460,6 +502,11 @@ func (a *app) pluginDeliverOne(c *crew.Crew, pl crew.Plugin, w *pluginWorld, now
 		reason := res.Reason(pl.TimeoutD())
 
 		if st.Fail(d, string(line), at, reason) {
+			if d.Kind == plugin.Dialog {
+				// Never told: its mark is no one's.
+				_ = armed.Disarm(nonceOfEvent(d.Entry.ID), at)
+			}
+
 			pluginLog(c, caller, "plugin-failed", pl.Name, d, fmt.Sprintf("given up after %d tries: %s", plugin.MaxTries, reason), res)
 			say("%s %s given up after %d tries: %s", d.Kind, d.Entry.ID, plugin.MaxTries, reason)
 		} else {
@@ -479,26 +526,38 @@ func (a *app) pluginDeliverOne(c *crew.Crew, pl crew.Plugin, w *pluginWorld, now
 	return lines
 }
 
-// line is the event of a due send as it goes on the plugin's stdin: the one a failed try kept, or one built now from what is
-// open (an answered from where the thing lives).
-func (w *pluginWorld) line(b plugin.Builder, d plugin.Due, now time.Time) ([]byte, bool) {
+// line is the event of a due send as it goes on the plugin's stdin, and the id it carries: the one a failed try kept, or one built
+// now from what is open (an answered from where the thing lives). A dialog event is armed for one press before it goes: its nonce
+// is in its id, and the first press made with it disarms it. false when that could not be written.
+func (w *pluginWorld) line(b plugin.Builder, d plugin.Due, now time.Time, armed plugin.Armed, at time.Time) ([]byte, string, bool) {
 	switch {
 	case d.Retry != nil:
-		return []byte(d.Retry.Line), true
+		return []byte(d.Retry.Line), d.Entry.ID, true
 	case d.Kind == plugin.Answered:
-		return b.Answered(closureOf(w.crew, d.Entry, now)).Line(), true
+		return b.Answered(closureOf(w.crew, d.Entry, now)).Line(), d.Entry.ID, true
 	case d.Kind == plugin.Dialog:
 		f, ok := w.dialogs[d.Key]
+		if !ok {
+			return nil, d.Entry.ID, false
+		}
 
-		return b.Dialog(f).Line(), ok
+		f.Nonce = plugin.NewNonce()
+
+		if err := armed.Arm(f.Nonce, plugin.DialogID(f.Role, f.ID), at); err != nil {
+			return nil, d.Entry.ID, false
+		}
+
+		ev := b.Dialog(f)
+
+		return ev.Line(), ev.ID, true
 	}
 
 	it, ok := w.items[d.Key]
 	if !ok {
-		return nil, false
+		return nil, d.Entry.ID, false
 	}
 
-	return b.Item(d.Kind, w.itemFacts(it)).Line(), true
+	return b.Item(d.Kind, w.itemFacts(it)).Line(), d.Entry.ID, true
 }
 
 // pluginLog puts what happened to an event in the event log: a delivery (plugin-told) or the giving up (plugin-failed), with

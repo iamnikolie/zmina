@@ -331,16 +331,56 @@ func (a *app) chooseCommand() *cobra.Command {
 					return err
 				}
 
-				// A plugin answers the dialog it was told of and no other: a late tap on a phone must never press a key in
-				// another question. The id it was told (role:fingerprint, or the fingerprint) is checked against the screen.
-				if via != "" && dialog == "" {
-					return errors.New("--by needs --dialog <id>: a plugin answers only the question it was told of")
+				// The id is role:fingerprint, or the fingerprint, and for a plugin's press with the nonce of the event it was
+				// told in: role:fingerprint:nonce.
+				id := strings.TrimPrefix(dialog, role+":")
+				fingerprint, nonce, _ := strings.Cut(id, ":")
+
+				// A plugin answers the dialog it was told of and no other, and once: a late tap on a phone must never press a key in
+				// another question, nor a second time in this one.
+				var (
+					before func(d *shift.Dialog) error
+					rearm  func()
+				)
+
+				if via != "" {
+					if dialog == "" {
+						return errors.New("--by needs --dialog <id>: a plugin answers only the question it was told of")
+					}
+
+					if nonce == "" {
+						return errors.New("--dialog has no one-shot mark: give the id of the event as it was told (role:fingerprint:mark)")
+					}
+
+					armed := plugin.Armed{Path: s.Crew.Layout().PluginArmed(via), Lock: s.Crew.Layout().PluginArmedLock(via)}
+					now := s.Now()
+
+					spent := false
+
+					before = func(d *shift.Dialog) error {
+						if err := armed.Consume(nonce, plugin.DialogID(role, d.ID), now); err != nil {
+							return err
+						}
+
+						spent = true
+
+						return nil
+					}
+
+					// Keys that could not be sent are no press: the mark is given back.
+					rearm = func() {
+						if spent {
+							_ = armed.Rearm(nonce, now)
+						}
+					}
 				}
 
-				id := strings.TrimPrefix(dialog, role+":")
-
-				d, err := pressChoice(s, role, n, id, dialog != "")
+				d, err := pressChoice(s, role, n, fingerprint, dialog != "", before)
 				if err != nil {
+					if rearm != nil {
+						rearm()
+					}
+
 					return err
 				}
 
@@ -357,7 +397,14 @@ func (a *app) chooseCommand() *cobra.Command {
 				}
 
 				s.Log(role, "chose", "", detail)
-				noteChosen(s, role, d.ID, answeredBy(by(), via), n, label)
+
+				// What was chosen is kept under the id the plugin was told, so that its answered says so.
+				key := plugin.DialogID(role, d.ID)
+				if via != "" {
+					key = plugin.EventDialogID(role, d.ID, nonce)
+				}
+
+				noteChosen(s, role, key, answeredBy(by(), via), n, label)
 
 				fmt.Fprintf(a.out, "%s · chose %d: %s\n", role, n, label)
 
@@ -372,9 +419,10 @@ func (a *app) chooseCommand() *cobra.Command {
 	return c
 }
 
-// noteChosen keeps what was chosen of a dialog, for the plugins' run to say how a dialog that left the screen ended; a choice
+// noteChosen keeps what was chosen of a dialog under its id (role:fingerprint, with the event's nonce when a plugin pressed), for the
+// plugins' run to say how a dialog that left the screen ended; a choice
 // made in a terminal says the owner is at the machine too.
-func noteChosen(s *shift.Shift, role, fingerprint, by string, n int, label string) {
+func noteChosen(s *shift.Shift, role, id, by string, n int, label string) {
 	if len(s.Crew.Plugins) == 0 {
 		return
 	}
@@ -385,7 +433,7 @@ func noteChosen(s *shift.Shift, role, fingerprint, by string, n int, label strin
 			o.Chosen = map[string]plugin.Chosen{}
 		}
 
-		o.Chosen[plugin.DialogID(role, fingerprint)] = plugin.Chosen{By: by, N: n, Text: shift.QuoteN(label, plugin.OptionMax), At: now}
+		o.Chosen[id] = plugin.Chosen{By: by, N: n, Text: shift.QuoteN(label, plugin.OptionMax), At: now}
 
 		if by == "owner" {
 			o.Active = now

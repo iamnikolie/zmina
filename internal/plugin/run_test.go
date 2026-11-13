@@ -248,12 +248,13 @@ func TestExecDeadlineKillsTheGroup(t *testing.T) {
 	pidFile := filepath.Join(dir, "child.pid")
 	slow := script(t, dir, "slow", "sleep 60 &\necho $! > "+pidFile+"\nwait\n")
 
+	// Long enough for a loaded machine to start the script and let it write its child's pid before the deadline.
 	start := time.Now()
-	res := Exec(spec(slow, 400*time.Millisecond, ""))
+	res := Exec(spec(slow, 2*time.Second, ""))
 
 	assert.True(t, res.TimedOut)
 	assert.False(t, res.OK())
-	assert.Equal(t, "timed out after 400ms", res.Reason(400*time.Millisecond))
+	assert.Equal(t, "timed out after 2s", res.Reason(2*time.Second))
 	assert.Less(t, time.Since(start), 10*time.Second, "not waited for the sleep")
 
 	var pid int

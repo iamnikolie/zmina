@@ -1,6 +1,8 @@
 package shift
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -84,6 +86,68 @@ func RecordQuestion(l crew.Layout, role string, input []byte, now time.Time) err
 		Questions: in.ToolInput.Questions})
 }
 
+// permissionInputMax is the most characters of a tool call's input a permission record keeps to show: the whole input, however long
+// (a Write's file), is in the record's sum.
+const permissionInputMax = 1000
+
+// AskedPermission is what a role's PermissionRequest hook wrote when a tool call put a permission prompt on its screen: which tool,
+// what it was asked to do (its command, path or input, cut), and a sum of the whole input, so that two calls that differ anywhere
+// are never the same request. It is the only thing that says what a permission prompt is about: the prompt on the screen asks
+// "Do you want to proceed?" of a command it draws above, which zmina does not read.
+type AskedPermission struct {
+	SessionID string    `json:"session_id"`
+	At        time.Time `json:"at"`
+	Tool      string    `json:"tool"`
+	Input     string    `json:"input"`
+	InputSum  string    `json:"input_sum"`
+}
+
+// RecordPermission reads a PermissionRequest hook's input and, for any tool but AskUserQuestion, writes the call as the role's
+// permission record (replacing the one before). Input that is not a tool call records nothing and is no error.
+func RecordPermission(l crew.Layout, role string, input []byte, now time.Time) error {
+	var in struct {
+		SessionID string          `json:"session_id"`
+		ToolName  string          `json:"tool_name"`
+		ToolInput json.RawMessage `json:"tool_input"`
+	}
+
+	if !hookRole(role) || json.Unmarshal(input, &in) != nil || in.ToolName == "" || in.ToolName == askTool || in.SessionID == "" {
+		return nil
+	}
+
+	// The sum is of the input as data, however it was spaced or ordered: a map marshals with its keys in order.
+	canon := []byte(in.ToolInput)
+
+	var v any
+	if json.Unmarshal(in.ToolInput, &v) == nil {
+		if raw, err := json.Marshal(v); err == nil {
+			canon = raw
+		}
+	}
+
+	sum := sha256.Sum256(append([]byte(in.ToolName+"\x00"), canon...))
+
+	return writeRecord(l, l.HookPermission(role), AskedPermission{SessionID: in.SessionID, At: now.UTC(), Tool: oneLine(in.ToolName),
+		Input: clipRunes(oneLine(toolInputWords(in.ToolInput)), permissionInputMax), InputSum: hex.EncodeToString(sum[:8])})
+}
+
+// toolInputWords says what a tool call was asked to do: the command of a shell call, the path or address of a file or web call, else
+// the input as JSON.
+func toolInputWords(raw json.RawMessage) string {
+	var m map[string]any
+	if json.Unmarshal(raw, &m) != nil {
+		return string(raw)
+	}
+
+	for _, key := range []string{"command", "file_path", "path", "notebook_path", "url", "pattern", "query"} {
+		if v, ok := m[key].(string); ok && v != "" {
+			return v
+		}
+	}
+
+	return string(raw)
+}
+
 // writeRecord writes a record whole or not at all, in a directory it makes under an existing crew directory.
 func writeRecord(l crew.Layout, path string, record any) error {
 	if st, err := os.Stat(l.Dir); err != nil || !st.IsDir() {
@@ -112,6 +176,7 @@ func (s *Shift) dropHookRecords(name string) {
 
 	l := s.Crew.Layout()
 	_ = os.Remove(l.HookQuestion(name))
+	_ = os.Remove(l.HookPermission(name))
 	_ = os.Remove(l.HookFailure(name))
 }
 
@@ -164,6 +229,25 @@ func (s *Shift) askedLook(name string, sess *registry.Session) (q *AskedQuestion
 	return &rec, true, ""
 }
 
+// permissionLook is the tool call a role's hook recorded, when it is the one on the role's screen: the session file says the session
+// waits on a permission prompt, the record is of that very session, and it was written within hookSkew of the moment that wait began.
+// Anything else — no record, one of an earlier prompt, one of another session — is nil: nothing says what is being approved.
+func (s *Shift) permissionLook(name string, sess *registry.Session) *AskedPermission {
+	if sess == nil || !hookRole(name) || waitKind(sess) != WaitPermission || sess.StatusUpdatedAt <= 0 {
+		return nil
+	}
+
+	var rec AskedPermission
+
+	switch {
+	case !readRecord(s.Crew.Layout().HookPermission(name), &rec), rec.SessionID == "", rec.SessionID != sess.SessionID, rec.Tool == "",
+		!near(rec.At, sess.StatusSince()):
+		return nil
+	}
+
+	return &rec
+}
+
 // apart says how far a moment is from another, in words: "1m0s before".
 func apart(at, from time.Time) string {
 	d := at.Sub(from).Round(time.Second)
@@ -203,7 +287,7 @@ func (q *AskedQuestion) Dialog() *Dialog {
 		return nil
 	}
 
-	d := &Dialog{Question: q.words(), Cursor: 1}
+	d := &Dialog{Question: q.words(), Cursor: 1, Multi: q.Questions[0].MultiSelect}
 
 	for i, o := range q.Questions[0].Options {
 		d.Options = append(d.Options, DialogOption{N: i + 1, Label: oneLine(o.Label), Detail: oneLine(o.Description)})
@@ -238,6 +322,7 @@ func askedDialog(q *AskedQuestion, screen *Dialog) *Dialog {
 	shown := *screen
 	shown.Question = d.Question
 	shown.Options = slices.Clone(screen.Options)
+	shown.Multi = shown.Multi || q.Questions[0].MultiSelect
 
 	for i := range shown.Options {
 		if shown.Options[i].Detail == "" {

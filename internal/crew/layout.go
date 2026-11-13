@@ -82,6 +82,12 @@ func (l Layout) HookQuestion(role string) string {
 	return filepath.Join(l.Hooks(), role+".question.json")
 }
 
+// HookPermission is the tool call a role's PermissionRequest hook saw a permission prompt put on its screen: which tool, and what
+// it was asked to do.
+func (l Layout) HookPermission(role string) string {
+	return filepath.Join(l.Hooks(), role+".permission.json")
+}
+
 // HookFailure is the API error a role's StopFailure hook saw end its turn.
 func (l Layout) HookFailure(role string) string {
 	return filepath.Join(l.Hooks(), role+".failure.json")
@@ -148,6 +154,18 @@ func (l Layout) PluginTold(name string) string { return filepath.Join(l.Plugins(
 // PluginLock is held by the run that delivers to one plugin, so that one event is on its way at a time and a run that
 // outlasts a beat is not met by the next.
 func (l Layout) PluginLock(name string) string { return filepath.Join(l.Plugins(), name+".lock") }
+
+// PluginArmed is the one-shot marks of a plugin's dialogs (plugins/<name>.armed.json): each dialog event it was told carries one,
+// and the first press made with it disarms it. It is written by the delivery that told the event and by the choose that pressed,
+// apart from the told file, under a lock of its own (PluginArmedLock).
+func (l Layout) PluginArmed(name string) string {
+	return filepath.Join(l.Plugins(), name+".armed.json")
+}
+
+// PluginArmedLock is the short lock the two writers of PluginArmed take.
+func (l Layout) PluginArmedLock(name string) string {
+	return filepath.Join(l.Plugins(), name+".armed.lock")
+}
 
 // PluginOwner is the owner's mark (plugins/owner.json): when he last answered in a terminal, and what he chose of a dialog,
 // written by the answer commands under the state lock and read by the plugins' run for quiet_when_active and for how a

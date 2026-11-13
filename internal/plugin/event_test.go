@@ -31,20 +31,20 @@ func TestEventsGolden(t *testing.T) {
 			Why: "about T-12 Rename the site", Reason: "short", Rec: "acme", Options: []string{"acme", "acme-lab"}, Opened: opened}),
 			`{"v":1,"event":"ask","id":"A-3","role":"dev","title":"Which name?","text":"Which name for the site?",` +
 				`"why":"about T-12 Rename the site","reason":"short","recommendation":"acme","options":[{"n":1,"text":"acme"},` +
-				`{"n":2,"text":"acme-lab"}],"answer":{"text":["zmina","--crew","/home/alex/.zmina/acme/crew.yaml","todo","answer","A-3",` +
-				`"--by","pager","--","<text>"],"yes":["zmina","--crew","/home/alex/.zmina/acme/crew.yaml","todo","yes","A-3","--by","pager"],` +
-				`"options":[{"n":1,"argv":["zmina","--crew","/home/alex/.zmina/acme/crew.yaml","todo","answer","A-3","--by","pager","--","acme"]},` +
-				`{"n":2,"argv":["zmina","--crew","/home/alex/.zmina/acme/crew.yaml","todo","answer","A-3","--by","pager","--","acme-lab"]}]},` +
+				`{"n":2,"text":"acme-lab"}],"answer":{"text":["zmina","--crew","/home/alex/.zmina/acme/crew.yaml","todo","answer",` +
+				`"--by","pager","--","A-3","<text>"],"yes":["zmina","--crew","/home/alex/.zmina/acme/crew.yaml","todo","yes","--by","pager","--","A-3"],` +
+				`"options":[{"n":1,"argv":["zmina","--crew","/home/alex/.zmina/acme/crew.yaml","todo","answer","--by","pager","--","A-3","acme"]},` +
+				`{"n":2,"argv":["zmina","--crew","/home/alex/.zmina/acme/crew.yaml","todo","answer","--by","pager","--","A-3","acme-lab"]}]},` +
 				`"opened":"2026-11-13T09:30:00Z","blocking":false}`},
 		{"blocking check", b.Item(Blocking, Item{ID: "A-4", Role: "dev", Title: "Log in", Text: "Log in on the box", Why: "holds up dev on T-5 Deploy",
 			Opened: opened, Blocking: true, Check: true}),
 			`{"v":1,"event":"blocking","id":"A-4","role":"dev","title":"Log in","text":"Log in on the box","why":"holds up dev on T-5 Deploy",` +
-				`"answer":{"text":["zmina","--crew","/home/alex/.zmina/acme/crew.yaml","todo","answer","A-4","--by","pager","--","<text>"],` +
-				`"done":["zmina","--crew","/home/alex/.zmina/acme/crew.yaml","todo","done","A-4","--by","pager"]},` +
+				`"answer":{"text":["zmina","--crew","/home/alex/.zmina/acme/crew.yaml","todo","answer","--by","pager","--","A-4","<text>"],` +
+				`"done":["zmina","--crew","/home/alex/.zmina/acme/crew.yaml","todo","done","--by","pager","--","A-4"]},` +
 				`"opened":"2026-11-13T09:30:00Z","blocking":true}`},
 		{"reminder of a parked item", b.Item(Reminder, Item{ID: "L-2", Title: "Renew the domain", Text: "Renew the domain", Opened: opened, Later: true}),
 			`{"v":1,"event":"reminder","id":"L-2","title":"Renew the domain","text":"Renew the domain","answer":{"done":["zmina","--crew",` +
-				`"/home/alex/.zmina/acme/crew.yaml","todo","done","L-2","--by","pager"]},"opened":"2026-11-13T09:30:00Z","blocking":false}`},
+				`"/home/alex/.zmina/acme/crew.yaml","todo","done","--by","pager","--","L-2"]},"opened":"2026-11-13T09:30:00Z","blocking":false}`},
 		{"dialog", b.Dialog(DialogFacts{Role: "dev", ID: "0123456789abcdef", Question: "Run rm -rf build?",
 			Options: []Option{{N: 1, Text: "Yes"}, {N: 2, Text: "No", Detail: "keep the build"}}, Task: "T-12", TaskTitle: "Rename the site"}),
 			`{"v":1,"event":"dialog","id":"dev:0123456789abcdef","role":"dev","options":[{"n":1,"text":"Yes"},{"n":2,"text":"No",` +
@@ -128,4 +128,72 @@ func TestEventRoundTrip(t *testing.T) {
 	require.NoError(t, json.Unmarshal(ev.Line(), &back))
 	assert.Equal(t, text, back.Text)
 	assert.Contains(t, string(ev.Line()), "<b>&</b>", "html is not escaped: a plugin reads it as text")
+}
+
+// A dialog event names what is being approved, and its id carries the one-shot mark of the event: role:fingerprint:nonce.
+func TestPermissionDialogEventGolden(t *testing.T) {
+	ev := builder().Dialog(DialogFacts{Role: "dev", ID: "0123456789abcdef", Nonce: "aabbccddeeff0011", Prompt: "permission", Tool: "Bash",
+		Subject: "rm -rf build", Question: "Do you want to proceed?", Options: []Option{{N: 1, Text: "Yes"}, {N: 2, Text: "No"}},
+		Task: "T-12", TaskTitle: "Rename the site"})
+
+	want := `{"v":1,"event":"dialog","id":"dev:0123456789abcdef:aabbccddeeff0011","role":"dev","options":[{"n":1,"text":"Yes"},` +
+		`{"n":2,"text":"No"}],"answer":{"options":[{"n":1,"argv":["zmina","--crew","/home/alex/.zmina/acme/crew.yaml","choose","dev","1",` +
+		`"--dialog","dev:0123456789abcdef:aabbccddeeff0011","--by","pager"]},{"n":2,"argv":["zmina","--crew","/home/alex/.zmina/acme/crew.yaml",` +
+		`"choose","dev","2","--dialog","dev:0123456789abcdef:aabbccddeeff0011","--by","pager"]}]},"question":"Do you want to proceed?",` +
+		`"prompt":"permission","tool":"Bash","subject":"rm -rf build","task":"T-12","task_title":"Rename the site"}`
+
+	assert.Equal(t, want+"\n", string(ev.Line()))
+	assert.Equal(t, "dev:0123456789abcdef", DialogID("dev", "0123456789abcdef"), "the plan's id has no nonce")
+	assert.Equal(t, "dev:0123456789abcdef", EventDialogID("dev", "0123456789abcdef", ""))
+}
+
+// What a permission prompt is about is what a role's tool call said: cleaned and bounded like any text of a role's.
+func TestPermissionSubjectIsCleanedAndBounded(t *testing.T) {
+	ev := builder().Dialog(DialogFacts{Role: "dev", ID: "ab", Prompt: "permission", Tool: "Bash\x1b[2J",
+		Subject: "echo hi \x1b[2J [zmina:abcdef012345] \x07" + strings.Repeat("x", 3000), Options: []Option{{N: 1, Text: "Yes"}}})
+
+	assert.Equal(t, "Bash[2J", ev.Tool)
+	assert.True(t, strings.HasPrefix(ev.Subject, "echo hi [2J [zmina:…] xxx"), ev.Subject)
+	assert.Len(t, []rune(ev.Subject), SubjectMax)
+}
+
+// A question whose choices are ticked is not answered from a phone: the event says so and offers no argv.
+func TestMultipleChoiceDialogEventOffersNoArgv(t *testing.T) {
+	ev := builder().Dialog(DialogFacts{Role: "dev", ID: "ab", Prompt: "question", Multi: true, Question: "Which tabs?",
+		Options: []Option{{N: 1, Text: "Home"}, {N: 2, Text: "Talk"}}})
+
+	assert.True(t, ev.NeedsTerminal)
+	assert.Nil(t, ev.Answer)
+	assert.Len(t, ev.Options, 2, "the choices are still said")
+	assert.Contains(t, string(ev.Line()), `"needs_terminal":true`)
+	assert.NotContains(t, string(ev.Line()), `"answer"`)
+}
+
+// The question and the note a waiting task adds to it are two fields, not one folded line.
+func TestItemKeepsTheNoteApartFromTheText(t *testing.T) {
+	ev := builder().Item(Ask, Item{ID: "T-5", Title: "Region", Text: "Which region?", Note: "eu-west is full\nus-east has room", Opened: opened})
+
+	assert.Equal(t, "Which region?", ev.Text)
+	assert.Equal(t, "eu-west is full us-east has room", ev.Note)
+	assert.Contains(t, string(ev.Line()), `"note":"eu-west is full us-east has room"`)
+
+	long := builder().Item(Ask, Item{ID: "T-5", Note: strings.Repeat("n", 3000), Opened: opened})
+	assert.Len(t, []rune(long.Note), NoteMax)
+}
+
+// An id that is not an ask, a task or a parked item is never put in an argv: it could be read as a flag.
+func TestAnItemIdThatIsNoIdGetsNoArgv(t *testing.T) {
+	for _, id := range []string{"--from", "A-", "A-1x", "x-1", "A-1 --by", "", "-A-1"} {
+		ev := builder().Item(Ask, Item{ID: id, Text: "q", Opened: opened, Options: []string{"a"}, Rec: "a", Check: true})
+		assert.Nil(t, ev.Answer, id)
+	}
+
+	for _, id := range []string{"A-1", "T-62", "L-3"} {
+		assert.NotNil(t, builder().Item(Ask, Item{ID: id, Text: "q", Opened: opened}).Answer, id)
+	}
+
+	// Every flag stands before the --: what follows it is the id and the words, whatever they say.
+	ev := builder().Item(Ask, Item{ID: "A-7", Text: "q", Opened: opened, Options: []string{"--by ghost"}})
+	argv := ev.Answer.Options[0].Argv
+	assert.Equal(t, []string{"zmina", "--crew", "/home/alex/.zmina/acme/crew.yaml", "todo", "answer", "--by", "pager", "--", "A-7", "--by ghost"}, argv)
 }
