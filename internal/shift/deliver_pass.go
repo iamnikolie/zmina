@@ -64,11 +64,18 @@ func (s *Shift) queueWaits(name string, rs *RoleState, now time.Time) bool {
 
 // ownerWaits reports whether a role held for a failed turn has the owner's own line to be given: the first of them, wherever it
 // stands. One behind other lines is given whatever those lines' failed tries say, as deliverInboxOnce gives it, since the
-// tries counted are the first line's; one at the head is given unless it failed a moment ago itself.
+// tries counted in the state are the first line's; it has tries of its own, and is given unless it failed less than countedGap
+// ago itself, as a line at the head is.
 func (s *Shift) ownerWaits(name string, rs *RoleState, now time.Time) bool {
-	i := s.ownerLine(name)
-
-	return i > 0 || i == 0 && !rs.triedLately(now)
+	switch i := s.ownerLine(name); {
+	case i < 0:
+		return false
+	case i == 0:
+		return !rs.triedLately(now)
+	default:
+		// Behind another line it has tries of its own (ownerTry), the same spacing as a head line's.
+		return !s.ownerTriedLately(name, rs.Inbox[i], now)
+	}
 }
 
 // dispatcherWaits reports whether deliver has something for the dispatcher: a queued line of its own that did not fail

@@ -90,6 +90,13 @@ func (l Layout) DeliveryFetched(role string) string {
 // read before a doorbell is rung. A role with none, or a mark of another start, is sent every line whole.
 func (l Layout) DeliveryBell(role string) string { return filepath.Join(l.Delivery(), role+".bell") }
 
+// DeliveryOwnerTries is the failed tries of the one line of a held role's queue that is not its head, the owner's own line taken
+// through a hold (delivery/<role>.owner-tries): the tries counted in the state are the head's. It is written and read by the
+// delivery under the state lock, apart from state.json, and never decides anything but when that line is tried again.
+func (l Layout) DeliveryOwnerTries(role string) string {
+	return filepath.Join(l.Delivery(), role+".owner-tries")
+}
+
 // RotationsDir is the directory of the rotation records: one append-only file a role (Rotations), the report of each
 // restart of the role into a fresh conversation. A record is read by looks and never decides a restart.
 func (l Layout) RotationsDir() string { return filepath.Join(l.Dir, "rotations") }

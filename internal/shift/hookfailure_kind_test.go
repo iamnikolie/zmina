@@ -755,3 +755,115 @@ func TestTheOwnersLineMovesOnlyWhenTypedAndNeverTakesAnotherLinesTries(t *testin
 		assert.Equal(t, 1, rs.Attempts)
 	})
 }
+
+// A typing of the owner's line that fails while it stands behind the head is counted for that line, not lost: it is spaced
+// by countedGap and moves to the failed list after typeTries tries, as a head line does, by the beat and by the courier alike
+// (Waiting), while the first line keeps its own tries and the rest of the queue stays whole and in order.
+func TestAFailedTypingOfTheOwnersLineBehindTheHeadIsCountedForThatLine(t *testing.T) {
+	const owner = "the owner's own words"
+
+	failures := func(f fix) int {
+		n := 0
+
+		for _, e := range f.ev.list {
+			if e.Role == "designer" && e.Event == "type-failed" {
+				n++
+			}
+		}
+
+		return n
+	}
+
+	// run tries the owner's line typeTries times on a held role whose queue is the lines given, a gap apart, and says what the
+	// role looked like before each try and after the last.
+	run := func(t *testing.T, lines []string) (f fix, results []string, waiting []bool) {
+		t.Helper()
+
+		f, _, _ = ownerHeld(t, failedInput, lines, owner)
+		f.tm.typeErr = errNotTyped("tmux would not take it")
+
+		for try := 1; try <= typeTries; try++ {
+			waiting = append(waiting, slicesContain(f.s.Waiting(), "designer"))
+
+			results = append(results, f.s.DeliverTo("designer"))
+			require.Equal(t, try, failures(f), "try %d is counted", try)
+
+			if try < typeTries {
+				// A moment later, with no gap: spaced like a head line, not named by a pass and not tried by a delivery.
+				assert.False(t, slicesContain(f.s.Waiting(), "designer"), "try %d: it failed a moment ago", try)
+				assert.Empty(t, f.s.DeliverTo("designer"))
+				require.Equal(t, try, failures(f), "and not tried again before the gap")
+
+				*f.now = f.now.Add(countedGap + time.Second)
+			}
+		}
+
+		return f, results, waiting
+	}
+
+	behind := []string{"[dispatcher] first", "[dispatcher] second", owner, "[dispatcher] third"}
+
+	f, results, waiting := run(t, behind)
+
+	assert.Equal(t, []bool{true, true, true}, waiting, "a pass names the role for each try, once the gap has gone")
+	assert.Empty(t, results[0])
+	assert.Empty(t, results[1])
+	assert.Equal(t, "designer: a queued line failed 3 times, kept in zmina queue: "+owner, results[2], "the third try is the last")
+
+	rs := f.s.State.Role("designer")
+	assert.Equal(t, []string{"[dispatcher] first", "[dispatcher] second", "[dispatcher] third"}, rs.Inbox, "the rest, whole and in order")
+	require.Len(t, rs.Failed, 1)
+	assert.Equal(t, owner, rs.Failed[0].Line)
+	assert.Contains(t, rs.Failed[0].Error, "tmux would not take it")
+	assert.NoFileExists(t, f.s.Crew.Layout().DeliveryOwnerTries("designer"), "nothing of its tries is left")
+
+	// The line is as a failed head line is: the same failure, the same message, the same record.
+	g, headResults, _ := run(t, []string{owner, "[dispatcher] first", "[dispatcher] second", "[dispatcher] third"})
+	grs := g.s.State.Role("designer")
+
+	require.Len(t, grs.Failed, 1)
+	assert.Equal(t, results[2], headResults[2])
+	assert.Equal(t, rs.Failed[0].Line, grs.Failed[0].Line)
+	assert.Equal(t, rs.Failed[0].Error, grs.Failed[0].Error)
+	assert.Equal(t, rs.Failed[0].IDs, grs.Failed[0].IDs)
+}
+
+// While the owner's line is tried, the first line's own tries are untouched, a count made for the owner's line never becomes the
+// first line's, and a record is kept for the line and for no other: not for one no longer queued.
+func TestTheOwnersLineTriesAreItsOwnAndTheFirstLinesAreNeverTouched(t *testing.T) {
+	const owner = "the owner's own words"
+
+	f, _, _ := ownerHeld(t, failedInput, []string{"[dispatcher] first", owner, "[dispatcher] second"}, owner)
+	rs := f.s.State.Role("designer")
+	rs.Attempts, rs.TriedAt = 2, f.now.Add(-time.Hour) // the first line failed twice, long ago
+	tried := rs.TriedAt
+
+	f.tm.typeErr = errNotTyped("tmux would not take it")
+	assert.Empty(t, f.s.DeliverTo("designer"))
+
+	assert.Equal(t, 2, rs.Attempts, "the first line's count")
+	assert.True(t, tried.Equal(rs.TriedAt))
+
+	attempts, at := f.s.ownerTried("designer", owner)
+	assert.Equal(t, 1, attempts, "the owner's line's own")
+	assert.True(t, at.Equal(*f.now))
+
+	// Not another line's, and not a line that is gone.
+	attempts, _ = f.s.ownerTried("designer", "[dispatcher] first")
+	assert.Zero(t, attempts)
+
+	rs.Inbox = []string{"[dispatcher] first", "[dispatcher] second"}
+	attempts, _ = f.s.ownerTried("designer", owner)
+	assert.Zero(t, attempts, "a line that is not queued has no tries")
+
+	// It goes once the typing works, and its record with it.
+	rs.Inbox = []string{"[dispatcher] first", owner, "[dispatcher] second"}
+	f.tm.typeErr = nil
+	*f.now = f.now.Add(countedGap + time.Second)
+
+	assert.NotEmpty(t, f.s.DeliverTo("designer"))
+	assert.Equal(t, []string{owner}, f.tm.typed["designer"])
+	assert.NoFileExists(t, f.s.Crew.Layout().DeliveryOwnerTries("designer"))
+	assert.Equal(t, 2, rs.Attempts, "the first line's count, still")
+	assert.Equal(t, []string{"[dispatcher] first", "[dispatcher] second"}, rs.Inbox)
+}

@@ -491,8 +491,10 @@ one line goes, and a turn that fails the same way is a record of its own and hol
 ending, or a restart (which removes the record), ends the hold sooner. The owner's own message (the cockpit's chat) goes
 through any hold: while a role is held, the first of the owner's lines anywhere in its queue is typed, and is taken to the head,
 out of its order, only at the moment it is typed; a line that was not typed (a draft in the input line, a typing that failed)
-leaves the queue in its order, and the failed tries counted for the first line are neither held against the owner's line nor
-lost. The queue's order is untouched whenever no hold is on. A held role's full queue (20) takes the owner's message up to 5
+leaves the queue in its order. A failed typing is counted for that line itself, in `delivery/<role>.owner-tries` beside the
+cards (not in state.json): it is spaced by the same 55 s and goes to the failed list after the same three tries as a head
+line, the beat and the courier alike, and the first line's own failed tries are neither held against it nor touched. The queue's
+order is untouched whenever no hold is on. A held role's full queue (20) takes the owner's message up to 5
 past the bound. The courier looks again every few seconds while a hold lasts, and reads no record for a role
 with nothing queued.
 

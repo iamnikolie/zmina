@@ -1458,14 +1458,22 @@ func (s *Shift) deliverInboxOnce(name string, now time.Time) string {
 	// forgotten. What the typing leaves of it is put right when this returns (below): the line that did not go is back in its
 	// place and the first line has its tries again.
 	if ownerAt > 0 {
-		was, tried, queued := rs.Attempts, rs.TriedAt, len(rs.Inbox)
+		was, tried, queued, owner := rs.Attempts, rs.TriedAt, len(rs.Inbox), rs.Inbox[ownerAt]
 
 		s.moveToHead(name, ownerAt)
-		rs.clearTries()
+
+		// The line is tried as a head line is: its own tries (kept by the line, ownerTry) are the counters while it is the head, so
+		// that the spacing and the three tries before the failed list are those of any line, and the first line's are put back.
+		rs.Attempts, rs.TriedAt = s.ownerTried(name, owner)
 
 		defer func() {
 			if len(rs.Inbox) == queued {
+				// It stays queued: its failed tries are kept for it, and it is back in its place.
+				s.setOwnerTried(name, owner, rs.Attempts, rs.TriedAt)
 				s.moveBack(name, ownerAt)
+			} else {
+				// It went (typed, or failed for good, or kept for a look): nothing of its tries is left to keep.
+				s.setOwnerTried(name, owner, 0, time.Time{})
 			}
 
 			rs.Attempts, rs.TriedAt = was, tried
