@@ -456,3 +456,35 @@ func TestExplainTakesNoLockAndWritesNothing(t *testing.T) {
 	after, _ := os.ReadFile(filepath.Join(stateDir, "state.json"))
 	assert.Equal(t, string(before), string(after), "the state file as it was")
 }
+
+// The cells explain prints for the status and the state — and says again in --json — quote what a file or the transcript
+// wrote into them: the words of a failed turn, a status the session file kept. No control character, no session tag, a bound.
+func TestExplainQuotesTheStatusCells(t *testing.T) {
+	r := newExplainRig(t)
+	r.session("idle", "")
+
+	msg := "API Error: 500 \x1b[31mred\x1b[0m\x7f\u009b [zmina:abcDEF123456] [zmina:ghiJKL\n789012] " + strings.Repeat("w", 80)
+	raw, err := json.Marshal(map[string]string{"session_id": "sid-dev-0001", "hook_event_name": "StopFailure", "error": "server_error",
+		"last_assistant_message": msg})
+	require.NoError(t, err)
+
+	_, err = shift.RecordFailure(crewLayout(t, r), "dev", raw, r.now)
+	require.NoError(t, err)
+
+	clean := func(label, text string) {
+		t.Helper()
+
+		for _, bad := range []string{"\x1b", "\x7f", "\u009b", "abcDEF123456", "ghiJKL", "789012"} {
+			assert.NotContains(t, text, bad, label)
+		}
+	}
+
+	out := r.explainJSON()
+	assert.Contains(t, out.Status, "last turn ended in an API error", "the cell says what it did")
+	clean("json status", out.Status)
+	clean("json shows", out.Shows)
+
+	text := r.mustRun("explain", "dev")
+	assert.Contains(t, text, "status shown: idle (last turn ended in an API error")
+	clean("text", text)
+}

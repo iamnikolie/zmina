@@ -50,7 +50,10 @@ func (a *app) explainCommand() *cobra.Command {
 					return fmt.Errorf("no role %q in the crew", args[0])
 				}
 
-				out := explainOut{Status: statusCell(v), Shows: roleCell(v), Explained: s.Explain(v, why)}
+				// The cells are built from the look with what a file or the transcript wrote in it quoted: ls prints them as they are,
+				// and explain says them again, quoted.
+				q := quotedView(v)
+				out := explainOut{Status: statusCell(q), Shows: roleCell(q), Explained: s.Explain(v, why)}
 
 				if v.State != shift.PresenceUp {
 					out.LastEvent = lastEvent(s, v.Role)
@@ -70,6 +73,15 @@ func (a *app) explainCommand() *cobra.Command {
 	c.Flags().BoolVar(&asJSON, "json", false, "JSON output")
 
 	return c
+}
+
+// quotedView is a look with the words a session file or a transcript put in it (the status, what it waits on, the error its last
+// turn ended in) quoted as every other quotation of explain is: nothing but printable characters, no session tag, a bound.
+// What is plain is unchanged.
+func quotedView(v shift.View) shift.View {
+	v.Status, v.WaitingFor, v.TurnError = shift.Quote(v.Status), shift.Quote(v.WaitingFor), shift.Quote(v.TurnError)
+
+	return v
 }
 
 // lastEvent is the newest event of the log about a role that says how it came to be down.
