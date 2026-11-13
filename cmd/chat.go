@@ -334,25 +334,33 @@ func chooseDialog(s *shift.Shift, role, pick string) error {
 	if !ok || err != nil || n < 1 || n > 9 {
 		return errors.New("choose:<n>:<label>")
 	}
+	_, err = pressChoice(s, role, n, id, true)
+	return err
+}
+
+// pressChoice is chooseDialog's work: it presses choice n of the dialog on the role's screen and returns the dialog it
+// pressed in. With check the dialog's id must be id (a question that changed is refused); without it any dialog that has
+// the choice takes it, as the owner who reads the screen himself means it.
+func pressChoice(s *shift.Shift, role string, n int, id string, check bool) (*shift.Dialog, error) {
 	screen, err := s.Tmux.Capture(role, 80)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if _, ok, err := s.Tmux.Prompt(role); err != nil || ok {
-		return errors.New("no question on its screen now")
+		return nil, errors.New("no question on its screen now")
 	}
 	if v := viewOf(s, role); v == nil || v.Status != "waiting" {
-		return errors.New("it is not waiting on a question now")
+		return nil, errors.New("it is not waiting on a question now")
 	}
 	d := s.ParseDialog(screen)
 	if d == nil {
-		return errors.New("no question on its screen now")
+		return nil, errors.New("no question on its screen now")
 	}
 	i := slices.IndexFunc(d.Options, func(o shift.DialogOption) bool { return o.N == n })
-	if i < 0 || d.ID != id {
-		return errors.New("the question on its screen changed: look again")
+	if i < 0 || check && d.ID != id {
+		return nil, errors.New("the question on its screen changed: look again")
 	}
-	return s.PressKeys(role, d.ChooseKeys(n))
+	return d, s.PressKeys(role, d.ChooseKeys(n))
 }
 
 // questionAnswer is the owner's answer to the question on a role's screen, from Chat: per item the chosen options

@@ -1,0 +1,356 @@
+package cmd
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+	"text/tabwriter"
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"github.com/iamnikolie/zmina/internal/crew"
+	"github.com/iamnikolie/zmina/internal/plugin"
+	"github.com/iamnikolie/zmina/internal/shift"
+)
+
+func (a *app) pluginCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "plugin",
+		Short: "Plugins: programs told of what reaches the owner (a question on his todo or a role's screen), able to answer back",
+	}
+
+	c.AddCommand(a.pluginLsCommand(), a.pluginTestCommand(), a.pluginDeliverCommand())
+
+	return c
+}
+
+// pluginLast is how a plugin's newest run ended, for ls.
+type pluginLast struct {
+	At    time.Time `json:"at"`
+	Event string    `json:"event"`
+	ID    string    `json:"id"`
+	OK    bool      `json:"ok"`
+	Error string    `json:"error,omitempty"`
+}
+
+// pluginRow is one plugin in ls.
+type pluginRow struct {
+	Name string `json:"name"`
+	// Program is where its program is, empty when it is not found (Problem says why, and where it is looked for).
+	Program         string      `json:"program"`
+	Found           bool        `json:"found"`
+	Via             string      `json:"via,omitempty"`
+	Problem         string      `json:"problem,omitempty"`
+	Events          []string    `json:"events"`
+	QuietWhenActive string      `json:"quiet_when_active"`
+	Timeout         string      `json:"timeout"`
+	DialogAfter     string      `json:"dialog_after"`
+	Last            *pluginLast `json:"last,omitempty"`
+	// Open is what it was told of that is still open, Waiting the events waiting for another try.
+	Open    int `json:"open"`
+	Waiting int `json:"waiting"`
+}
+
+// pluginRows reads every plugin of the crew: where its program is, and what its told file says of its last run.
+func pluginRows(c *crew.Crew) ([]pluginRow, []string) {
+	var (
+		rows  []pluginRow
+		warns []string
+	)
+
+	for _, pl := range c.Plugins {
+		row := pluginRow{Name: pl.Name, Events: pl.Events(), QuietWhenActive: spanOff(pl.QuietD()), Timeout: pl.TimeoutD().String(),
+			DialogAfter: pl.DialogAfterD().String()}
+
+		if prog, err := plugin.Resolve(pl, c.Layout().Dir); err != nil {
+			row.Problem = err.Error()
+		} else {
+			row.Program, row.Found, row.Via = prog.Path, true, prog.Via
+		}
+
+		st, err := plugin.Load(c.Layout().PluginTold(pl.Name))
+		if err != nil {
+			warns = append(warns, err.Error())
+		}
+
+		if l := st.Last; l != nil {
+			row.Last = &pluginLast{At: l.At, Event: l.Event, ID: l.ID, OK: l.OK, Error: l.Err}
+		}
+
+		row.Open, row.Waiting = st.Open(), len(st.Queue)
+		rows = append(rows, row)
+	}
+
+	return rows, warns
+}
+
+func spanOff(d time.Duration) string {
+	if d <= 0 {
+		return "off"
+	}
+
+	return d.String()
+}
+
+func (a *app) pluginLsCommand() *cobra.Command {
+	var asJSON bool
+
+	c := &cobra.Command{
+		Use:   "ls",
+		Short: "The crew's plugins: each one's program (or not found), the events it is told of, and how its last run ended",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := a.loadCrew()
+			if err != nil {
+				return err
+			}
+
+			rows, warns := pluginRows(c)
+			for _, w := range warns {
+				fmt.Fprintln(a.err, "zmina: warning:", w)
+			}
+
+			if asJSON {
+				if rows == nil {
+					rows = []pluginRow{}
+				}
+
+				return a.printJSON(rows)
+			}
+
+			if len(rows) == 0 {
+				fmt.Fprintln(a.out, "no plugins in the crew file")
+
+				return nil
+			}
+
+			w := tabwriter.NewWriter(a.out, 0, 0, 2, ' ', 0)
+
+			for _, r := range rows {
+				program := r.Program
+				if !r.Found {
+					program = "not found"
+				}
+
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.Name, program, strings.Join(r.Events, ","), lastWords(c, r))
+			}
+
+			if err := w.Flush(); err != nil {
+				return err
+			}
+
+			for _, r := range rows {
+				if !r.Found {
+					fmt.Fprintf(a.out, "%s: %s\n", r.Name, r.Problem)
+				}
+			}
+
+			return nil
+		},
+	}
+
+	c.Flags().BoolVar(&asJSON, "json", false, "JSON output")
+
+	return c
+}
+
+// lastWords is a plugin's last run in a few words: what it was about, how it ended, when; and what waits.
+func lastWords(c *crew.Crew, r pluginRow) string {
+	out := "never run"
+
+	if l := r.Last; l != nil {
+		when := l.At.In(c.Location()).Format("Mon 15:04")
+		if l.OK {
+			out = fmt.Sprintf("%s %s ok %s", l.Event, l.ID, when)
+		} else {
+			out = fmt.Sprintf("%s %s failed %s: %s", l.Event, l.ID, when, clip(oneLine(l.Error), 80))
+		}
+	}
+
+	if r.Waiting > 0 {
+		out += fmt.Sprintf(" · %d waiting for a retry", r.Waiting)
+	}
+
+	return out
+}
+
+func (a *app) pluginTestCommand() *cobra.Command {
+	var event string
+
+	c := &cobra.Command{
+		Use:   "test <name> [--event ask]",
+		Short: "Run a plugin once on an event made up for the test (marked \"test\": true) and print how it went",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			c, err := a.loadCrew()
+			if err != nil {
+				return err
+			}
+
+			pl, ok := c.PluginNamed(args[0])
+			if !ok {
+				return fmt.Errorf("no plugin %q in the crew file (plugins: %s)", args[0], pluginNames(c))
+			}
+
+			b := plugin.Builder{Crew: c.Path, Plugin: pl.Name, Clean: shift.QuoteN}
+
+			ev, ok := b.Sample(event, time.Now())
+			if !ok {
+				return fmt.Errorf("--event %q: one of ask, blocking, dialog, reminder, answered", event)
+			}
+
+			prog, err := plugin.Resolve(pl, c.Layout().Dir)
+			if err != nil {
+				return err
+			}
+
+			res := plugin.Exec(plugin.Spec{Program: prog, Dir: c.Dir, Stdin: ev.Line(), Timeout: pl.TimeoutD(),
+				Env: plugin.Env(os.Environ(), pl.Name, ev.Event, c.Path)})
+
+			fmt.Fprintf(a.out, "%s: %s (test) → %s, %s\n", pl.Name, ev.Event, outcome(res, pl.TimeoutD()), res.Took.Round(time.Millisecond))
+			fmt.Fprintf(a.out, "program: %s\nexit code: %d\n", prog.Path, res.Code)
+
+			for _, o := range []struct{ label, text string }{{"stdout", res.Stdout}, {"stderr", res.Stderr}} {
+				if strings.TrimSpace(o.text) != "" {
+					fmt.Fprintf(a.out, "%s:\n%s\n", o.label, indent(strings.TrimRight(o.text, "\n")))
+				}
+			}
+
+			if !res.OK() {
+				return &exitError{code: 1, msg: fmt.Sprintf("%s: %s", pl.Name, res.Reason(pl.TimeoutD()))}
+			}
+
+			return nil
+		},
+	}
+
+	c.Flags().StringVar(&event, "event", "ask", "the event to send: ask, blocking, dialog, reminder or answered")
+
+	return c
+}
+
+func outcome(r plugin.Result, timeout time.Duration) string {
+	if r.OK() {
+		return "taken"
+	}
+
+	return "failed (" + r.Reason(timeout) + ")"
+}
+
+func indent(s string) string { return "  " + strings.ReplaceAll(s, "\n", "\n  ") }
+
+func pluginNames(c *crew.Crew) string {
+	var names []string
+	for _, p := range c.Plugins {
+		names = append(names, p.Name)
+	}
+
+	if len(names) == 0 {
+		return "none"
+	}
+
+	return strings.Join(names, ", ")
+}
+
+// pluginDeliverCommand is what the beat starts to deliver to the plugins (see pluginsBeat): hidden, run by the ticker and by
+// tests. Run by hand it does the beat's delivery once.
+func (a *app) pluginDeliverCommand() *cobra.Command {
+	c := &cobra.Command{
+		Use:    "deliver",
+		Short:  "Tell the plugins of what is owed them (the ticker starts this after each beat)",
+		Args:   cobra.NoArgs,
+		Hidden: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return a.pluginsDeliver(time.Now())
+		},
+	}
+
+	return c
+}
+
+// chooseCommand is zmina choose: press a choice of the question on a role's screen, by number.
+func (a *app) chooseCommand() *cobra.Command {
+	var dialog, voice string
+
+	c := &cobra.Command{
+		Use:   "choose <role> <n> [--dialog <id>]",
+		Short: "Answer the question on a role's screen with its numbered choice n, as the arrows and Enter would",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			n, err := strconv.Atoi(args[1])
+			if err != nil || n < 1 || n > 9 {
+				return errors.New("choose <role> <n>: n is the number of a choice, 1 to 9")
+			}
+
+			role := args[0]
+
+			return a.withState(func(s *shift.Shift) error {
+				via, err := pluginVoice(s.Crew, voice)
+				if err != nil {
+					return err
+				}
+
+				// A plugin answers the dialog it was told of and no other: a late tap on a phone must never press a key in
+				// another question. The id it was told (role:fingerprint, or the fingerprint) is checked against the screen.
+				if via != "" && dialog == "" {
+					return errors.New("--by needs --dialog <id>: a plugin answers only the question it was told of")
+				}
+
+				id := strings.TrimPrefix(dialog, role+":")
+
+				d, err := pressChoice(s, role, n, id, dialog != "")
+				if err != nil {
+					return err
+				}
+
+				label := ""
+				for _, o := range d.Options {
+					if o.N == n {
+						label = o.Label
+					}
+				}
+
+				detail := fmt.Sprintf("%d: %s", n, shift.QuoteN(label, 200))
+				if via != "" {
+					detail += " (answered through plugin " + via + ")"
+				}
+
+				s.Log(role, "chose", "", detail)
+				noteChosen(s, role, d.ID, answeredBy("hand", via), n, label)
+
+				fmt.Fprintf(a.out, "%s · chose %d: %s\n", role, n, label)
+
+				return nil
+			})
+		},
+	}
+
+	c.Flags().StringVar(&dialog, "dialog", "", "the question's id (role:fingerprint, as a plugin was told it): refused when the screen shows another")
+	c.Flags().StringVar(&voice, "by", "", "a plugin answering in the owner's voice: its name, with ZMINA_PLUGIN=<name> set; needs --dialog")
+
+	return c
+}
+
+// noteChosen keeps what was chosen of a dialog, for the plugins' run to say how a dialog that left the screen ended; a choice
+// made in a terminal says the owner is at the machine too.
+func noteChosen(s *shift.Shift, role, fingerprint, by string, n int, label string) {
+	if len(s.Crew.Plugins) == 0 {
+		return
+	}
+
+	now := s.Now()
+	_ = plugin.UpdateOwner(s.Crew.Layout().PluginOwner(), now, func(o *plugin.Owner) {
+		if o.Chosen == nil {
+			o.Chosen = map[string]plugin.Chosen{}
+		}
+
+		o.Chosen[plugin.DialogID(role, fingerprint)] = plugin.Chosen{By: by, N: n, Text: shift.QuoteN(label, plugin.OptionMax), At: now}
+
+		if by == "owner" {
+			o.Active = now
+		}
+	})
+}

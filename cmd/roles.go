@@ -1321,6 +1321,7 @@ func (a *app) tickCommand() *cobra.Command {
 			a.retentionBeat(time.Now())
 			a.versionBeat(time.Now())
 			a.diskBeat(time.Now())
+			a.pluginsBeat(time.Now())
 
 			return err
 		},

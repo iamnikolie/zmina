@@ -34,7 +34,7 @@ func (a *app) localTodoAct(key, action, id, text string) (string, error) {
 		if action == "mine" {
 			line, err = c.takeBack(s, id)
 		} else {
-			line, err = answerTodo(s, "ui", action, id, text)
+			line, err = answerTodo(s, "ui", "", action, id, text)
 		}
 
 		return err

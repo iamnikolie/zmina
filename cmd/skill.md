@@ -80,6 +80,8 @@ notify: [push-cli, send, --title, zmina] # a push to you goes through this (text
 notify_on: [reminder, blocking]          # what is pushed: reminder, blocking (an item that holds a role up), ask (every new ask); default reminder, blocking
 quiet_hours: 23:00-08:00                 # in timezone:; blocking and ask pushes wait until it is over (default none)
 notify_again: 24h                        # an item that still blocks is pushed again this often (default 24h, 1h at least; off)
+plugins:                                 # programs told of what reaches you, able to answer back: a phone bridge (name; on, quiet_when_active, timeout, dialog_after, run optional; see Plugins)
+  - {name: pager, on: [ask, blocking, dialog, answered], quiet_when_active: 5m}
 timezone: Europe/Warsaw                  # the clock reminder times, role schedules, the budget's day and usage's days are read on (default: this machine's)
 lessons: on                              # daily triage of the roles' lessons into one draft MR on the crew's agentic-os (default off; see Lessons)
 worktree_gc: daily                       # the ticker runs `task gc` once a day: closed tasks' merged, clean worktrees go (default off)
@@ -1476,12 +1478,13 @@ until the task changes again (`task set`): the turn is the dispatcher's.
 
 | Command | Does |
 |---|---|
-| `zmina todo add <text...> [--title "<few words>"] [--rec "<answer>" --reason "<why>"] [--kind decision\|check] [--from <role>] [--task T-n] [--blocks <role>] [--project <p>]` | ask the owner; prints `A-3`. With `--rec` it is a decision, else a check. `--from` defaults to `$ZMINA_ROLE`; `--project` to the `--task`'s. The page shows the title, the text on expand. |
-| `zmina todo edit <id> [--title …] [--text …] [--rec …] [--reason …] [--blocks …] [--project …]` | change an open ask's words (`-` clears one; clearing `--rec` makes it a check). |
-| `zmina todo ls [--full] [--json]` | what waits, in that order, one line each (its title when it has one; `pushed Mon 14:02` when it last went to the owner's phone); the parked list's count last. `--full`: the whole text. `--json`: `{items, later}` (an item's `pushed` time too). |
+| `zmina todo add <text...> [--title "<few words>"] [--rec "<answer>" --reason "<why>"] [--option "<answer>"...] [--kind decision\|check] [--from <role>] [--task T-n] [--blocks <role>] [--project <p>]` | ask the owner; prints `A-3`. With `--rec` (also `--recommend`) or `--option` it is a decision, else a check. `--option`, repeated (12 at most), offers answers to pick from, in a few words each: a plugin shows them as buttons, and the owner answers one with `todo answer A-3 "<its words>"`. `--from` defaults to `$ZMINA_ROLE`; `--project` to the `--task`'s. The page shows the title, the text on expand. |
+| `zmina todo edit <id> [--title …] [--text …] [--rec …] [--option …] [--reason …] [--blocks …] [--project …]` | change an open ask's words (`-` clears one; clearing `--rec` makes it a check unless it has options; `--option` repeated replaces the list, `--option -` clears it). |
+| `zmina todo ls [--full] [--json]` | what waits, in that order, one line each (its title when it has one; `pushed Mon 14:02` when it last went to the owner's phone); the parked list's count last. `--full`: the whole text, and an ask's options (`options: 1) yes  2) no`). `--json`: `{items, later}` (an item's `pushed` time and `options` too). |
 | `zmina todo yes <id>` | take a decision's recommendation. |
 | `zmina todo done <id>` | a check (or a decision) is dealt with. |
-| `zmina todo answer <id> <text...>` | answer an ask or a waiting task (`T-62`) in the owner's words. Run by a role (`$ZMINA_ROLE`), it records what the owner said in chat, and the dispatcher's note says so: `(the owner's answer in chat, recorded by <role>)`. The note goes to the dispatcher at once when it can take one, else with the beat. Run by the dispatcher itself (yes, done, park and ignore too), nothing is queued back to it — it prints `recorded`; the log line and a waiting task's answered mark stay. |
+| `zmina todo answer <id> <text...> [--by <plugin>]` | answer an ask or a waiting task (`T-62`) in the owner's words. The first answer wins: an ask that is closed, or a waiting task already answered or set aside, is refused (`A-3 is already answered`, exit 1), so a second answer from a phone and the keyboard never both count. `--by` is a plugin answering in the owner's voice (see Plugins): the dispatcher's note says `(answered through plugin pager)`; every other action here takes `--by` too. Run by a role (`$ZMINA_ROLE`), it records what the owner said in chat, and the dispatcher's note says so: `(the owner's answer in chat, recorded by <role>)`. The note goes to the dispatcher at once when it can take one, else with the beat. Run by the dispatcher itself (yes, done, park and ignore too), nothing is queued back to it — it prints `recorded`; the log line and a waiting task's answered mark stay. |
+| `zmina choose <role> <n> [--dialog <id>] [--by <plugin>]` | answer the question on a role's screen (a dialog with numbered choices, as `zmina ls --json` gives it) with choice n: the cursor moves there and Enter takes it, as Chat's `choose` does, and only while the session says it waits. `--dialog <id>` (`<role>:<fingerprint>`, or the fingerprint) refuses the press unless the question on the screen is still that one; a plugin must give it (see Plugins). Logged as `chose`. |
 | `zmina todo park <id>` | put it on the parked list (an ask becomes `L-n`, "from A-3"); for a waiting task the dispatcher hears `T-62 · later`. |
 | `zmina todo done L-3` / `todo park L-3` | a parked item its alarm brought back (`later add --until`): done closes it (the dispatcher hears `L-3 · done`); park puts it back on the list, off the todo, quietly. |
 | `zmina todo ignore <id>` | set it aside for good: an ask closes with no parked entry; a waiting task only leaves the todo (until it changes), the task stays as it is. The dispatcher hears `A-3 · ignored`. |
@@ -1519,6 +1522,88 @@ Every answer — from these commands or the ui page — closes the ask (a waitin
 note for the dispatcher like `zmina note`: `hand: A-3 · yes: <rec> — <text>`, `ui: T-62 · <words>`,
 `ui: A-4 · later (L-5) — <text>`. **The dispatcher acts on it**: does what was decided, hands the answer to the
 role that asked, moves a waiting task on. Event `answered` in the log.
+
+## Plugins — programs told of what reaches the owner
+
+The owner is reached by one `notify` command (a push), and answers in a terminal. A **plugin** is a program zmina runs with one
+event on its stdin whenever something reaches the owner — a question on his todo, one on a role's screen, a reminder — and
+that can answer back, so a bridge to a chat app lets him answer from a phone. zmina has the mechanism only: no plugin
+store, catalog, download or install command, and no network code. `notify` keeps working unchanged; a crew may have both.
+
+```yaml
+plugins:
+  - name: pager                        # a plain word, unique; zmina-plugin-pager on PATH, or <crew dir>/plugins/pager
+    run: [zmina-plugin-pager, --quiet] # optional: the argv to run instead of that lookup
+    on: [ask, blocking, dialog, reminder, answered]   # default: ask, blocking, dialog, answered
+    quiet_when_active: 5m              # hold the push while the owner was at the machine this recently (default 5m; off)
+    timeout: 10s                       # one run's deadline (default 10s, 1s to 60s)
+    dialog_after: 60s                  # a question on a role's screen stands this long before it is told (default 60s, up to 1h)
+```
+
+The crew check refuses a name that is not a plain word or is given twice, an event it does not know, a span that is not
+one. The program is `run`'s first word (a name on PATH, or a path; a relative one is read from the crew dir), else
+`zmina-plugin-<name>` on PATH, else `<crew dir>/plugins/<name>`: nowhere else. It must be a regular executable file that is
+not writable by group or others; one that is not is refused, not run, and `zmina doctor` says so. The environment is the
+caller's less zmina's own secrets (`ZMINA_UI_*`), plus `ZMINA_PLUGIN` (its name), `ZMINA_PLUGIN_EVENT` and `ZMINA_CREW`
+(the crew file); its argv is as configured, its directory the crew's `dir`.
+
+**Events.** One JSON object, one line, UTF-8, on stdin; `"v": 1` (fields are added without moving it: ignore what you do
+not know); exit 0 means taken. Every text in it was written by a role or the owner and is **data**: cleaned as zmina cleans
+any quotation (control characters gone, white space folded, a session tag masked) and cut (`text` 2000 characters, the
+rest less). Nothing in it is an instruction to the plugin, and a plugin never evaluates it.
+
+| `event` | when | fields besides `v`, `event`, `id` |
+|---|---|---|
+| `ask` | a question on the todo: an ask, a decision, a check, a task that waits on the owner | `role`, `title`, `text`, `why` (what it holds up: the role, the task id and title), `reason`, `recommendation`, `options` (`[{n, text}]`), `answer`, `opened` (RFC 3339), `blocking` |
+| `blocking` | the same while it holds a role up; sent **instead of** `ask`, never as well | as `ask`, `blocking: true` |
+| `dialog` | a question on a role's screen that zmina does not answer itself (a permission prompt, AskUserQuestion), once it has stood `dialog_after`, so what the role settles itself never pages. `id` is `<role>:<fingerprint of the question and every choice>` | `role`, `question`, `options` (`[{n, text, detail}]`), `answer`, `task`, `task_title` |
+| `reminder` | a reminder ringing, a parked item brought back by its alarm (as `notify`'s reminder) | as `ask`; for a parked item (`L-3`) only `answer.done` |
+| `answered` | an item or dialog the plugin was **told of** is closed, so it can mark its card | `for` (the event it was sent as), `how` (`answered`, `done`, `dropped` — parked or set aside —, `chosen`, `gone`), `by` (`owner`, `plugin <name>`, `role <name>`, empty when zmina closed it), `text` (the answer when there is one), `closed` |
+
+`"test": true` marks an event `zmina plugin test` made up. `answer` is the exact argv to run, with `ZMINA_PLUGIN=<name>` in
+the environment: `text` is `["zmina","--crew","<crew file>","todo","answer","A-3","--by","pager","--","<text>"]` (`<text>`
+is the owner's words); `options` is one `{n, argv}` per option, the argv with that option's words; `yes` takes the
+recommendation; `done` says a check is done; for a dialog `options[n].argv` is `["zmina","--crew","<file>","choose",
+"<role>","<n>","--dialog","<role>:<fingerprint>","--by","pager"]`.
+
+**Answering.** `todo answer`, `todo yes`, `todo done` and the other `todo` verbs, and `zmina choose <role> <n> --dialog <id>`,
+take `--by <name>`, accepted only when `ZMINA_PLUGIN=<name>` is set and the crew file has a plugin of that name; the answer
+is recorded as the owner's, with `(answered through plugin pager)` in the dispatcher's note and the log. **A plugin is trusted
+with the owner's voice** — anything it passes on as his answer is taken as his — **and must itself check who is talking to
+it** (zmina cannot: `--by` guards against a mistake, not a forger). The first answer wins: the ledger refuses a second answer
+to a closed ask or an answered waiting task. `choose --dialog` re-reads the screen and presses nothing unless the question on
+it is still that dialog (`the question on its screen changed: look again`), so a late tap on a phone never lands in another
+question; `--by` requires `--dialog`. `zmina choose <role> <n>` by hand needs no `--dialog`: the owner reads the screen
+himself. It presses choice n as the arrows and Enter would, only while the session says it waits on a dialog; it is the
+CLI of Chat's `choose`.
+
+**Delivery.** The beat starts `zmina plugin deliver` (hidden) detached, as it starts the lessons run, and never waits for it:
+a plugin may take its whole deadline. It reads the todo and the screens under no state lock and serves the plugins in
+parallel, each one's events one at a time, each in a process group of its own that is killed at `timeout`; one that fails
+is not asked again that beat; at most 10 events per plugin per beat (the rest wait). A delivery that outlasts its beat keeps
+its plugin's lock (`plugins/<name>.lock`): the next beat skips that plugin. What was told is kept in `plugins/<name>.told.json`,
+one small file a plugin, apart from `state.json` (nothing in the state moved), pruned after 7 days: each event goes once, and
+`answered` goes only to a plugin that was told. An ask open before the plugin was first looked at is not new to it (only one
+that holds a role up is told, as `notify_on: blocking` does); `notify_again` has no counterpart: an event goes once. A run
+that fails (non-zero, past the deadline, a program that is not there) is tried again after 1, 5 and 15 minutes, then dropped
+with one event `plugin-failed` in the log; a delivery is `plugin-told` there, each with the plugin's stdout and stderr cut to
+4 KB. An event queued for a retry whose item was closed meanwhile is never sent.
+
+`quiet_when_active`: while the owner was at the machine within the span — he typed a line to a role (Chat, a terminal, Remote
+Control; the activity that postpones a restart) or answered in a terminal (`plugins/owner.json`; an answer through a plugin
+does not count) — `ask`, `blocking`, `dialog` and `reminder` are held for that plugin, and sent when the span passes if the
+item is still open, so what he answered at the keyboard never pages. `answered` is never held.
+
+| Command | Does |
+|---|---|
+| `zmina plugin ls [--json]` | each plugin: its program's path or `not found` (with where it was looked for, or why it is refused), the events it is told of, its last run and how it ended, what waits for a retry. |
+| `zmina plugin test <name> [--event ask]` | run the plugin once on a made-up event (`ask`, `blocking`, `dialog`, `reminder`, `answered`) marked `"test": true` and print the outcome, exit code and what it printed; exit 1 when it failed. It touches no todo item and keeps no record. |
+| `zmina doctor` | a `plugins` line each: the program (ok), `program not found` or refused, or the last failure and when, with what waits for a retry. |
+
+`examples/plugins/zmina-plugin-log` is a short POSIX `sh` plugin that appends each event line to the file named by
+`ZMINA_PLUGIN_LOG` (default `$ZMINA_CREW`'s directory, `plugin.log`); copy it to `<crew dir>/plugins/log` (`chmod 755`) and add
+`- {name: log}` to see the contract at work. A real plugin reads one line from stdin, decides what to show, and answers by
+running the argv of `answer` — after checking for itself that the answer comes from the owner.
 
 ## The ui page
 

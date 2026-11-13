@@ -371,6 +371,9 @@ type Crew struct {
 	Routes        []yaml.Node `yaml:"routes"`
 	Busy          string      `yaml:"busy"`
 	RouteOverride string      `yaml:"route_override"`
+	// Plugins are programs told of what reaches the owner (a question on his todo, one on a role's screen, a reminder)
+	// and able to answer back (see Plugin). Empty: none, as before; notify keeps working beside them.
+	Plugins []Plugin `yaml:"plugins"`
 
 	bootGrace time.Duration
 	renotify  time.Duration
@@ -919,6 +922,10 @@ func (c *Crew) check() error {
 	}
 
 	if err := c.checkLaterSweep(); err != nil {
+		return err
+	}
+
+	if err := c.checkPlugins(); err != nil {
 		return err
 	}
 

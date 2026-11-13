@@ -623,9 +623,17 @@ var DefaultDrop = []string{
 	"__CFBundleIdentifier", "CODEX_THREAD_ID", "CODEX_INTERNAL_ORIGINATOR_OVERRIDE", "ZMINA_UI_*",
 }
 
+// SecretEnv are the variables that hold a credential of zmina's own (the cockpit's token and code command): a program
+// zmina runs that is not the cockpit — a role, a check, a plugin — never gets them.
+var SecretEnv = []string{"ZMINA_UI_*"}
+
 // CleanEnv drops DefaultDrop and the extra names (NAME, or PREFIX*) from env.
 func CleanEnv(env, extra []string) []string {
-	drop := append(append([]string{}, DefaultDrop...), extra...)
+	return WithoutEnv(env, append(append([]string{}, DefaultDrop...), extra...))
+}
+
+// WithoutEnv drops the named variables (NAME, or PREFIX*) from env.
+func WithoutEnv(env, drop []string) []string {
 	out := make([]string, 0, len(env))
 
 	for _, kv := range env {

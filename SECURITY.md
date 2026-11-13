@@ -34,3 +34,8 @@ Some things are known and by design rather than vulnerabilities:
   injection).
 - **Claude Code folder trust** is answered automatically only inside worktrees
   zmina created itself under the crew's `worktrees/` directory.
+- **A plugin is trusted with the owner's voice.** A program the crew file names under `plugins:` is told what reaches the
+  owner and can answer in his name (`--by`, with `ZMINA_PLUGIN` set to its name, which guards against a mistake and proves
+  nothing: any process of yours can set it). It must check for itself who is talking to it. zmina runs it only from `run`, PATH
+  or the crew's `plugins/` directory, and only a regular executable file that group and others cannot write; it hands it
+  roles' text as cleaned and bounded data, never as an instruction, and none of its own secrets in the environment.
