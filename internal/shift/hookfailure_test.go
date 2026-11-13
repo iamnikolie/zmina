@@ -561,7 +561,7 @@ func TestTheOwnersOwnMessageIsNotHeldAfterAFailedTurn(t *testing.T) {
 	rs.ChatReceipts = append(rs.ChatReceipts, chat.Receipt{ID: "c1", Line: owner, At: *f.now})
 
 	assert.True(t, slicesContain(f.s.Waiting(), "designer"), "the owner's message is next: the role is asked")
-	assert.True(t, f.s.ownerNext("designer"))
+	assert.Equal(t, 0, f.s.ownerLine("designer"), "the owner's line is the head of the queue")
 	assert.NotEmpty(t, f.s.DeliverTo("designer"), "and it goes")
 	assert.Equal(t, []string{"[dispatcher] second"}, rs.Inbox, "what zmina queued behind it waits for that turn")
 }

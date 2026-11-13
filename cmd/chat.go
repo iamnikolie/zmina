@@ -264,7 +264,7 @@ func (a *app) localChatSendFiles(key, role, id, text string, files []string) (ch
 			line = fmt.Sprintf("%s — the owner's own words, whole with their formatting: zmina inbox show %s", string(head), entry)
 		}
 		line = chat.Prefix(id) + line
-		if err = s.QueueFrom(role, line, shift.Facts{From: "owner"}); err != nil {
+		if err = s.QueueOwner(role, line); err != nil {
 			return err
 		}
 		rs.ChatReceipts = append(rs.ChatReceipts, chat.Receipt{ID: id, Hash: payloadHash, Attachments: attachments, Text: text, Line: line, At: s.Now(), Session: snapshot.Session})

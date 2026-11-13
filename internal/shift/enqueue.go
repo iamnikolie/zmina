@@ -14,6 +14,20 @@ func (s *Shift) enqueue(name, line string, f Facts) {
 	s.cardNew(name, line, f)
 }
 
+// moveToHead takes the line at place i of a role's queue to its head: the one that goes out of its order (the owner's own
+// message through a hold, ownerThroughHold). It is the same line with the same card; what goes before everything that waits
+// is another's first now, so the failed tries counted are forgotten.
+func (s *Shift) moveToHead(name string, i int) {
+	rs := s.State.Role(name)
+	if i <= 0 || i >= len(rs.Inbox) {
+		return
+	}
+
+	line := rs.Inbox[i]
+	rs.Inbox = slices.Concat([]string{line}, rs.Inbox[:i], rs.Inbox[i+1:])
+	rs.clearTries()
+}
+
 // enqueueHead queues lines at the head of a role's queue, in the order given, each with its card: lines that are to go
 // before everything that waits (the recovery pointer, a rename).
 func (s *Shift) enqueueHead(name string, f Facts, lines ...string) {

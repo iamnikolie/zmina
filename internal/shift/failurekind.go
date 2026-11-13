@@ -12,19 +12,26 @@ import (
 type FailureKind string
 
 const (
-	// KindTransient is an error that goes by itself: overloaded, a 5xx, the network, a timeout, and anything not
-	// recognised. The queue waits FailHold, as it always did.
+	// KindTransient is an error that goes by itself: overloaded, a 5xx, a gateway or proxy page, the network, a timeout, a
+	// request the API refused for its content, and anything not recognised. The queue waits FailHold.
 	KindTransient FailureKind = "transient"
-	// KindLimit is a usage or rate limit reached. It lifts at a reset time, which the message often gives.
+	// KindLimit is a usage or rate limit reached. It lifts at a reset time, which the notice often gives.
 	KindLimit FailureKind = "limit"
 	// KindAccount is a problem of the account or the setup that retrying does not mend and only the owner does: billing
-	// or credit, a login that expired or a key that is not valid, a permission, a model that is not there.
+	// or credit, a login that expired or a key that is not valid, a permission, a model that is not there. It is told only
+	// by a status and an error type that belong together, or by words that say it outright.
 	KindAccount FailureKind = "account"
 )
 
-// LimitHoldMax caps how long a queue waits for the reset time a limit message gave: a time further off than this, or one
-// that was misread, does not park a role for days.
-const LimitHoldMax = 6 * time.Hour
+const (
+	// AccountHold is how long the queue of a role waits after an account error: a slow probe. It is long because nothing
+	// but the owner mends it, and it is not for ever because nothing here can tell that the owner has: past it one line
+	// goes as it would for any other error, and a turn that fails the same way is a record of its own and holds again.
+	AccountHold = 30 * time.Minute
+	// LimitHoldMax caps how long a queue waits for the reset time a limit message gave: a time further off than this, or one
+	// that was misread, does not park a role for hours on end.
+	LimitHoldMax = 6 * time.Hour
+)
 
 // resetMax is how far off a reset time can be and still be believed.
 const resetMax = 30 * 24 * time.Hour
@@ -38,45 +45,76 @@ type FailureClass struct {
 }
 
 var (
-	// accountCodes are the short codes Claude Code and the API give errors that only the owner mends.
-	accountCodes = map[string]bool{
-		"billing_error": true, "authentication_failed": true, "authentication_error": true, "permission_error": true,
-		"permission_denied": true, "model_not_found": true, "invalid_api_key": true, "forbidden": true, "unauthorized": true,
-	}
 	// limitCodes are the codes of an error that is a limit reached.
 	limitCodes = map[string]bool{"rate_limit": true, "rate_limit_error": true}
 
 	// limitWords find the words of a usage or rate limit. "limit" alone is not one: a context or an output token limit
-	// ends a turn too, and retrying it is no more use than for any error that goes by itself.
+	// ends a turn too, and a bare 429 or "too many requests" says no more than any error that goes by itself.
 	limitWords = regexp.MustCompile(`usage limit|(?:5|five)[- ]hour limit|weekly limit|session limit|hit your (?:\w+ )?limit|` +
-		`limit will reset|rate[ _-]?limit|too many requests|out of (?:extra )?usage|api error:? ?429\b`)
+		`limit will reset|rate[ _-]?limit|out of (?:extra )?usage`)
 
-	// accountWords find the words of billing, login, permission and model errors.
-	accountWords = regexp.MustCompile(`credit balance|insufficient (?:credit|funds|quota)|out of credits|billing|` +
-		`payment required|authentication[_ ](?:error|failed)|invalid (?:x-)?api[ _-]?key|invalid bearer token|` +
-		`invalid authentication|(?:oauth )?token (?:has )?(?:expired|been revoked)|please run /login|not logged in|` +
-		`login (?:expired|required)|unauthorized|permission[_ ](?:error|denied)|forbidden|organization (?:has been |is )?disabled|` +
-		`not have access|model[_ ]not[_ ]found|not_found_error.{0,100}model|issue with the selected model|` +
-		`model .{0,60}(?:does not exist|not available|is not available)|api error:? ?(?:401|402|403)\b`)
+	// statusRe finds the HTTP status an error line starts with: "API Error: 529 ...".
+	statusRe = regexp.MustCompile(`(?:api error:?|status(?: code)?:?|http)\s*(\d{3})\b`)
+
+	// typeRe finds the error types the API names, in a JSON body or as a word.
+	typeRe = regexp.MustCompile(`\b(authentication_error|permission_error|not_found_error|billing_error|rate_limit_error|` +
+		`overloaded_error|api_error|server_error|invalid_request_error)\b`)
+
+	// pageRe finds a page where an error should be: an HTML body, or a gateway or proxy answering for the API. Whatever
+	// status it carries says nothing of the account.
+	pageRe = regexp.MustCompile(`<\s*(?:!doctype|html|head|body)\b|bad gateway|gateway time-?out|\bproxy\b|cloudflare|nginx`)
+
+	// creditRe and loginRe are the words that say an account error outright, whatever the status.
+	creditRe = regexp.MustCompile(`credit balance is too low`)
+	loginRe  = regexp.MustCompile(`invalid (?:x-)?api[ _-]?key|(?:api key|oauth token|token) (?:has )?(?:expired|been revoked)|` +
+		`expired api key|please run /login|issue with the selected model`)
+
+	// modelRe is an error body that names a model: the 404 of a model that is not there.
+	modelRe = regexp.MustCompile(`not_found_error.{0,120}\bmodel\b`)
 )
+
+// accountCodes are the short codes Claude Code gives errors that only the owner mends.
+var accountCodes = map[string]bool{"billing_error": true, "authentication_failed": true, "model_not_found": true}
 
 // ClassifyFailure sorts an API error by what it asks for, from the short code Claude Code gave it and the words it showed,
 // and, for a limit, reads the reset time out of the words (see parseReset; now is the clock the times are read against, and
 // its location is the one a time with no zone is read in). It is a pure function: nothing is read but its arguments.
 //
-// The code decides when it is one of the few that name a kind. Then the words: a limit's before an account's, because
-// taking a limit for an account error holds a role until the owner comes, and the other mistake only keeps today's
-// five-minute wait. Whatever is not recognised is transient.
+// It is strict about what the owner has to mend. Whatever carries a 5xx status or a server, overloaded or api error type is
+// transient, whatever else it says; so is a page (HTML, a gateway or proxy) and a status with no error type that belongs
+// to it. An account error is a pair that belongs together (401 with authentication_error, 402 or billing, 403 with
+// permission_error, 404 with a not_found_error naming a model), or words that say it outright (a credit balance too low, an
+// API key or a token that is invalid or expired, "please run /login"; the API's own 400 for a request it did not like, an
+// invalid_request_error, may quote such words and is not one, as it is none for a credit balance, which that 400 is), or one
+// of the codes Claude Code gives for it. Bare words (billing, forbidden, unauthorized) and a status alone are not. A limit is
+// its code, its type or its words; a code that names a kind decides before the words. Whatever is not recognised is
+// transient.
 func ClassifyFailure(code, text string, now time.Time) FailureClass {
 	code = strings.ToLower(strings.TrimSpace(code))
 	words := strings.ToLower(code + " " + text)
 
+	status := 0
+	if m := statusRe.FindStringSubmatch(words); m != nil {
+		status, _ = strconv.Atoi(m[1])
+	}
+
+	types := map[string]bool{}
+	for _, m := range typeRe.FindAllString(words, -1) {
+		types[m] = true
+	}
+
 	switch {
+	case status >= 500 && status <= 599, types["server_error"], types["overloaded_error"], types["api_error"], code == "server_error",
+		pageRe.MatchString(words):
+		return FailureClass{Kind: KindTransient}
 	case accountCodes[code]:
 		return FailureClass{Kind: KindAccount}
-	case limitCodes[code], limitWords.MatchString(words):
+	case limitCodes[code], types["rate_limit_error"], limitWords.MatchString(words):
 		return FailureClass{Kind: KindLimit, Reset: parseReset(text, now)}
-	case accountWords.MatchString(words):
+	case status == 402, types["billing_error"], creditRe.MatchString(words),
+		status == 401 && types["authentication_error"], status == 403 && types["permission_error"],
+		status == 404 && modelRe.MatchString(words),
+		!types["invalid_request_error"] && loginRe.MatchString(words):
 		return FailureClass{Kind: KindAccount}
 	default:
 		return FailureClass{Kind: KindTransient}
@@ -106,19 +144,68 @@ var (
 
 	// resetIn is a reset or a retry after a span: "resets in 2 hours 30 minutes", "try again in 45m".
 	resetIn   = regexp.MustCompile(`(?i)(?:resets?|try again|retry(?: again)?)\s+in\s+((?:\d+\s*[a-z]+[\s,]*(?:and\s+)?)+)`)
-	resetSpan = regexp.MustCompile(`(?i)(\d+)\s*(d|h|m|s)[a-z]*`)
+	resetSpan = regexp.MustCompile(`(?i)(\d+)\s*([a-z]+)`)
 
-	// resetAt is a reset at a clock time, with the day when it is not today and the zone when the notice names one:
-	// "resets 3pm (Europe/Berlin)", "resets 2:30am", "limit will reset at 15:04 (UTC)", "resets Oct 9, 10am".
+	// resetAt is a reset at a clock time, with the day when it is not today and the zone when the notice names one, in
+	// brackets or as an abbreviation right after the time: "resets 3pm (Europe/Berlin)", "resets 2:30am", "limit will reset
+	// at 15:04 UTC", "resets Oct 9, 10am". Its groups: month, day, hour, minute, am or pm, zone in brackets, zone
+	// abbreviation, an offset after it (which makes the abbreviation no zone known here).
 	resetAt = regexp.MustCompile(`(?i)\bresets?\s+(?:at\s+|on\s+)?(?:(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+` +
-		`(\d{1,2})(?:[a-z]{2})?(?:,|\s+at)?\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?(?:\s*\(([^)]+)\))?`)
+		`(\d{1,2})(?:[a-z]{2})?(?:,|\s+at)?\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?` +
+		`(?:\s*\(([^)]+)\)|\s+((?-i:[A-Z]{2,5}))\b(\s?[+-]\d)?)?`)
 )
 
+// spanUnits are the units of a span, whole words only: "ms" or "months" is never read as minutes.
+var spanUnits = map[string]time.Duration{
+	"ms": time.Millisecond, "msec": time.Millisecond, "msecs": time.Millisecond, "millisecond": time.Millisecond,
+	"milliseconds": time.Millisecond,
+	"s":            time.Second, "sec": time.Second, "secs": time.Second, "second": time.Second, "seconds": time.Second,
+	"m": time.Minute, "min": time.Minute, "mins": time.Minute, "minute": time.Minute, "minutes": time.Minute,
+	"h": time.Hour, "hr": time.Hour, "hrs": time.Hour, "hour": time.Hour, "hours": time.Hour,
+	"d": 24 * time.Hour, "day": 24 * time.Hour, "days": 24 * time.Hour,
+	"w": 7 * 24 * time.Hour, "wk": 7 * 24 * time.Hour, "wks": 7 * 24 * time.Hour, "week": 7 * 24 * time.Hour,
+	"weeks": 7 * 24 * time.Hour,
+}
+
+// zoneAbbr are the zone abbreviations a notice may carry, as seconds east of UTC; they and the IANA names are the zones
+// there are (zoneOf). An abbreviation that is ambiguous in the world is read as the one a US-English notice means.
+var zoneAbbr = map[string]int{
+	"UTC": 0, "GMT": 0, "Z": 0,
+	"EST": -5 * 3600, "EDT": -4 * 3600, "CST": -6 * 3600, "CDT": -5 * 3600,
+	"MST": -7 * 3600, "MDT": -6 * 3600, "PST": -8 * 3600, "PDT": -7 * 3600,
+	"CET": 3600, "CEST": 2 * 3600,
+}
+
+// zoneOf is the zone a notice names, in brackets or as an abbreviation: an abbreviation of zoneAbbr or an IANA name. Nil
+// for any other, so that a time in a zone not known here is no time, never a guess; "Local" is the reader's, not the
+// notice's, and is no zone either.
+func zoneOf(name string) *time.Location {
+	name = strings.TrimSpace(name)
+	if name == "" || strings.EqualFold(name, "local") {
+		return nil
+	}
+
+	if off, ok := zoneAbbr[strings.ToUpper(name)]; ok {
+		if off == 0 {
+			return time.UTC
+		}
+
+		return time.FixedZone(strings.ToUpper(name), off)
+	}
+
+	l, err := time.LoadLocation(name)
+	if err != nil {
+		return nil
+	}
+
+	return l
+}
+
 // parseReset is the moment a limit lifts, as the message says it, or the zero time when it does not say, says it in a form
-// not known here, or says one that cannot be right (not after now, or more than a month off). A time with a zone named in
-// brackets is read in that zone, which is the IANA name Claude Code shows, and returned in it; a time with none is read in
-// the location of now, which is where the one who sees the notice is, and returned there. A zone that cannot be loaded makes
-// the time unknown, never a guess.
+// not known here, or says one that cannot be right (not after now, more than a month off, a date that is no date, a zone not
+// known). A time with a zone named is read in that zone and returned in it; a time with none is read in the location of
+// now, which is where the one who sees the notice is, and returned there. A clock time with no date that has passed already
+// is no time: it is not read as tomorrow's.
 func parseReset(text string, now time.Time) time.Time {
 	var at time.Time
 
@@ -139,18 +226,19 @@ func parseReset(text string, now time.Time) time.Time {
 	return at
 }
 
-// readSpan is now and the span: "2 hours 30 minutes". The zero time for none.
+// readSpan is now and the span: "2 hours 30 minutes". The zero time for none, and for a unit that is not one of spanUnits.
 func readSpan(s string, now time.Time) time.Time {
 	var d time.Duration
 
 	for _, m := range resetSpan.FindAllStringSubmatch(s, -1) {
 		n, err := strconv.Atoi(m[1])
-		if err != nil || n > 1000 {
+		unit, ok := spanUnits[strings.ToLower(m[2])]
+
+		if err != nil || n > 100000 || !ok {
 			return time.Time{}
 		}
 
-		unit := map[string]time.Duration{"d": 24 * time.Hour, "h": time.Hour, "m": time.Minute, "s": time.Second}
-		d += time.Duration(n) * unit[strings.ToLower(m[2])]
+		d += time.Duration(n) * unit
 	}
 
 	if d <= 0 {
@@ -160,7 +248,7 @@ func readSpan(s string, now time.Time) time.Time {
 	return now.Add(d)
 }
 
-// readClock is the time of a resetAt match (its groups: month, day, hour, minute, am or pm, zone).
+// readClock is the time of a resetAt match (see resetAt for its groups).
 func readClock(m []string, now time.Time) time.Time {
 	hour, _ := strconv.Atoi(m[3])
 	minute, _ := strconv.Atoi(m[4])
@@ -180,22 +268,23 @@ func readClock(m []string, now time.Time) time.Time {
 
 	loc := now.Location()
 
-	if zone := strings.TrimSpace(m[6]); zone != "" {
-		l, err := time.LoadLocation(zone)
-		if err != nil {
+	if zone := m[6] + m[7]; strings.TrimSpace(zone) != "" {
+		if m[8] != "" {
 			return time.Time{}
 		}
 
-		loc = l
+		if loc = zoneOf(zone); loc == nil {
+			return time.Time{}
+		}
 	}
 
 	local := now.In(loc)
 
 	if m[1] == "" {
-		// Today's, or tomorrow's when today's has passed.
+		// Today's; one that has passed is no time, and not tomorrow's.
 		at := time.Date(local.Year(), local.Month(), local.Day(), hour, minute, 0, 0, loc)
-		if !at.After(now) {
-			at = at.AddDate(0, 0, 1)
+		if at.Hour() != hour || at.Minute() != minute {
+			return time.Time{}
 		}
 
 		return at
@@ -205,12 +294,20 @@ func readClock(m []string, now time.Time) time.Time {
 	month := time.Month(indexOf(months, strings.ToLower(m[1])) + 1)
 	day, _ := strconv.Atoi(m[2])
 
-	at := time.Date(local.Year(), month, day, hour, minute, 0, 0, loc)
-	if !at.After(now) {
-		at = at.AddDate(1, 0, 0)
+	// A date with its day: this year's, or next year's when it has passed (a notice in December that says Jan 2).
+	for year := local.Year(); year <= local.Year()+1; year++ {
+		at := time.Date(year, month, day, hour, minute, 0, 0, loc)
+		if at.Month() != month || at.Day() != day || at.Hour() != hour || at.Minute() != minute {
+			// Feb 31, or a minute that does not exist in the zone: no such time.
+			return time.Time{}
+		}
+
+		if at.After(now) {
+			return at
+		}
 	}
 
-	return at
+	return time.Time{}
 }
 
 func indexOf(list []string, s string) int {

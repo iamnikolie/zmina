@@ -1364,7 +1364,12 @@ func statusWords(v shift.View) string {
 func turnErrorKind(v shift.View) string {
 	c := shift.FailureClass{Kind: shift.FailureKind(v.TurnErrorKind), Reset: v.TurnErrorReset}
 
-	if w := c.Words(); w != "" {
+	w := c.Words()
+	if w != "" && !v.TurnErrorHeldUntil.IsZero() {
+		w += ", queue held until " + v.TurnErrorHeldUntil.Format("15:04 MST")
+	}
+
+	if w != "" {
 		return ", " + w
 	}
 

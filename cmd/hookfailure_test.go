@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -73,7 +74,7 @@ func TestStopFailureHookOnlyRecords(t *testing.T) {
 	assert.Contains(t, lines[0], `"event":"failure-hold"`)
 	assert.Contains(t, lines[0], `"role":"dev"`)
 	assert.Contains(t, lines[0], "model_not_found")
-	assert.Contains(t, lines[0], "an account problem that needs the owner: the lines queued for it wait until its next turn ends or it is restarted")
+	assert.Contains(t, lines[0], "an account problem that needs the owner: the lines queued for it wait 30m, or less when its next turn ends or it is restarted")
 
 	// A second failure is a second hold, and its own event.
 	root = newRoot(&app{out: &out, err: &errb})
@@ -90,12 +91,13 @@ func TestStopFailureHookEventSaysHowLongTheQueueWaits(t *testing.T) {
 	for name, tc := range map[string]struct{ input, want string }{
 		"transient": {`{"session_id":"s-1","error":"server_error","last_assistant_message":"API Error: 529 Overloaded"}`,
 			"the lines queued for it wait 5m0s"},
-		"a limit with its time": {`{"session_id":"s-1","error":"rate_limit","last_assistant_message":"You've hit your limit · resets 3pm (UTC)"}`,
+		"a limit with its time": {`{"session_id":"s-1","error":"rate_limit","last_assistant_message":"You've hit your limit · resets ` +
+			time.Now().UTC().Add(2*time.Hour).Format("Jan 2, 3:04pm") + ` (UTC)"}`,
 			"a usage limit: the lines queued for it wait until "},
 		"a limit with none": {`{"session_id":"s-1","error":"rate_limit"}`,
 			"a usage limit with no reset time given: the lines queued for it wait 5m0s"},
 		"account": {`{"session_id":"s-1","error":"billing_error"}`,
-			"an account problem that needs the owner: the lines queued for it wait until its next turn ends or it is restarted"},
+			"an account problem that needs the owner: the lines queued for it wait 30m, or less when its next turn ends or it is restarted"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			crewFile := testCrew(t, "")
@@ -303,28 +305,123 @@ func TestCourierLooksAgainWhenAFailedTurnsHoldEnds(t *testing.T) {
 	assert.False(t, queueGated(s, s.Waiting()))
 }
 
-// A hold for an account problem runs out with no time, so the courier has nothing to look at again every few seconds: the
-// role's next turn, a restart or the owner's message, which are what lift it, each change the state or run a hook. Waiting
-// still leaves the role out, however long it has been; a turn the role goes through since frees it.
-func TestCourierDoesNotPollAnAccountHold(t *testing.T) {
+// An account hold is a timed one like the rest: Waiting leaves the role out for AccountHold, the courier's look at the queue says
+// it is gated all that time, so that it looks again every few seconds and finds the role when the probe is due, and the
+// role's next turn frees it sooner. The courier's gate reads no record for a role with nothing queued.
+func TestCourierLooksAgainWhenAnAccountHoldEnds(t *testing.T) {
 	s, now, layout, failedAt, session := courierHold(t)
 
 	_, err := shift.RecordFailure(layout, "dev", []byte(stopFailure), failedAt)
 	require.NoError(t, err)
 
-	for _, after := range []time.Duration{time.Minute, shift.FailHold + time.Second, 7 * time.Hour, 72 * time.Hour} {
+	for _, after := range []time.Duration{time.Minute, shift.FailHold + time.Second, shift.AccountHold - time.Second} {
 		*now = failedAt.Add(after)
 
 		assert.Empty(t, s.Waiting(), "%v on: held", after)
-		assert.False(t, queueGated(s, s.Waiting()), "%v on: nothing for the courier to look at again", after)
-		assert.True(t, s.HeldUntilNextTurn("dev", *now))
+		assert.True(t, queueGated(s, s.Waiting()), "%v on: gated, so the courier looks again", after)
 	}
 
-	// The role goes through a turn since: the record is not how it stands, and the role is waiting.
+	*now = failedAt.Add(shift.AccountHold + time.Second)
+	assert.Equal(t, []string{"dev"}, s.Waiting(), "the probe: one line may go")
+	assert.False(t, queueGated(s, s.Waiting()))
+
+	// The role goes through a turn since, well before the hold is over: the record is not how it stands, and it is waiting.
+	*now = failedAt.Add(10 * time.Minute)
+	require.Empty(t, s.Waiting())
 	require.NoError(t, os.WriteFile(session, []byte(`{"pid": `+strconv.Itoa(os.Getpid())+`, "sessionId": "s-1", "name": "`+
-		s.Crew.Roles["dev"].Session+`", "status": "idle", "statusUpdatedAt": `+strconv.FormatInt(failedAt.Add(73*time.Hour).UnixMilli(), 10)+
+		s.Crew.Roles["dev"].Session+`", "status": "idle", "statusUpdatedAt": `+strconv.FormatInt(failedAt.Add(9*time.Minute).UnixMilli(), 10)+
 		`}`), 0o600))
 
 	assert.Equal(t, []string{"dev"}, s.Waiting())
-	assert.False(t, s.HeldUntilNextTurn("dev", *now))
+}
+
+// A role with nothing queued has no record read for the courier's gate, whatever the record says.
+func TestCourierGateReadsNoRecordForAnEmptyQueue(t *testing.T) {
+	s, now, layout, failedAt, _ := courierHold(t)
+
+	_, err := shift.RecordFailure(layout, "dev", []byte(stopFailure), failedAt)
+	require.NoError(t, err)
+
+	s.State.Role("dev").Inbox = nil
+
+	// The record is unreadable now: a gate that read it would be the only thing that could notice.
+	require.NoError(t, os.WriteFile(layout.HookFailure("dev"), []byte(`{`), 0o600))
+
+	assert.Empty(t, s.Waiting())
+	assert.False(t, queueGated(s, s.Waiting()))
+
+	// And a record past the longest hold is not sorted: stale, it holds nothing.
+	*now = failedAt.Add(shift.LimitHoldMax + time.Minute)
+	s.State.Role("dev").Inbox = []string{"[dispatcher] next"}
+	_, err = shift.RecordFailure(layout, "dev", []byte(stopFailure), failedAt)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"dev"}, s.Waiting())
+}
+
+// zmina doctor says which roles' queues wait for a usage limit or an account error, and for the dispatcher what that keeps
+// from the owner: its queue, the crew's signals and the notes. A transient error, which is over in minutes, is not a line.
+func TestDoctorSaysWhichQueuesWaitForAFailedTurn(t *testing.T) {
+	crewFile := testCrew(t, "  dev:\n")
+	layout := crew.Layout{Dir: filepath.Dir(crewFile)}
+	now := time.Now()
+
+	_, err := shift.RecordFailure(layout, "dispatcher", []byte(strings.Replace(stopFailure, "s-1", "s-d", 1)), now)
+	require.NoError(t, err)
+
+	_, err = shift.RecordFailure(layout, "dev", []byte(`{"session_id":"s-2","error":"server_error","last_assistant_message":"API Error: 529 Overloaded"}`), now)
+	require.NoError(t, err)
+
+	c, err := crew.Load(crewFile)
+	require.NoError(t, err)
+
+	st := shift.NewState()
+	st.Signals = []string{"one", "two"}
+	st.Notes = []string{"a note"}
+	st.Role("dispatcher").Inbox = []string{"[zmina] a line"}
+
+	var got []check
+
+	checkFailureHolds(c, st, now.Add(time.Minute), func(name, level, format string, args ...any) {
+		got = append(got, check{Name: name, Level: level, Detail: fmt.Sprintf(format, args...)})
+	})
+
+	require.Len(t, got, 1, "the transient error is no line: %v", got)
+	assert.Equal(t, "holds", got[0].Name)
+	assert.Equal(t, "warn", got[0].Level)
+	assert.Contains(t, got[0].Detail, "dispatcher: its last turn ended in an API error, account problem, needs the owner (model_not_found:")
+	assert.Contains(t, got[0].Detail, "its queue, the crew's signals and the health notes wait (2 signals of at most 20, 1 notes, 1 lines of its own waiting; a new signal past the most is refused) until ")
+	assert.Contains(t, got[0].Detail, "this is the owner's to look at: zmina peek dispatcher")
+
+	// Past the hold: nothing to say.
+	got = nil
+
+	checkFailureHolds(c, st, now.Add(shift.AccountHold+time.Minute), func(name, level, format string, args ...any) {
+		got = append(got, check{Name: name, Level: level, Detail: fmt.Sprintf(format, args...)})
+	})
+	assert.Empty(t, got)
+}
+
+// ls says what kind of error ended the turn, when it is not a transient one, and until when the queue waits for it.
+func TestStatusWordsSayTheKindAndTheHold(t *testing.T) {
+	at := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
+
+	for name, tc := range map[string]struct {
+		view shift.View
+		want string
+	}{
+		"transient": {shift.View{Status: "idle", TurnError: "server_error: Overloaded"},
+			"idle (last turn ended in an API error: server_error: Overloaded)"},
+		"account": {shift.View{Status: "idle", TurnError: "billing_error", TurnErrorKind: "account", TurnErrorHeldUntil: at.Add(shift.AccountHold)},
+			"idle (last turn ended in an API error, account problem, needs the owner, queue held until 12:30 UTC: billing_error)"},
+		"a limit": {shift.View{Status: "idle", TurnError: "rate_limit", TurnErrorKind: "limit", TurnErrorReset: at.Add(3 * time.Hour),
+			TurnErrorHeldUntil: at.Add(3 * time.Hour)},
+			"idle (last turn ended in an API error, usage limit, resets Sat 15:00 UTC, queue held until 15:00 UTC: rate_limit)"},
+		"a limit, the hold over": {shift.View{Status: "idle", TurnError: "rate_limit", TurnErrorKind: "limit"},
+			"idle (last turn ended in an API error, usage limit: rate_limit)"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, tc.want, statusWords(tc.view))
+		})
+	}
 }

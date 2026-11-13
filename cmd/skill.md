@@ -403,27 +403,14 @@ its two records (this one and the failure's).
 A turn that ends on an API error runs no `Stop` hook, so the settings carry a `StopFailure` hook too, `zmina
 _stop-failure --role <role>` (same timeout and silence). It only records: the error's code and the words Claude Code
 showed for it (and its `error_details` when it has them), as given, with the session id and time, to
-`hooks/<role>.failure.json`, and one `failure-hold` event in the log. It posts and retries nothing. The record is as the
-hook said it; what kind of error it is gets worked out from it when it is looked at, by one pure function over the code and
-the words, into three kinds. `transient` (overloaded, a 5xx, the network, a timeout, and whatever is not recognised, so the
-default): nothing more is known of it. `limit` (a usage or rate limit reached): the notice's reset time is read when it gives
-one (`resets 3pm (Europe/Berlin)`, `resets Oct 9, 10am`, `limit will reset at 15:04`, `|<unix seconds>`, `try again in 2
-hours`; a time with no zone is read in the host's zone; a zone that is not known, a time already past or over a month off is
-no time). `account` (billing or credit, authentication or a login that expired or a key that is not valid, a permission, a
-model that is not found or not available): retrying does not mend it, the owner does. While that record is of the role's
-current session and the session has been idle since that turn (within 1 s of the record), no line queued for the role — the
-dispatcher's signals and notes too — is posted or typed, by the beat, the delivery pass or a turn's end, and `Waiting` leaves
-the role out: a session that keeps failing does not take its whole queue at a line a second. How long, by kind: a transient
-error 5 minutes, then one line goes (its turn failing too is a record of its own, and holds the role again); a limit until
-its reset time when the notice gave one, at most 6 hours, else 5 minutes as a transient one; an account problem until the
-role's next turn ends or it is restarted (a restart removes the record), not by time and not retried every 5 minutes. The
-owner's own message goes through any hold. The courier looks again every few seconds while a timed hold lasts (not for an account problem, which no time lifts), and
-finds the role when it ends. `zmina ls` shows `idle (last turn ended in an API error: <text>)` meanwhile (a limit `… an API
-error, usage limit, resets Fri 15:00 UTC: <text>`, an account problem `… an API error, account problem, needs the owner:
-<text>`) and `--json` has `turn_error`, and for a limit or an account problem `turn_error_kind` (`limit`, `account`; none for
-a transient one) and for a limit with a time `turn_error_reset`; the next turn takes it away. The dispatcher hears it once,
-as for a role without the hook (see The ticker): an account problem as one that needs the owner, with how long the role
-waits.
+`hooks/<role>.failure.json`, and one `failure-hold` event in the log. It posts and retries nothing. When the record is
+written it is sorted once, strictly, into `transient` (the default), `limit` (with its reset time) or `account` (the owner
+mends it), and kept so (`kind`, `reset`). While that record is of the role's current session and the session has been idle
+since that turn (within 1 s of the record), no line queued for the role — the dispatcher's signals and notes too — is posted
+or typed, by the beat, the delivery pass or a turn's end, and `Waiting` leaves the role out: a session that keeps failing does
+not take its whole queue at a line a second. The wait is a time, by kind (5 minutes; 30 for an account error; until a limit's
+reset): see Failed turns. `zmina ls` shows `idle (last turn ended in an API error: <text>)` meanwhile, and `--json` has
+`turn_error`; the next turn takes it away. The dispatcher hears it once, as for a role without the hook (see The ticker).
 
 A role started by an earlier zmina has neither hook until its next start and shows what the screen and transcript show.
 
@@ -480,6 +467,39 @@ A Codex role's bridge keeps an inbox, `<crew state>/codex/inbox/<session>/`, and
 and no request is open, echoes it in its console (`› …`) and marks it taken, which is when it counts as delivered.
 Nothing is typed into the bridge's console, so the owner's input there never mixes with zmina's lines. Its lines carry the start's tag the same way. A bridge of an
 earlier zmina has no inbox: its role is typed into until it restarts.
+
+### Failed turns: how an API error is sorted and held
+
+The `StopFailure` hook's record (see Delivery) is sorted once, when it is written, by one pure function over the code and
+the words, strictly, into three kinds. `transient`: any 5xx status or a `server_error`, `overloaded_error` or `api_error`
+type whatever else is said, a gateway, proxy or HTML page, a status with no error type of its own, a 400
+`invalid_request_error` (context length, content filtering, a message quoting `permission denied`), and whatever is not
+recognised. `limit`: `rate_limit`, `rate_limit_error`, `usage limit`, `hit your limit`, `weekly limit`; its reset time is read
+once and kept (`reset`, an RFC 3339 instant) from `resets 3pm (Europe/Berlin)`, `resets 3pm PST` (a zone in brackets or an
+abbreviation right after the time, from one table: UTC, GMT, EST, EDT, CST, CDT, MST, MDT, PST, PDT, CET, CEST, and the IANA
+names; any other zone is no time), `resets Oct 9, 10am`, `|<unix seconds>`, `try again in 2 hours` (whole units only: ms, s,
+m, h, d, w). A clock time with no date that has already passed, a date that is none (Feb 31), a time over a month off are no
+time. `account`: a pair that belongs together (401 with `authentication_error`; 402, `billing_error` or a credit balance too
+low; 403 with `permission_error`; 404 with a `not_found_error` that names a model), or words that say it outright (an
+invalid or expired API key or OAuth token, `please run /login`), or Claude Code's codes `billing_error`,
+`authentication_failed`, `model_not_found`. Bare words (billing, forbidden, unauthorized) and a status alone are none.
+
+The queue of a held role waits a time, always: a transient error 5 minutes; an account error 30 minutes (a slow probe, not for
+ever); a limit until its reset time, never under 5 minutes nor over 6 hours, and 5 minutes when the record has no reset. Then
+one line goes, and a turn that fails the same way is a record of its own and holds the role again. The role's next turn
+ending, or a restart (which removes the record), ends the hold sooner. The owner's own message (the cockpit's chat) goes
+through any hold: while a role is held, the first of the owner's lines anywhere in its queue is taken to the head, out of its
+order, and typed (the queue's order is untouched whenever no hold is on), and a held role's full queue (20) takes the owner's
+message up to 5 past the bound. The courier looks again every few seconds while a hold lasts, and reads no record for a role
+with nothing queued.
+
+`zmina ls` adds the kind to the status: `… an API error, usage limit, resets Fri 15:00 UTC, queue held until 15:00 UTC: <text>`
+or `… an API error, account problem, needs the owner, queue held until 12:30 UTC: <text>`; `--json` has `turn_error_kind`
+(`limit`, `account`; none for a transient one), `turn_error_held_until` and, for a limit with a time, `turn_error_reset`. The
+dispatcher is told once, in the line the ticker's step 9 describes: an account error as one that needs the owner, and, when
+the role is held for it, for how long. A held dispatcher cannot read that note, and its signals (at most 20, past which a new
+one is refused) and notes pile up behind it, so for it the owner is also told by a `dispatcher-held` event in the log, by `zmina
+ls` and by `zmina doctor` (`holds`, with what waits behind it).
 
 ### The crossing mark: a line that crossed a newer one
 
@@ -620,7 +640,7 @@ goes over the crew's field by field; a change applies at the role's next start. 
 
 | Command | Does |
 |---|---|
-| `zmina ls [role...] [--all] [--wide] [--json]` | first line: when the ticker last beat (and `STOPPED` while the shift is stopped), how many roles are up and down. Then a line per role that is not down: role, `up`/`dead` (its process ended, the ticker collects it within a minute)/`outside` (a claude with that name runs, not under zmina)/`unknown` (tmux did not answer) with `idle`/`busy`/`waiting` (`waiting (question)` or `waiting (permission)` when Claude Code's session file says what a waiting role waits on, `--json` as `waiting_for`; `idle (last turn ended in an API error: …)` while the role is idle since a turn its `StopFailure` hook recorded as ended that way, `--json` as `turn_error` (a usage limit adds `, usage limit, resets <time>`, an account problem `, account problem, needs the owner`, and `--json` `turn_error_kind` and `turn_error_reset`; see the `StopFailure` hook); `(dialog)` while its screen shows a question instead of its input line; `up unknown (session file unreadable; zmina doctor)` when Claude Code's session file for the role is empty or cut short, which `doctor` names with the role to restart, and `--json` says in `status_error`), for how long (`3m`, `4h12m`, `2d3h`), how many tokens its conversation fills (`362k/150k` with its `context_max`), the active tasks it holds. The down roles follow in one line, `down: designer, dev3 (T-4), seo (broken)`, each with what is worth knowing in brackets: tasks, `broken` (dies on boot), `bad dir` (its dir is gone — it does not start, the rest of the crew runs on), `N lines need attention` (failed lines that may have reached the role; see `zmina queue`), `N failed lines` (nothing reached it), `asleep until Mon 09:00` (`zmina sleep`), next scheduled run, expiry. `--all`: a line for the down ones too. `--wide`: the whole table with SESSION, KEEP (+ next scheduled run, expiry) and ABOUT; `zmina ls <role>` the same for that role and its copies, with what it says it does. A second line says it when the crew is retired (where the live crew is), or has stood still for over an hour (stopped, or its ticker silent; see `zmina retire`). `*` marks the dispatcher. Last line `later: N parked` while the parked list is not empty. A role with a rotation in flight says so after its status, `rotating r7k2m9qd (started 2m)` (also in the down line), and `--wide` and `zmina ls <role>` add a line `dev last rotation: rebuilt 14:02 (restart_at)` for each role that was rotated (Rotations). `--json` has every field (`failed` counts all failed lines, `attention` those that may have reached the role), also `rotation` (the newest rotation that is not a compact or a clear: `id`, `kind`, `open` with `phase` and `at` since when, or `outcome` with `at` when it closed and `then` `rebuilt` or `aborted` for a lost one; no key for a role never rotated), `prompt: true` while an up role's screen shows a dialog or a question, and `now` / `now_at`: the role's last status line in words (its screen's last `⏺ …` line that is not a tool call) and since when it says so. If tool output scrolls that line away, the last line and its timestamp are kept until new words appear. |
+| `zmina ls [role...] [--all] [--wide] [--json]` | first line: when the ticker last beat (and `STOPPED` while the shift is stopped), how many roles are up and down. Then a line per role that is not down: role, `up`/`dead` (its process ended, the ticker collects it within a minute)/`outside` (a claude with that name runs, not under zmina)/`unknown` (tmux did not answer) with `idle`/`busy`/`waiting` (`waiting (question)` or `waiting (permission)` when Claude Code's session file says what a waiting role waits on, `--json` as `waiting_for`; `idle (last turn ended in an API error: …)` while the role is idle since a turn its `StopFailure` hook recorded as ended that way, `--json` as `turn_error` (a usage limit adds `, usage limit, resets <time>`, an account problem `, account problem, needs the owner`, and `--json` `turn_error_kind`, `turn_error_held_until` and `turn_error_reset`; see Failed turns); `(dialog)` while its screen shows a question instead of its input line; `up unknown (session file unreadable; zmina doctor)` when Claude Code's session file for the role is empty or cut short, which `doctor` names with the role to restart, and `--json` says in `status_error`), for how long (`3m`, `4h12m`, `2d3h`), how many tokens its conversation fills (`362k/150k` with its `context_max`), the active tasks it holds. The down roles follow in one line, `down: designer, dev3 (T-4), seo (broken)`, each with what is worth knowing in brackets: tasks, `broken` (dies on boot), `bad dir` (its dir is gone — it does not start, the rest of the crew runs on), `N lines need attention` (failed lines that may have reached the role; see `zmina queue`), `N failed lines` (nothing reached it), `asleep until Mon 09:00` (`zmina sleep`), next scheduled run, expiry. `--all`: a line for the down ones too. `--wide`: the whole table with SESSION, KEEP (+ next scheduled run, expiry) and ABOUT; `zmina ls <role>` the same for that role and its copies, with what it says it does. A second line says it when the crew is retired (where the live crew is), or has stood still for over an hour (stopped, or its ticker silent; see `zmina retire`). `*` marks the dispatcher. Last line `later: N parked` while the parked list is not empty. A role with a rotation in flight says so after its status, `rotating r7k2m9qd (started 2m)` (also in the down line), and `--wide` and `zmina ls <role>` add a line `dev last rotation: rebuilt 14:02 (restart_at)` for each role that was rotated (Rotations). `--json` has every field (`failed` counts all failed lines, `attention` those that may have reached the role), also `rotation` (the newest rotation that is not a compact or a clear: `id`, `kind`, `open` with `phase` and `at` since when, or `outcome` with `at` when it closed and `then` `rebuilt` or `aborted` for a lost one; no key for a role never rotated), `prompt: true` while an up role's screen shows a dialog or a question, and `now` / `now_at`: the role's last status line in words (its screen's last `⏺ …` line that is not a tool call) and since when it says so. If tool output scrolls that line away, the last line and its timestamp are kept until new words appear. |
 | `zmina up <role...>` / `--all` | start roles. Refuses a role already up (with `--fresh` it names `zmina restart <role> --fresh`), and a name a claude outside zmina already holds. Clears a hold and a broken mark. A sleeping role resumes its last known conversation, as at its alarm; the alarm still rings later. A fresh start (not `--resume`, no resume policy) of a role that holds active tasks hands them, as `--task` does for one: the line that says why (`[zmina] restarted fresh: started by hand (zmina up). …`) and each task's packet, at the head of its queue, with a rotation record of kind `up` (see Rotations). A start that resumes, or of a role that holds none, is a plain start. |
 | `zmina up <role> --as N` | a copy of the role, `<role>#N` (2–9) under `<session>-N`, same dir/boot/model/args; never kept up, gone once it is down. `zmina down dev --as 2` (or `zmina down 'dev#2'`). |
 | `zmina up <role> [--as N] --task T-1` | start a seat for an active recorded task, in its worktree when present. Queue one short handoff packet locator, never the inline task body. Read that file, check `task show` and its latest Note, then run the exact `task accept` command carried by the locator before work. By default continue a compatible task conversation, otherwise start fresh; `--continue` / `--fresh` make the choice explicit. The task names this role. Claude Code trust is answered only for worktrees zmina made under `<crew>/worktrees/`. |
@@ -2346,7 +2366,7 @@ until it can go.
    line, a dialog holds its boot and its queued lines wait: <the screen's last lines>` (once; `a question`
    or `a permission prompt` for `a dialog` likewise). A last turn that ended in an API error →
    `<role>: its last turn ended in an API error: …` (once per failed turn, from its `StopFailure` record or
-   transcript; kinds: see `StopFailure`). A usage-limit notice at the
+   transcript; kinds: Failed turns). A usage-limit notice at the
    bottom of the screen → `<role>: stopped by a usage limit: …` (once per notice). Folder trust in
    a role's own task worktree is answered (`trusted` in the log).
 

@@ -17,7 +17,7 @@ const (
 	// session that keeps failing — a model that is not there, a login that lapsed, a limit — would otherwise take its
 	// whole queue at one line a second, each line a turn that fails again. Past it one line goes; if that turn fails
 	// too, its own record holds the role again. It is the wait for a transient error, and for a limit that gave no reset
-	// time; an account error waits for the role's next turn instead (holds), a limit with a reset time until then.
+	// time and the least of any limit's; an account error waits AccountHold, a limit with a reset time until then (holdFor).
 	FailHold = 5 * time.Minute
 	// failSame is how far apart the transcript's error line and a hook's record may be and still be one failed turn.
 	failSame = time.Minute
@@ -25,42 +25,60 @@ const (
 
 // TurnFailure is what a role's StopFailure hook recorded: its turn ended on an API error. Claude Code runs no Stop
 // hook for such a turn, and its status goes idle as for any other turn that ended. Error is the short code Claude Code
-// gives the error (model_not_found) and Details the words it showed for it, passed on as they came. What kind of error
-// it is (Class: transient, a limit, an account problem) is worked out from them when it is looked at, and never kept:
-// the record is what the hook said. ErrorDetails is the hook's own error_details, which only the sorting reads.
+// gives the error (model_not_found) and Details the words it showed for it, passed on as they came. ErrorDetails is the
+// hook's own error_details, which only the sorting reads. What kind of error it is (transient, a limit, an account problem)
+// is worked out once, when the record is written (Kind), and for a limit the moment it lifts is read then too (Reset), in
+// the zone of the host the notice was shown on: every reader after that takes both from the record and parses nothing. A
+// record written before they existed has neither, and is sorted by its words when it is read, with no reset time.
 type TurnFailure struct {
 	SessionID    string    `json:"session_id"`
 	At           time.Time `json:"at"`
 	Error        string    `json:"error,omitempty"`
 	Details      string    `json:"details,omitempty"`
 	ErrorDetails string    `json:"error_details,omitempty"`
+	Kind         string    `json:"kind,omitempty"`
+	Reset        time.Time `json:"reset,omitzero"`
 }
 
-// Class is what kind of error the record is (ClassifyFailure over what the hook said), with its reset time for a limit,
-// read against the moment the hook ran: a time the notice gives with no zone is in the zone of the host, which is where
-// Claude Code showed it.
-func (f *TurnFailure) Class() FailureClass { return f.classWith("") }
+// Class is what kind of error the record is, with the reset time of a limit when the record has one: the record's own, never
+// worked out again from words and the reader's zone. A record with no Kind is sorted by its words, its reset left unknown.
+func (f *TurnFailure) Class() FailureClass {
+	switch kind := FailureKind(f.Kind); kind {
+	case KindLimit:
+		return FailureClass{Kind: KindLimit, Reset: f.Reset}
+	case KindTransient, KindAccount:
+		return FailureClass{Kind: kind}
+	}
 
-// classWith is Class over what the transcript showed of the same error besides.
-func (f *TurnFailure) classWith(more string) FailureClass {
-	return ClassifyFailure(f.Error, f.ErrorDetails+" "+f.Details+" "+more, f.At.In(time.Local))
+	c := ClassifyFailure(f.Error, f.ErrorDetails+" "+f.Details, f.At)
+	c.Reset = time.Time{}
+
+	return c
 }
 
-// holds reports whether the lines queued for a role wait at now because of this failure, by what kind of error it is: a
-// transient one FailHold; an account problem until the role's next turn ends, which is not a time (the caller asks whether
-// the record is still how the session stands); a limit until its reset time, at most LimitHoldMax, FailHold when the message
-// gave none.
-func (f *TurnFailure) holds(now time.Time) bool {
+// holdFor is how long after the record the lines queued for the role wait, by what kind of error it is: FailHold for a
+// transient one; AccountHold for an account error; for a limit until its reset time, never less than FailHold nor more than
+// LimitHoldMax, FailHold when the record has no reset time.
+func (f *TurnFailure) holdFor() time.Duration {
 	c := f.Class()
 
 	switch {
 	case c.Kind == KindAccount:
-		return !f.At.IsZero() && !now.Before(f.At)
-	case c.Kind == KindLimit && !c.Reset.IsZero():
-		return within(now, f.At, min(c.Reset.Sub(f.At), LimitHoldMax))
+		return AccountHold
+	case c.Kind == KindLimit && c.Reset.After(f.At):
+		return min(max(c.Reset.Sub(f.At), FailHold), LimitHoldMax)
 	default:
-		return within(now, f.At, FailHold)
+		return FailHold
 	}
+}
+
+// holdEnd is the moment the hold of the record ends.
+func (f *TurnFailure) holdEnd() time.Time { return f.At.Add(f.holdFor()) }
+
+// holds reports whether the lines queued for a role wait at now because of this failure. A record older than the longest
+// hold there is is stale, and is not even sorted.
+func (f *TurnFailure) holds(now time.Time) bool {
+	return within(now, f.At, LimitHoldMax) && within(now, f.At, f.holdFor())
 }
 
 // Text is the error in a few words: what Claude Code named, then what it said of it.
@@ -143,6 +161,10 @@ func RecordFailure(l crew.Layout, role string, input []byte, now time.Time) (*Tu
 
 	f.At = now.UTC()
 
+	// Sorted once, here: the reset time of a limit is read against the clock and the zone of the host that showed it.
+	c := ClassifyFailure(f.Error, f.ErrorDetails+" "+f.Details, now)
+	f.Kind, f.Reset = string(c.Kind), c.Reset
+
 	if err := writeRecord(l, l.HookFailure(role), f); err != nil {
 		return nil, err
 	}
@@ -184,18 +206,19 @@ func (f *TurnFailure) current(sess *registry.Session) bool {
 }
 
 // HoldWords is how long the lines queued for a role wait because of the failure, in the words of the failure-hold event:
-// "the lines queued for it wait 5m0s" for a transient error, as it always said; for a limit until its reset time when the
-// message gave one, and for an account problem until the role's next turn ends or it is restarted, the owner to mend it.
+// "the lines queued for it wait 5m0s" for a transient error, as it always said; for a limit until its reset time (never less
+// than FailHold, never more than LimitHoldMax) when the record has one; for an account problem AccountHold, or less when the
+// role's next turn ends or it is restarted, and the owner to mend it.
 func HoldWords(f *TurnFailure) string {
 	c := f.Class()
 
 	switch {
 	case c.Kind == KindAccount:
-		return "an account problem that needs the owner: the lines queued for it wait until its next turn ends or it is " +
-			"restarted"
-	case c.Kind == KindLimit && !c.Reset.IsZero():
-		return "a usage limit: the lines queued for it wait until " + c.Reset.Format("Mon 15:04 MST") + ", at most " +
-			span(LimitHoldMax)
+		return "an account problem that needs the owner: the lines queued for it wait " + span(AccountHold) + ", or less when its " +
+			"next turn ends or it is restarted"
+	case c.Kind == KindLimit && c.Reset.After(f.At):
+		return "a usage limit: the lines queued for it wait until " + f.holdEnd().In(c.Reset.Location()).Format("Mon 15:04 MST") +
+			" (at least " + span(FailHold) + ", at most " + span(LimitHoldMax) + ")"
 	case c.Kind == KindLimit:
 		return "a usage limit with no reset time given: the lines queued for it wait " + FailHold.String()
 	default:
@@ -204,58 +227,102 @@ func HoldWords(f *TurnFailure) string {
 }
 
 // failureHeld reports whether the lines queued for a role wait because its last turn ended on an API error that still holds
-// them (TurnFailure.holds: FailHold for a transient one, until the reset time for a limit that gave one, until the role's
-// next turn for an account problem), a record of the hook that is of its current session and still how it stands
-// (failureFor). A role started anew has no record, and an owner's message goes as ever (ownerNext). Delivery
-// of any kind — the beat's, the pass's, a turn end's — leaves the role alone while it holds. It asks no tmux: the
-// role's session is found by its name in Claude Code's session files, as Waiting needs, and only for a role that has such
-// a record. A record of another session, an older one, or a role the hook never ran for holds nothing.
+// them (TurnFailure.holds: FailHold for a transient one, AccountHold for an account problem, until the reset time for a
+// limit that gave one), a record of the hook that is of its current session and still how it stands (failureFor): a turn the
+// role goes through since ends it, and so does a restart, which takes the record away. A role started anew has no record, and
+// the owner's own message goes as ever (ownerThroughHold). Delivery of any kind — the beat's, the pass's, a turn end's —
+// leaves the role alone while it holds. It asks no tmux: the role's session is found by its name in Claude Code's session
+// files, as Waiting needs, and only for a role that has such a record, and a record past the longest hold is not even
+// sorted. A record of another session, an older one, or a role the hook never ran for holds nothing.
 func (s *Shift) failureHeld(name string, now time.Time) bool {
-	held, _ := s.failureHold(name, now)
+	_, held := s.failureRecord(name, now)
 
 	return held
 }
 
-// HeldUntilNextTurn reports whether the role's queue is held by a failure that no time lifts: an account problem, which
-// ends with the role's next turn, a restart or the owner's own message, each of which changes the state or runs a hook. A
-// courier has no use for looking again every few seconds for such a role, as it has for a hold that runs out.
-func (s *Shift) HeldUntilNextTurn(name string, now time.Time) bool {
-	held, untimed := s.failureHold(name, now)
-
-	return held && untimed
-}
-
-// failureHold is failureHeld and, for a role that is held, whether it is for an account problem.
-func (s *Shift) failureHold(name string, now time.Time) (held, untimed bool) {
+// failureRecord is the record that holds the role's queue at now, and whether one does (failureHeld).
+func (s *Shift) failureRecord(name string, now time.Time) (*TurnFailure, bool) {
 	if s.Reg == nil || !hookRole(name) {
-		return false, false
+		return nil, false
 	}
 
 	var f TurnFailure
 	if !readRecord(s.Crew.Layout().HookFailure(name), &f) || f.SessionID == "" || !f.holds(now) {
-		return false, false
+		return nil, false
 	}
 
 	r, err := s.Role(name)
 	if err != nil || r.IsCodex() {
-		return false, false
+		return nil, false
 	}
 
 	sess := s.Reg.LiveByName(r.Session)
 	if sess == nil || f.SessionID != sess.SessionID || !f.current(sess) {
-		return false, false
+		return nil, false
 	}
 
-	return true, f.Class().Kind == KindAccount
+	return &f, true
 }
 
-// ownerNext reports whether the next line queued for a role is the owner's own message (the cockpit's chat). The hold
-// after a failed turn is for what zmina would feed the role by itself; what the owner sends goes, as their typing into
-// the pane would.
-func (s *Shift) ownerNext(name string) bool {
-	rs, ok := s.State.Roles[name]
+// FailureHold is a role whose queue waits for a failed turn, as the owner is told of it (zmina doctor).
+type FailureHold struct {
+	Role string
+	// Class is what kind of error it was, Text the words of it, Until when the hold ends if nothing ends it sooner.
+	Class FailureClass
+	Text  string
+	Until time.Time
+}
 
-	return ok && len(rs.Inbox) > 0 && s.ownerChat(name, rs.Inbox[0])
+// FailureHolds lists the roles whose last failed turn still holds their queues at now, going by the records alone (no
+// session is asked, so a role that has been through a turn since is listed until its record runs out: the next beat
+// delivers to it). Only the roles the crew file has, and only records within the longest hold.
+func FailureHolds(l crew.Layout, roles []string, now time.Time) []FailureHold {
+	var out []FailureHold
+
+	for _, name := range roles {
+		var f TurnFailure
+		if !hookRole(name) || !readRecord(l.HookFailure(name), &f) || f.SessionID == "" || !f.holds(now) {
+			continue
+		}
+
+		out = append(out, FailureHold{Role: name, Class: f.Class(), Text: f.Text(), Until: f.holdEnd()})
+	}
+
+	return out
+}
+
+// ownerLine is the place in a role's queue of the first line that is the owner's own message (the cockpit's chat), -1 when
+// there is none.
+func (s *Shift) ownerLine(name string) int {
+	rs, ok := s.State.Roles[name]
+	if !ok {
+		return -1
+	}
+
+	for i, line := range rs.Inbox {
+		if s.ownerChat(name, line) {
+			return i
+		}
+	}
+
+	return -1
+}
+
+// ownerThroughHold is what the hold after a failed turn does with the owner's words: it is for what zmina would feed the role
+// by itself, and what the owner sends goes, as their typing into the pane would, wherever it stands in the queue. The first
+// of the owner's lines is taken to the head, out of its order, and only now, while the role is held; the lines before it stay
+// held, and the queue's order is what it was whenever no hold is on. It reports whether the queue has such a line.
+func (s *Shift) ownerThroughHold(name string) bool {
+	i := s.ownerLine(name)
+	if i < 0 {
+		return false
+	}
+
+	if i > 0 {
+		s.moveToHead(name, i)
+	}
+
+	return true
 }
 
 // sameTurn reports whether the transcript's last error is the failed turn the record is of: written within failSame of
@@ -321,35 +388,49 @@ func (s *Shift) apiErrorNote(name string, rs *RoleState) string {
 
 	rs.ErrorNoted = id
 
-	note := apiErrorLine(name, text, s.classOf(rec, turn, text))
+	class, held := s.classOf(name, rec, turn, text)
+	note := apiErrorLine(name, text, class, held)
 	s.log(name, "api-error", "", note)
+
+	// A dispatcher that is held hears nothing of it: the owner must see it in the log (and zmina ls, zmina doctor).
+	if held && name == s.Crew.Dispatcher && class.Kind != KindTransient {
+		s.log(name, "dispatcher-held", "", "its turn ended on an API error ("+class.Words()+") and its queue, the crew's signals "+
+			"and the health notes wait for it until "+rec.holdEnd().Format("15:04 MST")+" or its next turn: the owner has to "+
+			"look (zmina ls, zmina doctor): "+clip(text))
+	}
 
 	return note
 }
 
-// classOf is the kind of the error a note is told of: the hook's record of that turn when there is one (its code and
-// details, and the words the transcript showed besides), else the words alone, read against now. A transcript's error that
-// is of another turn than the record's is not the record's.
-func (s *Shift) classOf(rec *TurnFailure, turn registry.Turn, text string) FailureClass {
+// classOf is the kind of the error a note is told of, and whether the role is held for it. When the hook recorded that turn
+// (a record of the session, that of the transcript's error when it shows one) the record's kind is the kind, the very one
+// the hold goes by; a role with no hook record has the kind of the words it was shown, and no hold to claim.
+func (s *Shift) classOf(name string, rec *TurnFailure, turn registry.Turn, text string) (FailureClass, bool) {
 	if rec == nil || turn.Error != "" && !rec.sameTurn(turn) {
-		return ClassifyFailure("", text, s.Now())
+		return ClassifyFailure("", text, s.Now()), false
 	}
 
-	return rec.classWith(text)
+	_, held := s.failureRecord(name, s.Now())
+
+	return rec.Class(), held
 }
 
 // apiErrorLine is the note for the dispatcher about a role whose last turn ended in an API error. A transient error is the
 // plain line it always was. A limit says so, and when it lifts if the message did. An account problem says it needs the
-// owner (zmina cannot mend a billing, login or permission error, nor the role by retrying) and that the role's queue waits
-// until its next turn ends or it is restarted, not for a few minutes.
-func apiErrorLine(name, text string, c FailureClass) string {
+// owner (zmina cannot mend a billing, login or permission error, nor the role by retrying), and, when the role's queue is
+// held for it, for how long: the hold is a probe, so it is AccountHold and not for ever.
+func apiErrorLine(name, text string, c FailureClass, held bool) string {
 	switch c.Kind {
 	case KindLimit:
 		return name + ": its last turn ended in an API error (" + c.Words() + "): " + clip(text)
 	case KindAccount:
-		return name + ": its last turn ended in an API error that needs the owner (an account, billing, login or permission " +
-			"problem, which retrying does not mend): " + clip(text) + "; its queued lines wait until its next turn ends or it is " +
-			"restarted"
+		line := name + ": its last turn ended in an API error that needs the owner (an account, billing, login or permission " +
+			"problem, which retrying does not mend): " + clip(text)
+		if held {
+			line += "; its queued lines wait " + span(AccountHold) + ", or less when its next turn ends or it is restarted"
+		}
+
+		return line
 	default:
 		return name + ": its last turn ended in an API error: " + clip(text)
 	}
