@@ -96,6 +96,46 @@ func TestCheckpointLessonsSection(t *testing.T) {
 	assert.NotContains(t, out, "Pin the Go version", "filed, not kept in the record")
 }
 
+// A crew whose handoff shape names a lessons section asks its roles for lessons: the record is held to the shape
+// without it, so a checkpoint with lessons, with none, and with the section left out are all saved.
+func TestCheckpointLessonsSectionNamedByTheShape(t *testing.T) {
+	file := testCrew(t, "  dev:\n    handoff: {sections: [{name: summary, guidance: state}, {name: lessons, guidance: rules}]}\n")
+	_, _, err := zm(t, file, "task", "new", "dev", "Fix the build")
+	require.NoError(t, err)
+
+	save := func(values map[string]string) error {
+		body := filepath.Join(t.TempDir(), "cp.json")
+		raw, err := json.Marshal(values)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(body, raw, 0o600))
+
+		_, _, err = zm(t, file, "task", "checkpoint", "1", "--file", body)
+
+		return err
+	}
+
+	require.NoError(t, save(map[string]string{"summary": "one",
+		"lessons": "### Pin the Go version\nWhy: a bump raised go.mod\nApplies to: one task\n"}))
+	require.NoError(t, save(map[string]string{"summary": "two", "lessons": "none"}))
+	require.NoError(t, save(map[string]string{"summary": "three", "lessons": ""}))
+	require.NoError(t, save(map[string]string{"summary": "four"}))
+
+	out, _, err := zm(t, file, "lesson", "ls")
+	require.NoError(t, err)
+	assert.Contains(t, out, "LS-1   new     dev        task         Pin the Go version")
+	assert.NotContains(t, out, "LS-2", "none and an empty section file nothing")
+
+	out, _, err = zm(t, file, "task", "checkpoint", "1", "--json")
+	require.NoError(t, err)
+	assert.Contains(t, out, "four")
+	assert.NotContains(t, out, "lessons", "the record carries no lessons section")
+
+	// The packet still asks for it.
+	out, _, err = zm(t, file, "task", "handoff", "1", "--json")
+	require.NoError(t, err)
+	assert.Contains(t, out, "lessons")
+}
+
 func TestLessonsDue(t *testing.T) {
 	c := &crew.Crew{Lessons: crew.Lessons{On: true, At: "06:00"}}
 	morning := time.Date(2026, 11, 9, 6, 30, 0, 0, c.Location())

@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/record"
 	"github.com/iamnikolie/zmina/internal/shift"
 	"github.com/iamnikolie/zmina/internal/task"
@@ -123,7 +124,7 @@ func (a *app) saveRecordFile(id, kind, file, handoff string, cmd *cobra.Command)
 		if lessonErr != nil {
 			fmt.Fprintln(a.err, "zmina: lessons not filed:", lessonErr)
 		}
-		d := record.Document{Version: 1, Kind: kind, Task: t.ID, Role: t.Role, By: s.By, At: s.Now(), Shape: s.Crew.HandoffFor(r), Values: values}
+		d := record.Document{Version: 1, Kind: kind, Task: t.ID, Role: t.Role, By: s.By, At: s.Now(), Shape: recordShape(s.Crew.HandoffFor(r)), Values: values}
 		ref, err := record.Save(s.Crew.StateDir(), d)
 		if err != nil {
 			return err
@@ -249,4 +250,19 @@ func recordTask(t task.Task, kind, revision string) string {
 		return ref.Task
 	}
 	return t.ID
+}
+
+// recordShape is the shape a record is held to: the role's handoff shape without its lessons section. A shape names
+// that section to ask the role for lessons; what it writes there is filed as lessons and leaves the record, so the
+// record has no such section to carry, and a role with nothing learned may leave it out.
+func recordShape(shape crew.HandoffShape) crew.HandoffShape {
+	out := crew.HandoffShape{Sections: make([]crew.Section, 0, len(shape.Sections))}
+
+	for _, sec := range shape.Sections {
+		if sec.Name != "lessons" {
+			out.Sections = append(out.Sections, sec)
+		}
+	}
+
+	return out
 }
