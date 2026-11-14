@@ -96,6 +96,12 @@ func (a *app) pendingCommand() *cobra.Command {
 						_ = shift.RecordRotationEvidence(s.Crew.Layout(), role, shift.EvidenceHookStart, "", role, hook.SessionID, s.Now())
 					}
 
+					// A compaction or a clear ends what the role was asked in its conversation: a question its last turn ended on is
+					// not awaited of the one that begins.
+					if self && trimmed(hook.Source) {
+						_ = shift.DropTurn(s.Crew.Layout(), role)
+					}
+
 					return nil
 				}
 
@@ -145,6 +151,18 @@ func hookSource(in io.Reader) string {
 type hookInput struct {
 	Source    string `json:"source"`
 	SessionID string `json:"session_id"`
+	// LastMessage is a Stop hook's last reply of the turn, a string (anything else is no reply: see lastReply).
+	LastMessage json.RawMessage `json:"last_assistant_message"`
+}
+
+// lastReply is the turn's last reply of a Stop hook's input; empty when it has none or it is not a string.
+func (h hookInput) lastReply() string {
+	var s string
+	if json.Unmarshal(h.LastMessage, &s) != nil {
+		return ""
+	}
+
+	return s
 }
 
 // readHook reads a hook's input: empty when run by hand (a terminal on stdin) or when it is not JSON. The whole

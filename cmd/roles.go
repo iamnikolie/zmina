@@ -958,20 +958,66 @@ func (a *app) awaitOwnTurn(name string, own shift.Own, deadline time.Time) error
 	}
 }
 
+// queueSend queues a line for a role with the facts of its card, lets it go at once when the role can take it, and says what became
+// of it: it is the delivery of `send --when-idle`, and of the owner's answer a plugin gives.
+func (a *app) queueSend(s *shift.Shift, role, text string, facts shift.Facts) error {
+	id, err := s.QueueTrackedFrom(role, text, facts)
+	if err != nil {
+		return err
+	}
+
+	// It goes now when the role can take it, else with the beat. Its own line is the last one queued: it
+	// went when it is no longer waiting (a line before it takes the pass first).
+	rs := s.State.Role(role)
+	queued := rs.Inbox[len(rs.Inbox)-1]
+	s.DeliverTo(role)
+	went := !slices.Contains(rs.Inbox, queued) &&
+		!slices.ContainsFunc(rs.Failed, func(f shift.Failed) bool {
+			// A line that went in one post with others (a joined post) failed with them, as a part.
+			return f.Line == queued || slices.ContainsFunc(f.Parts, func(p shift.Part) bool { return p.Line == queued })
+		})
+
+	switch {
+	case id != "" && went:
+		fmt.Fprintf(a.out, "delivered to %s as %s: said again until it acks\n", role, id)
+	case id != "":
+		fmt.Fprintf(a.out, "queued for %s as %s: delivered once it is up and between turns; said again until it acks\n", role, id)
+	case went:
+		fmt.Fprintf(a.out, "delivered to %s\n", role)
+	default:
+		fmt.Fprintf(a.out, "queued for %s: typed the first time it is up and idle\n", role)
+	}
+
+	return nil
+}
+
 func (a *app) sendCommand() *cobra.Command {
 	var (
-		whenIdle bool
-		taskID   string
+		whenIdle    bool
+		taskID      string
+		dialog, via string
 	)
 
 	c := &cobra.Command{
 		Use:   "send <role> <text>",
-		Short: "Type one line into a role's prompt and press Enter (--when-idle: queued; it goes at once when the role can take it, else with the ticker; --task T-n, with --when-idle: the task it is about)",
+		Short: "Type one line into a role's prompt and press Enter (--when-idle: queued; it goes at once when the role can take it, else with the ticker; --task T-n, with --when-idle: the task it is about; --by <plugin> --dialog <id>: the owner's answer to the question a role's turn ended on, given through a plugin)",
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			text := strings.Join(args[1:], " ")
-			if strings.ContainsAny(text, "\r\n") {
+
+			// The owner's words through a plugin are folded to one line whatever they hold; any other line is one.
+			if via == "" && strings.ContainsAny(text, "\r\n") {
 				return errors.New("send takes one line; for more, use SendMessage from a session")
+			}
+
+			// A plugin's answer is the owner's own words to the question a role's turn ended on, and to that question only: both flags or none.
+			switch {
+			case via != "" && dialog == "":
+				return errors.New("--by needs --dialog <id>: a plugin answers only the question it was told of")
+			case dialog != "" && via == "":
+				return errors.New("--dialog needs --by <plugin>: it names the question a plugin's answer is to")
+			case via != "" && (taskID != "" || whenIdle):
+				return errors.New("--by answers a question the role's turn ended on: it takes neither --when-idle nor --task")
 			}
 
 			// A line sent now keeps no card when it has to be typed, so no task could be kept on it and no mark made: the task
@@ -981,6 +1027,15 @@ func (a *app) sendCommand() *cobra.Command {
 			}
 
 			return a.withState(func(s *shift.Shift) error {
+				if via != "" {
+					plug, err := pluginVoice(s.Crew, via)
+					if err != nil {
+						return err
+					}
+
+					return a.answerTurn(s, plug, dialog, args[0], text)
+				}
+
 				// The task a line is about is what its sender says here, never read from its words: it is kept on the line's
 				// card, and a line that crossed a newer line of its reader's on that task is delivered with a mark that says so.
 				facts := shift.Facts{}
@@ -995,34 +1050,7 @@ func (a *app) sendCommand() *cobra.Command {
 				}
 
 				if whenIdle {
-					id, err := s.QueueTrackedFrom(args[0], text, facts)
-					if err != nil {
-						return err
-					}
-
-					// It goes now when the role can take it, else with the beat. Its own line is the last one queued: it
-					// went when it is no longer waiting (a line before it takes the pass first).
-					rs := s.State.Role(args[0])
-					queued := rs.Inbox[len(rs.Inbox)-1]
-					s.DeliverTo(args[0])
-					went := !slices.Contains(rs.Inbox, queued) &&
-						!slices.ContainsFunc(rs.Failed, func(f shift.Failed) bool {
-							// A line that went in one post with others (a joined post) failed with them, as a part.
-							return f.Line == queued || slices.ContainsFunc(f.Parts, func(p shift.Part) bool { return p.Line == queued })
-						})
-
-					switch {
-					case id != "" && went:
-						fmt.Fprintf(a.out, "delivered to %s as %s: said again until it acks\n", args[0], id)
-					case id != "":
-						fmt.Fprintf(a.out, "queued for %s as %s: delivered once it is up and between turns; said again until it acks\n", args[0], id)
-					case went:
-						fmt.Fprintf(a.out, "delivered to %s\n", args[0])
-					default:
-						fmt.Fprintf(a.out, "queued for %s: typed the first time it is up and idle\n", args[0])
-					}
-
-					return nil
+					return a.queueSend(s, args[0], text, facts)
 				}
 
 				err := s.Send(args[0], text)
@@ -1041,6 +1069,8 @@ func (a *app) sendCommand() *cobra.Command {
 
 	c.Flags().BoolVar(&whenIdle, "when-idle", false, "queue the line: it goes at once when the role is up and can take it, else the ticker types it once the role is idle")
 	c.Flags().StringVar(&taskID, "task", "", "the task the line is about (T-n, must exist; needs --when-idle): the line says so on its card, and when it was written before its reader's last line to you on that task, or before you were handed or had fetched it, it reaches the reader behind a [written …] mark")
+	c.Flags().StringVar(&via, "by", "", "a plugin giving the owner's answer to the question a role's turn ended on: its name, with ZMINA_PLUGIN=<name> set; needs --dialog")
+	c.Flags().StringVar(&dialog, "dialog", "", "the id of the dialog event the plugin was told the question in (role:fingerprint:mark): refused unless the role is waiting on that very question; needs --by")
 
 	return c
 }

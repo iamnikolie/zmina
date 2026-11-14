@@ -44,6 +44,15 @@ func (a *app) hookLayout() (crew.Layout, bool) {
 	return crew.Layout{Dir: filepath.Dir(path)}, true
 }
 
+// ownHook reports whether a hook that names a role runs for it: Claude Code runs a role's hooks in the role's own environment
+// (ZMINA_ROLE), so a hook whose --role is another's, or whose environment is another role's, is a command typed by hand or by
+// another role and records, and removes, nothing for the role it names. No ZMINA_ROLE is a hand.
+func ownHook(role string) bool {
+	env := os.Getenv("ZMINA_ROLE")
+
+	return env == "" || env == role
+}
+
 // permissionRequestCommand is the PermissionRequest hook of a Claude role (roleSettings). Claude Code runs it when a
 // dialog is about to be shown, with the tool and its input on stdin. For AskUserQuestion it writes the questions and
 // their options as the role's record (shift.RecordQuestion), which is how zmina knows the question on a screen without
@@ -107,6 +116,11 @@ func (a *app) stopFailureCommand() *cobra.Command {
 			l, ok := a.hookLayout()
 			if !ok || len(input) == 0 {
 				return nil
+			}
+
+			// A turn took place, so the question an earlier turn ended on is not the role's any more: its record goes.
+			if ownHook(role) {
+				_ = shift.DropTurn(l, role)
 			}
 
 			f, err := shift.RecordFailure(l, role, input, time.Now())

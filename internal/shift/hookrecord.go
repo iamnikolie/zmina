@@ -305,9 +305,9 @@ func writeRecord(l crew.Layout, path string, record any) error {
 	return fsx.WriteFile(path, append(data, '\n'), 0o600)
 }
 
-// dropHookRecords removes the two records a role's hooks left (the question and the failure): a role that starts a new
-// session has none of that session's, and what the old one recorded must not read as the new one's. Nothing else in the
-// hooks directory is touched.
+// dropHookRecords removes the records a role's hooks left (the question, the permission calls, the failure and the turn's
+// question): a role that starts a new session has none of that session's, and what the old one recorded must not read as the
+// new one's. Nothing else in the hooks directory is touched.
 func (s *Shift) dropHookRecords(name string) {
 	if !hookRole(name) {
 		return
@@ -318,6 +318,7 @@ func (s *Shift) dropHookRecords(name string) {
 	_ = os.Remove(l.HookPermission(name))
 	_ = os.Remove(l.HookPermission(name) + ".lock")
 	_ = os.Remove(l.HookFailure(name))
+	_ = os.Remove(l.HookTurn(name))
 }
 
 // readRecord reads a record into v; false when there is none or it does not read.

@@ -55,8 +55,9 @@ type pluginWorld struct {
 	dialogStill func(f plugin.DialogFacts) bool
 }
 
-// pluginWorld reads what is open: each item on the owner's todo, and each question on a role's screen that its choose
-// command can answer (the one the screen shows, as chooseDialog reads it).
+// pluginWorld reads what is open: each item on the owner's todo, each question on a role's screen that its choose
+// command can answer (the one the screen shows, as chooseDialog reads it), and each question a role's last turn ended on in plain
+// words (standingTurn).
 func (a *app) pluginWorld(c *crew.Crew, now time.Time) (*pluginWorld, error) {
 	w := &pluginWorld{crew: c, items: map[string]todoItem{}, dialogs: map[string]plugin.DialogFacts{}}
 
@@ -85,6 +86,17 @@ func (a *app) pluginWorld(c *crew.Crew, now time.Time) (*pluginWorld, error) {
 				w.gaps.Roles[v.Role] = true
 			}
 
+			// No dialog on its screen: a role idle since a turn that ended on a question to the owner is awaited all the same (a
+			// standing dialog wins, and a role whose screen could not be read is judged by neither).
+			if !ok && known {
+				var turnKnown bool
+
+				facts, ok, turnKnown = standingTurn(c, v)
+				if !turnKnown {
+					w.gaps.Roles[v.Role] = true
+				}
+			}
+
 			if !ok {
 				continue
 			}
@@ -92,7 +104,7 @@ func (a *app) pluginWorld(c *crew.Crew, now time.Time) (*pluginWorld, error) {
 			key := plugin.DialogKey(plugin.DialogID(facts.Role, facts.ID))
 			w.dialogs[key] = facts
 			w.things = append(w.things, plugin.Thing{Key: key, ID: plugin.DialogID(facts.Role, facts.ID), Class: plugin.DialogThing,
-				Role: facts.Role, Opened: v.Since})
+				Role: facts.Role, Opened: facts.Since})
 		}
 
 		// Read again right before a question is told, as an item is: one answered, or asked again, since the look is not paged.
@@ -100,6 +112,13 @@ func (a *app) pluginWorld(c *crew.Crew, now time.Time) (*pluginWorld, error) {
 			v, _, ok := s.Look(f.Role)
 			if !ok {
 				return false
+			}
+
+			// A turn's question is on no screen: the record is read again, and the role must be idle since that very turn.
+			if f.Prompt == plugin.PromptTurn {
+				now, standing, known := standingTurn(c, v)
+
+				return known && standing && now.ID == f.ID && now.Since.Equal(f.Since)
 			}
 
 			now, standing, known := standingDialog(s, c, v)
@@ -252,6 +271,79 @@ func standingDialog(s *shift.Shift, c *crew.Crew, v shift.View) (plugin.DialogFa
 	return f, true, true
 }
 
+// turnAskWindow is how far before a turn's end an item of the role's own on the owner's todo still says it asked properly when it is
+// not known when the turn before it ended (the first turn, or a record a start dropped): the ask is put on the list in the turn that
+// asks, or a little before.
+const turnAskWindow = 15 * time.Minute
+
+// turnAsked reports whether a role put a question on the owner's todo in the turn that ended on the question the record holds: an ask it
+// made, or a task it set waiting on the owner, whether it still waits there or the owner has answered it, done it, parked it or set it
+// aside since (a plugin that was told of the item has had its card). That turn began after the one before it ended (rec.Prev), so an
+// item made after that is of it, and one made before is of an earlier turn, which says nothing of this one's words; where the earlier
+// turn's end is not known the item must be from turnAskWindow before the record on. A waiting task has no time it began to wait but
+// the time its file was updated, so a later edit of it (a note, a state kept) counts as made in the turn that edited it. A file that
+// does not read says nothing.
+func turnAsked(c *crew.Crew, role string, rec *shift.TurnRecord) bool {
+	since, ok := rec.Prev, !rec.Prev.IsZero()
+	if !ok {
+		since = rec.At.Add(-turnAskWindow)
+	}
+
+	asked, _, _ := askStore(c).Scan()
+
+	for _, a := range asked {
+		if a.Role == role && a.Created.After(since) {
+			return true
+		}
+	}
+
+	tasks, _, _ := taskStore(c).Scan()
+
+	for _, t := range tasks {
+		if t.Role == role && t.State == task.Waiting && t.On == "" && t.Updated.After(since) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// standingTurn is the question a role's last turn ended on, in plain words and with nothing on the owner's todo, that a plugin can
+// be told of: the record its Stop hook kept, while the role is up and idle at its input line (no dialog, no prompt) in the session
+// the record is of, and went idle within moments of the hook (shift.TurnRecord.Stands) — a role that took another turn since is
+// not awaiting it. A record with no text is a turn that asked nothing, and is no thing. Not when the role put something of its own on
+// the todo in that turn (turnAsked), open or closed: it asked, and a card exists. known is false when the record is there and does not
+// read, and nothing is then judged ended.
+func standingTurn(c *crew.Crew, v shift.View) (plugin.DialogFacts, bool, bool) {
+	if v.State != shift.PresenceUp || v.Status != "idle" || v.Prompt || v.Dialog != nil {
+		return plugin.DialogFacts{}, false, true
+	}
+
+	rec, err := shift.ReadTurn(c.Layout(), v.Role)
+	if err != nil {
+		return plugin.DialogFacts{}, false, false
+	}
+
+	if rec == nil || rec.Text == "" || !rec.Stands(v) {
+		return plugin.DialogFacts{}, false, true
+	}
+
+	if turnAsked(c, v.Role, rec) {
+		return plugin.DialogFacts{}, false, true
+	}
+
+	f := plugin.DialogFacts{Role: v.Role, ID: rec.ID, Question: rec.Text, Prompt: plugin.PromptTurn, Since: rec.At}
+
+	if len(v.Tasks) > 0 {
+		f.Task = v.Tasks[0]
+		if t, err := taskStore(c).Get(f.Task); err == nil {
+			f.TaskTitle = t.Headline()
+		}
+	}
+
+	return f, true, true
+}
+
 // itemFacts is what an event of a todo item says of it.
 func (w *pluginWorld) itemFacts(it todoItem) plugin.Item {
 	c := w.crew
@@ -284,11 +376,20 @@ func closureOf(c *crew.Crew, e plugin.Entry, at time.Time) plugin.Closure {
 
 	if e.Kind == plugin.Dialog {
 		// What was chosen is under the id the plugin was told (a plugin's press), or under the dialog's own (a hand's, the cockpit's).
+		// A choice of no number is the owner's words to a question a role's turn ended on: it was answered, not chosen.
 		chosen := plugin.ReadOwner(c.Layout().PluginOwner()).Chosen
-		if ch, ok := chosen[e.ID]; ok && ch.At.After(e.Told) {
+		ch, ok := chosen[e.ID]
+
+		if !ok || !ch.At.After(e.Told) {
+			ch, ok = chosen[dialogOfEvent(e.ID)]
+		}
+
+		if ok && ch.At.After(e.Told) {
 			cl.How, cl.By, cl.Text, cl.At = plugin.HowChosen, ch.By, ch.Text, ch.At
-		} else if ch, ok := chosen[dialogOfEvent(e.ID)]; ok && ch.At.After(e.Told) {
-			cl.How, cl.By, cl.Text, cl.At = plugin.HowChosen, ch.By, ch.Text, ch.At
+
+			if ch.N == 0 {
+				cl.How = plugin.HowAnswered
+			}
 		}
 
 		return cl
@@ -622,8 +723,8 @@ var errNotInLook = errors.New("not in the look")
 
 // line is the event of a due send as it goes on the plugin's stdin, and the id it carries: the one a failed try kept, or one built
 // now from what is open (an answered from where the thing lives). A dialog event is armed for one press before it goes: its nonce
-// is in its id, and the first press made with it, in the wait it was told in, disarms it. The error is errNotInLook for a thing that
-// is not in the look, else why the mark could not be written.
+// is in its id, and the first press made with it, in the wait it was told in, disarms it (the answer to a turn's question is the
+// press of that one). The error is errNotInLook for a thing that is not in the look, else why the mark could not be written.
 func (w *pluginWorld) line(b plugin.Builder, d plugin.Due, now time.Time, armed plugin.Armed, at time.Time) ([]byte, string, error) {
 	switch {
 	case d.Retry != nil:
@@ -638,6 +739,8 @@ func (w *pluginWorld) line(b plugin.Builder, d plugin.Due, now time.Time, armed 
 
 		f.Nonce = plugin.NewNonce()
 
+		// A turn's question is armed as any dialog is: the one answer given with its mark (send --by --dialog) spends it, and only the
+		// plugin that was told it has it.
 		if err := armed.Arm(f.Nonce, plugin.DialogID(f.Role, f.ID), f.Since, at); err != nil {
 			return nil, d.Entry.ID, err
 		}

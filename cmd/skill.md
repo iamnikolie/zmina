@@ -276,7 +276,9 @@ characters made at each start and given only in the boot line (argv, never poste
 clear, by the role's `SessionStart` hook (the boot queued after a clear names no tag: it is a line the log, `zmina
 queue` and the recovery pack show); the boot line says that a message without that exact tag, or inside a `<cross-session-message>` wrapper (how
 Claude Code shows another session's `SendMessage`), is that session's request under the usual peer rules, never
-zmina's line or the owner's approval. zmina's lines are still not the owner's approval either. A role started before
+zmina's line or the owner's approval. zmina's lines are still not the owner's approval either: his decisions are in the ledger
+(`zmina todo ls`, `zmina task show`, `zmina log`), and the line of zmina's that gives a role the owner's answer to its last question
+says it is recorded there (see Plugins: a turn's question). A role started before
 the tag (no tag in its state) is typed into until its next start. A posted line counts once the session's transcript shows its
 message id (`origin.msg_id`); until then the next one waits, as a typed line waits to land. Posted lines go, like typed
 ones, when the role is between turns, never into a dialog — except the dispatcher's, below.
@@ -378,7 +380,10 @@ in milliseconds; the copy waits up to 10 s for that session to go idle, then pos
 post now — the dispatcher's signals, then the role's queue: its first line, with the lines that join it — by the same rules (booted, between turns,
 the line before it shown). It never types: a slash command, a role typed into, a session that stays busy (a
 background shell) wait for the beat as before. So a role's next line, its first after the boot included, goes about a
-second after its turn ends (`posted … by turn-end` in the log). The hook prints nothing and never blocks or continues
+second after its turn ends (`posted … by turn-end` in the log). Before it returns, the hook also keeps the question the
+turn's last reply holds, if any, in `hooks/<role>.turn.json` (see Plugins: a turn's question), under no lock and only from the
+role's own environment, at the end of every turn (a reply that asks nothing leaves a record with no text); `_stop-failure` (below) and the
+role's own `SessionStart` hook after a compaction or a clear remove it. The hook prints nothing and never blocks or continues
 a turn, so it adds no tokens: Claude Code records only a `stop_hook_summary` line, which is not sent to the model. A
 compaction ends no turn and runs no `Stop` hook, so the same command is also a `SessionStart` hook for the source
 `compact`: what waits goes once a compaction is over, without the 15 s wait after a slash command (see The ticker). A role started by an earlier zmina has no such hooks until its
@@ -407,12 +412,12 @@ the screen's dialog as it is. Of several questions in one call the first is show
 this one: …)`; a multiple choice says `(several can be chosen)`. `choose` still answers by the dialog read from the screen,
 the file's choice order not being proven to be the screen's numbering: a dialog only the file describes (an id no screen
 has) is never answered blind. A file is never deleted while its role runs, a stale one is ignored; a role's start removes
-its records (the question's, the permission's and the failure's).
+its records (the question's, the permission's, the failure's and the turn's).
 
 A turn that ends on an API error runs no `Stop` hook, so the settings carry a `StopFailure` hook too, `zmina
 _stop-failure --role <role>` (same timeout and silence). It only records: the error's code and the words Claude Code
 showed for it (and its `error_details` when it has them), as given, with the session id and time, to
-`hooks/<role>.failure.json`, and one `failure-hold` event in the log. It posts and retries nothing. When the record is
+`hooks/<role>.failure.json`, and one `failure-hold` event in the log. It also removes the role's `hooks/<role>.turn.json`. It posts and retries nothing. When the record is
 written it is sorted once, strictly, into `transient` (the default), `limit` (with its reset time) or `account` (the owner
 mends it), and kept so (`kind`, `reset`). While that record is of the role's current session and the session has been idle
 since that turn (within 1 s of the record), no line queued for the role — the dispatcher's signals and notes too — is posted
@@ -716,7 +721,7 @@ line behind a fact read from the screen.
 | `zmina up <role> --resume` / `--resume=<id>` | start on the role's last conversation, or on the session id given — with `=`: `--resume <id>` reads the id as a second role. A Claude conversation must be under the crew's namespace (`<namespace>/projects/*/<id>.jsonl`): one recorded under another `CLAUDE_CONFIG_DIR` is refused, naming where zmina looked, with `--fresh` as the way on; a resume zmina chose itself (`resume: always`, a wake, a task's saved conversation, a restart without `--continue`) starts fresh instead (`resume-missing` in the log); `--resume` and `--continue` refuse. Any start that resumes a conversation (asked, by `resume: always`, or a sleeping role woken by hand) whose process ends within a moment is reported as ended with its last screen line, never as up. zmina keeps each role's last session id; a different session with no recorded work does not replace a known conversation. The boot message is sent again into the resumed conversation. A Claude conversation resumed under a session name it was not started under keeps its stored title (Remote Control shows the old one): zmina types `/rename <session>` into it once it is booted (`rename` in the log). |
 | `zmina down <role...>` / `--all` / `zmina down <role> --as N` | types `/exit` (session-end hooks run), kills after 15 s; the wait happens outside the lock, so other commands and the ticker are not held up. `/exit` goes only into an empty input line: a draft there (it would be sent with `/exit`) or a dialog (its Enter would pick the highlighted answer) refuses the down, exit 1, nothing pressed. `--clear` drops the draft (C-c; BSpace and End do not clear it) or closes the dialog (Escape) first, then `/exit`; a screen Escape leaves without an input line gets C-c C-c in one call. Claude Code's "Background work is running" question on exit is answered "Exit and stop tasks". The dispatcher needs `--force`. |
 | `zmina restart <role>` | down + up under the same name, honoring the configured resume policy. `--fresh` forces a new conversation; `--continue` requires its last conversation. A fresh start of a role that holds active tasks hands them (the line that says why, `[zmina] restarted fresh: by hand (zmina restart). …`, and each task's packet, at the head of its queue); a hand-out that fails leaves the role up and says so (Rotations: the record closes lost, `zmina rotation retry` hands again). Each restart keeps a rotation record (kind `manual`; `own_restart` from the role's own session): closed `resumed` when it went on in a conversation, `rebuilt` or `lost` when a fresh one was followed (see Rotations). A draft or a dialog refuses it as with `down`; `--clear` too. Run from the role's own session (the dispatcher restarting itself), it does not put the role down under itself. Its own session: the conversation the runtime names to its tools (`CLAUDE_CODE_SESSION_ID`, `CODEX_THREAD_ID` — also a shared Codex daemon's tools, which do not descend from the role's pane) is the role's current one, or the command descends from the process in the role's pane. Then it checks the restart, hands it to a detached zmina and returns at once (`dev restarts once this turn ends, on this conversation`); that one waits for the turn to end (30 min at most), then restarts that very session on the conversation it was on, whatever its resume policy (`--fresh`: a new one). Whether it may is decided under the lock that begins the down: a session that replaced the one that asked, a turn that began again, or another restart that claimed it first is never put down by it, and the up follows the down in the same hold of the lock. Log `restart-pending`, then `down` and `up`; `restart-skipped` when the session that asked was put down or replaced meanwhile (two restarts asked by one session restart it once); a failure is `restart-failed` and a note for the dispatcher. |
-| `zmina send <role> <text>` | one line for the role now: posted to its inbox socket (see Delivery), else typed into its prompt with Enter — only where the queue would type it: the role booted and at its prompt (not in a turn, not at a dialog), its input line readable and empty, no line typed into it still unlanded; else it types nothing, fails saying why and to use `--when-idle` (never into a dialog or over a draft). With `--when-idle` to a role on its own channel the queued line carries an id and waits for its ack (see Acks); a slash command (`/compact`) goes as it is, typed once, never acked or said again. Text that starts with `-` goes after `--`: `zmina send dev -- '- item'`. `--task T-n` (with `--when-idle` only: a line sent now keeps no card when it has to be typed) says what the line is about (the task must exist): it is kept on the line's card, and a line that crossed a newer line of its reader's on that task reaches the reader behind a `[written …]` mark (see The crossing mark); the task is never read from the words. `--when-idle` queues it instead: it goes as the command ends when the role is up, booted and can take it (it prints `delivered to <role>`), else it prints `queued for <role>` and the ticker types it the first time the role is up, booted and idle (a typed role gets one queued line per pass, so it reads each before the next; a role on its own channel gets the lines that wait as one numbered post, see Delivery). For a message between sessions of this crew prefer `SendMessage({to: "<prefix><role>"})`; another crew or node: `zmina tell <node>/<crew>`, never SendMessage (see Nodes). |
+| `zmina send <role> <text>` | one line for the role now: posted to its inbox socket (see Delivery), else typed into its prompt with Enter — only where the queue would type it: the role booted and at its prompt (not in a turn, not at a dialog), its input line readable and empty, no line typed into it still unlanded; else it types nothing, fails saying why and to use `--when-idle` (never into a dialog or over a draft). With `--when-idle` to a role on its own channel the queued line carries an id and waits for its ack (see Acks); a slash command (`/compact`) goes as it is, typed once, never acked or said again. Text that starts with `-` goes after `--`: `zmina send dev -- '- item'`. `--task T-n` (with `--when-idle` only: a line sent now keeps no card when it has to be typed) says what the line is about (the task must exist): it is kept on the line's card, and a line that crossed a newer line of its reader's on that task reaches the reader behind a `[written …]` mark (see The crossing mark); the task is never read from the words. `--by <plugin> --dialog <id>` (together, and neither with `--when-idle` nor `--task`) is a plugin giving the owner's answer to the question a role's turn ended on in plain words: only a plugin's own run (as `todo answer --by`), only while the role stands on the question the id names, given at once, never queued, as a line of zmina's that names the question and says whose words they are, and recorded in the log (see Plugins: a turn's question). `--when-idle` queues it instead: it goes as the command ends when the role is up, booted and can take it (it prints `delivered to <role>`), else it prints `queued for <role>` and the ticker types it the first time the role is up, booted and idle (a typed role gets one queued line per pass, so it reads each before the next; a role on its own channel gets the lines that wait as one numbered post, see Delivery). For a message between sessions of this crew prefer `SendMessage({to: "<prefix><role>"})`; another crew or node: `zmina tell <node>/<crew>`, never SendMessage (see Nodes). |
 | `zmina peek <role> [-n\|--lines 20] [--raw]` | the role's state in one line (as `ls` has it), then the last 20 lines of its screen as text without blank lines, rules and the footer under the input line — works from an agent, no terminal; also on a `dead` role. The input line stays: `❯` with a draft when there is one. The footer is cut only when it is recognised: the input box (a rule, the `❯` line with its draft, a rule) is the last block on the screen and every line under it is Claude Code's own — its status line, the mode line, its hints. Anything else there — a dialog, boxed or not, numbered options, any text — and nothing is cut: the question, the options and the confirm hint stay. Claude Code's suggested next prompt, dim in an empty input line, shows as `❯ (suggestion) …`: nobody typed it. `--raw`: the screen as it is (40 lines by default). |
 | `zmina explain <role> [--json]` (alias `why`) | why the role's status is what it is; read-only — no state lock, nothing written, as `ls`. It reads the very look `ls` takes of the role, so the two never disagree, and says: the status shown (the STATUS column of `ls --wide`); the source that **decided** it, in the order they are trusted — a **hook record** (`StopFailure`, while the role is idle since the turn it recorded), **Claude Code's session file** (`status`, `waitingFor`) or a **screen rule** (its id from Screen rules; the line it matched is quoted, cut, control characters stripped) — with its evidence and age; then each source consulted that did not decide, what it said and why not (`no record`, `a record of another session`, `an older turn's record`, `its word is kept`, `it adds the (dialog) mark`). Besides: what stands in the input line (empty, a draft's length, a dim suggestion), a usage-limit notice on the bottom rows with its rule and line (not part of the status), where a dialog's words came from (the hook's question record or the screen), the lines waiting and what holds them (a failed turn's hold with why and until when — the instant `ls` shows —, a typed line not landed — its kind and length only, never its words —, a settling slash command, a dialog, a busy turn), the context against `context_max`, `restart_at` and `restart_done`, and a restart or trim begun and not finished. Everything quoted — a screen line, a status, a row's words from a crew's override — has its control characters stripped, is cut, and shows a session tag (`[zmina:<12 characters>]`) as `[zmina:…]`. A role that is down says `down: no session; last known: …`: when it started, its conversation, why the ticker leaves it down, the newest event about it. `--json` is one object: `status`, `shows` (the compact `ls` cell), `role`, `state`, `summary`, `decided` and `lost` (each `source` of `hook`, `registry`, `screen`, `tmux` or `none`, `kind`, `says`, `evidence`, `at`, `age_seconds`, `why`), `screen`, `queue`, `context`, `restart`, `last_known`, `last_event`. |
 | `zmina keys <role> <key...>` | press named keys: `Enter Escape Up Down Left Right Tab BTab Space BSpace PageUp PageDown Home End C-c y n 1`–`9`. Text goes with `send`. The keys of one call go in one tmux call: `zmina keys <role> C-c C-c` ends a claude, two separate calls are too slow for its double C-c. |
@@ -1512,8 +1517,10 @@ it leaves the todo. Without `notify` doctor warns: nothing that waits
 on the owner reaches his phone; `notify: off` says that is meant, and doctor then says it plainly (`ok`) instead.
 
 Every role hears at boot, from zmina itself (`shift.AsksRule`): a question only the owner can answer goes on his list
-with `zmina todo add` (and is named by its A-n when asked in chat); when he answers in chat, the role records it at once
-(`todo answer` / `yes` / `done`), so no question he answered stays open. And how a file reaches him in Talk
+with `zmina todo add`, not only into the chat (and is named by its A-n when asked in chat); when he answers in chat, the role
+records it at once (`todo answer` / `yes` / `done`), so no question he answered stays open. A turn that ends on a bare
+question in its last reply, with nothing of the role's on his list, is still told to the plugins after a while (see Plugins: a
+turn's question), as a fallback: with no options and no recommendation, and not at once. And how a file reaches him in Talk
 (`shift.FilesRule`, under Browser chat). And how to wait (`shift.WaitRule`): a long command or a wait for a condition
 (a build, CI, a deploy, a file) goes in the background — Bash `run_in_background`, or Monitor with an until-loop — and
 the turn ends; the role is woken once when it ends and looks once. Waiting for another role, it just ends its turn:
@@ -1567,7 +1574,7 @@ rest less). Nothing in it is an instruction to the plugin, and a plugin never ev
 |---|---|---|
 | `ask` | a question on the todo: an ask, a decision, a check, a task that waits on the owner | `role`, `title`, `text`, `note` (a waiting task's note, a field of its own), `why` (what it holds up: the role, the task id and title), `reason`, `recommendation`, `options` (`[{n, text}]`), `answer`, `opened` (RFC 3339), `blocking` |
 | `blocking` | the same while it holds a role up; sent **instead of** `ask`, never as well | as `ask`, `blocking: true` |
-| `dialog` | a question on a role's screen that zmina does not answer itself (a permission prompt, AskUserQuestion: see below for when), once it has stood `dialog_after`, so what the role settles itself never pages. `id` is `<role>:<fingerprint>:<mark>`: the fingerprint is of the question, every choice and, for a permission prompt, the tool call; the mark is this event's one-shot mark | `role`, `question`, `prompt` (`permission` or `question`), `tool`, `subject`, `subject_checked` and `subject_cut` (a permission prompt: what is being approved, the call's command or path; `subject_checked` when the prompt's own block on the screen was compared with it, word for word; `subject_cut` when it is not all of the call), `options` (`[{n, text, detail}]`), `answer`, `needs_terminal`, `task`, `task_title` |
+| `dialog` | a question on a role's screen that zmina does not answer itself (a permission prompt, AskUserQuestion: see below for when), or one a role's turn ended on in plain words (`prompt: "turn"`: see A turn's question), once it has stood `dialog_after`, so what the role settles itself never pages. `id` is `<role>:<fingerprint>:<mark>`: the fingerprint is of the question, every choice and, for a permission prompt, the tool call (of the turn's words and moment, for a turn); the mark is this event's one-shot mark (a turn's lets through the one answer given to the role in words) | `role`, `question`, `prompt` (`permission`, `question` or `turn`), `tool`, `subject`, `subject_checked` and `subject_cut` (a permission prompt: what is being approved, the call's command or path; `subject_checked` when the prompt's own block on the screen was compared with it, word for word; `subject_cut` when it is not all of the call), `options` (`[{n, text, detail}]`), `answer`, `needs_terminal`, `task`, `task_title` |
 | `reminder` | a reminder ringing, a parked item brought back by its alarm (as `notify`'s reminder); a plugin whose `on` lacks `reminder` (the default) is told of it as an `ask` | as `ask`; for a parked item (`L-3`) only `answer.done` |
 | `answered` | an item or dialog the plugin was **told of** is closed, so it can mark its card | `for` (the event it was sent as), `how` (`answered`, `done`, `dropped` — parked or set aside —, `chosen`, `gone`), `by` (`owner`, `plugin <name>`, `role <name>`, empty when zmina closed it), `text` (the answer when there is one), `closed` |
 
@@ -1577,13 +1584,18 @@ the environment, every flag before the `--` and after it the id and the words: `
 the argv with that option's words; `yes` takes the recommendation; `done` says a check is done; for a dialog `options[n].argv` is
 `["zmina","--crew","<file>","choose","<role>","<n>","--dialog","<role>:<fingerprint>:<mark>","--by","pager"]`, and none is given
 for a choice above 9 (`choose` takes 1 to 9) and none at all when `needs_terminal`: several choices can be ticked (pressing one
-answers nothing), or a permission prompt's subject is cut or was not checked (below). An item id that is not `A-n`, `T-n` or `L-n`
-gets no argv.
+answers nothing), or a permission prompt's subject is cut or was not checked (below). A turn's question has no `options`:
+its `answer.text` is `["zmina","--crew","<file>","send","--by","pager","--dialog","<role>:<fingerprint>:<mark>","--","<role>","<text>"]`,
+the owner's words given to the role through the plugin, to that event's question only (nothing in the event is in the argv but the
+role's name, which is checked to be a role's name, and the id of the event itself). It can exit non-zero — the mark is not this
+plugin's or is spent, the role took another turn, the question is gone, the words are empty or over 2000 characters, the role cannot
+take a line just now — and then **nothing was given to the role**: the plugin tells the owner that his answer was not taken, and that he
+answers in a terminal. An item id that is not `A-n`, `T-n` or `L-n` gets no argv.
 
-**Answering.** `todo answer`, `todo yes`, `todo done` and the other `todo` verbs, and `zmina choose <role> <n> --dialog <id>`,
-take `--by <name>`, accepted only when `ZMINA_PLUGIN=<name>` is set, the crew file has a plugin of that name and no role is
-speaking (`ZMINA_ROLE` unset); the answer is recorded as the owner's, with `(answered through plugin pager)` in the dispatcher's
-note and the log. **A plugin is trusted with the owner's voice** — anything it passes on as his answer is taken as his — **and must
+**Answering.** `todo answer`, `todo yes`, `todo done` and the other `todo` verbs, `zmina choose <role> <n> --dialog <id>` and
+`zmina send <role> <text> --dialog <id>` (a turn's question: see below), take `--by <name>`, accepted only when `ZMINA_PLUGIN=<name>`
+is set, the crew file has a plugin of that name and no role is speaking (`ZMINA_ROLE` unset); the answer is recorded as the owner's,
+with `(answered through plugin pager)` in the dispatcher's note and the log. **A plugin is trusted with the owner's voice** — anything it passes on as his answer is taken as his — **and must
 itself check who is talking to it** (zmina cannot: `--by` guards against a mistake, not a forger). The first answer wins: the
 ledger refuses a second answer to a closed ask, and a plugin's answer to a waiting task already answered.
 
@@ -1623,6 +1635,54 @@ screen's reading is not one a card presses, whatever the file says. And not when
 the file lost or could not read one), nor when the screen has a permission prompt's title (`Bash command`): the file is not written again
 while a session stays waiting, so a permission prompt can follow an answered question under the same words. The same check runs at the
 press.
+
+**A turn's question** (`prompt: "turn"`) is the fallback for a role that ends its turn with a question to the owner written in plain
+words, and puts nothing on his todo and nothing on its screen: it is idle, and nobody would hear that he is awaited. Its `Stop` hook
+looks in the turn's last reply (`last_assistant_message`: a hook input without it records no question, and a role on an engine with no
+such hook — a Codex role — is never told this way) for a `?` (or `？`, `؟`) that ends a sentence — followed by the end of the text, white
+space, or closing marks, a full stop, a colon or an ellipsis and then one of those, so a `?` in a URL or a query string is none — and
+only in the last three paragraphs of prose of the reply. Fenced code blocks, indented code (a paragraph that opens with four spaces or a
+tab), inline code spans, `>` quotes, headings, table rows and HTML comments are not prose, and the items of a list, blank lines between
+them or not, are one paragraph. It keeps the reply from the start of the first paragraph that holds one through its end (the owner needs
+what follows it too), at most 4000 characters.
+
+The hook writes `hooks/<role>.turn.json` at the end of **every** turn (mode 0600, only from the role's own environment: `ZMINA_ROLE` is the
+role, or unset): `session`, `at`, `text` (empty when the turn asked nothing: a record of a turn and no question, never a thing and never a
+gap), `prev` (when the turn before it ended, from the record it replaced when that is of the same session) and an `id`, a 16-hex
+fingerprint of session, time and text. A record that does not read, or whose id is not its fingerprint, is a gap, as an unreadable screen
+is. `_stop-failure`, a compaction or a clear (the role's `SessionStart` hook) and the role's start remove it (the next turn then does not
+know `prev`). A plugin is told of a record with text as of any dialog — once the role has stood on it `dialog_after`, held by
+`quiet_when_active`, once — and **only while it stands**: the role is up and idle at its input line (a dialog or prompt on its screen
+wins), in the session the record is of, and went idle within 10 seconds of the record's time, so a role that took another turn since is not
+awaiting it. A turn that ends while background work keeps the session busy is not idle, and is not told: that is a limit. Not when the
+role put something on the owner's todo in the turn that ended on the question — an ask it made, or a task it set waiting on him, created
+after `prev`, whether it still waits there or the owner has answered, done, parked or set it aside since: it asked, and a card exists (an
+ask of an earlier turn says nothing of these words; where `prev` is not known the item must be from 15 minutes before the record on; a
+waiting task has only the time its file was updated, so a later edit of it counts as made in the turn that edited it). A turn's mark
+is armed in the plugin's armed file as any dialog's is, and the event has `question` (cleaned, cut to 2000 characters), `task`,
+`task_title`, no `options` and no `needs_terminal`, and `answer.text` as above. It is read again right before it is told.
+
+The owner's answer goes by `zmina send <role> <text> --by <plugin> --dialog <id>`: the plugin is checked as `todo answer --by` is, and
+`--by` and `--dialog` go together. It is taken only while the role stands on the very question the id names (the record's fingerprint,
+the role idle in the stand the record is of, as the event is read again before it is told), and once: the event's mark is spent
+(as `choose`'s is), so a made-up mark, another plugin's, a second tap and an old card are refused and nothing is given. The words must not be empty or over 2000 characters, and are not
+cut; of several lines they are one, white space folded.
+
+The line is **given at once or not at all**: never queued, since a line that waits could be read long after the question it answers is
+over. A role that cannot take it just now (lines wait for it, its delivery is held by its plan or by a turn that ended on an API error; when it is typed into, a
+draft or a dialog in its prompt, a line not landed) is a refusal, `<role> cannot take it just now: <why>; answer in its
+terminal`, exit 1: the mark is given back, the record stays, nothing is queued, logged as answered or noted, and the card stays open. Only
+a given line is recorded. It is a line of zmina's, never typed as the owner's own, so it does not move the owner's last line to the role,
+and he is not marked as at the machine, and it names its question, so that even read late it is not taken for the answer to another: `[zmina] The
+owner's answer to the question your turn ended on at 09:30 («<its first 120 characters>»), given through plugin pager and recorded in the
+ledger (zmina log): «<words>»`. In it the words are cleaned (control characters gone, white space folded, a session tag masked), `«` and `»`
+in them are `‹` and `›` so that no word of theirs leaves the quotation, and a `[zmina` is broken to `(zmina`. The ledger has it as an `answered` event of the role, `its turn's question:
+«<words>» (answered through plugin pager)` (the words cut to 200 characters, `zmina log`), which a role that has to be sure of the line
+reads before it acts on it: a record for the role to read, not proof against another role with a shell, the standing of every `--by`
+channel. The question's record is cleared (its text, not its time), so the card ends at the next look: `answered` with `how: answered`, `by:
+plugin pager` and the words as `text`. When it cannot be cleared the answer was given all the same: exit 0, a `plugin-error` in the log, and
+the spent mark refuses a second one. A question that ends any other way (the role took another turn, whoever sent it — the card, a terminal,
+the cockpit) ends as `answered` with `how: gone`.
 
 What remains, by design: between the last check of a press and its keys pass some milliseconds, and a prompt answered at the terminal in
 that instant puts the keys into the next one queued; the same call asked twice in one wait is one call, so a card told for the first presses
