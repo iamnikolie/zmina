@@ -21,6 +21,11 @@ type rolePick struct {
 	// byRoute is true when the routes picked the role (--route); because is why a role picked by hand is not theirs.
 	byRoute bool
 	because string
+	// outside is true when the hand picked a seat outside the pool, said no kind of work, and only the pool
+	// answered: the pool shares the work among its own seats and has no word on a specialist. own is the rule that
+	// names the seat (a project's, a kind's, the first review's), empty when none does.
+	outside bool
+	own     string
 }
 
 // pickRole decides the role of a new task from its arguments: --route leaves the role out and the routes pick it;
@@ -53,6 +58,10 @@ func (a *app) pickRole(s *shift.Shift, ask routeAsk, useRoute bool, because stri
 
 	p.d = d
 
+	if !useRoute && ask.kind == "" {
+		p.outside, p.own = outsidePool(s.Crew.RouteTable(), d, p.role)
+	}
+
 	if useRoute {
 		switch {
 		case !d.Matched():
@@ -67,7 +76,7 @@ func (a *app) pickRole(s *shift.Shift, ask routeAsk, useRoute bool, because stri
 		return p, nil
 	}
 
-	if s.Crew.RouteOverrideRequired() && d.Matched() && !d.Agrees(p.role) && p.because == "" {
+	if s.Crew.RouteOverrideRequired() && d.Matched() && !d.Agrees(p.role) && !p.outside && p.because == "" {
 		return p, fmt.Errorf("the routes say %s (rule %d %s: %s); %s instead needs --because \"<why>\" (route_override: required)",
 			d.To, d.Rule, d.Name, d.Why, p.role)
 	}
@@ -75,9 +84,56 @@ func (a *app) pickRole(s *shift.Shift, ask routeAsk, useRoute bool, because stri
 	return p, nil
 }
 
-// record is what the task keeps of the routes' answer: nothing when the crew has no routes or no rule matched.
+// outsidePool reports whether the pool's answer d has no word on role: the pool is what answered and role is not one
+// of its seats (a copy is its role). own is how the table names the seat elsewhere: the project, kind or review rule
+// it stands in, so the reader sees which flag would have asked that rule.
+func outsidePool(t route.Table, d route.Decision, role string) (outside bool, own string) {
+	if !d.Matched() || d.Rule != route.Pool.Number() || d.Agrees(role) {
+		return false, ""
+	}
+
+	base := route.Base(role)
+
+	for _, r := range t.Rules {
+		switch r.Kind {
+		case route.Pool:
+			for _, seat := range r.Seats {
+				if seat == base {
+					return false, ""
+				}
+			}
+		case route.Project, route.WorkKind:
+			for name, seat := range r.Owners {
+				if seat == base && (own == "" || name < ownName(own)) {
+					own = fmt.Sprintf("rule %d %s %s", r.Kind.Number(), r.Kind.Label(), name)
+				}
+			}
+		case route.Review:
+			if r.First == base && own == "" {
+				own = fmt.Sprintf("rule %d %s", r.Kind.Number(), r.Kind.Label())
+			}
+		}
+	}
+
+	return true, own
+}
+
+// ownName is the name a rule line of outsidePool ends on.
+func ownName(own string) string { return own[strings.LastIndex(own, " ")+1:] }
+
+// outsideText says why a hand pick outside the pool is not held against the pool's answer.
+func (p rolePick) outsideText() string {
+	if p.own != "" {
+		return fmt.Sprintf("%s is %s's seat; the kind of work was not said, so the pool has no word on it", p.role, p.own)
+	}
+
+	return p.role + " is outside the pool and no rule names it; the pool has no word on it"
+}
+
+// record is what the task keeps of the routes' answer: nothing when the crew has no routes, no rule matched, or the
+// hand picked a seat the pool has no word on.
 func (p rolePick) record() *task.Route {
-	if !p.routed || !p.d.Matched() {
+	if !p.routed || !p.d.Matched() || p.outside {
 		return nil
 	}
 
@@ -94,6 +150,8 @@ func (p rolePick) said() string {
 	switch {
 	case !p.routed || !p.d.Matched():
 		return ""
+	case p.outside:
+		return p.outsideText()
 	case p.byRoute:
 		return fmt.Sprintf("rule %d: %s", p.d.Rule, p.d.Why)
 	case p.d.Agrees(p.role):
@@ -120,6 +178,8 @@ func (p rolePick) log(s *shift.Shift, t task.Task) {
 	switch {
 	case !p.d.Matched():
 		e.Detail = "no rule matched; picked " + t.Role
+	case p.outside:
+		e.Detail = "picked by hand: " + p.outsideText()
 	case p.d.Agrees(t.Role):
 		rule := p.d.Rule
 		e.Rule, e.RouteSaid = &rule, p.d.To
