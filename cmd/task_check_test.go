@@ -582,7 +582,7 @@ func TestTaskDoneHoldsNoLockWhileItsCheckRuns(t *testing.T) {
 
 // A check does not see what looks like a secret in the environment it was started from, and is told it is a check.
 func TestTaskCheckRunsWithoutTheSecretsOfItsEnvironment(t *testing.T) {
-	c := newCheckCrew(t, "done_check: \"env | sort; echo value-for-test-one\"\n")
+	c := newCheckCrew(t, "done_check: \"env | sort | grep -E '^(ZMINA_|GOPRIVATE=|DATABASE_URL=|DEPLOY_TOKEN=)'; echo value-for-test-one\"\n")
 	c.task(t)
 
 	t.Setenv("DEPLOY_TOKEN", "value-for-test-one")

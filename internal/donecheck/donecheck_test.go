@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 	"gopkg.in/yaml.v3"
 )
 
@@ -300,12 +301,12 @@ func TestRunGivesTheCommandASessionOfItsOwn(t *testing.T) {
 		return err == nil
 	}, 5*time.Second, 10*time.Millisecond)
 
-	sid, err := syscall.Getsid(pid)
+	sid, err := unix.Getsid(pid)
 	require.NoError(t, err)
 	assert.Equal(t, pid, sid, "the shell leads its own session")
 	assert.NotEqual(t, syscall.Getpid(), pid)
 
-	own, err := syscall.Getsid(0)
+	own, err := unix.Getsid(0)
 	require.NoError(t, err)
 	assert.NotEqual(t, own, sid, "it is not in zmina's session")
 

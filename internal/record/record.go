@@ -201,6 +201,17 @@ func Save(dir string, d Document) (Ref, error) {
 	if err != nil {
 		return Ref{}, err
 	}
+	// The revision is of the record as it reads back: bytes that are not UTF-8 are written as U+FFFD, and a
+	// revision taken before that would name a record no Load accepts.
+	var kept Document
+	if err = json.Unmarshal(raw, &kept); err != nil {
+		return Ref{}, err
+	}
+	d = kept
+	d.At = time.Time{}
+	if raw, err = json.Marshal(d); err != nil {
+		return Ref{}, err
+	}
 	rev := fmt.Sprintf("%x", sha256.Sum256(raw))
 	p, err := path(dir, d.Kind, d.Task, rev)
 	if err != nil {
