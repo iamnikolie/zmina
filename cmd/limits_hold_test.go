@@ -96,7 +96,7 @@ func TestLimitsFlowShowsTheMarksAndTheHolds(t *testing.T) {
 	out, _, err = zm(t, crewFile, "limits")
 	require.NoError(t, err)
 	assert.Contains(t, out, fmt.Sprintf("hold     claude 5h window at 97%%, until %s (2 roles, 2 lines waiting); the owner's own line passes\n",
-		reset.Format("15:04")), out)
+		clock(reset, time.Now().UTC())), out) // the weekday with it when the reset is past midnight
 
 	out, _, err = zm(t, crewFile, "limits", "--json")
 	require.NoError(t, err)
