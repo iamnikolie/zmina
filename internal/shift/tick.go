@@ -172,7 +172,7 @@ func (s *Shift) Tick() []string {
 				if name != s.Crew.Dispatcher {
 					// What zmina did, told once: an info line.
 					note := name + ": started again (keep: always)"
-					s.markInfo(note, now)
+					s.markQuiet(note, now)
 					notes = append(notes, note)
 				}
 			}

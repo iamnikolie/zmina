@@ -804,6 +804,22 @@ func (a *app) changeOf(s *shift.Shift, st task.State, o taskChange) ledger.Chang
 		ClearCheck: o.clearCheck, Caller: a.caller(s, o.handoff, st == task.Done || st == task.Dropped)}
 }
 
+// alreadyDone says a task closed as done again, with nothing new, is done already: no event, no line for the
+// dispatcher, exit 0. A role and the dispatcher that both close a task do not make two closures of it.
+func (a *app) alreadyDone(id string) error {
+	return a.readState(func(s *shift.Shift) error {
+		t, err := s.Tasks.Get(id)
+		if err != nil {
+			return err
+		}
+
+		fmt.Fprintf(a.out, "%s · %s · %s already (closed %s): nothing changed\n", t.ID, t.Role, t.Status(),
+			t.Updated.Local().Format("Jan 2 15:04"))
+
+		return nil
+	})
+}
+
 func (a *app) setTask(id string, st task.State, o taskChange) error {
 	var (
 		closed *task.Task
@@ -811,6 +827,9 @@ func (a *app) setTask(id string, st task.State, o taskChange) error {
 	)
 
 	var envFault *ledger.EnvFault
+
+	// again is a done task closed as done with nothing more to say: said, and nothing else happens.
+	var again bool
 
 	checked, err := a.doneCheck(id, st, o)
 	if errors.As(err, &late) {
@@ -820,6 +839,10 @@ func (a *app) setTask(id string, st task.State, o taskChange) error {
 
 	if errors.As(err, &envFault) {
 		return a.checkEnvFault(envFault)
+	}
+
+	if errors.Is(err, ledger.ErrAlreadyDone) {
+		return a.alreadyDone(id)
 	}
 
 	if err != nil {
@@ -844,6 +867,12 @@ func (a *app) setTask(id string, st task.State, o taskChange) error {
 		}
 
 		t, err := a.ledger(s).Set(id, change)
+		if errors.Is(err, ledger.ErrAlreadyDone) {
+			again = true
+
+			return nil
+		}
+
 		if errors.As(err, &late) {
 			// A session that does not hold the task is not the one to close or change it.
 			held, gerr := s.Tasks.Get(id)
@@ -877,6 +906,10 @@ func (a *app) setTask(id string, st task.State, o taskChange) error {
 
 		return nil
 	})
+
+	if err == nil && again {
+		return a.alreadyDone(id)
+	}
 
 	// The cost of a closed task is read after the lock: the transcripts take a while, the ticker must not wait.
 	if err == nil && closed != nil {

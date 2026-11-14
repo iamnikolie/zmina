@@ -22,6 +22,11 @@ const (
 	// infoRide is how long info lines wait for a line the dispatcher is posted anyway, to go with it; then they go
 	// alone.
 	infoRide = 90 * time.Second
+	// infoRideQuiet is how long a quiet info line waits for such a line: a role released holding nothing, a keep:
+	// always role started again. Nothing follows from either, zmina ls shows both, and a turn of the dispatcher's
+	// own to read one costs more than the line is worth; after this long it goes alone all the same, so none is
+	// kept for ever.
+	infoRideQuiet = 6 * time.Hour
 	// resultReady is what a result's notice says after its task's id.
 	resultReady = " result ready (worker-reported)"
 	// infoRule is what the dispatcher's boot line says of info lines.
@@ -41,6 +46,30 @@ func (s *Shift) markInfo(text string, now time.Time) {
 	if _, ok := s.State.Info[text]; !ok {
 		s.State.Info[text] = now
 	}
+}
+
+// markQuiet makes a line an info line that waits long for a line to go with (infoRideQuiet).
+func (s *Shift) markQuiet(text string, now time.Time) {
+	if !s.Crew.InfoLinesOn() {
+		return
+	}
+
+	s.markInfo(text, now)
+
+	if s.State.InfoQuiet == nil {
+		s.State.InfoQuiet = map[string]bool{}
+	}
+
+	s.State.InfoQuiet[text] = true
+}
+
+// infoRideOf is how long an info line waits for a line to go with.
+func (s *Shift) infoRideOf(text string) time.Duration {
+	if s.State.InfoQuiet[text] {
+		return infoRideQuiet
+	}
+
+	return infoRide
 }
 
 // isInfo reports whether a queued signal or note is an info line.
@@ -73,7 +102,8 @@ func (s *Shift) splitInfo(sigs []string) (act, info []string) {
 }
 
 // infoWaits reports whether all that waits for the dispatcher — these signals and the notes — is info lines the
-// oldest of which was queued less than infoRide ago: they wait for a line to go with.
+// each of which was queued less than its ride ago (infoRide, infoRideQuiet for a quiet one): they wait for a line
+// to go with. One that has waited its ride out takes the others with it.
 func (s *Shift) infoWaits(sigs []string, now time.Time) bool {
 	all := append(slices.Clone(sigs), s.State.Notes...)
 	if len(all) == 0 {
@@ -81,7 +111,7 @@ func (s *Shift) infoWaits(sigs []string, now time.Time) bool {
 	}
 
 	for _, text := range all {
-		if !s.isInfo(text) || now.Sub(s.State.Info[text]) >= infoRide {
+		if !s.isInfo(text) || now.Sub(s.State.Info[text]) >= s.infoRideOf(text) {
 			return false
 		}
 	}
@@ -144,6 +174,7 @@ func (s *Shift) pruneInfo() {
 	for text := range s.State.Info {
 		if !waits(text) {
 			delete(s.State.Info, text)
+			delete(s.State.InfoQuiet, text)
 		}
 	}
 }

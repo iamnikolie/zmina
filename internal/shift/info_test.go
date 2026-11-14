@@ -49,22 +49,23 @@ func TestInfoLineClosesOnSeen(t *testing.T) {
 	cases := []struct {
 		name string
 		make func(t *testing.T, f fix)
+		ride time.Duration
 		want string
 	}{
 		{"a result ready", func(t *testing.T, f fix) {
 			saveResult(t, f, "designer", "T-1")
 			f.s.NotifyRecords()
-		}, "[zmina] FYI designer: T-1 result ready (worker-reported): Recorded (zmina task result T-1 --revision "},
+		}, infoRide, "[zmina] FYI designer: T-1 result ready (worker-reported): Recorded (zmina task result T-1 --revision "},
 		{"a role released", func(t *testing.T, f fix) {
 			require.NoError(t, f.s.Up("designer"))
 			f.s.State.Role("designer").ReleaseIdle = 34 * time.Minute
 			_, note := f.s.putDown("designer")
 			f.s.addNotes([]string{note})
-		}, "[zmina] FYI released designer after 34m idle"},
+		}, infoRideQuiet, "[zmina] FYI released designer after 34m idle"},
 		{"a keep: always role started again", func(t *testing.T, f fix) {
 			did := f.s.Tick()
 			assert.Contains(t, did, "started harvester")
-		}, "[zmina] FYI harvester: started again (keep: always)"},
+		}, infoRideQuiet, "[zmina] FYI harvester: started again (keep: always)"},
 	}
 
 	for _, c := range cases {
@@ -75,7 +76,10 @@ func TestInfoLineClosesOnSeen(t *testing.T) {
 
 			assert.Empty(t, f.s.deliver(*f.now), "alone, it waits for a line to go with")
 
-			*f.now = f.now.Add(infoRide)
+			*f.now = f.now.Add(c.ride - time.Second)
+			assert.Empty(t, f.s.deliver(*f.now), "and waits its whole ride")
+
+			*f.now = f.now.Add(time.Second)
 			line := f.s.deliver(*f.now)
 			assert.True(t, strings.HasPrefix(line, c.want), line)
 			assert.NotContains(t, line, "(zmina S-", "no ack tail")
@@ -573,4 +577,31 @@ func TestAckOfAClosedOrInfoLineIsANoOp(t *testing.T) {
 	p.showAll()
 	f.s.deliver(*f.now)
 	assert.Len(t, closed(f), 1, "the info line is closed by seen, as ever")
+}
+
+// A release that parked nothing and a keep: always role started again start no turn of the dispatcher's own: they
+// wait hours for a line that goes anyway and go with it at once. A release that parked a task keeps the short wait.
+func TestQuietInfoLinesWaitForALineToGoWith(t *testing.T) {
+	f, _ := nativeFixture(t, crewYAML)
+	upNative(t, f, "dispatcher")
+
+	require.NoError(t, f.s.Up("designer"))
+	f.s.State.Role("designer").ReleaseIdle = 34 * time.Minute
+	_, note := f.s.putDown("designer")
+	f.s.addNotes([]string{note})
+
+	*f.now = f.now.Add(time.Hour)
+	assert.Empty(t, f.s.deliver(*f.now), "an hour on it still waits")
+
+	// A line the dispatcher is posted anyway takes it along.
+	_, err := f.s.Note("mrs", "acme/site!12 approved", false)
+	require.NoError(t, err)
+
+	line := f.s.deliver(*f.now)
+	assert.Contains(t, line, "acme/site!12 approved")
+	assert.Contains(t, line, "FYI released designer after 34m idle")
+
+	// The mark does not outlive the line.
+	f.s.pruneInfo()
+	assert.True(t, f.s.State.InfoQuiet[note] == f.s.isInfo(note), "the quiet mark goes when the line's class does")
 }

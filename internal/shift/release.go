@@ -184,8 +184,12 @@ func (s *Shift) putDown(name string) (did, note string) {
 	}
 
 	s.log(name, "released", tasks, note)
-	// What zmina did, told once: an info line.
-	s.markInfo(note, s.Now())
+	// What zmina did, told once: an info line; one that parked nothing can wait for a line to go with.
+	if len(items) > 0 {
+		s.markInfo(note, s.Now())
+	} else {
+		s.markQuiet(note, s.Now())
+	}
 
 	return note, note
 }
