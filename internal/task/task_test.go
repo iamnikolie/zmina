@@ -246,6 +246,41 @@ func TestCheckFieldsAreOptionalInTheFile(t *testing.T) {
 	assert.Equal(t, got, again)
 }
 
+// A task file written before reviews were made by zmina reads as it did, and writes back without the review keys; one that is a
+// review, and one whose closing names the review due, read back whole.
+func TestReviewFieldsAreOptionalInTheFile(t *testing.T) {
+	s := &Store{Dir: t.TempDir()}
+	require.NoError(t, os.MkdirAll(s.Dir, 0o700))
+
+	old := `{"id": "T-1", "role": "dev", "asked": "x", "state": "done", "created": "2026-10-26T12:00:00Z",
+  "updated": "2026-10-26T12:00:00Z", "closed": {"by": "dev", "at": "2026-10-26T12:00:00Z", "state": "done"}}`
+	require.NoError(t, os.WriteFile(filepath.Join(s.Dir, "T-1.json"), []byte(old), 0o600))
+
+	got, err := s.Get("T-1")
+	require.NoError(t, err)
+	assert.Nil(t, got.Review)
+	assert.Nil(t, got.Closed.Review)
+
+	require.NoError(t, s.Put(got))
+
+	raw, err := os.ReadFile(filepath.Join(s.Dir, "T-1.json"))
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), `"review"`)
+
+	got.Closed.Review = &ReviewDue{Round: 1, Task: "T-2"}
+	require.NoError(t, s.Put(got))
+
+	review := Task{ID: "T-2", Role: "reviewer", Asked: "x", State: Done, Created: got.Created, Updated: got.Updated,
+		Review: &Review{Of: "T-1", Round: 1, Verdict: VerdictReject}}
+	require.NoError(t, s.Put(review))
+
+	for _, want := range []Task{got, review} {
+		again, err := s.Get(want.ID)
+		require.NoError(t, err)
+		assert.Equal(t, want, again)
+	}
+}
+
 // A task file written before hand-outs were counted reads with generation 0 and writes back without the keys; one with a
 // generation, a closure under it and late reports reads back whole.
 func TestGenerationFieldsAreOptionalInTheFile(t *testing.T) {

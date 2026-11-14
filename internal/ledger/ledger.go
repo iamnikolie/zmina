@@ -116,6 +116,9 @@ type Ledger struct {
 	InCheck bool
 	// Later is the parked list a sweep task is closed against (ErrUnswept); nil: a sweep closes like any task.
 	Later *later.Store
+	// AutoReview is the crew file's auto_review in rounds: a task a role closes as done is stamped as due a review, up to
+	// this many times; 0: none, as before.
+	AutoReview int
 }
 
 // NewTask is what a new task is made of.
@@ -139,6 +142,8 @@ type NewTask struct {
 	Check *donecheck.Spec
 	// Sweep is the parked items the task asks a verdict on (task.Task.Sweep).
 	Sweep []string
+	// Review makes the task a review of another (task.Task.Review).
+	Review *task.Review
 	// AskedFor, when set, builds the asked text once the task has its id, and is written with it: for a text that names its own
 	// task. Asked stands for it until then, and is what a task that sets none keeps.
 	AskedFor func(id string) string
@@ -161,7 +166,7 @@ func (l *Ledger) New(n NewTask) (task.Task, error) {
 	}
 
 	t := task.Task{Role: n.Role, Asked: n.Asked, Note: n.Note, By: n.By, Title: n.Title, Project: n.Project, URL: n.URL,
-		Budget: n.Budget, Route: n.Route, Criteria: criteria, Sweep: n.Sweep}
+		Budget: n.Budget, Route: n.Route, Criteria: criteria, Sweep: n.Sweep, Review: n.Review}
 
 	if n.Check != nil {
 		if t.Check, err = l.cleanCheck(*n.Check, n.By, n.Worktree); err != nil {
@@ -271,6 +276,8 @@ type Change struct {
 	Force bool
 	// By is who makes the change (a role, "hand"); a task it closes keeps it (Task.Closed).
 	By string
+	// Verdict is accept or reject: what a review task is closed as done with (see closeReview); a task that is no review takes none.
+	Verdict string
 	// Caller, when set, is held to the task's current hand-out: a change from a session that does not hold it is refused
 	// as a late report (ErrLate) before anything is read or run. nil: the change is zmina's own, or is not made by a session.
 	Caller *Caller
@@ -333,6 +340,10 @@ func (l *Ledger) apply(t task.Task, c Change, preflight bool) (task.Task, []stri
 
 	alreadyDone := t.State == task.Done && c.State == task.Done
 
+	if c.Verdict != "" && c.State != task.Done {
+		return t, nil, errors.New("a verdict goes with closing a review task as done")
+	}
+
 	if c.State != "" {
 		if !c.State.Active() && t.Worktree != "" && !c.Force {
 			if err := l.refuseDirty(t); err != nil {
@@ -350,6 +361,10 @@ func (l *Ledger) apply(t task.Task, c Change, preflight bool) (task.Task, []stri
 		case alreadyDone && t.Closed != nil:
 			// It closed once, on the check it had then: closing it again, to say more, runs nothing and keeps that.
 			checked, unchecked = t.Closed.Check, t.Closed.Unchecked
+
+			if err := sameVerdict(t, c); err != nil {
+				return t, nil, err
+			}
 		case c.State == task.Done && !alreadyDone:
 			if checked, unchecked, err = l.closeCheck(t, c, preflight); err != nil {
 				return t, nil, err
@@ -365,6 +380,21 @@ func (l *Ledger) apply(t task.Task, c Change, preflight bool) (task.Task, []stri
 			if unchecked == nil {
 				unchecked = early
 			}
+
+			// A review task closes on a verdict, as a sweep on its items.
+			if early, err = l.closeReview(t, c); err != nil {
+				return t, nil, err
+			}
+
+			if unchecked == nil {
+				unchecked = early
+			}
+		}
+
+		if c.Verdict != "" && !alreadyDone {
+			review := *t.Review
+			review.Verdict = c.Verdict
+			t.Review = &review
 		}
 
 		t.State = c.State
@@ -478,10 +508,21 @@ func (l *Ledger) apply(t task.Task, c Change, preflight bool) (task.Task, []stri
 		t.CheckEnv, t.CheckEnvTold = nil, nil
 
 		if c.By != "" {
+			was := t.Closed
 			t.Closed = &task.Closure{By: c.By, At: t.Updated, State: c.State, Note: c.Note, Check: checked, Unchecked: unchecked,
 				Unbound: c.unbound}
 			if t.Delivery != nil {
 				t.Closed.Gen = t.Delivery.Gen
+			}
+
+			switch {
+			case alreadyDone && was != nil:
+				// Closing it again, to say more, keeps the review it is due.
+				t.Closed.Review = was.Review
+			case c.State == task.Done && !alreadyDone && !preflight:
+				if t.Closed.Review, err = l.reviewDue(t, c); err != nil {
+					return t, nil, err
+				}
 			}
 		}
 	}
@@ -573,6 +614,16 @@ func (l *Ledger) GCWith(ctx context.Context, o GCOptions) ([]Collected, error) {
 		return nil, err
 	}
 
+	// What a task whose review is due waits on is looked up by id; with auto_review off nothing is.
+	var byID map[string]task.Task
+
+	if l.AutoReview > 0 {
+		byID = make(map[string]task.Task, len(all))
+		for _, t := range all {
+			byID[t.ID] = t
+		}
+	}
+
 	var out []Collected
 
 	for _, t := range all {
@@ -580,7 +631,7 @@ func (l *Ledger) GCWith(ctx context.Context, o GCOptions) ([]Collected, error) {
 			return out, err
 		}
 
-		if t.State.Active() || t.Branch == "" {
+		if t.State.Active() || t.Branch == "" || l.reviewPending(t, byID) {
 			continue
 		}
 

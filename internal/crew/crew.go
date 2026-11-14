@@ -358,6 +358,8 @@ type Crew struct {
 	// LaterSweep is the ticker's own sweep of the parked list: a task for one role to give each stale item a verdict
 	// (see LaterSweep). Absent: off.
 	LaterSweep *LaterSweep `yaml:"later_sweep"`
+	// AutoReview is review without the dispatcher: on, off or {rounds: N} (see AutoReview). Absent: off.
+	AutoReview AutoReview `yaml:"auto_review"`
 	// DoneCheck is the command closing a task as done runs in the task's worktree, unless the task sets its own: a
 	// command line, or run, timeout and commit (see donecheck.Spec). Empty, off or none: no check, as before.
 	DoneCheck *donecheck.Spec `yaml:"done_check"`

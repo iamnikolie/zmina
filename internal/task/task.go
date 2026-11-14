@@ -134,6 +134,9 @@ type Task struct {
 	Closed *Closure `json:"closed,omitempty"`
 	// Route is what the crew file's routes said when the task was made, when the crew has routes (zmina route).
 	Route *Route `json:"route,omitempty"`
+	// Review is set on a task zmina made to review another (the crew file's auto_review): which, which round, and the verdict
+	// its reviewer closed it with. A task that has it is closed as done only with a verdict.
+	Review *Review `json:"review,omitempty"`
 	// Criteria is what must be true for the task to count as finished, one statement each; the handoff packet
 	// carries them and the worker's result says for each whether it holds. Empty: the worker decides.
 	Criteria []string `json:"criteria,omitempty"`
@@ -292,6 +295,29 @@ type Closure struct {
 	Check *donecheck.Result `json:"check,omitempty"`
 	// Unchecked is set when the task had a check and was closed without it, by force.
 	Unchecked *Unchecked `json:"unchecked,omitempty"`
+	// Review is set when a role closed the task as done under the crew file's auto_review: its review is due, and zmina makes
+	// the review task from it. It is written with the closing, so a crash after the close leaves it to be found.
+	Review *ReviewDue `json:"review,omitempty"`
+}
+
+// The verdicts a reviewer closes a review task with.
+const (
+	VerdictAccept = "accept"
+	VerdictReject = "reject"
+)
+
+// Review says a task is a review of task Of, in round Round of that task's reviews, and what its reviewer decided: Verdict
+// is accept or reject, empty while the review is open and when it was closed without one (by force).
+type Review struct {
+	Of      string `json:"of"`
+	Round   int    `json:"round"`
+	Verdict string `json:"verdict,omitempty"`
+}
+
+// ReviewDue says the review of a closed task is due: which round, and the review task once zmina made it.
+type ReviewDue struct {
+	Round int    `json:"round"`
+	Task  string `json:"task,omitempty"`
 }
 
 // Unchecked says who closed a task past its check, and which check it was.
