@@ -1979,7 +1979,8 @@ file of the crew's own words; named but unreadable, every lesson is refused and 
 The run (once a day after `at`, only when lessons wait, no lessons MR is open and the week's budget has room; the
 ticker starts it as a process of its own, output in `<state>/lessons/run.log`): fetch origin, cut `lessons/<date>`
 from `origin/<branch>` in a worktree of zmina's own (the checkout's unpushed commits are not in it), then two
-read-only passes of `claude -p` (`--restricted --tools Read,Grep,Glob --permission-mode dontAsk`: no settings file of
+read-only passes of `claude -p` under the crew's `namespace`, so with its roles' login (`--restricted --tools
+Read,Grep,Glob --permission-mode dontAsk`: no settings file of
 the user's — no hooks, no bypass mode —, file tools confined to the worktree, no other tool, no MCP; `--max-budget-usd`,
 a pass that fails without a cost counted at its whole budget; answers held to a JSON schema):
 the sorting seat (60% of the run's budget) gives every lesson a verdict — every seat -> CLAUDE.md/AGENTS.md, one role
