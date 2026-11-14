@@ -1669,8 +1669,8 @@ the role idle in the stand the record is of, as the event is read again before i
 cut; of several lines they are one, white space folded.
 
 The line is **given at once or not at all**: never queued, since a line that waits could be read long after the question it answers is
-over. A role that cannot take it just now (lines wait for it, its delivery is held by its plan or by a turn that ended on an API error, a
-draft or a dialog in its prompt, a line typed into it not landed) is a refusal, `<role> cannot take it just now: <why>; answer in its
+over. A role that cannot take it just now (lines wait for it, its delivery is held by its plan or by a turn that ended on an API error; when it is typed into, a
+draft or a dialog in its prompt, a line not landed) is a refusal, `<role> cannot take it just now: <why>; answer in its
 terminal`, exit 1: the mark is given back, the record stays, nothing is queued, logged as answered or noted, and the card stays open. Only
 a given line is recorded. It is a line of zmina's, never typed as the owner's own, so it does not move the owner's last line to the role,
 and he is not marked as at the machine, and it names its question, so that even read late it is not taken for the answer to another: `[zmina] The

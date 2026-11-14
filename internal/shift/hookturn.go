@@ -385,7 +385,14 @@ func RecordTurn(l crew.Layout, role, session, reply string, now time.Time) error
 		rec.Prev = old.At
 	}
 
-	return writeRecord(l, l.HookTurn(role), rec)
+	if err := writeRecord(l, l.HookTurn(role), rec); err != nil {
+		// The record of the turn before would stand for this one: none is better than a stale one.
+		_ = DropTurn(l, role)
+
+		return err
+	}
+
+	return nil
 }
 
 // ClearTurn ends the question a record holds without losing when its turn ended: the record is written again with no text. A role with
