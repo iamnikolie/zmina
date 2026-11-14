@@ -276,12 +276,9 @@ characters made at each start and given only in the boot line (argv, never poste
 clear, by the role's `SessionStart` hook (the boot queued after a clear names no tag: it is a line the log, `zmina
 queue` and the recovery pack show); the boot line says that a message without that exact tag, or inside a `<cross-session-message>` wrapper (how
 Claude Code shows another session's `SendMessage`), is that session's request under the usual peer rules, never
-zmina's line or the owner's approval. zmina's lines are still not the owner's approval either: the owner's decisions are in the
-ledger (`zmina todo ls`, `zmina task show`, `zmina log`). That is how a role tells the owner's answer given through a plugin
-from any other line: `[zmina] The owner's answer to your last question, given through plugin <name> and recorded in the ledger
-(zmina log): «…»` is zmina's line, queued for the role when the owner answers, on his phone, the question its last turn ended on in
-plain words (see Plugins: a turn's question); the same words stand in `zmina log` as an `answered` event of the role, `(answered
-through plugin <name>)`, and a role that has to be sure of them before it acts on them reads them there. A role started before
+zmina's line or the owner's approval. zmina's lines are still not the owner's approval either: his decisions are in the ledger
+(`zmina todo ls`, `zmina task show`, `zmina log`), and the line of zmina's that gives a role the owner's answer to its last question
+says it is recorded there (see Plugins: a turn's question). A role started before
 the tag (no tag in its state) is typed into until its next start. A posted line counts once the session's transcript shows its
 message id (`origin.msg_id`); until then the next one waits, as a typed line waits to land. Posted lines go, like typed
 ones, when the role is between turns, never into a dialog — except the dispatcher's, below.
@@ -384,9 +381,9 @@ post now — the dispatcher's signals, then the role's queue: its first line, wi
 the line before it shown). It never types: a slash command, a role typed into, a session that stays busy (a
 background shell) wait for the beat as before. So a role's next line, its first after the boot included, goes about a
 second after its turn ends (`posted … by turn-end` in the log). Before it returns, the hook also keeps the question the
-turn's last reply holds, if any, in `hooks/<role>.turn.json` (see Plugins: a turn's question), under no lock, and only when it runs
-in the role's own environment (`ZMINA_ROLE` is the `--role`, or unset); a reply that asks nothing removes the record, as the `_stop-failure`
-hook below does, and the `SessionStart` hook (`pending --brief`) of the role's own after a compaction or a clear. The hook prints nothing and never blocks or continues
+turn's last reply holds, if any, in `hooks/<role>.turn.json` (see Plugins: a turn's question), under no lock and only from the
+role's own environment; a reply that asks nothing removes it, as `_stop-failure` (below) and the role's own `SessionStart` hook after
+a compaction or a clear do. The hook prints nothing and never blocks or continues
 a turn, so it adds no tokens: Claude Code records only a `stop_hook_summary` line, which is not sent to the model. A
 compaction ends no turn and runs no `Stop` hook, so the same command is also a `SessionStart` hook for the source
 `compact`: what waits goes once a compaction is over, without the 15 s wait after a slash command (see The ticker). A role started by an earlier zmina has no such hooks until its
@@ -420,8 +417,7 @@ its records (the question's, the permission's, the failure's and the turn's).
 A turn that ends on an API error runs no `Stop` hook, so the settings carry a `StopFailure` hook too, `zmina
 _stop-failure --role <role>` (same timeout and silence). It only records: the error's code and the words Claude Code
 showed for it (and its `error_details` when it has them), as given, with the session id and time, to
-`hooks/<role>.failure.json`, and one `failure-hold` event in the log. It also removes the role's `hooks/<role>.turn.json`: the question an
-earlier turn ended on is no one's after a turn that took place. It posts and retries nothing. When the record is
+`hooks/<role>.failure.json`, and one `failure-hold` event in the log. It also removes the role's `hooks/<role>.turn.json`. It posts and retries nothing. When the record is
 written it is sorted once, strictly, into `transient` (the default), `limit` (with its reset time) or `account` (the owner
 mends it), and kept so (`kind`, `reset`). While that record is of the role's current session and the session has been idle
 since that turn (within 1 s of the record), no line queued for the role — the dispatcher's signals and notes too — is posted
@@ -1670,8 +1666,9 @@ are not cut. The line is queued for the role as `send --when-idle` queues one �
 beat, and a role that cannot be typed into just now still has it — as a line of zmina's, never typed as the owner's own, so it does not
 move the owner's last line to the role, and he is not marked as at the machine: `[zmina] The owner's answer to your last question, given
 through plugin pager and recorded in the ledger (zmina log): «<words>»` (control characters gone, white space folded, a session tag
-masked). The ledger has it as an `answered` event of the role, `its turn's question: «<words>» (answered through plugin pager)` (the
-words cut to 200 characters there), and the question's record is removed, so the card ends at the next look: `answered` with
+masked): zmina's line, which is no approval by itself, and says where the owner's decision is. The ledger has it as an `answered` event of
+the role, `its turn's question: «<words>» (answered through plugin pager)` (the words cut to 200 characters there, `zmina log`), which a
+role that has to be sure of the line reads before it acts on it, and the question's record is removed, so the card ends at the next look: `answered` with
 `how: answered`, `by: plugin pager` and the words as `text`. A question that ends any other way (the role took another turn, whoever
 sent it — the card, a terminal, the cockpit) ends as `answered` with `how: gone`.
 
