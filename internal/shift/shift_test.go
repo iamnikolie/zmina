@@ -1339,3 +1339,18 @@ func TestStartLiftsTheStopWhenTheDispatcherFails(t *testing.T) {
 	assert.ErrorIs(t, err, ErrPartial)
 	assert.True(t, f.s.State.Stopped.IsZero())
 }
+
+// A beat that comes long after the one before says so in the log: the machine slept or the ticker stood still.
+func TestTickLogsAGapBetweenBeats(t *testing.T) {
+	s, _, _, now := fixture(t)
+	ev := s.Events.(*fakeEvents)
+
+	s.Tick()
+	*now = now.Add(time.Minute)
+	s.Tick()
+	assert.Zero(t, ev.count("", "beat-gap"), "a minute apart is no gap")
+
+	*now = now.Add(2*time.Hour + 14*time.Minute)
+	s.Tick()
+	assert.Equal(t, 1, ev.count("", "beat-gap"))
+}

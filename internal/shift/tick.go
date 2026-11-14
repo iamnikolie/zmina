@@ -76,6 +76,12 @@ func (s *Shift) Tick() []string {
 	stopped := !s.State.Stopped.IsZero() || s.Crew.IsRetired()
 	s.lastBeat = s.State.LastTick
 	s.State.LastTick = now
+
+	// A gap between beats is on the record: the machine slept or the ticker stood still, and whatever waited did so
+	// for that long with nobody to move it.
+	if gap := now.Sub(s.lastBeat); !s.lastBeat.IsZero() && gap > beatGapMax {
+		s.log("", "beat-gap", "", fmt.Sprintf("no beat for %s, since %s", gap.Round(time.Minute), s.lastBeat.Format("01-02 15:04")))
+	}
 	s.pruneAbsent(now)
 
 	// The plans' thresholds before anything is delivered or started: a hold that begins now is on the book for every step below.

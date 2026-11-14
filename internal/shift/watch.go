@@ -151,6 +151,8 @@ func (s *Shift) FinishWatch(run WatchRun, res watch.Result, baseline bool) []str
 		return []string{name + ": the watch changed while it ran; result discarded"}
 	}
 
+	// How the run before this one ended, for what the log keeps of a run that found nothing new.
+	prevRun, prevOK := st.LastRun, st.LastOK
 	st.LastRun = run.Started
 
 	var did []string
@@ -237,11 +239,17 @@ func (s *Shift) FinishWatch(run WatchRun, res watch.Result, baseline bool) []str
 		}
 	}
 
-	s.log(role, "watch-run", "", summary)
+	// A run that found something new is logged, and stays in the tick log. One that found nothing new is logged
+	// once a clock hour, and after a run that failed or the first one: a watch that runs every few minutes and
+	// finds nothing would otherwise be most of the event log. watch ls has the time of every last run.
+	fresh := len(outs) > counts[watch.Dup]
 
-	// A run that found nothing new stays out of the tick log; the event log keeps every run.
-	if len(outs) > counts[watch.Dup] {
+	switch {
+	case fresh:
+		s.log(role, "watch-run", "", summary)
 		did = append(did, name+": "+summary)
+	case prevRun.IsZero() || !prevOK || !sameHour(prevRun, run.Started):
+		s.log(role, "watch-run", "", summary+" (nothing new; such runs are logged once an hour)")
 	}
 
 	return did
@@ -311,3 +319,6 @@ func (s *Shift) PruneWatches() {
 		}
 	}
 }
+
+// sameHour reports whether a and b are in one hour of the clock.
+func sameHour(a, b time.Time) bool { return a.Truncate(time.Hour).Equal(b.Truncate(time.Hour)) }

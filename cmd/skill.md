@@ -1309,7 +1309,8 @@ The keys of one MR noted in one run fold into one note:
 | `zmina watch baseline <name>` | record what the source reports now, note nothing. |
 | `zmina watch forget <name> [key]` | drop stored fingerprints, so the next run notes them again. |
 
-Watches are edited by hand in the crew file. Log events: `watch-run`, `watch-noted`, `watch-renoted`,
+Watches are edited by hand in the crew file. A run that found nothing new is logged once a clock hour (and
+after a failed run), one that found something every time. Log events: `watch-run`, `watch-noted`, `watch-renoted`,
 `watch-ack`, `watch-dropped`, `watch-failed` (role `watch:<name>`: `zmina log --role watch:mrs`).
 
 ## Tasks — the work ledger
@@ -2577,7 +2578,8 @@ be removed with `zmina seat rm` while it does.
 
 `zmina log [--since 12h|3d] [--role r] [--task T-14] [-n|--last 50] [--full] [--json]` — ups, downs, ends, broken
 roles, stuck/idle/expired notes, lines told or typed, keys, sends, tasks, seats, `route` (which seat a new task went to
-and what the routes said, see Routes), scheduled runs, restarts,
+and what the routes said, see Routes), scheduled runs, restarts, `beat-gap` (a beat more than 5 minutes after the one
+before: the machine slept or the ticker stood still, and for how long),
 each with who did it (`hand`, `ticker`, `schedule`, or the role) and, after a task's or parked item's id, its title
 (`accepted T-14 (fix the login)`); one line of at most 160 characters per event,
 `--full` whole. File `~/.zmina/events.jsonl`,

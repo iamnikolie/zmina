@@ -202,3 +202,38 @@ func TestRunTickRunsSourcesOutsideTheLock(t *testing.T) {
 	assert.Contains(t, strings.Join(lines, "\n"), "told the dispatcher: [zmina] ci-red: pipeline red")
 	assert.Len(t, f.tm.typed["dispatcher"], 1, "typed once")
 }
+
+// A run that finds nothing new is logged once a clock hour, and after a failed run; one that finds something is
+// logged every time. A watch that runs every few minutes and finds nothing does not fill the event log.
+func TestWatchRunsThatFindNothingAreLoggedOnceAnHour(t *testing.T) {
+	f := fixtureWith(t, watchYAML)
+	*f.now = f.now.Truncate(time.Hour).Add(time.Minute)
+
+	runs := func() int { return f.ev.count("watch:ci-red", "watch-run") }
+
+	cycle(t, f, watch.Result{})
+	assert.Equal(t, 1, runs(), "the first run is logged")
+
+	for range 5 {
+		*f.now = f.now.Add(5 * time.Minute)
+		cycle(t, f, watch.Result{})
+	}
+
+	assert.Equal(t, 1, runs(), "the same hour: nothing new, nothing logged")
+
+	*f.now = f.now.Add(40 * time.Minute)
+	cycle(t, f, watch.Result{})
+	assert.Equal(t, 2, runs(), "the next hour's first run")
+
+	// A run that finds something is logged whenever it is.
+	*f.now = f.now.Add(5 * time.Minute)
+	cycle(t, f, watch.Result{Events: []watch.Event{ev("main", "red")}})
+	assert.Equal(t, 3, runs())
+
+	// After a failed run the next one is logged: the log shows the watch came back.
+	*f.now = f.now.Add(5 * time.Minute)
+	cycle(t, f, watch.Result{Err: errors.New("no answer")})
+	*f.now = f.now.Add(5 * time.Minute)
+	cycle(t, f, watch.Result{Events: []watch.Event{ev("main", "red")}})
+	assert.Equal(t, 4, runs(), "the same key again is nothing new, but the run before failed")
+}
