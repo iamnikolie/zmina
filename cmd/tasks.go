@@ -375,6 +375,8 @@ func (a *app) taskShowCommand() *cobra.Command {
 					fmt.Fprintln(a.out, "route:", routeLine(t.Route))
 				}
 
+				printReview(a.out, t)
+
 				if t.Worktree != "" {
 					fmt.Fprintf(a.out, "worktree: %s (branch %s from %s)\n", t.Worktree, t.Branch, t.Base)
 				}
@@ -508,6 +510,8 @@ type taskChange struct {
 	// handoff is the packet --handoff names: the hand-out the caller reports for.
 	handoff string
 	force   bool
+	// verdict is --verdict: what a review task is closed with (done only).
+	verdict string
 	// criteria is the values of --criteria; setCriteria the list they make when the flag was given (set only).
 	criteria    []string
 	setCriteria *[]string
@@ -600,6 +604,8 @@ func (a *app) taskCloseCommand(use string, st task.State) *cobra.Command {
 
 	if st == task.Done {
 		c.Flags().StringVar(&resultFile, "result", "", "save a role-shaped JSON result before closing (file or -)")
+		c.Flags().StringVar(&o.verdict, "verdict", "", "accept or reject: how a review task zmina made (auto_review) is closed; "+
+			"closing one without it is refused")
 	}
 
 	o.flags(c, false)
@@ -801,7 +807,7 @@ func checkExit(err error) error {
 func (a *app) changeOf(s *shift.Shift, st task.State, o taskChange) ledger.Change {
 	return ledger.Change{State: st, On: o.on, Note: o.note, Role: o.role, Force: o.force, Title: o.title,
 		Project: o.project, URL: o.url, Budget: o.budget, Criteria: o.setCriteria, By: by(), Check: o.check,
-		ClearCheck: o.clearCheck, Caller: a.caller(s, o.handoff, st == task.Done || st == task.Dropped)}
+		ClearCheck: o.clearCheck, Verdict: o.verdict, Caller: a.caller(s, o.handoff, st == task.Done || st == task.Dropped)}
 }
 
 // alreadyDone says a task closed as done again, with nothing new, is done already: no event, no line for the
@@ -871,6 +877,9 @@ func (a *app) setTask(id string, st task.State, o taskChange) error {
 		if errors.Is(err, ledger.ErrAlreadyDone) {
 			again = true
 
+			// A close that was told nothing of its review, by a crash, is finished by the next one that says nothing new.
+			a.reviewLoop(s, id)
+
 			return nil
 		}
 
@@ -899,6 +908,9 @@ func (a *app) setTask(id string, st task.State, o taskChange) error {
 
 		if st != "" && !st.Active() {
 			closed = &t
+
+			// The review of a task a role closed is made, and the verdict of one is acted on, before the dispatcher is told.
+			a.reviewLoop(s, t.ID)
 
 			// A role that closes a task tells the dispatcher, with its note, like a result does.
 			s.NotifyClosed()

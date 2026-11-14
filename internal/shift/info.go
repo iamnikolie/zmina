@@ -55,6 +55,21 @@ func (s *Shift) markQuiet(text string, now time.Time) {
 	s.markInfo(text, now.Add(infoRideQuiet-infoRide))
 }
 
+// NoteQuiet is Note for a line that asks nothing of the dispatcher and can wait for another to go with, as long as a quiet
+// info line does (infoRideQuiet): zmina reports what happened, and nothing follows. It reports whether the note was queued.
+// With info_lines: false it is a note like any other.
+func (s *Shift) NoteQuiet(from, text string) (bool, error) {
+	note, queued, err := s.note(from, text, false, true)
+
+	// The note made itself an info line as it was queued, and a mark keeps the first time it was given (markInfo): the later
+	// time that makes it quiet is set over it.
+	if queued && s.Crew.InfoLinesOn() {
+		s.State.Info[note] = s.Now().Add(infoRideQuiet - infoRide)
+	}
+
+	return queued, err
+}
+
 // ridingOnly reports whether all that waits for the dispatcher is info lines still waiting for a line to go with:
 // nothing of it is due, so it holds nothing up (a trim of the dispatcher, the courier's look at a gated queue).
 func (s *Shift) ridingOnly(now time.Time) bool { return s.infoWaits(s.State.Signals, now) }
