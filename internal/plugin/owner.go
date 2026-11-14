@@ -14,7 +14,8 @@ import (
 // from the screen ended, within a beat or two.
 const chosenKeep = 2 * 24 * time.Hour
 
-// Chosen is the choice made of a dialog: who made it, which, its words, when.
+// Chosen is the choice made of a dialog: who made it, which (0 for none: the owner's own words to the question a role's turn ended
+// on), its words, when.
 type Chosen struct {
 	By   string    `json:"by"`
 	N    int       `json:"n"`

@@ -91,7 +91,7 @@ func (a *app) pluginWorld(c *crew.Crew, now time.Time) (*pluginWorld, error) {
 			if !ok && known {
 				var turnKnown bool
 
-				facts, ok, turnKnown = standingTurn(c, v, items)
+				facts, ok, turnKnown = standingTurn(c, v)
 				if !turnKnown {
 					w.gaps.Roles[v.Role] = true
 				}
@@ -116,7 +116,7 @@ func (a *app) pluginWorld(c *crew.Crew, now time.Time) (*pluginWorld, error) {
 
 			// A turn's question is on no screen: the record is read again, and the role must be idle since that very turn.
 			if f.Prompt == plugin.PromptTurn {
-				now, standing, known := standingTurn(c, v, nil)
+				now, standing, known := standingTurn(c, v)
 
 				return known && standing && now.ID == f.ID && now.Since.Equal(f.Since)
 			}
@@ -275,12 +275,35 @@ func standingDialog(s *shift.Shift, c *crew.Crew, v shift.View) (plugin.DialogFa
 // is put on the list in the turn that asks, or a little before.
 const turnAskWindow = 15 * time.Minute
 
+// turnAsked reports whether a role put a question on the owner's todo since a moment: an ask it made, or a task it set waiting on the
+// owner, whether it still waits there or the owner has answered it, done it, parked it or set it aside since (a plugin that was told
+// of the item has had its card). A file that does not read says nothing.
+func turnAsked(c *crew.Crew, role string, since time.Time) bool {
+	asked, _, _ := askStore(c).Scan()
+
+	for _, a := range asked {
+		if a.Role == role && !a.Created.Before(since) {
+			return true
+		}
+	}
+
+	tasks, _, _ := taskStore(c).Scan()
+
+	for _, t := range tasks {
+		if t.Role == role && t.State == task.Waiting && t.On == "" && !t.Updated.Before(since) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // standingTurn is the question a role's last turn ended on, in plain words and with nothing on the owner's todo, that a plugin can
 // be told of: the record its Stop hook kept, while the role is up and idle at its input line (no dialog, no prompt) in the session
 // the record is of, and went idle within moments of the hook (shift.TurnRecord.Stands) — a role that took another turn since is
-// not awaiting it. Not when the role has an open item on the todo created since turnAskWindow before the record: it asked, and a
-// card exists. known is false when the record is there and does not read, and nothing is then judged ended.
-func standingTurn(c *crew.Crew, v shift.View, items []todoItem) (plugin.DialogFacts, bool, bool) {
+// not awaiting it. Not when the role has an item of its own on the todo from turnAskWindow before the record on (turnAsked), open or
+// closed: it asked, and a card exists. known is false when the record is there and does not read, and nothing is then judged ended.
+func standingTurn(c *crew.Crew, v shift.View) (plugin.DialogFacts, bool, bool) {
 	if v.State != shift.PresenceUp || v.Status != "idle" || v.Prompt || v.Dialog != nil {
 		return plugin.DialogFacts{}, false, true
 	}
@@ -294,10 +317,8 @@ func standingTurn(c *crew.Crew, v shift.View, items []todoItem) (plugin.DialogFa
 		return plugin.DialogFacts{}, false, true
 	}
 
-	for _, it := range items {
-		if it.Role == v.Role && !it.Created.Before(rec.At.Add(-turnAskWindow)) {
-			return plugin.DialogFacts{}, false, true
-		}
+	if turnAsked(c, v.Role, rec.At.Add(-turnAskWindow)) {
+		return plugin.DialogFacts{}, false, true
 	}
 
 	f := plugin.DialogFacts{Role: v.Role, ID: rec.ID, Question: rec.Text, Prompt: plugin.PromptTurn, Since: rec.At}
@@ -344,11 +365,20 @@ func closureOf(c *crew.Crew, e plugin.Entry, at time.Time) plugin.Closure {
 
 	if e.Kind == plugin.Dialog {
 		// What was chosen is under the id the plugin was told (a plugin's press), or under the dialog's own (a hand's, the cockpit's).
+		// A choice of no number is the owner's words to a question a role's turn ended on: it was answered, not chosen.
 		chosen := plugin.ReadOwner(c.Layout().PluginOwner()).Chosen
-		if ch, ok := chosen[e.ID]; ok && ch.At.After(e.Told) {
+		ch, ok := chosen[e.ID]
+
+		if !ok || !ch.At.After(e.Told) {
+			ch, ok = chosen[dialogOfEvent(e.ID)]
+		}
+
+		if ok && ch.At.After(e.Told) {
 			cl.How, cl.By, cl.Text, cl.At = plugin.HowChosen, ch.By, ch.Text, ch.At
-		} else if ch, ok := chosen[dialogOfEvent(e.ID)]; ok && ch.At.After(e.Told) {
-			cl.How, cl.By, cl.Text, cl.At = plugin.HowChosen, ch.By, ch.Text, ch.At
+
+			if ch.N == 0 {
+				cl.How = plugin.HowAnswered
+			}
 		}
 
 		return cl

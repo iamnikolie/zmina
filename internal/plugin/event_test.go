@@ -251,15 +251,15 @@ func TestAnUncheckedPermissionSubjectOffersNoArgv(t *testing.T) {
 	assert.NotNil(t, ok.Answer)
 }
 
-// A question a role asked in words has no screen: the event is a dialog of prompt "turn", with the words and a line to type to the
-// role, and nothing to press.
+// A question a role asked in words has no screen: the event is a dialog of prompt "turn", with the words and the argv that gives the
+// owner's answer to the role through the plugin, to this event's question only, and nothing to press.
 func TestTurnDialogEventGolden(t *testing.T) {
 	ev := builder().Dialog(DialogFacts{Role: "dev", ID: "0123456789abcdef", Nonce: "aabbccddeeff0011", Prompt: PromptTurn,
 		Question: "Fix it now?\nI also need to know whether it was dev or prod.", Since: opened, Task: "T-12", TaskTitle: "Rename the site"})
 
 	want := `{"v":1,"event":"dialog","id":"dev:0123456789abcdef:aabbccddeeff0011","role":"dev","answer":{"text":["zmina","--crew",` +
-		`"/home/alex/.zmina/acme/crew.yaml","send","--","dev","<text>"]},"question":"Fix it now? I also need to know whether it was dev or prod.",` +
-		`"prompt":"turn","task":"T-12","task_title":"Rename the site"}`
+		`"/home/alex/.zmina/acme/crew.yaml","send","--by","pager","--dialog","dev:0123456789abcdef:aabbccddeeff0011","--","dev","<text>"]},` +
+		`"question":"Fix it now? I also need to know whether it was dev or prod.","prompt":"turn","task":"T-12","task_title":"Rename the site"}`
 
 	assert.Equal(t, want+"\n", string(ev.Line()))
 	assert.False(t, ev.NeedsTerminal)
@@ -279,8 +279,8 @@ func TestTurnDialogEventIsCleanedAndNeverInjectsArgv(t *testing.T) {
 	assert.NotContains(t, ev.Question, "\x1b")
 	assert.NotContains(t, ev.Question, "\n")
 	require.NotNil(t, ev.Answer)
-	assert.Equal(t, []string{"zmina", "--crew", "/home/alex/.zmina/acme/crew.yaml", "send", "--", "dev", "<text>"}, ev.Answer.Text,
-		"the words are not in the argv")
+	assert.Equal(t, []string{"zmina", "--crew", "/home/alex/.zmina/acme/crew.yaml", "send", "--by", "pager", "--dialog", "dev:ab:cd", "--", "dev",
+		"<text>"}, ev.Answer.Text, "the words are not in the argv")
 	assert.Nil(t, ev.Answer.Options)
 	assert.Equal(t, 1, strings.Count(string(ev.Line()), "\n"))
 

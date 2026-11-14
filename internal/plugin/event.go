@@ -103,7 +103,7 @@ type Event struct {
 
 	// A dialog: the question on the role's screen, and the task the role holds. Prompt says what it is, permission (a tool's
 	// approval: Tool and Subject are the call, what is being approved), question or turn (on no screen: the role ended its turn on
-	// a question to the owner in plain words, which is Question, and Answer.Text is a line typed to the role); NeedsTerminal says a
+	// a question to the owner in plain words, which is Question, and Answer.Text gives the owner's words to the role); NeedsTerminal says a
 	// choice of it cannot be pressed from here (several can be ticked), so the event offers no argv for it.
 	Question   string `json:"question,omitempty"`
 	Prompt     string `json:"prompt,omitempty"`
@@ -266,11 +266,12 @@ func (b Builder) Dialog(d DialogFacts) Event {
 		Prompt: b.clean(d.Prompt, roleMax), Tool: b.clean(d.Tool, roleMax), Subject: b.clean(d.Subject, SubjectMax),
 		Task: b.clean(d.Task, roleMax), TaskTitle: b.clean(d.TaskTitle, TitleMax), SubjectCut: d.SubjectCut, SubjectChecked: d.SubjectChecked, NeedsTerminal: d.Multi || d.SubjectCut || permissionUnsure(d)}
 
-	// A question put in words is answered in words: a line typed to the role, after the `--` so that nothing in it is read as a flag.
-	// The role's name is checked, as an item's id is, before it goes into an argv.
+	// A question put in words is answered in words: the owner's line to the role, given through the plugin and to this question only
+	// (--dialog names the event), every flag before the `--` and after it the role and the words, so that nothing in them is read
+	// as a flag. The role's name is checked, as an item's id is, before it goes into an argv.
 	if d.Prompt == PromptTurn {
 		if roleNameRe.MatchString(d.Role) {
-			ev.Answer = &Answer{Text: []string{zminaBinary, "--crew", b.Crew, "send", "--", d.Role, textHolder}}
+			ev.Answer = &Answer{Text: []string{zminaBinary, "--crew", b.Crew, "send", "--by", b.Plugin, "--dialog", id, "--", d.Role, textHolder}}
 		}
 
 		return ev

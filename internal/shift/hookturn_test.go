@@ -63,6 +63,35 @@ func TestTurnQuestion(t *testing.T) {
 		{name: "Cyrillic without a question", reply: "Готово. Всё работает, вопросов нет."},
 		{name: "windows line ends", reply: "Ready.\r\n\r\nShip it?\r\nNow.", want: "Ship it?\nNow.", asked: true},
 		{name: "trailing white space is cut", reply: "Ship it?  \n\n\n", want: "Ship it?", asked: true},
+
+		// Where a question counts: in the last three paragraphs of prose, and in prose only.
+		{name: "a question above the last three paragraphs is of a report that went on", reply: "Old?\n\nB.\n\nC.\n\nD."},
+		{name: "a question in the third paragraph from the end", reply: "Old.\n\nAsk?\n\nB.\n\nC.", want: "Ask?\n\nB.\n\nC.", asked: true},
+		{name: "a paragraph with no prose is not counted", reply: "Q?\n\n## Heading\n\nB.\n\nC.", want: "Q?\n\n## Heading\n\nB.\n\nC.", asked: true},
+		{name: "a table is no paragraph either", reply: "Q?\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nB.\n\nC.", want: "Q?\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nB.\n\nC.", asked: true},
+		{name: "a heading is not asked", reply: "# What next?\n\nDone."},
+		{name: "a heading of any depth", reply: "###### Why?\nDone."},
+		{name: "an issue number is not a heading", reply: "#123 is broken, fix it?", want: "#123 is broken, fix it?", asked: true},
+		{name: "a table row is not asked", reply: "| name | ready? |\n|---|---|\n| dev | yes |\n"},
+		{name: "indented code is not asked", reply: "Result:\n\n    why not?\n    really?\n\nDone."},
+		{name: "tab-indented code is not asked", reply: "Result:\n\n\twhy not?\n\nDone."},
+		{name: "an indented line inside a paragraph goes on with it", reply: "- an item\n    goes on, ok?", want: "- an item\n    goes on, ok?", asked: true},
+		{name: "an html comment is not asked", reply: "<!-- is this ok? -->\nDone."},
+		{name: "a comment of several lines", reply: "<!--\nask?\n-->\nDone."},
+		{name: "a comment inside a line", reply: "Done <!-- why? --> now."},
+		{name: "text around a comment is asked", reply: "Done <!-- why --> now, ok?", want: "Done <!-- why --> now, ok?", asked: true},
+
+		// What may follow the mark.
+		{name: "a colon after the mark", reply: "Fix it now?: yes or no", want: "Fix it now?: yes or no", asked: true},
+		{name: "a full stop after the mark", reply: "Really?.", want: "Really?.", asked: true},
+		{name: "an ellipsis after the mark", reply: "Really?…", want: "Really?…", asked: true},
+		{name: "a quote and a full stop after the mark", reply: "He asked \"why?\".", want: "He asked \"why?\".", asked: true},
+		{name: "a bracket and a full stop after the mark", reply: "Is it done (really?).", want: "Is it done (really?).", asked: true},
+		{name: "a zero-width space after the mark", reply: "Fix it?" + string(rune(0x200b)) + "Now.", want: "Fix it?" + string(rune(0x200b)) + "Now.", asked: true},
+		{name: "the Arabic mark", reply: "هل تريد المتابعة؟ نعم", want: "هل تريد المتابعة؟ نعم", asked: true},
+		{name: "the Arabic mark at the end", reply: "Done.\n\nهل نكمل؟", want: "هل نكمل؟", asked: true},
+		{name: "optional chaining is not a question", reply: "It reads a?.b and c?:d here."},
+		{name: "a full stop that goes on is no end", reply: "It reads a?.b"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, ok := TurnQuestion(tc.reply)
@@ -113,6 +142,110 @@ func TestTurnQuestion(t *testing.T) {
 			t.Fatal("slow")
 		}
 	})
+}
+
+// A reply read from its end, cut inside a fenced block, does not read the rest of that block as prose.
+func TestTurnQuestionOfACutReplyIsNotReadInsideACodeBlock(t *testing.T) {
+	code := strings.Repeat("a line of code that asks why?\n", 12000)
+	require.Greater(t, len(code), turnReplyMax)
+
+	// The block opens before what is read, and is closed within it: what is read starts inside it.
+	_, ok := TurnQuestion("Start.\n```\n" + code + "```\nAll good.\n")
+	assert.False(t, ok, "the end of a code block is code")
+
+	got, ok := TurnQuestion("Start.\n```\n" + code + "```\nAll good, or not?\n")
+	require.True(t, ok)
+	assert.Equal(t, "All good, or not?", got, "the prose after it is read as ever")
+
+	// A reply cut in prose is read from the cut, a block inside what is read being whole.
+	_, ok = TurnQuestion(strings.Repeat("Plain words with nothing asked.\n", 12000) + "\n```\ncode?\n```\nDone.\n")
+	assert.False(t, ok)
+
+	got, ok = TurnQuestion(strings.Repeat("Plain words with nothing asked.\n", 12000) + "\n```\ncode?\n```\nDone, ok?\n")
+	require.True(t, ok)
+	assert.Equal(t, "Done, ok?", got)
+}
+
+// The scan for the mark that ends a sentence is one pass: a long line of marks is no quadratic walk, which a hook with a 5 second
+// timeout cannot afford.
+func TestTurnQuestionOfLongRunsOfMarksIsLinear(t *testing.T) {
+	for name, text := range map[string]string{
+		"question marks then a letter":  strings.Repeat("?", 200000) + "x",
+		"question marks and quotes":     strings.Repeat("?\"", 100000) + "x",
+		"marks of every kind":           strings.Repeat("?!.:…*_)", 30000) + "x",
+		"question marks inside a quote": "> " + strings.Repeat("?", 200000),
+		"a question at the end":         strings.Repeat("?", 200000) + "x\n\nDone?",
+	} {
+		done := make(chan struct{})
+
+		go func() { _, _ = TurnQuestion(text); close(done) }()
+
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s: slow", name)
+		}
+	}
+
+	start := time.Now()
+	assert.False(t, endsSentence(strings.Repeat("?", 200000)+"x"))
+	assert.True(t, endsSentence(strings.Repeat("?", 200000)+" x"))
+	assert.Less(t, time.Since(start), time.Second)
+
+	// What counts is as it was, the run skipped whole.
+	assert.False(t, endsSentence("a?.b ?:c ??x"))
+	assert.True(t, endsSentence("a?.b ??x ?!"))
+}
+
+// A record is taken away by whoever ends the question it was of, and no record is no error.
+func TestDropTurn(t *testing.T) {
+	l := crew.Layout{Dir: t.TempDir()}
+
+	require.NoError(t, DropTurn(l, "dev"), "none")
+	require.NoError(t, RecordTurn(l, "dev", "sid-1", "Ship it?", time.Now()))
+	require.NoError(t, RecordTurn(l, "ops", "sid-1", "Ship it?", time.Now()))
+	require.NoError(t, DropTurn(l, "dev"))
+	assert.NoFileExists(t, l.HookTurn("dev"))
+	assert.FileExists(t, l.HookTurn("ops"), "no other role's")
+	require.NoError(t, DropTurn(l, "../ops"), "a name that is no file name is no record")
+	assert.FileExists(t, l.HookTurn("ops"))
+}
+
+// A record whose id is not the fingerprint of its session, moment and words was written by no hook: it does not read.
+func TestReadTurnTakesOnlyARecordWhoseIdIsItsFingerprint(t *testing.T) {
+	l := crew.Layout{Dir: t.TempDir()}
+	at := time.Date(2026, 11, 13, 9, 30, 0, 123456789, time.UTC)
+
+	require.NoError(t, RecordTurn(l, "dev", "sid-1", "Ship it?", at))
+
+	raw, err := os.ReadFile(l.HookTurn("dev"))
+	require.NoError(t, err)
+
+	rec, err := ReadTurn(l, "dev")
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+	assert.Equal(t, turnID("sid-1", at, "Ship it?"), rec.ID, "the fingerprint of what the hook saw")
+	assert.Regexp(t, `^[0-9a-f]{16}$`, rec.ID)
+
+	for name, tamper := range map[string]func(string) string{
+		"other words":         func(s string) string { return strings.Replace(s, "Ship it?", "Drop it?", 1) },
+		"another session":     func(s string) string { return strings.Replace(s, "sid-1", "sid-2", 1) },
+		"another moment":      func(s string) string { return strings.Replace(s, "09:30:00.123456789Z", "09:30:01Z", 1) },
+		"an id of upper case": func(s string) string { return strings.Replace(s, rec.ID, strings.ToUpper(rec.ID), 1) },
+		"a short id":          func(s string) string { return strings.Replace(s, rec.ID, rec.ID[:8], 1) },
+		"a long id":           func(s string) string { return strings.Replace(s, rec.ID, rec.ID+"00", 1) },
+		"an id that is not hex": func(s string) string {
+			return strings.Replace(s, rec.ID, strings.Repeat("g", 16), 1)
+		},
+	} {
+		changed := tamper(string(raw))
+		require.NotEqual(t, string(raw), changed, name)
+		require.NoError(t, os.WriteFile(l.HookTurn("dev"), []byte(changed), 0o600))
+
+		got, err := ReadTurn(l, "dev")
+		require.Error(t, err, name)
+		assert.Nil(t, got, name)
+	}
 }
 
 // The record is the question and where it is from; a turn that asks nothing takes it away.

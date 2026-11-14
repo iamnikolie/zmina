@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -27,15 +28,34 @@ const (
 	turnTextMax = 4000
 	// turnReplyMax is how much of the end of a reply is read for a question: a longer one is not read from its start.
 	turnReplyMax = 256 << 10
+	// turnParagraphs is how many of the last paragraphs of prose of a reply a question is looked for in: a `?` further up is of a
+	// question the reply has since moved on from, or of the report it ends with.
+	turnParagraphs = 3
 	// turnSkew is how far apart in time the record and the moment the role's session went idle may be. The hook and the session file
 	// are written within moments of each other, in either order, and a slow Stop hook of the role's own may hold either back. A
 	// later turn is further than that from this one, and has its own hook write a record or remove this one.
 	turnSkew = 10 * time.Second
 )
 
-// closingMarks are what may stand between a `?` and the end of its sentence: the closing of an emphasis, a quote or a bracket, or
-// another mark of the same sentence.
-const closingMarks = "*_~\"'»”’›」』）】)]}!?？"
+// trailMarks are what may stand between a `?` and the end of its sentence: the closing of an emphasis, a quote or a bracket,
+// another mark of the same sentence, and the full stop, colon or ellipsis that ends it after them.
+const trailMarks = "*_~\"'»”’›」』）】)]}!?？؟.:…"
+
+// isQuestionMark reports a character that asks: the question mark, its fullwidth form and the Arabic one.
+func isQuestionMark(r rune) bool { return r == '?' || r == '？' || r == '؟' }
+
+// zeroWidth reports an invisible character that ends a sentence as white space does (an emphasis boundary leaves one).
+func zeroWidth(r rune) bool {
+	switch r {
+	case 0x200b, 0x200c, 0x200d, 0x2060, 0xfeff: // zero width space, non-joiner, joiner, word joiner, byte order mark
+		return true
+	}
+
+	return false
+}
+
+// htmlComment is an HTML comment inside a paragraph: not words to the owner.
+var htmlComment = regexp.MustCompile(`(?s)<!--.*?-->`)
 
 // TurnRecord is what a role's Stop hook wrote when its last reply held a question to the owner: the session the turn was of, when
 // the hook ran, the question's paragraph and what follows it, and a fingerprint of the three.
@@ -47,11 +67,13 @@ type TurnRecord struct {
 }
 
 // TurnQuestion is the question a role's reply holds, with what the owner needs to read it: the reply from the start of the first
-// paragraph that holds a question through its end, cut at turnTextMax characters. False when the reply holds none.
+// paragraph that holds one, of the last turnParagraphs paragraphs of prose, through its end, cut at turnTextMax characters. False
+// when the reply holds none.
 //
-// A question is a `?` (or `？`) that ends a sentence: it is followed by the end of the text, by white space, or by closing marks
-// and then one of those, so that a `?` inside a URL or a query string is none. Fenced code blocks, inline code spans and quoted
-// lines (`>`) are not looked in: what is quoted or run is not asked.
+// A question is a `?` (or `？`, `؟`) that ends a sentence: it is followed by the end of the text, by white space or a zero-width
+// space, or by closing marks, a full stop, a colon or an ellipsis and then one of those, so that a `?` inside a URL or a query
+// string is none. Not looked in, and no prose: fenced code blocks, indented code (a paragraph that opens with four spaces or a tab),
+// inline code spans, quoted lines (`>`), headings (`#`), table rows (`|`) and HTML comments.
 func TurnQuestion(reply string) (string, bool) {
 	reply = strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(reply)
 
@@ -62,13 +84,21 @@ func TurnQuestion(reply string) (string, bool) {
 		if i := strings.IndexByte(reply, '\n'); i >= 0 {
 			reply = reply[i+1:]
 		}
+
+		// Not from the middle of a fenced block: the rest of one is code, whatever it looks like.
+		reply = withoutFenceRemainder(reply)
 	}
 
 	lines := strings.Split(reply, "\n")
 	prose := proseLines(lines)
 
-	// A paragraph runs to the next blank line that is not inside code; the lines of a fence or a quote in it are its own, and are not
-	// looked in. The question is kept from its paragraph's first line of prose.
+	// A paragraph runs to the next blank line that is not inside code; the lines of a fence, a quote, a heading or a table in it are
+	// its own, and are not looked in. Only the last of those that hold prose are; the question is kept from the first line of prose of
+	// the first of them that asks.
+	type paragraph struct{ from, to, first int }
+
+	var paras []paragraph
+
 	blank := func(i int) bool { return prose[i] && strings.TrimSpace(lines[i]) == "" }
 
 	for from, i := 0, 0; i <= len(lines); i++ {
@@ -76,45 +106,75 @@ func TurnQuestion(reply string) (string, bool) {
 			continue
 		}
 
-		if at := questionAt(lines[from:i], prose[from:i]); at >= 0 {
-			return clipRunes(strings.TrimSpace(strings.Join(lines[from+at:], "\n")), turnTextMax), true
+		for j := from; j < i; j++ {
+			if prose[j] {
+				paras = append(paras, paragraph{from, i, j})
+
+				break
+			}
 		}
 
 		from = i + 1
 	}
 
-	return "", false
-}
+	for _, p := range paras[max(len(paras)-turnParagraphs, 0):] {
+		var text []string
 
-// questionAt is the index of the first line of prose of a paragraph when its prose holds a question; -1 when it holds none, or
-// no prose.
-func questionAt(lines []string, prose []bool) int {
-	first := -1
-
-	var text []string
-
-	for i, line := range lines {
-		if prose[i] {
-			text = append(text, line)
-
-			if first < 0 {
-				first = i
+		for i := p.from; i < p.to; i++ {
+			if prose[i] {
+				text = append(text, lines[i])
 			}
+		}
+
+		if endsSentence(dropCodeSpans(htmlComment.ReplaceAllString(strings.Join(text, "\n"), " "))) {
+			return clipRunes(strings.TrimSpace(strings.Join(lines[p.first:], "\n")), turnTextMax), true
 		}
 	}
 
-	if first < 0 || !endsSentence(dropCodeSpans(strings.Join(text, "\n"))) {
-		return -1
-	}
-
-	return first
+	return "", false
 }
 
-// proseLines marks the lines that are prose: not inside a fenced code block, not a fence, not a quote.
-func proseLines(lines []string) []bool {
-	prose := make([]bool, len(lines))
+// withoutFenceRemainder takes the start of a text that is cut inside a fenced block off: an odd number of fence lines in it says the
+// first of them closes a block that was open before the cut, and everything up to and including it is that block's.
+func withoutFenceRemainder(text string) string {
+	count, end := 0, -1
 
-	var fence string
+	for pos := 0; pos < len(text); {
+		next := strings.IndexByte(text[pos:], '\n')
+		line, stop := text[pos:], len(text)
+
+		if next >= 0 {
+			line, stop = text[pos:pos+next], pos+next+1
+		}
+
+		if fenceOf(strings.TrimLeft(line, " \t")) != "" {
+			count++
+
+			if end < 0 {
+				end = stop
+			}
+		}
+
+		pos = stop
+	}
+
+	if count%2 == 1 {
+		return text[end:]
+	}
+
+	return text
+}
+
+// proseLines marks the lines that are prose: not inside a fenced block, not a fence, not indented code, a quote, a heading, a table
+// row or an HTML comment. A blank line outside any of them is a paragraph's end, and is marked too.
+func proseLines(lines []string) []bool {
+	var (
+		prose    = make([]bool, len(lines))
+		fence    string
+		comment  bool
+		indented bool
+		start    = true
+	)
 
 	for i, line := range lines {
 		t := strings.TrimLeft(line, " \t")
@@ -124,15 +184,34 @@ func proseLines(lines []string) []bool {
 			if closesFence(t, fence) {
 				fence = ""
 			}
+		case comment:
+			comment = !strings.Contains(line, "-->")
+		case t == "":
+			prose[i], indented, start = true, false, true
+
+			continue
+		case indented || start && (strings.HasPrefix(line, "    ") || strings.HasPrefix(line, "\t")):
+			indented = true
 		case fenceOf(t) != "":
 			fence = fenceOf(t)
-		case strings.HasPrefix(t, ">"):
+		case strings.HasPrefix(t, ">"), isHeading(t), strings.HasPrefix(t, "|"):
+		case strings.HasPrefix(t, "<!--"):
+			comment = !strings.Contains(t[len("<!--"):], "-->")
 		default:
 			prose[i] = true
 		}
+
+		start = false
 	}
 
 	return prose
+}
+
+// isHeading reports a line of a heading: one to six `#` and a space, or nothing more (`#123 is broken` is words).
+func isHeading(t string) bool {
+	n := len(t) - len(strings.TrimLeft(t, "#"))
+
+	return n >= 1 && n <= 6 && (n == len(t) || t[n] == ' ' || t[n] == '\t')
 }
 
 // fenceOf is the fence a line opens: its run of three or more backticks or tildes; "" when it opens none. A backtick fence's
@@ -215,19 +294,31 @@ func dropCodeSpans(s string) string {
 // backticks is the length of the run of backticks a string starts with.
 func backticks(s string) int { return len(s) - len(strings.TrimLeft(s, "`")) }
 
-// endsSentence reports a `?` that ends a sentence.
+// endsSentence reports a question mark that ends a sentence. It goes once over the text: the marks after a question mark that does
+// not end one are skipped whole, since every question mark among them has the same end.
 func endsSentence(s string) bool {
-	for i, r := range s {
-		if r != '?' && r != '？' {
+	for i := 0; i < len(s); {
+		r, n := utf8.DecodeRuneInString(s[i:])
+		i += n
+
+		if !isQuestionMark(r) {
 			continue
 		}
 
-		rest := strings.TrimLeftFunc(s[i+utf8.RuneLen(r):], func(c rune) bool { return strings.ContainsRune(closingMarks, c) })
-		if rest == "" {
+		for i < len(s) {
+			c, w := utf8.DecodeRuneInString(s[i:])
+			if !strings.ContainsRune(trailMarks, c) {
+				break
+			}
+
+			i += w
+		}
+
+		if i == len(s) {
 			return true
 		}
 
-		if c, _ := utf8.DecodeRuneInString(rest); unicode.IsSpace(c) {
+		if c, _ := utf8.DecodeRuneInString(s[i:]); unicode.IsSpace(c) || zeroWidth(c) {
 			return true
 		}
 	}
@@ -252,11 +343,7 @@ func RecordTurn(l crew.Layout, role, session, reply string, now time.Time) error
 
 	text, ok := TurnQuestion(reply)
 	if !ok {
-		if err := os.Remove(l.HookTurn(role)); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
-		}
-
-		return nil
+		return DropTurn(l, role)
 	}
 
 	now = now.UTC()
@@ -264,8 +351,22 @@ func RecordTurn(l crew.Layout, role, session, reply string, now time.Time) error
 	return writeRecord(l, l.HookTurn(role), TurnRecord{SessionID: session, At: now, Text: text, ID: turnID(session, now, text)})
 }
 
+// DropTurn removes a role's turn record: a turn that asks nothing, a turn that ended on an error, the start of a new conversation
+// and an answer that was taken leave none. No record is no error.
+func DropTurn(l crew.Layout, role string) error {
+	if !hookRole(role) {
+		return nil
+	}
+
+	if err := os.Remove(l.HookTurn(role)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+
+	return nil
+}
+
 // ReadTurn is the question a role's hook recorded: nil, with no error, when it recorded none; an error when the file is there
-// and does not read.
+// and does not read, or its id is not the fingerprint of its session, moment and words (a record that was written by no hook).
 func ReadTurn(l crew.Layout, role string) (*TurnRecord, error) {
 	if !hookRole(role) {
 		return nil, nil
@@ -292,11 +393,30 @@ func ReadTurn(l crew.Layout, role string) (*TurnRecord, error) {
 		return nil, err
 	}
 
-	if rec.SessionID == "" || rec.ID == "" || rec.Text == "" || rec.At.UnixMilli() <= 0 {
-		return nil, errors.New("a turn record with no session, id, text or time")
+	if rec.SessionID == "" || rec.Text == "" || rec.At.UnixMilli() <= 0 {
+		return nil, errors.New("a turn record with no session, text or time")
+	}
+
+	if !validTurnID(rec.ID) || rec.ID != turnID(rec.SessionID, rec.At, rec.Text) {
+		return nil, errors.New("a turn record whose id is not the fingerprint of its session, time and words")
 	}
 
 	return &rec, nil
+}
+
+// validTurnID reports 16 lower-case hex characters.
+func validTurnID(id string) bool {
+	if len(id) != 16 {
+		return false
+	}
+
+	for _, c := range id {
+		if c < '0' || c > '9' && c < 'a' || c > 'f' {
+			return false
+		}
+	}
+
+	return true
 }
 
 // Stands reports whether a role's view is of the turn the record is of, still: the role is up and idle at its input line, in the

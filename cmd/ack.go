@@ -96,6 +96,12 @@ func (a *app) pendingCommand() *cobra.Command {
 						_ = shift.RecordRotationEvidence(s.Crew.Layout(), role, shift.EvidenceHookStart, "", role, hook.SessionID, s.Now())
 					}
 
+					// A compaction or a clear ends what the role was asked in its conversation: a question its last turn ended on is
+					// not awaited of the one that begins.
+					if self && trimmed(hook.Source) {
+						_ = shift.DropTurn(s.Crew.Layout(), role)
+					}
+
 					return nil
 				}
 

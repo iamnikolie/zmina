@@ -445,6 +445,12 @@ func spendMarks(s *shift.Shift, role string, d *shift.Dialog, since time.Time) {
 // and says it was chosen, and by whom. It is for the plugins' run to say how a dialog that left the screen ended; a choice
 // made in a terminal says the owner is at the machine too.
 func noteChosen(s *shift.Shift, role, id, by string, n int, label string) {
+	noteDecision(s, id, by, n, shift.QuoteN(label, plugin.OptionMax))
+}
+
+// noteDecision is noteChosen for any decision of a dialog: n is the choice made, 0 for words (the owner's answer to the question a
+// role's turn ended on), and text what was chosen or said, already cleaned and cut.
+func noteDecision(s *shift.Shift, id, by string, n int, text string) {
 	if len(s.Crew.Plugins) == 0 {
 		return
 	}
@@ -455,7 +461,7 @@ func noteChosen(s *shift.Shift, role, id, by string, n int, label string) {
 			o.Chosen = map[string]plugin.Chosen{}
 		}
 
-		c := plugin.Chosen{By: by, N: n, Text: shift.QuoteN(label, plugin.OptionMax), At: now}
+		c := plugin.Chosen{By: by, N: n, Text: text, At: now}
 		o.Chosen[id] = c
 		o.Chosen[dialogOfEvent(id)] = c
 

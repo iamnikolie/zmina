@@ -81,6 +81,12 @@ func (a *app) turnEndCommand() *cobra.Command {
 func (a *app) recordTurn(role, session, reply string) {
 	defer func() { _ = recover() }()
 
+	// Only the role's own hook records for it: a command run in another role's environment, or by hand, names a role and a session
+	// it has no say in.
+	if !ownHook(role) {
+		return
+	}
+
 	if l, ok := a.hookLayout(); ok {
 		_ = shift.RecordTurn(l, role, session, reply, time.Now())
 	}

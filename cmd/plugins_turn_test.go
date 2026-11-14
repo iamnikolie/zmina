@@ -17,6 +17,7 @@ import (
 
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/plugin"
+	"github.com/iamnikolie/zmina/internal/registry"
 	"github.com/iamnikolie/zmina/internal/shift"
 )
 
@@ -85,8 +86,8 @@ func turnFacts(t *testing.T, file string, seams func(s *shift.Shift)) (*pluginWo
 }
 
 // The question goes to the plugin once the role has stood idle on it a minute (so a reply that the owner answers at once pages
-// nobody), once, with the words, and a line to type to the role as its answer: no choices, nothing to press, and no mark armed.
-// Typed to the role as the event says, the answer is the owner's line. When the role takes it up the plugin hears the end: gone.
+// nobody), once, with the words, and the argv that gives the owner's answer to the role through the plugin as its answer: no choices,
+// nothing to press, and no mark armed. When the role takes another turn the plugin hears the end: gone.
 func TestPluginsTellOfAQuestionTheTurnEndedOn(t *testing.T) {
 	file, f, seams, ns, log := turnWorld(t, "  - {name: pager, quiet_when_active: off}\n")
 	now := time.Now().Add(-5 * time.Minute)
@@ -112,25 +113,14 @@ func TestPluginsTellOfAQuestionTheTurnEndedOn(t *testing.T) {
 	assert.NotContains(t, ev.Line, "subject")
 
 	answer := ev.Line["answer"].(map[string]any)
-	assert.Equal(t, []any{"zmina", "--crew", file, "send", "--", "dev", "<text>"}, answer["text"])
+	assert.Equal(t, []any{"zmina", "--crew", file, "send", "--by", "pager", "--dialog", id, "--", "dev", "<text>"}, answer["text"])
 	assert.NotContains(t, answer, "options")
 
 	// Nothing is pressed, so nothing is armed.
 	assert.NoFileExists(t, crew.Layout{Dir: filepath.Dir(file)}.PluginArmed("pager"), "no mark")
 	assert.Empty(t, f.pressed())
 
-	// The plugin runs the argv with the owner's words in place of <text>. It parses as the role and the line, flags and all: it gets
-	// as far as the guard that holds a line back from a role that is not booted at its prompt, which this world is not. Without the
-	// `--` the same words would be flags.
-	words := "dev, and yes --by ghost -- fix it"
-
-	_, err := runWith(t, file, seams, "send", "--", "dev", words)
-	require.ErrorContains(t, err, "dev: not typed, it is not at its prompt")
-
-	_, err = runWith(t, file, seams, "send", "dev", "--by", "ghost")
-	require.ErrorContains(t, err, "unknown flag: --by")
-
-	// The role took it up: the plugin hears the end of what it was told, once.
+	// The role took another turn: the plugin hears the end of what it was told, once.
 	f.session(t, ns, "sid-1", "busy", time.Now().Add(time.Second))
 	deliver(t, file, now.Add(3*time.Minute), seams)
 	deliver(t, file, now.Add(4*time.Minute), seams)
@@ -158,6 +148,229 @@ func TestAChooseWithATurnQuestionsIdPressesNothing(t *testing.T) {
 	_, err := runWith(t, file, seams, "choose", "dev", "1", "--dialog", id, "--by", "pager")
 	require.Error(t, err)
 	assert.Empty(t, f.pressed())
+}
+
+// toldTurn runs the delivery until the plugin has been told of the turn's question, and returns the id of its event.
+func toldTurn(t *testing.T, file string, seams func(s *shift.Shift), log string) string {
+	t.Helper()
+
+	now := time.Now().Add(-5 * time.Minute)
+	deliver(t, file, now, seams)
+	deliver(t, file, now.Add(time.Minute), seams)
+	require.Len(t, told(t, log), 1)
+
+	return told(t, log)[0].Line["id"].(string)
+}
+
+// waitingLines is what waits in a role's queue.
+func waitingLines(t *testing.T, file, role string) []string {
+	t.Helper()
+
+	st, err := shift.Read(filepath.Dir(file))
+	require.NoError(t, err)
+
+	if rs := st.Roles[role]; rs != nil {
+		return rs.Inbox
+	}
+
+	return nil
+}
+
+// ownerNoted is what the answer commands noted of the owner: when he last answered in a terminal.
+func ownerNoted(file string) time.Time {
+	return plugin.ReadOwner(crew.Layout{Dir: filepath.Dir(file)}.PluginOwner()).Active
+}
+
+// The plugin runs the argv of the event with the owner's words in place of <text>, with ZMINA_PLUGIN set: the words go to the role as
+// a line of zmina's that says whose they are, through which plugin and where they are recorded, queued as any line of zmina's to a role
+// that is idle, with no word of the owner's own at the keyboard; the ledger has it; the question's record goes, and the plugin is told
+// at the next look that it was answered, by whom, and with what; a second answer finds no question.
+func TestAPluginAnswersAQuestionTheTurnEndedOn(t *testing.T) {
+	file, f, seams, _, log := turnWorld(t, "  - {name: pager, quiet_when_active: 5m}\n")
+	id := toldTurn(t, file, seams, log)
+
+	t.Setenv("ZMINA_PLUGIN", "pager")
+
+	// What the argv carries is the event's own: every flag before the --, then the role and the words, which may look like flags.
+	words := "dev, and yes --by ghost -- fix it"
+	argv := told(t, log)[0].Line["answer"].(map[string]any)["text"].([]any)
+	require.Equal(t, "<text>", argv[len(argv)-1])
+
+	args := []string{}
+	for _, w := range argv[3 : len(argv)-1] {
+		args = append(args, w.(string))
+	}
+
+	out, err := runWith(t, file, seams, append(args, words)...)
+	require.NoError(t, err, out)
+	assert.Regexp(t, `^(queued for|delivered to) dev`, out)
+
+	// The role is given a line of zmina's, which says it is the owner's answer, given through the plugin, and where it is recorded.
+	lines := waitingLines(t, file, "dev")
+	require.Len(t, lines, 1)
+	assert.True(t, strings.HasPrefix(lines[0], "[zmina] The owner's answer to your last question, given through plugin pager "+
+		"and recorded in the ledger (zmina log): «dev, and yes --by ghost -- fix it»"), lines[0])
+
+	// Nothing of the owner's own at the keyboard: no mark that he is at the machine, no message of his in the role's queue.
+	assert.True(t, ownerNoted(file).IsZero(), "an answer through a plugin is no sign that he is at the machine")
+	assert.Empty(t, f.pressed())
+
+	st, err := shift.Read(filepath.Dir(file))
+	require.NoError(t, err)
+	assert.Empty(t, st.Roles["dev"].ChatReceipts, "it is no message of the owner's own")
+
+	// The ledger has what he said, as an answer through the plugin.
+	logged, _, err := zm(t, file, "log", "--full")
+	require.NoError(t, err)
+	assert.Contains(t, logged, "answered")
+	assert.Contains(t, logged, "«dev, and yes --by ghost -- fix it» (answered through plugin pager)")
+
+	// The record is gone, so the card ends at once, as an answer through the plugin and with the words.
+	assert.NoFileExists(t, crew.Layout{Dir: filepath.Dir(file)}.HookTurn("dev"))
+
+	now := time.Now().Add(-4 * time.Minute)
+	deliver(t, file, now, seams)
+	deliver(t, file, now.Add(time.Minute), seams)
+	assert.Equal(t, []string{"dialog " + id, "answered " + id}, toldIDs(t, log))
+
+	end := told(t, log)[1].Line
+	assert.Equal(t, "dialog", end["for"])
+	assert.Equal(t, "answered", end["how"])
+	assert.Equal(t, "plugin pager", end["by"])
+	assert.Equal(t, "dev, and yes --by ghost -- fix it", end["text"])
+
+	// A second answer, a double tap or a retry, finds no question: nothing more is queued.
+	_, err = runWith(t, file, seams, append(args, "again")...)
+	require.ErrorContains(t, err, "waiting on no question")
+	assert.Len(t, waitingLines(t, file, "dev"), 1)
+}
+
+// The owner's answer given through a plugin reaches the role as a line of zmina's, which the look at the role's conversation that tells
+// when the owner last wrote to it (the one a push is held by, and a restart put off by) does not take for the owner writing, whether the
+// line arrives posted or typed. The same words typed at the prompt as plain words are his.
+func TestAnAnswerThroughAPluginIsNotTheOwnersOwnLineToTheRole(t *testing.T) {
+	ns := t.TempDir()
+	dir := filepath.Join(ns, "projects", "-work")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+
+	when := time.Now().Add(-time.Minute).UTC()
+	typed := func(text string) string {
+		return `{"type":"user","timestamp":"` + when.Format(time.RFC3339) + `","message":{"role":"user","content":` + strconv.Quote(text) + `}}` + "\n"
+	}
+
+	owner := func(text string) time.Time {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "sid-1.jsonl"), []byte(typed(text)), 0o600))
+
+		a, err := (&registry.Registry{Namespace: ns}).Activity("sid-1")
+		require.NoError(t, err)
+
+		return a.Owner
+	}
+
+	assert.True(t, owner(turnAnswerLine("pager", "dev, and yes")).IsZero(), "typed or posted, it is zmina's line")
+	assert.WithinDuration(t, when, owner("dev, and yes"), time.Second, "while the same words typed by hand are his")
+}
+
+// An answer is taken only through the plugin's own run, only to the question the card was told, and only while the role waits on it.
+func TestAnAnswerToATurnQuestionIsTakenOnlyWhereItStands(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// setup runs after the plugin was told; it returns the words of the command after `send`, given the card's id.
+		setup func(t *testing.T, f *dialogScreenTmux, file, ns, id string) []string
+		want  string
+	}{
+		{"a plugin's own run only", func(t *testing.T, _ *dialogScreenTmux, _, _, id string) []string {
+			t.Setenv("ZMINA_PLUGIN", "")
+
+			return []string{"--by", "pager", "--dialog", id, "--", "dev", "yes"}
+		}, "ZMINA_PLUGIN=pager is not set"},
+		{"never a role's shell", func(t *testing.T, _ *dialogScreenTmux, _, _, id string) []string {
+			t.Setenv("ZMINA_ROLE", "dev")
+
+			return []string{"--by", "pager", "--dialog", id, "--", "dev", "yes"}
+		}, "a role (dev) does not answer in a plugin's voice"},
+		{"a plugin of the crew", func(t *testing.T, _ *dialogScreenTmux, _, _, id string) []string {
+			t.Setenv("ZMINA_PLUGIN", "ghost")
+
+			return []string{"--by", "ghost", "--dialog", id, "--", "dev", "yes"}
+		}, "the crew file has no plugin of that name"},
+		{"--by needs --dialog", func(*testing.T, *dialogScreenTmux, string, string, string) []string {
+			return []string{"--by", "pager", "--", "dev", "yes"}
+		}, "--by needs --dialog"},
+		{"--dialog needs --by", func(_ *testing.T, _ *dialogScreenTmux, _, _, id string) []string {
+			return []string{"--dialog", id, "--", "dev", "yes"}
+		}, "--dialog needs --by"},
+		{"no queueing with it", func(_ *testing.T, _ *dialogScreenTmux, _, _, id string) []string {
+			return []string{"--by", "pager", "--dialog", id, "--when-idle", "--", "dev", "yes"}
+		}, "takes neither --when-idle nor --task"},
+		{"the question the card was told, not another", func(_ *testing.T, _ *dialogScreenTmux, _, _, id string) []string {
+			return []string{"--by", "pager", "--dialog", "dev:0000000000000000:" + strings.Split(id, ":")[2], "--", "dev", "yes"}
+		}, "not the one this card was told of"},
+		{"an id with its mark", func(_ *testing.T, _ *dialogScreenTmux, _, _, id string) []string {
+			return []string{"--by", "pager", "--dialog", strings.Join(strings.Split(id, ":")[:2], ":"), "--", "dev", "yes"}
+		}, "give the id of the event as it was told"},
+		{"the role's own id", func(_ *testing.T, _ *dialogScreenTmux, _, _, id string) []string {
+			return []string{"--by", "pager", "--dialog", "ops" + strings.TrimPrefix(id, "dev"), "--", "dev", "yes"}
+		}, "give the id of the event as it was told"},
+		{"a role that is not in the crew", func(_ *testing.T, _ *dialogScreenTmux, _, _, id string) []string {
+			return []string{"--by", "pager", "--dialog", "ops" + strings.TrimPrefix(id, "dev"), "--", "ops", "yes"}
+		}, "not a role of this crew"},
+		{"a role that took another turn", func(t *testing.T, f *dialogScreenTmux, _, ns, id string) []string {
+			f.session(t, ns, "sid-1", "busy", time.Now().Add(time.Second))
+
+			return []string{"--by", "pager", "--dialog", id, "--", "dev", "yes"}
+		}, "waiting on no question"},
+		{"a role in another session", func(t *testing.T, f *dialogScreenTmux, _, ns, id string) []string {
+			f.session(t, ns, "sid-2", "idle", time.Now())
+
+			return []string{"--by", "pager", "--dialog", id, "--", "dev", "yes"}
+		}, "waiting on no question"},
+		{"the card of an earlier question", func(t *testing.T, f *dialogScreenTmux, file, ns, id string) []string {
+			at := time.Now().Add(20 * time.Second)
+			f.session(t, ns, "sid-1", "idle", at)
+			require.NoError(t, shift.RecordTurn(crew.Layout{Dir: filepath.Dir(file)}, "dev", "sid-1", "Done.\n\nShall I merge it?", at))
+
+			return []string{"--by", "pager", "--dialog", id, "--", "dev", "yes"}
+		}, "not the one this card was told of"},
+		{"a record that is gone", func(t *testing.T, _ *dialogScreenTmux, file, _, id string) []string {
+			require.NoError(t, os.Remove(crew.Layout{Dir: filepath.Dir(file)}.HookTurn("dev")))
+
+			return []string{"--by", "pager", "--dialog", id, "--", "dev", "yes"}
+		}, "waiting on no question"},
+		{"a record that does not read", func(t *testing.T, _ *dialogScreenTmux, file, _, id string) []string {
+			require.NoError(t, os.WriteFile(crew.Layout{Dir: filepath.Dir(file)}.HookTurn("dev"), []byte("{"), 0o600))
+
+			return []string{"--by", "pager", "--dialog", id, "--", "dev", "yes"}
+		}, "does not read"},
+		{"words to say", func(_ *testing.T, _ *dialogScreenTmux, _, _, id string) []string {
+			return []string{"--by", "pager", "--dialog", id, "--", "dev", "   "}
+		}, "the answer is empty"},
+		{"words that are not cut", func(_ *testing.T, _ *dialogScreenTmux, _, _, id string) []string {
+			return []string{"--by", "pager", "--dialog", id, "--", "dev", strings.Repeat("é", plugin.TextMax+1)}
+		}, "longer than"},
+		{"one line", func(_ *testing.T, _ *dialogScreenTmux, _, _, id string) []string {
+			return []string{"--by", "pager", "--dialog", id, "--", "dev", "yes\nand more"}
+		}, "send takes one line"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			file, f, seams, ns, log := turnWorld(t, "  - {name: pager, quiet_when_active: off}\n")
+			id := toldTurn(t, file, seams, log)
+
+			t.Setenv("ZMINA_PLUGIN", "pager")
+
+			args := tc.setup(t, f, file, ns, id)
+
+			_, err := runWith(t, file, seams, append([]string{"send"}, args...)...)
+			require.ErrorContains(t, err, tc.want)
+
+			assert.Empty(t, waitingLines(t, file, "dev"), "nothing was given to the role")
+			assert.True(t, ownerNoted(file).IsZero())
+
+			logged, _, err := zm(t, file, "log", "--full")
+			require.NoError(t, err)
+			assert.NotContains(t, logged, "answered through plugin", "nothing is recorded as answered")
+		})
+	}
 }
 
 // A role that took another turn since is not awaiting what the record says: busy, idle since a later moment, in another session, or
@@ -330,16 +543,39 @@ func TestPluginsDoNotTellOfAQuestionTheRoleAlsoPutOnTheTodo(t *testing.T) {
 		assert.Equal(t, 1, turnTold(t, log))
 	})
 
-	t.Run("an item answered since", func(t *testing.T) {
-		file, _, seams, _, log := turnWorld(t, plugins)
+	// The owner has answered the item already, or done it, or set it aside: the role asked, a card was told, and the words of its last
+	// reply are not a second one.
+	for _, closing := range [][]string{{"answer", "A-1", "dev"}, {"done", "A-1"}, {"ignore", "A-1"}, {"park", "A-1"}} {
+		t.Run("an item closed since: "+closing[0], func(t *testing.T) {
+			file, _, seams, _, log := turnWorld(t, plugins)
+			asked(t, file, "dev")
+
+			_, _, err := zm(t, file, append([]string{"todo"}, closing...)...)
+			require.NoError(t, err)
+
+			run(t, file, seams)
+
+			assert.Zero(t, turnTold(t, log), "it was asked properly: no second card")
+			assert.Empty(t, toldIDs(t, log), "and the item itself is closed, so no card of it either")
+		})
+	}
+
+	t.Run("an item closed before the turn's window", func(t *testing.T) {
+		file, f, seams, ns := dialogWorld(t, plugins)
+		log := recorder(t, file, "pager", "")
+
 		asked(t, file, "dev")
 
 		_, _, err := zm(t, file, "todo", "answer", "A-1", "dev")
 		require.NoError(t, err)
 
+		at := time.Now().Add(20 * time.Minute)
+		f.session(t, ns, "sid-1", "idle", at)
+		require.NoError(t, shift.RecordTurn(crew.Layout{Dir: filepath.Dir(file)}, "dev", "sid-1", askedInWords, at))
+
 		run(t, file, seams)
 
-		assert.Equal(t, 1, turnTold(t, log), "it is no card any more")
+		assert.Equal(t, 1, turnTold(t, log), "a question of an hour ago says nothing of this one")
 	})
 }
 
@@ -350,7 +586,7 @@ func TestPluginsHoldATurnQuestionWhileTheOwnerIsActive(t *testing.T) {
 	now := time.Now()
 
 	// He answered something in a terminal just now.
-	out, _, err := zm(t, file, "todo", "add", "Old question?", "--from", "dev")
+	out, _, err := zm(t, file, "todo", "add", "Old question?")
 	require.NoError(t, err)
 	_, _, err = zm(t, file, "todo", "answer", askID(t, out), "yes")
 	require.NoError(t, err)
@@ -373,7 +609,7 @@ func TestPluginsDoNotTellOfAQuestionTheRoleMovedOnFromWhileItWasHeld(t *testing.
 	file, f, seams, ns, log := turnWorld(t, "  - {name: pager, quiet_when_active: 5m, dialog_after: 0s}\n")
 	now := time.Now()
 
-	out, _, err := zm(t, file, "todo", "add", "Old question?", "--from", "dev")
+	out, _, err := zm(t, file, "todo", "add", "Old question?")
 	require.NoError(t, err)
 	_, _, err = zm(t, file, "todo", "answer", askID(t, out), "yes")
 	require.NoError(t, err)
@@ -497,8 +733,8 @@ func TestATurnQuestionOfAHostileReplyIsCleanedAndInjectsNothing(t *testing.T) {
 	assert.Contains(t, question, "[zmina:…]")
 	assert.True(t, strings.HasPrefix(question, "Run [2J --by ghost -- and --crew /etc now?"), question)
 
-	assert.Equal(t, []any{"zmina", "--crew", file, "send", "--", "dev", "<text>"}, line["answer"].(map[string]any)["text"],
-		"the argv is the plugin's own, with nothing of the reply in it")
+	assert.Equal(t, []any{"zmina", "--crew", file, "send", "--by", "pager", "--dialog", line["id"], "--", "dev", "<text>"},
+		line["answer"].(map[string]any)["text"], "the argv is the plugin's own, with nothing of the reply in it")
 	assert.NotContains(t, line["answer"], "yes")
 	assert.NotContains(t, line["answer"], "options")
 
@@ -650,6 +886,109 @@ func TestTurnEndHookRecordsTheQuestionOfTheLastReply(t *testing.T) {
 	require.FileExists(t, l.HookTurn("dev"))
 	hook(`{"session_id":"sid-1","last_assistant_message":{"text":"Ship it?"}}`, "--role", "dev")
 	assert.NoFileExists(t, l.HookTurn("dev"))
+}
+
+// Only the role's own hook records for it: run in another role's environment, or for a role it is not, it writes and removes nothing.
+func TestTurnEndHookRecordsOnlyForTheRoleItRunsIn(t *testing.T) {
+	crewFile := testCrew(t, "  dev: {}\n  ops: {}\n")
+	l := crew.Layout{Dir: filepath.Dir(crewFile)}
+	input := `{"session_id":"sid-1","hook_event_name":"Stop","last_assistant_message":"Ship it?"}`
+
+	t.Setenv("ZMINA_ROLE", "ops")
+
+	_, err := zmIn(t, crewFile, input, "_turn-end", "--role", "dev")
+	require.NoError(t, err)
+	assert.NoFileExists(t, l.HookTurn("dev"), "another role's hook says nothing of dev")
+
+	// The role's own hook does; and another role's that would take the question away does not.
+	t.Setenv("ZMINA_ROLE", "dev")
+
+	_, err = zmIn(t, crewFile, input, "_turn-end", "--role", "dev")
+	require.NoError(t, err)
+	require.FileExists(t, l.HookTurn("dev"))
+
+	t.Setenv("ZMINA_ROLE", "ops")
+
+	_, err = zmIn(t, crewFile, `{"session_id":"sid-1","last_assistant_message":"Nothing asked."}`, "_turn-end", "--role", "dev")
+	require.NoError(t, err)
+	assert.FileExists(t, l.HookTurn("dev"))
+}
+
+// A turn that ends on an API error ran no Stop hook, and the question an earlier turn ended on is no one's now: the StopFailure hook
+// takes the record away, for the role it runs for.
+func TestStopFailureHookRemovesTheTurnRecord(t *testing.T) {
+	crewFile := testCrew(t, "  dev: {}\n  ops: {}\n")
+	l := crew.Layout{Dir: filepath.Dir(crewFile)}
+
+	keep := func(role string) {
+		t.Helper()
+
+		require.NoError(t, shift.RecordTurn(l, role, "s-1", "Ship it?", time.Now()))
+		require.FileExists(t, l.HookTurn(role))
+	}
+
+	keep("dev")
+	keep("ops")
+
+	// A command of another role's environment names dev and does not touch its record.
+	t.Setenv("ZMINA_ROLE", "ops")
+
+	_, err := zmIn(t, crewFile, stopFailure, "_stop-failure", "--role", "dev")
+	require.NoError(t, err)
+	assert.FileExists(t, l.HookTurn("dev"))
+
+	t.Setenv("ZMINA_ROLE", "dev")
+
+	out, err := zmIn(t, crewFile, stopFailure, "_stop-failure", "--role", "dev")
+	require.NoError(t, err)
+	assert.Empty(t, out)
+	assert.NoFileExists(t, l.HookTurn("dev"))
+	assert.FileExists(t, l.HookFailure("dev"), "and the failure is recorded as it was")
+	assert.FileExists(t, l.HookTurn("ops"), "no other role's")
+}
+
+// A compaction or a clear starts a conversation the role was not asked its last question in: the SessionStart hook takes the record
+// away. A start or a resume does not (the record names its session, and what is of another stays unread), nor does a hook that is not
+// the role's own.
+func TestSessionStartAfterACompactionRemovesTheTurnRecord(t *testing.T) {
+	crewFile := testCrew(t, "  dev: {}\n")
+	l := crew.Layout{Dir: filepath.Dir(crewFile)}
+
+	keep := func() {
+		t.Helper()
+
+		require.NoError(t, shift.RecordTurn(l, "dev", "sid-1", "Ship it?", time.Now()))
+		require.FileExists(t, l.HookTurn("dev"))
+	}
+
+	brief := func(source string) {
+		t.Helper()
+
+		_, err := zmIn(t, crewFile, `{"session_id":"sid-1","source":"`+source+`"}`, "pending", "--role", "dev", "--brief")
+		require.NoError(t, err)
+	}
+
+	keep()
+
+	for _, source := range []string{"startup", "resume"} {
+		t.Setenv("ZMINA_ROLE", "dev")
+		brief(source)
+		assert.FileExists(t, l.HookTurn("dev"), source)
+	}
+
+	// By hand, or as another role: nothing.
+	t.Setenv("ZMINA_ROLE", "")
+	brief("compact")
+	t.Setenv("ZMINA_ROLE", "ops")
+	brief("compact")
+	assert.FileExists(t, l.HookTurn("dev"))
+
+	for _, source := range []string{"compact", "clear"} {
+		keep()
+		t.Setenv("ZMINA_ROLE", "dev")
+		brief(source)
+		assert.NoFileExists(t, l.HookTurn("dev"), source)
+	}
 }
 
 // The hook is silent, and records nothing, for a crew whose directory is not there: it makes none.
