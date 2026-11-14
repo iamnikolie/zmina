@@ -172,7 +172,7 @@ func (s *Shift) Tick() []string {
 				if name != s.Crew.Dispatcher {
 					// What zmina did, told once: an info line.
 					note := name + ": started again (keep: always)"
-					s.markInfo(note, now)
+					s.markQuiet(note, now)
 					notes = append(notes, note)
 				}
 			}
@@ -384,7 +384,8 @@ func (s *Shift) trim(name string, r *crew.Role, now time.Time, tasks []string) s
 		return ""
 	}
 
-	if name == s.Crew.Dispatcher && len(s.State.Signals)+len(s.State.Notes) > 0 {
+	// Lines that wait for the dispatcher go first; info lines still riding are not due and hold no trim up.
+	if name == s.Crew.Dispatcher && len(s.State.Signals)+len(s.State.Notes) > 0 && !s.ridingOnly(now) {
 		return ""
 	}
 

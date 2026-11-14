@@ -301,3 +301,32 @@ func TestOwnerNameThatIsARoleIsRefused(t *testing.T) {
 	_, _, err := zm(t, crewFile, "todo", "ls")
 	require.ErrorContains(t, err, `owner: "dev" is a role of this crew`)
 }
+
+// A done task closed as done again, with nothing new to say, is said to be done already: no second closure in the
+// log and no second line for the dispatcher. With a note it is a change, as before.
+func TestTaskDoneAgainChangesNothing(t *testing.T) {
+	crewFile := testCrew(t, "  dev:\n")
+
+	_, _, err := zm(t, crewFile, "task", "new", "dev", "ship it")
+	require.NoError(t, err)
+	_, _, err = zm(t, crewFile, "task", "done", "T-1", "--force")
+	require.NoError(t, err)
+
+	before, _, err := zm(t, crewFile, "log", "--json")
+	require.NoError(t, err)
+
+	for _, force := range [][]string{nil, {"--force"}} {
+		out, _, err := zm(t, crewFile, append([]string{"task", "done", "T-1"}, force...)...)
+		require.NoError(t, err)
+		assert.Contains(t, out, "T-1 · dev · done already")
+		assert.Contains(t, out, "not closed again")
+	}
+
+	after, _, err := zm(t, crewFile, "log", "--json")
+	require.NoError(t, err)
+	assert.Equal(t, before, after, "nothing was logged")
+
+	out, _, err := zm(t, crewFile, "task", "done", "T-1", "--force", "--note", "merged")
+	require.NoError(t, err)
+	assert.Equal(t, "T-1 · dev · done\n", out)
+}

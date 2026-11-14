@@ -317,6 +317,9 @@ func (l *Ledger) Set(id string, c Change) (task.Task, error) {
 	return t, nil
 }
 
+// ErrAlreadyDone is closing a done task as done with nothing else to say: nothing is written, logged or told.
+var ErrAlreadyDone = errors.New("already done")
+
 // apply is what Set does to t before it writes it: t as it becomes, and what changed. A preflight does all of it but
 // ask for the run of the check a close needs (PlanCheck uses one to refuse, before a check runs, what Set would refuse
 // after it); it writes nothing either way.
@@ -365,7 +368,11 @@ func (l *Ledger) apply(t task.Task, c Change, preflight bool) (task.Task, []stri
 		}
 
 		t.State = c.State
-		changes = append(changes, string(c.State))
+
+		// Done again says nothing new of the state: only what else the change carries is a change.
+		if !alreadyDone {
+			changes = append(changes, string(c.State))
+		}
 
 		if t.State != task.Waiting {
 			t.On = ""
@@ -449,6 +456,10 @@ func (l *Ledger) apply(t task.Task, c Change, preflight bool) (task.Task, []stri
 
 	if said != "" {
 		changes = append(changes, said)
+	}
+
+	if len(changes) == 0 && alreadyDone {
+		return t, nil, ErrAlreadyDone
 	}
 
 	if len(changes) == 0 {
