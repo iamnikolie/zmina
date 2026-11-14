@@ -35,8 +35,8 @@ const (
 	lessonsRunStale = time.Hour
 )
 
-// lessonSeat is the seat a run uses (a variable for tests).
-var lessonSeat = lesson.ClaudeSeat
+// lessonSeat, when set, is the seat a run uses in place of Claude Code under the crew's namespace (tests set it).
+var lessonSeat func(model string) lesson.Seat
 
 func lessonDir(c *crew.Crew) string { return filepath.Join(c.StateDir(), "lessons") }
 
@@ -428,7 +428,12 @@ func (a *app) lessonTriage(ctx context.Context, dry, scheduled bool) error {
 		ctx = context.Background()
 	}
 
-	res, terr := lesson.Triage(ctx, run.cfg, run.lessons, lessonSeat(run.model))
+	seat := lesson.ClaudeSeatIn(crew.ExpandHome(run.crew.Namespace), run.model)
+	if lessonSeat != nil {
+		seat = lessonSeat(run.model)
+	}
+
+	res, terr := lesson.Triage(ctx, run.cfg, run.lessons, seat)
 
 	if dry {
 		a.printPlan(res)

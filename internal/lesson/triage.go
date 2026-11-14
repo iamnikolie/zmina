@@ -86,13 +86,22 @@ var SeatTimeout = 20 * time.Minute
 
 // ClaudeSeat is the seat on Claude Code: a headless run that may only read (Read, Grep, Glob), with no MCP servers,
 // stopped at the budget by the CLI itself, its answer held to the schema.
-func ClaudeSeat(model string) Seat {
+func ClaudeSeat(model string) Seat { return ClaudeSeatIn("", model) }
+
+// ClaudeSeatIn is ClaudeSeat under the crew's namespace: the seat runs with that CLAUDE_CONFIG_DIR, so it is logged in
+// as the crew's roles are. The daily run is started by the ticker, whose environment names no namespace: without it
+// the seat reads the default one's login, which a crew that lives in another namespace never refreshes.
+func ClaudeSeatIn(namespace, model string) Seat {
 	return func(parent context.Context, dir, prompt, schema string, budget float64) ([]byte, error) {
 		ctx, cancel := context.WithTimeout(parent, SeatTimeout)
 		defer cancel()
 
 		cmd := exec.CommandContext(ctx, "claude", SeatArgs(model, schema, budget)...)
 		cmd.Dir = dir
+		if namespace != "" {
+			cmd.Env = append(os.Environ(), "CLAUDE_CONFIG_DIR="+namespace)
+		}
+
 		cmd.Stdin = strings.NewReader(prompt)
 		cmd.WaitDelay = gitWaitDelay
 

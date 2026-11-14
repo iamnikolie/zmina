@@ -63,3 +63,18 @@ func TestClaudeSeatAnswersAndStops(t *testing.T) {
 	assert.Contains(t, err.Error(), "stopped")
 	assert.NotContains(t, err.Error(), "no answer")
 }
+
+// The seat runs under the namespace it is given, and under the caller's when given none.
+func TestClaudeSeatRunsUnderTheNamespace(t *testing.T) {
+	fakeClaude(t, `cat >/dev/null; printf '{"dir":"%s"}' "$CLAUDE_CONFIG_DIR"`)
+	shortSeatTimeout(t, 30*time.Second)
+	t.Setenv("CLAUDE_CONFIG_DIR", "/the/callers")
+
+	out, err := ClaudeSeatIn("/the/crews", "m")(context.Background(), t.TempDir(), "prompt", "{}", 1)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"dir":"/the/crews"}`, string(out))
+
+	out, err = ClaudeSeat("m")(context.Background(), t.TempDir(), "prompt", "{}", 1)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"dir":"/the/callers"}`, string(out))
+}
