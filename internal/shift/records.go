@@ -29,13 +29,22 @@ func (s *Shift) NotifyRecords() {
 		list := refs[id]
 		// The short form stays apart from every revision task result <id> --revision looks among.
 		srcs := []string{id}
+		line := resultTold
 		if t, err := s.Tasks.Get(id); err == nil {
 			srcs = t.RecordSources("result")
+			line = s.resultLine(t)
+		}
+		if line == resultHeld {
+			continue
 		}
 		revs := record.Revisions(s.Crew.StateDir(), "result", srcs)
 		for _, ref := range list {
 			key := "result/" + id + "/" + ref.Revision
 			if s.State.RecordNotified[key] {
+				continue
+			}
+			if line == resultSilent {
+				s.State.RecordNotified[key] = true
 				continue
 			}
 			d, err := record.Load(s.Crew.StateDir(), "result", id, ref.Revision)
@@ -57,6 +66,66 @@ func (s *Shift) NotifyRecords() {
 			s.State.RecordNotified[key] = true
 		}
 	}
+}
+
+// How the dispatcher hears of the results of a task (resultLine).
+type resultKind int
+
+const (
+	// resultTold: as always, a line for each result.
+	resultTold resultKind = iota
+	// resultHeld: none yet; the task's close tells of its outcome.
+	resultHeld
+	// resultSilent: none at all; the loop's own lines tell the outcome.
+	resultSilent
+)
+
+// resultLine is how the dispatcher hears of the results of t. With the crew file's auto_review on, a task with a worktree
+// that is still being worked on is held: the review of it comes next, and the line waits for the close. A review task, and a
+// task closed with its review due, are never told (the loop tells how the review went, see NoteOnce); any other is told as
+// always, a task closed by hand included.
+func (s *Shift) resultLine(t task.Task) resultKind {
+	switch {
+	case t.Review != nil, t.Closed != nil && t.Closed.Review != nil:
+		return resultSilent
+	case s.Crew.AutoReviewRounds() > 0 && t.Worktree != "" && t.State.Active():
+		return resultHeld
+	}
+
+	return resultTold
+}
+
+// NoteOnce is Note, or NoteQuiet, told once for each key (RecordNotified); it reports whether this call queued it. A line the
+// queue refuses is tried again by the next call.
+func (s *Shift) NoteOnce(key, from, text string, quiet bool) (bool, error) {
+	if s.State.RecordNotified[key] {
+		return false, nil
+	}
+
+	var err error
+
+	if quiet {
+		_, err = s.NoteQuiet(from, text)
+	} else {
+		_, err = s.Note(from, text, false)
+	}
+
+	if err != nil {
+		return false, err
+	}
+
+	s.MarkNoted(key)
+
+	return true, nil
+}
+
+// MarkNoted records that the line for key needs no telling: what it is about was dealt with another way (NoteOnce).
+func (s *Shift) MarkNoted(key string) {
+	if s.State.RecordNotified == nil {
+		s.State.RecordNotified = map[string]bool{}
+	}
+
+	s.State.RecordNotified[key] = true
 }
 
 // resultGist is a result's first sentence for its notice: the summary section (the first section when the shape has
@@ -117,6 +186,13 @@ func (s *Shift) NotifyClosed() {
 
 		if s.State.RecordNotified == nil {
 			s.State.RecordNotified = map[string]bool{}
+		}
+
+		// A review the crew's auto_review runs, and the task it is of, have lines of the loop's own (NoteOnce): not this one.
+		if t.Review != nil || c.Review != nil {
+			s.State.RecordNotified[key] = true
+
+			continue
 		}
 
 		if t.Result != nil && !t.Result.At.Before(assigned(t)) {

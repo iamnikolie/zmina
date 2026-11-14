@@ -121,6 +121,35 @@ func checkHygiene(c *crew.Crew, st *shift.State, now time.Time, add func(name, l
 	}
 
 	checkWorktrees(c, st, add)
+	checkReview(c, add)
+}
+
+// checkReview is the crew file's auto_review: on, with who reviews, or on and doing nothing since the routes name no reviewer.
+// Nothing when it is off.
+func checkReview(c *crew.Crew, add func(name, level, format string, args ...any)) {
+	if c.AutoReview.Rounds == 0 {
+		return
+	}
+
+	rule, ok := c.ReviewRule()
+	if !ok {
+		add("review", "warn", "auto_review is on and routes has no review rule: it does nothing")
+
+		return
+	}
+
+	var who []string
+
+	if rule.First != "" {
+		who = append(who, "first "+rule.First)
+	}
+
+	if len(rule.Again) > 0 {
+		who = append(who, "again "+strings.Join(rule.Again, ", "))
+	}
+
+	add("review", "ok", "auto_review: %d %s · %s", c.AutoReview.Rounds, plural(c.AutoReview.Rounds, "round", "rounds"),
+		strings.Join(who, ", "))
 }
 
 // checkWorktrees is the closed tasks' worktrees: with worktree_gc on the ticker sweeps them daily, and what is left
