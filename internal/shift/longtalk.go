@@ -12,9 +12,9 @@ import (
 const (
 	// longTalkBy is who files the check about a long conversation.
 	longTalkBy = "context"
-	// longTalkAt is how full a conversation is long when the role names no restart_at: Claude Code's turns cost the
-	// same up to 200k and the whole of it is read again with every turn after.
-	longTalkAt = 250_000
+	// longTalkAt is how full a conversation is long at the least, whatever the role's restart_at: past 200k a Claude
+	// turn is priced higher, and the whole of it is read again with every turn after.
+	longTalkAt = 200_000
 )
 
 // longTalk files one check for the owner about a Claude role whose conversation has grown long and that nothing of
@@ -48,10 +48,7 @@ func (s *Shift) longTalk(name string, r *crew.Role, now time.Time, tasks []strin
 		return ""
 	}
 
-	at := r.RestartContext()
-	if at == 0 {
-		at = longTalkAt
-	}
+	at := max(r.RestartContext(), longTalkAt)
 
 	if turn.Context < at {
 		return ""

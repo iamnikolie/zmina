@@ -143,8 +143,8 @@ grows large, and `restart_done` restarts a role fresh once its task closed: set 
 advice, not defaults. The defaults are unchanged (`context_max` none, `restart_at` 250k, `restart_done` 150k) and no
 running crew changes unless its file does. `zmina doctor` reports each crew-level value past them in a `context` line
 that names the key to set, and lists in one line the roles whose own value is past them; a role the owner talks to
-directly may keep a higher value, and nothing silences that line. A Claude role's conversation past `restart_at` (250k when
-off) that nothing is about to shorten — it holds no task to be restarted for, or that restart was given up (no note
+directly may keep a higher value, and nothing silences that line. A Claude role's conversation past `restart_at` (200k at
+the least) that nothing is about to shorten — it holds no task to be restarted for, or that restart was given up (no note
 came), and `context_max` is off, not reached yet or left it over the limit — is put on the owner's todo once a
 conversation (a check, by `context`, event `long-talk`): he decides whether it goes on. Not the dispatcher's. Codex roles are not measured, since the sizes
 come from Claude crews, and the dispatcher only by `context_max`: it is never restarted for its context.
