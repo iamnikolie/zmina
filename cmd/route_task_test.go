@@ -335,3 +335,45 @@ func TestTaskFilesWithoutARouteStillRead(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, strings.HasPrefix(out, "T-9 · dev"), out)
 }
+
+// A specialist named by hand with no kind of work said is not a pick against the pool: the pool shares work among
+// its own seats and has no word on a seat outside it. Nothing is asked of it, even when overrides need a reason.
+func TestTaskNewByHandOutsideThePoolIsNotHeldAgainstIt(t *testing.T) {
+	file := routeCrew(t, "route_override: required\n")
+	routeLimits(t, file, 41, 50)
+
+	// A seat a kind rule names: the line says which rule would have answered had the kind been said.
+	out, _, err := zm(t, file, "task", "new", "designer", "a new logo")
+	require.NoError(t, err)
+	assert.Equal(t, "T-1 · designer (designer is rule 4 kind design's seat; the kind of work was not said, so the pool has no word on it)\n", out)
+	assert.NotContains(t, readTaskFile(t, file, "T-1"), "route", "the routes had no word: nothing to keep")
+
+	// The first review's seat, the same.
+	out, _, err = zm(t, file, "task", "new", "reviewer", "look at it")
+	require.NoError(t, err)
+	assert.Equal(t, "T-2 · reviewer (reviewer is rule 5 review's seat; the kind of work was not said, so the pool has no word on it)\n", out)
+
+	evs := routeEvents(t, file)
+	require.Len(t, evs, 2)
+	assert.Equal(t, "picked by hand: designer is rule 4 kind design's seat; the kind of work was not said, so the pool has no word on it", evs[0].Detail)
+	assert.Nil(t, evs[0].Rule)
+	assert.Empty(t, evs[0].RouteSaid)
+
+	// A seat of the pool picked against it still needs its reason ...
+	_, _, err = zm(t, file, "task", "new", "dev2", "x")
+	require.ErrorContains(t, err, "needs --because")
+
+	// ... and so does a specialist when the kind was said and is the pool's.
+	_, _, err = zm(t, file, "task", "new", "designer", "--kind", "code", "x")
+	require.ErrorContains(t, err, "needs --because")
+}
+
+// A seat no rule names at all, picked by hand: the same, said so.
+func TestTaskNewByHandForASeatNoRuleNames(t *testing.T) {
+	file := testCrew(t, routeSeatsYAML+"  scribe: {}\n"+routesYAML)
+	routeLimits(t, file, 41, 50)
+
+	out, _, err := zm(t, file, "task", "new", "scribe", "write it up")
+	require.NoError(t, err)
+	assert.Equal(t, "T-1 · scribe (scribe is outside the pool and no rule names it; the pool has no word on it)\n", out)
+}

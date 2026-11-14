@@ -2547,6 +2547,11 @@ T-15 · dev3 (route said dev2, rule 6; override: alex named it)
 - **The line** after the role says `(rule 6: …)` when the routes picked it, `(rule 6, as the routes say)` when the hand
   agreed, `(route said dev2, rule 6)` when it did not (`; override: <why>` with `--because`), and nothing when no rule
   matched. The first line stays `T-<n> · <role>`.
+- **A seat outside the pool**, picked by hand with no `--kind`, is not a pick against the pool: the pool shares work
+  among its own seats and has no word on a specialist. The line says which rule names the seat (`designer is rule 4
+  kind design's seat; the kind of work was not said, so the pool has no word on it`) or that none does; the task keeps
+  no `route`, the event has no `rule` or `route_said`, and `route_override: required` asks for no reason. Say the
+  kind (`--kind design`, or `--route`) and the rule answers itself.
 - **`--because "<why>"`** is optional by default, so a shadow period shows where the table and the hand differ before
   anyone is made to explain. With `route_override: required` a pick that differs from what the routes name is refused,
   and no task is made, until it says why; a pick the routes agree with, a pick when no rule matched and `--route` need no
