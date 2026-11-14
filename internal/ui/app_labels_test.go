@@ -123,6 +123,31 @@ func TestPhoneTabs(t *testing.T) {
 		"Sign in and publish the test board", "Done", "Talk to dispatcher"}, res.Sheet)
 }
 
+// TestDecidedReadsLikeACheckOnThePage runs static/app.js's question row under Node: a decided item (a role took the
+// decision itself) has Done and an answer in words and no No, as a check has, and its opened row says why and what was
+// not done; a decision keeps its No.
+func TestDecidedReadsLikeACheckOnThePage(t *testing.T) {
+	node := requireNode(t, "node is not installed: the page's rows are not rendered")
+
+	raw, err := exec.Command(node, "testdata/app-labels.js", "static/app.js", "decided").Output()
+	require.NoError(t, err)
+
+	var res struct {
+		Rows map[string]struct {
+			Buttons []string `json:"buttons"`
+			Panel   []string `json:"panel"`
+		} `json:"rows"`
+		Checks []bool `json:"checks"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &res))
+
+	assert.Equal(t, []string{"Answer…", "Done", "Later"}, res.Rows["decided"].Buttons)
+	assert.Equal(t, res.Rows["check"].Buttons, res.Rows["decided"].Buttons, "as a check")
+	assert.Equal(t, []string{"Answer…", "Later", "No"}, res.Rows["decision"].Buttons)
+	assert.Equal(t, []string{"links point at it", "Instead of: rename the flag"}, res.Rows["decided"].Panel)
+	assert.Equal(t, []bool{true, false}, res.Checks)
+}
+
 // requireNode is the node binary; without one the test skips, except in CI, where a skip would read as a pass.
 func requireNode(t *testing.T, why string) string {
 	t.Helper()

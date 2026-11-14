@@ -25,7 +25,7 @@ const W = {
   yes: "Yes", no: "No", noText: "no", done: "Done", answer: "Answer…", park: "Later", ignore: "Hide", send: "Send", cancel: "Cancel",
   sentTo: "Sent to the dispatcher", parkedTo: "Parked", ignored: "Hidden", broughtBack: "Brought back", dropped: "Discarded",
   undo: "undo", back: "Bring back", drop: "Discard", mine: "Take it back", madeMine: "Back with you",
-  notSent: "Not sent: ", rec: "Recommended: ", more: (n) => n + " more", less: "show less", hands: "By hand:",
+  notSent: "Not sent: ", rec: "Recommended: ", instead: "Instead of: ", more: (n) => n + " more", less: "show less", hands: "By hand:",
   waits: (r) => "waits on " + r, from: (r) => "from " + r, doneText: "done", waitOn: (n, who) => n + " waiting on " + who,
   setAside: (n) => n + " set aside by you",
   newVersion: "New version of zmina.", reload: "Reload",
@@ -530,6 +530,10 @@ async function postTo(url, body) {
 // line with the link named by its source, then one action line — a field where the row takes words, one primary,
 // the rest muted text.
 
+// isCheck is an item the owner marks done or answers in words, with no yes or no to it: a check, and a decided item
+// (a role took the decision itself; Done says it is fine, an answer says what to redo).
+const isCheck = (it) => it.kind === "check" || it.kind === "decided";
+
 // says is whether the why tells something the title does not.
 function says(why, title) {
   const n = (s) => (s || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
@@ -658,13 +662,14 @@ function itemPanel(it, holds) {
   if (it.kind === "later") return backPanel(it);
   const rec = it.kind === "decision" && it.rec;
   const primary = rec ? { label: it.rec, fn: () => act(it, "yes", "", W.sentTo), icon: "check" }
-    : holds || it.kind === "check" ? { label: W.done, fn: () => done(it), icon: "check" } : null;
+    : holds || isCheck(it) ? { label: W.done, fn: () => done(it), icon: "check" } : null;
   const muted = [[W.park, () => act(it, "park", "", W.parkedTo), "clock"]];
   if (holds) muted.push([W.ignore, () => act(it, "ignore", "", W.ignored), "eyeOff"]);
-  else if (it.kind !== "check") muted.push([W.no, () => act(it, "answer", W.noText, W.sentTo), "x"]);
+  else if (!isCheck(it)) muted.push([W.no, () => act(it, "answer", W.noText, W.sentTo), "x"]);
   return panel({
     body: it.id.startsWith("T-") ? taskBody(it.text, it.title, it.note)
-      : [says(it.text, it.title || it.text) ? it.text : "", rec ? it.reason : it.note],
+      : [says(it.text, it.title || it.text) ? it.text : "", rec || it.kind === "decided" ? it.reason : it.note,
+        it.kind === "decided" && it.instead && W.instead + it.instead],
     meta: [holds ? W.waits(who(it.crew, it.blocks || it.role) || "—") : it.role && W.from(who(it.crew, it.role))], url: it.url,
     reply: it, primary, muted, crew: it.crew,
   });
@@ -739,9 +744,9 @@ function askRow(it) {
   const hov = el("div");
   if (it.kind === "later") hov.append(button("q", W.back, () => act(it, "back", "", W.broughtBack)));
   else hov.append(button("q", W.answer, () => toggleRow(k)));
-  if (it.kind === "check") hov.append(button("q", W.done, () => act(it, "done", "", W.sentTo)));
+  if (isCheck(it)) hov.append(button("q", W.done, () => act(it, "done", "", W.sentTo)));
   hov.append(button("q", W.park, () => act(it, "park", "", W.parkedTo)));
-  if (it.kind !== "check") hov.append(button("q", W.no, () => act(it, "answer", W.noText, W.sentTo)));
+  if (!isCheck(it)) hov.append(button("q", W.no, () => act(it, "answer", W.noText, W.sentTo)));
   const words = itemWords(it, false);
   const row = rowShell(k, stl(it.crew), words, ageOf(it), chip(it), ownHov(it.crew, hov), itemPanel(it, false));
   row.title = ids(idOf(it.crew, it.id), it.task && idOf(it.crew, it.task));
@@ -752,8 +757,8 @@ function askRow(it) {
 function renderAsks(asks) {
   heading("ask-h", W.ask, asks.length);
   const live = asks.filter((it) => !gone(key(it.crew, it.id)));
-  const decisions = live.filter((it) => it.kind !== "check");
-  const checks = live.filter((it) => it.kind === "check");
+  const decisions = live.filter((it) => !isCheck(it));
+  const checks = live.filter((it) => isCheck(it));
   const cap = 6;
   const shown = showAllAsks || decisions.length <= cap + 1 ? decisions : decisions.slice(0, cap);
   const rows = shown.map((it) => askRow(it));
@@ -1139,7 +1144,7 @@ function renderCockpit(hold, asks, others, parked) {
     }
   } else if (!holds.length) holds.push(el("p", "dnone", W.noHold));
   patch($("move-rows"), [...holds]);
-  const qs = [...asks.filter(live).filter((it) => it.kind !== "check"), ...asks.filter(live).filter((it) => it.kind === "check")];
+  const qs = [...asks.filter(live).filter((it) => !isCheck(it)), ...asks.filter(live).filter((it) => isCheck(it))];
   setText($("move-ask-h"), qs.length ? W.ask : "");
   patch($("move-asks"), [...qs.map((it) => moveRow(it, false))]);
   patch($("move-al-h"), [...alarmHead()]);
@@ -1223,7 +1228,7 @@ function moveRow(it, holds) {
     // A question carries its node/crew too: the same title from two nodes reads apart.
     const cl = crewTag(it.crew, true);
     if (cl) words.append(cl);
-    const why = it.kind === "decision" ? it.reason : it.note;
+    const why = it.kind === "decision" || it.kind === "decided" ? it.reason : it.note;
     if (why) words.append(el("span", "gr", why));
   }
   const tag = chip(it) || (it.kind === "later" ? el("span", "chip ghost", W.backTag) : null);
@@ -2260,9 +2265,9 @@ function phoneLists() {
   const old = (a, b) => T(a.created) - T(b.created);
   const todo = snap.todo.filter(live);
   return {
-    waiting: todo.filter((it) => it.kind !== "check" && it.kind !== "later"),
+    waiting: todo.filter((it) => !isCheck(it) && it.kind !== "later"),
     // Yours by hand: the checks, and a parked item its alarm brought back.
-    hand: todo.filter((it) => it.kind === "check" || it.kind === "later").sort(old),
+    hand: todo.filter((it) => isCheck(it) || it.kind === "later").sort(old),
     parked: snap.later.filter(live).sort(old),
     alarms: (snap.alarms || []).filter((a) => shows(a.crew) && !gone(alarmKey(a))).sort((a, b) => T(a.at) - T(b.at)),
     crews: snap.crews.filter((c) => shows(c.key) && !away(c.key) && !c.spare),

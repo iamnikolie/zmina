@@ -316,6 +316,9 @@ type Crew struct {
 	// (14:05)] …`. The task is only what the line's sender said by structure (zmina send --task), never read from its
 	// words. Default true; false delivers every line as it was written.
 	Crossing *bool `yaml:"crossing"`
+	// Decide has every role take its own recommendation instead of stopping for the owner's answer, carry on, and record
+	// it for his review (zmina todo decided); only what is critical waits on him. Default false.
+	Decide *bool `yaml:"decide"`
 	// BootGrace is how long a started role is left to boot before lines are typed into it (default 2m).
 	BootGrace string `yaml:"boot_grace"`
 	// DropEnv lists environment variables (NAME, or PREFIX*) kept from the roles, on top of the built-in list.
@@ -644,6 +647,10 @@ func (c *Crew) DoorbellOn() bool { return c.Doorbell == nil || *c.Doorbell }
 // CrossingOn reports whether a line that crossed a newer line on its task is delivered with a mark that says so
 // (crossing).
 func (c *Crew) CrossingOn() bool { return c.Crossing == nil || *c.Crossing }
+
+// DecideOn reports whether every role is told at boot to take its own recommendation and record it for the owner's review
+// instead of waiting for his answer (decide).
+func (c *Crew) DecideOn() bool { return c.Decide != nil && *c.Decide }
 
 // SystemdUnit is the crew's ticker on Linux: zmina (.service and .timer), or zmina-<name>.
 func (c *Crew) SystemdUnit() string { return suffixed("zmina", "-", c.Name) }

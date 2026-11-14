@@ -857,6 +857,27 @@ func TestCrossingSwitch(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// decide is off unless the crew file turns it on, and is no unknown key.
+func TestDecideSwitch(t *testing.T) {
+	const roles = "namespace: /ns\nroles:\n  dispatcher:\n"
+
+	for body, want := range map[string]bool{
+		"":                false,
+		"decide: true\n":  true,
+		"decide: on\n":    true,
+		"decide: false\n": false,
+		"decide: off\n":   false,
+	} {
+		c, err := Load(write(t, body+roles))
+		require.NoError(t, err, body)
+		assert.Equal(t, want, c.DecideOn(), body)
+		assert.Empty(t, c.Warnings, body)
+	}
+
+	_, err := Load(write(t, "decide: sometimes\n"+roles))
+	assert.Error(t, err)
+}
+
 // done_check is a command line or its three keys; none is the default, and a bad one stops the load.
 func TestDoneCheckKey(t *testing.T) {
 	const roles = "namespace: /ns\nroles:\n  dispatcher:\n"

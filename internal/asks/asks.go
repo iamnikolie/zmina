@@ -1,5 +1,5 @@
 // Package asks is what the dispatcher asks the owner: a decision it keeps asking, with its recommendation and a
-// reason, or a check only the owner can do. One JSON file per ask under asks/ next to the crew file, written alone
+// reason, a check only the owner can do, or a decision a role took itself for him to review. One JSON file per ask under asks/ next to the crew file, written alone
 // like tasks and the parked list. An answered ask stays on disk with its state and the owner's words.
 package asks
 
@@ -28,12 +28,16 @@ const (
 	Decision Kind = "decision"
 	// Check is something only the owner can do: done says it is done.
 	Check Kind = "check"
+	// Decided is a decision a role took on its own recommendation and carried on: it waits on nobody, and the owner
+	// reads it afterwards (done says it is fine, an answer says what to redo).
+	Decided Kind = "decided"
 )
 
-// ParseKind reads a kind; empty is a decision when there is a recommendation, else a check.
+// ParseKind reads a kind; empty is a decision when there is a recommendation, else a check. Decided is only ever
+// named, never read from a recommendation.
 func ParseKind(s, rec string) (Kind, error) {
 	switch Kind(s) {
-	case Decision, Check:
+	case Decision, Check, Decided:
 		return Kind(s), nil
 	case "":
 		if rec != "" {
@@ -43,7 +47,7 @@ func ParseKind(s, rec string) (Kind, error) {
 		return Check, nil
 	}
 
-	return "", fmt.Errorf("kind %q: decision or check", s)
+	return "", fmt.Errorf("kind %q: decision, check or decided", s)
 }
 
 // State is where an ask is.
@@ -73,9 +77,11 @@ type Ask struct {
 	Title string `json:"title,omitempty"`
 	// Project is the project it is for (default: its task's).
 	Project string `json:"project,omitempty"`
-	// Rec is the recommended answer, Reason why in one line.
+	// Rec is the recommended answer, Reason why in one line (a decided ask's reason for what it did).
 	Rec    string `json:"rec,omitempty"`
 	Reason string `json:"reason,omitempty"`
+	// Instead is what a decided ask's role did not do.
+	Instead string `json:"instead,omitempty"`
 	// Options are the answers the asker offers, each a few words (--option, repeated): a phone shows them as buttons.
 	// An older ask has none, and reads as before.
 	Options []string `json:"options,omitempty"`

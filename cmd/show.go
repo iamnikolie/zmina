@@ -145,6 +145,26 @@ func itemText(c itemCard, now time.Time) string {
 			asks = ""
 		}
 
+		// A decided item waits on nobody: the role took it, and the owner reads it.
+		if q.decided() {
+			state = map[string]string{"need": "to review", "parked": "parked", "done": "reviewed"}[c.State]
+			if c.State == "need" {
+				act = "zmina todo done " + q.ID + " (fine) / zmina todo answer " + q.ID + " \"<what to redo>\""
+			}
+
+			about := ""
+			if q.Task != "" {
+				about = " · about " + q.Task
+			}
+
+			return cardText(q.ID+" · "+title, []string{
+				"decided by " + dash(q.Role) + " · " + state + " · " + age(now.Sub(c.Since)) + about,
+				ifSet("decided: ", asks),
+				ifSet("reason: ", q.Reason),
+				ifSet("instead: ", q.Instead),
+			}, act)
+		}
+
 		return cardText(q.ID+" · "+title, []string{
 			string(q.Kind) + " for the owner · " + state + " · " + age(now.Sub(c.Since)) + " · " + who,
 			ifSet("asks: ", asks),

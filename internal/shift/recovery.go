@@ -28,7 +28,10 @@ func (s *Shift) RecoveryPack() (string, recovery.Pack, error) {
 		}
 	}
 	for _, a := range (&asks.Store{Dir: s.Crew.Layout().Asks()}).Pending() {
-		add("asks", a.ID, a.Text, "zmina todo ls", a)
+		// A decided item is for the owner to read: nothing is open on it for the dispatcher.
+		if a.Kind != asks.Decided {
+			add("asks", a.ID, a.Text, "zmina todo ls", a)
+		}
 	}
 	if s.Later != nil {
 		for _, it := range s.Later.Parked() {

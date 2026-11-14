@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -24,21 +25,27 @@ import (
 // overdueAfter is how old a todo item gets before it is shown as overdue.
 const overdueAfter = 24 * time.Hour
 
-// todoItem is one thing waiting on the owner: an ask (decision or check) or a task in state waiting.
+// decidedKeep is how long a decided item stays on the list: an older one is not shown, and stays on disk, open.
+const decidedKeep = 7 * 24 * time.Hour
+
+// todoItem is one thing waiting on the owner: an ask (decision or check) or a task in state waiting; or, last, a
+// decided item, which waits on nobody and is there for him to read.
 type todoItem struct {
 	// Crew is the crew's key on the ui page, which shows every crew's todo as one list.
 	Crew string `json:"crew,omitempty"`
 	ID   string `json:"id"`
-	Kind string `json:"kind"` // decision | check | waiting | later
+	Kind string `json:"kind"` // decision | check | decided | waiting | later
 	Text string `json:"text"`
 	// Title is the item in a few words: the ask's title, the waiting task's headline.
 	Title string `json:"title,omitempty"`
 	// Project and URL are the task's, when the item is about one.
 	Project string `json:"project,omitempty"`
 	URL     string `json:"url,omitempty"`
-	// Rec and Reason are a decision's recommendation; Note is a waiting task's note.
-	Rec    string `json:"rec,omitempty"`
-	Reason string `json:"reason,omitempty"`
+	// Rec and Reason are a decision's recommendation; Note is a waiting task's note. A decided item has its Reason and
+	// what the role did not do (Instead).
+	Rec     string `json:"rec,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	Instead string `json:"instead,omitempty"`
 	// Options are the answers the asker offered (an ask's --option).
 	Options []string `json:"options,omitempty"`
 	Note    string   `json:"note,omitempty"`
@@ -58,9 +65,13 @@ type todoItem struct {
 	named string
 }
 
+// decided reports whether the item is a decided one: a role took the decision itself, and nothing waits on the owner.
+func (it todoItem) decided() bool { return it.Kind == string(asks.Decided) }
+
 // todo is what waits on the owner, in the order it is shown: blocking first, then overdue, then the rest, oldest
-// first inside each group. A waiting task blocks only while its role is up and idle (held up by it, not busy
-// elsewhere or down); an ask blocks when it says so. Files that do not read are returned as problems.
+// first inside each group, and last the decided items (never overdue, never blocking), newest first. A waiting task
+// blocks only while its role is up and idle (held up by it, not busy elsewhere or down); an ask blocks when it says
+// so. A decided item older than decidedKeep is left out. Files that do not read are returned as problems.
 func todo(c *crew.Crew, now time.Time, views []shift.View) ([]todoItem, []string) {
 	idle := map[string]bool{}
 	for _, v := range views {
@@ -77,8 +88,23 @@ func todo(c *crew.Crew, now time.Time, views []shift.View) ([]todoItem, []string
 
 	// An ask about a task is that task's question: the task's waiting item folds into it, never shows twice.
 	asked := map[string]int{}
+	// A decided item about a task is no question: it only takes the task's project and link.
+	decidedAbout := map[string][]int{}
 
 	for _, a := range all {
+		if a.Kind == asks.Decided {
+			if a.Open() && now.Sub(a.Created) <= decidedKeep {
+				if a.Task != "" {
+					decidedAbout[a.Task] = append(decidedAbout[a.Task], len(items))
+				}
+
+				items = append(items, todoItem{ID: a.ID, Kind: string(a.Kind), Text: a.Text, Title: a.Title, Reason: a.Reason,
+					Instead: a.Instead, Role: a.Role, Task: a.Task, Project: a.Project, Created: a.Created, named: a.Title})
+			}
+
+			continue
+		}
+
 		if a.Open() {
 			if a.Task != "" {
 				asked[a.Task] = len(items)
@@ -95,6 +121,10 @@ func todo(c *crew.Crew, now time.Time, views []shift.View) ([]todoItem, []string
 
 	for _, t := range tasks {
 		if i, ok := asked[t.ID]; ok {
+			items[i].Project, items[i].URL = cmp.Or(items[i].Project, t.Where()), t.URL
+		}
+
+		for _, i := range decidedAbout[t.ID] {
 			items[i].Project, items[i].URL = cmp.Or(items[i].Project, t.Where()), t.URL
 		}
 
@@ -134,7 +164,7 @@ func todo(c *crew.Crew, now time.Time, views []shift.View) ([]todoItem, []string
 	}
 
 	for i := range items {
-		items[i].Overdue = now.Sub(items[i].Created) >= overdueAfter
+		items[i].Overdue = !items[i].decided() && now.Sub(items[i].Created) >= overdueAfter
 	}
 
 	sortTodo(items)
@@ -142,10 +172,13 @@ func todo(c *crew.Crew, now time.Time, views []shift.View) ([]todoItem, []string
 	return items, problems
 }
 
-// sortTodo puts blocking items first, then overdue ones, then the rest, oldest first inside each group.
+// sortTodo puts blocking items first, then overdue ones, then the rest, oldest first inside each group; the decided
+// items are the last group, newest first.
 func sortTodo(items []todoItem) {
 	group := func(it todoItem) int {
 		switch {
+		case it.decided():
+			return 3
 		case it.Blocks != "":
 			return 0
 		case it.Overdue:
@@ -156,8 +189,13 @@ func sortTodo(items []todoItem) {
 	}
 
 	sort.SliceStable(items, func(i, j int) bool {
-		if gi, gj := group(items[i]), group(items[j]); gi != gj {
+		gi, gj := group(items[i]), group(items[j])
+		if gi != gj {
 			return gi < gj
+		}
+
+		if gi == 3 {
+			return items[i].Created.After(items[j].Created)
 		}
 
 		return items[i].Created.Before(items[j].Created)
@@ -200,7 +238,7 @@ func (a *app) todoCommand() *cobra.Command {
 		Short: "What waits on the owner: the dispatcher's asks (decisions, checks) and tasks in state waiting",
 	}
 
-	c.AddCommand(a.todoAddCommand(), a.todoLsCommand(), a.todoEditCommand(), a.todoAnswerCommand("yes"),
+	c.AddCommand(a.todoAddCommand(), a.todoDecidedCommand(), a.todoLsCommand(), a.todoEditCommand(), a.todoAnswerCommand("yes"),
 		a.todoAnswerCommand("done"), a.todoAnswerCommand("answer"), a.todoAnswerCommand("park"),
 		a.todoAnswerCommand("ignore"))
 
@@ -232,6 +270,10 @@ func (a *app) todoAddCommand() *cobra.Command {
 			k, err := asks.ParseKind(kind, ask.Rec)
 			if err != nil {
 				return err
+			}
+
+			if k == asks.Decided {
+				return errors.New("a decided item is recorded with zmina todo decided, which asks for its reason")
 			}
 
 			ask.Kind, ask.Text, ask.By = k, strings.Join(args, " "), by()
@@ -271,6 +313,53 @@ func (a *app) todoAddCommand() *cobra.Command {
 	return c
 }
 
+// todoDecidedCommand records a decision the role took on its own recommendation instead of waiting for the owner, for him
+// to review afterwards. It is never blocking and has no recommendation or answers to pick from.
+func (a *app) todoDecidedCommand() *cobra.Command {
+	var ask asks.Ask
+
+	c := &cobra.Command{
+		Use:   "decided <text...> --reason \"<why>\" [--instead \"<what was not done>\"]",
+		Short: "Record what you decided instead of waiting, for the owner to review afterwards; prints its id (A-3)",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if strings.TrimSpace(ask.Reason) == "" {
+				return errors.New("a decision needs its reason: --reason \"<why>\"")
+			}
+
+			ask.Kind, ask.Text, ask.By = asks.Decided, strings.Join(args, " "), by()
+			if ask.Role == "" {
+				ask.Role = ask.By
+			}
+
+			if ask.Task != "" {
+				ask.Task = task.Normalize(ask.Task)
+			}
+
+			return a.withState(func(s *shift.Shift) error {
+				added, err := askStore(s.Crew).Add(ask, s.Now())
+				if err != nil {
+					return err
+				}
+
+				s.Log(added.Role, "decided", added.Task, added.ID+": "+added.Text)
+				fmt.Fprintln(a.out, added.ID)
+
+				return nil
+			})
+		},
+	}
+
+	c.Flags().StringVar(&ask.Reason, "reason", "", "why you took it, in one line (required)")
+	c.Flags().StringVar(&ask.Instead, "instead", "", "what you did not do")
+	c.Flags().StringVar(&ask.Title, "title", "", "the decision in a few plain words (the page shows it, the text on expand)")
+	c.Flags().StringVar(&ask.Role, "from", "", "the role that decided (default $ZMINA_ROLE, else hand)")
+	c.Flags().StringVar(&ask.Task, "task", "", "the task it is about")
+	c.Flags().StringVar(&ask.Project, "project", "", "the project it is for (default: its --task's)")
+
+	return c
+}
+
 func (a *app) todoEditCommand() *cobra.Command {
 	var e struct {
 		text, title, rec, reason, blocks, project string
@@ -292,6 +381,10 @@ func (a *app) todoEditCommand() *cobra.Command {
 
 				if !ask.Open() {
 					return fmt.Errorf("%s is already %s", ask.ID, ask.State)
+				}
+
+				if ask.Kind == asks.Decided {
+					return fmt.Errorf("%s is a decision already taken: it is not edited (record another with zmina todo decided)", ask.ID)
 				}
 
 				var changed []string
@@ -374,7 +467,7 @@ func (a *app) todoLsCommand() *cobra.Command {
 
 	c := &cobra.Command{
 		Use:   "ls",
-		Short: "What waits on the owner: blocking first, then overdue, oldest first; the parked list's count last",
+		Short: "What waits on the owner: blocking first, then overdue, oldest first; then what roles decided, newest first; the parked list's count last",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.readState(func(s *shift.Shift) error {
@@ -401,7 +494,8 @@ func (a *app) todoLsCommand() *cobra.Command {
 					}{items, parked})
 				}
 
-				if len(items) == 0 {
+				// A decided item waits on nobody: it is no reason to say something does.
+				if !slices.ContainsFunc(items, func(it todoItem) bool { return !it.decided() }) {
 					fmt.Fprintln(a.out, "nothing waits on you")
 				}
 
@@ -437,6 +531,13 @@ func (a *app) todoLsCommand() *cobra.Command {
 
 					if full && len(it.Options) > 0 {
 						line += " · options: " + optionsLine(it.Options)
+					}
+
+					if full && it.decided() {
+						line += " · reason: " + it.Reason
+						if it.Instead != "" {
+							line += " · instead: " + it.Instead
+						}
 					}
 
 					if !full {
@@ -571,7 +672,9 @@ func answeredBy(from, via string) string {
 
 // answerTodo closes an ask (yes, done, answer, park) or answers a waiting task (answer, park), and queues the
 // answer for the dispatcher as a note from `from` — "A-3 · yes: <rec>", "T-62 · <words>", "A-4 · later" — unless
-// `from` is the dispatcher itself. via is the plugin the owner answered through, when he did: the note says so. The first
+// `from` is the dispatcher itself. A decided ask is the owner's to read: yes, done and ignore close it and queue nothing
+// (reviewed, fine), an answer queues "A-5 · redo: <words> — decided: <text>" (he disagrees: the dispatcher acts on it).
+// via is the plugin the owner answered through, when he did: the note says so. The first
 // answer wins: an item that is closed or answered already is refused, whoever answers. The caller holds the state lock. It
 // returns the line to print.
 func answerTodo(s *shift.Shift, from, via, action, id, words string) (string, error) {
@@ -580,7 +683,12 @@ func answerTodo(s *shift.Shift, from, via, action, id, words string) (string, er
 		return "", errors.New("an answer needs words")
 	}
 
-	var note string
+	var (
+		note string
+		// reviewed is a decided ask read and found fine: nothing is queued. decided is any answer to a decided ask, which
+		// is no answer to the task it is about.
+		reviewed, decided bool
+	)
 
 	switch {
 	case strings.HasPrefix(id, "A-"):
@@ -593,7 +701,10 @@ func answerTodo(s *shift.Shift, from, via, action, id, words string) (string, er
 
 		st := map[string]asks.State{"yes": asks.Yes, "done": asks.Done, "answer": asks.Answered,
 			"park": asks.Parked, "ignore": asks.Ignored}[action]
-		if action == "yes" && ask.Rec == "" {
+		decided = ask.Kind == asks.Decided
+		reviewed = decided && (action == "yes" || action == "done" || action == "ignore")
+
+		if action == "yes" && ask.Rec == "" && !decided {
 			return "", fmt.Errorf("%s has no recommendation to say yes to: answer it", ask.ID)
 		}
 
@@ -603,11 +714,17 @@ func answerTodo(s *shift.Shift, from, via, action, id, words string) (string, er
 
 		switch action {
 		case "yes":
-			note = ask.ID + " · yes: " + ask.Rec
+			note = ask.ID + " · yes"
+			if ask.Rec != "" {
+				note += ": " + ask.Rec
+			}
 		case "done":
 			note = ask.ID + " · done"
 		case "answer":
 			note = ask.ID + " · " + words
+			if decided {
+				note = ask.ID + " · redo: " + words
+			}
 		case "ignore":
 			note = ask.ID + " · ignored"
 		case "park":
@@ -619,7 +736,12 @@ func answerTodo(s *shift.Shift, from, via, action, id, words string) (string, er
 			note = ask.ID + " · later (" + it.ID + ")"
 		}
 
-		note += " — " + clip(ask.Text, 120)
+		if decided {
+			note += " — decided: " + clip(ask.Text, 120)
+		} else {
+			note += " — " + clip(ask.Text, 120)
+		}
+
 		id = ask.ID
 	case strings.HasPrefix(id, "T-"):
 		t, err := taskStore(s.Crew).Get(id)
@@ -720,14 +842,15 @@ func answerTodo(s *shift.Shift, from, via, action, id, words string) (string, er
 	role, _, _ := strings.Cut(from, "#")
 	self := role == s.Crew.Dispatcher
 
-	if !self {
+	if !self && !reviewed {
 		if _, err := s.Note(from, note, false); err != nil {
 			return "", err
 		}
 	}
 
-	// The task's turn is the dispatcher's now: it leaves the todo until the task changes.
-	if tid := taskOf(s, id); tid != "" {
+	// The task's turn is the dispatcher's now: it leaves the todo until the task changes. A decided item is not the
+	// task's question, so it leaves the task as it is.
+	if tid := taskOf(s, id); tid != "" && !decided {
 		store := taskStore(s.Crew)
 		if t, err := store.Get(tid); err == nil && t.State == task.Waiting {
 			t.Answered, t.AnsweredBy = s.Now(), answeredBy(from, via)
@@ -746,6 +869,10 @@ func answerTodo(s *shift.Shift, from, via, action, id, words string) (string, er
 
 	if self {
 		return id + " · " + action + " · recorded", nil
+	}
+
+	if reviewed {
+		return id + " · " + action + " · reviewed, nothing queued", nil
 	}
 
 	// The answer goes to the dispatcher now when it can take it, else with the beat.

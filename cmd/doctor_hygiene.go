@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/iamnikolie/zmina/internal/asks"
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/shift"
 )
@@ -85,7 +86,8 @@ func checkHygiene(c *crew.Crew, st *shift.State, now time.Time, add func(name, l
 	var old []string
 
 	for _, it := range askStore(c).Pending() {
-		if now.Sub(it.Created) >= askAge {
+		// A decided item waits on nobody, and the list stops showing it after a week.
+		if it.Kind != asks.Decided && now.Sub(it.Created) >= askAge {
 			old = append(old, it.ID)
 		}
 	}

@@ -199,6 +199,26 @@ if (phone) {
   process.exit(0);
 }
 
+if (process.argv[3] === "decided") {
+  // A decided item reads like a check on the page (Done, an answer in words, no No); a decision has its No.
+  ctx.cls = cls;
+  const out = vm.runInContext(`
+    snap = { self: "", nodes: [], crews: [{ key: "default", name: "default" }], tints: {} };
+    filter = "all";
+    const at = new Date().toISOString();
+    const rows = {};
+    for (const kind of ["check", "decided", "decision"]) {
+      const it = { crew: "default", id: "A-1", kind, title: "Keep the old name", text: "Keep the old name", reason: "links point at it",
+        instead: "rename the flag", created: at };
+      const row = askRow(it);
+      rows[kind] = { buttons: cls(row, "q").map((b) => b.textContent), panel: cls(itemPanel(it, false), "pn").map((p) => p.textContent) };
+    }
+    JSON.stringify({ rows, checks: [isCheck({ kind: "decided" }), isCheck({ kind: "decision" })] });
+  `, ctx);
+  process.stdout.write(out + "\n");
+  process.exit(0);
+}
+
 // Two nodes, each with its default crew, each asking the same question as A-1.
 const ask = (crew) => ({ crew, id: "A-1", kind: "decision", title: "Approve release", text: "Approve release", rec: "yes", reason: "Ready", created: new Date().toISOString() });
 ctx.cases = { asks: [ask("default"), ask("node-b/default")] };
