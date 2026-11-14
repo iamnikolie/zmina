@@ -25,7 +25,8 @@ import (
 // overdueAfter is how old a todo item gets before it is shown as overdue.
 const overdueAfter = 24 * time.Hour
 
-// decidedKeep is how long a decided item stays on the list: an older one is not shown, and stays on disk, open.
+// decidedKeep is how long a decided item stays on the list: an older one is not shown, and the next todo decided
+// closes it (expireDecided).
 const decidedKeep = 7 * 24 * time.Hour
 
 // todoItem is one thing waiting on the owner: an ask (decision or check) or a task in state waiting; or, last, a
@@ -337,6 +338,8 @@ func (a *app) todoDecidedCommand() *cobra.Command {
 			}
 
 			return a.withState(func(s *shift.Shift) error {
+				expireDecided(s)
+
 				added, err := askStore(s.Crew).Add(ask, s.Now())
 				if err != nil {
 					return err
@@ -358,6 +361,30 @@ func (a *app) todoDecidedCommand() *cobra.Command {
 	c.Flags().StringVar(&ask.Project, "project", "", "the project it is for (default: its --task's)")
 
 	return c
+}
+
+// expireDecided closes the decided items still open past decidedKeep, which the list stopped showing: they would stay
+// open for good. zmina closes them itself (state ignored, no closer) and the log says which. The caller holds the state
+// lock; an item that cannot be closed stays as it is, for the next time.
+func expireDecided(s *shift.Shift) {
+	store := askStore(s.Crew)
+	all, _, _ := store.Scan()
+
+	var expired []string
+
+	for _, a := range all {
+		if a.Kind != asks.Decided || !a.Open() || s.Now().Sub(a.Created) <= decidedKeep {
+			continue
+		}
+
+		if _, err := store.CloseBy(a.ID, asks.Ignored, "", "", s.Now()); err == nil {
+			expired = append(expired, a.ID)
+		}
+	}
+
+	if len(expired) > 0 {
+		s.Log("", "decided-expired", "", strings.Join(expired, " "))
+	}
 }
 
 func (a *app) todoEditCommand() *cobra.Command {
@@ -585,6 +612,12 @@ func (a *app) todoAnswerCommand(action string) *cobra.Command {
 		"ignore": "Set it aside for good (no parked entry; a waiting task only leaves the todo)",
 	}[action]
 
+	// The owner's own yes, done, ignore or park on a decided item tells the dispatcher nothing.
+	quiet := ""
+	if action != "answer" {
+		quiet = " (not when the owner closes a decided item)"
+	}
+
 	use, args := action+" <id>", cobra.ExactArgs(1)
 	if action == "answer" {
 		use, args = "answer <id> <text...>", cobra.MinimumNArgs(2)
@@ -594,7 +627,7 @@ func (a *app) todoAnswerCommand(action string) *cobra.Command {
 
 	c := &cobra.Command{
 		Use:   use,
-		Short: short + "; the dispatcher hears it as a note",
+		Short: short + "; the dispatcher hears it as a note" + quiet,
 		Args:  args,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if from == "" {
@@ -672,9 +705,10 @@ func answeredBy(from, via string) string {
 
 // answerTodo closes an ask (yes, done, answer, park) or answers a waiting task (answer, park), and queues the
 // answer for the dispatcher as a note from `from` — "A-3 · yes: <rec>", "T-62 · <words>", "A-4 · later" — unless
-// `from` is the dispatcher itself. A decided ask is the owner's to read: yes, done and ignore close it and queue nothing
-// (reviewed, fine), an answer queues "A-5 · redo: <words> — decided: <text>" (he disagrees: the dispatcher acts on it).
-// via is the plugin the owner answered through, when he did: the note says so. The first
+// `from` is the dispatcher itself. A decided ask is the owner's to read: when he closes it with yes, done, ignore or park
+// (in a terminal, on the page, through a plugin) nothing is queued (reviewed, fine), and an answer queues "A-5 · redo:
+// <words> — decided: <text>" (he disagrees: the dispatcher acts on it). A role that closes one records what the owner
+// said, as for any ask: the dispatcher is told. via is the plugin the owner answered through, when he did: the note says so. The first
 // answer wins: an item that is closed or answered already is refused, whoever answers. The caller holds the state lock. It
 // returns the line to print.
 func answerTodo(s *shift.Shift, from, via, action, id, words string) (string, error) {
@@ -685,8 +719,8 @@ func answerTodo(s *shift.Shift, from, via, action, id, words string) (string, er
 
 	var (
 		note string
-		// reviewed is a decided ask read and found fine: nothing is queued. decided is any answer to a decided ask, which
-		// is no answer to the task it is about.
+		// reviewed is a decided ask the owner read and found fine (or parked): nothing is queued. decided is any answer to
+		// a decided ask, which is no answer to the task it is about.
 		reviewed, decided bool
 	)
 
@@ -702,7 +736,7 @@ func answerTodo(s *shift.Shift, from, via, action, id, words string) (string, er
 		st := map[string]asks.State{"yes": asks.Yes, "done": asks.Done, "answer": asks.Answered,
 			"park": asks.Parked, "ignore": asks.Ignored}[action]
 		decided = ask.Kind == asks.Decided
-		reviewed = decided && (action == "yes" || action == "done" || action == "ignore")
+		reviewed = decided && action != "answer" && (from == "hand" || from == "ui" || via != "")
 
 		if action == "yes" && ask.Rec == "" && !decided {
 			return "", fmt.Errorf("%s has no recommendation to say yes to: answer it", ask.ID)
@@ -872,6 +906,10 @@ func answerTodo(s *shift.Shift, from, via, action, id, words string) (string, er
 	}
 
 	if reviewed {
+		if action == "park" {
+			return id + " · park · parked, nothing queued", nil
+		}
+
 		return id + " · " + action + " · reviewed, nothing queued", nil
 	}
 

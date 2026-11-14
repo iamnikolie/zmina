@@ -1498,7 +1498,11 @@ until the task changes again (`task set`): the turn is the dispatcher's.
 A role that has a recommendation need not wait for the owner: it takes it, carries on, and records a **decided** item
 (`zmina todo decided`). It waits on nobody: it is the last group of the list, after everything that waits, newest first;
 never overdue, never blocking, never counted as waiting, never pushed and never told to a plugin. One older than 7 days
-is not listed (it stays on disk). On the ui page it reads like a check (Done, or an answer in words).
+is not listed, and the next `todo decided` closes it (state ignored, no closer; event `decided-expired` with the ids;
+`zmina show` reads it as closed after a week, not reviewed). On the ui page it is a group of its own, "Decided, for your
+review", last and newest first, in no count; each reads like a check (Done says Reviewed, Later, or an answer in words).
+**Every zmina on a crew's files must be this build before `decide: on`:** an older one lists a decided item as an ordinary
+open ask.
 
 | Command | Does |
 |---|---|
@@ -1507,7 +1511,7 @@ is not listed (it stays on disk). On the ui page it reads like a check (Done, or
 | `zmina todo edit <id> [--title …] [--text …] [--rec …] [--option …] [--reason …] [--blocks …] [--project …]` | change an open ask's words (`-` clears one; clearing `--rec` makes it a check unless it has options; `--option` repeated replaces the list, `--option -` clears it). |
 | `zmina todo ls [--full] [--json]` | what waits, in that order, one line each (its title when it has one; `pushed Mon 14:02` when it last went to the owner's phone), then the decided items; the parked list's count last. `--full`: the whole text, an ask's options (`options: 1) yes  2) no`), a decided item's `reason:` and `instead:`. `--json`: `{items, later}` (an item's `pushed` time, `options`, `reason` and `instead` too). |
 | `zmina todo yes <id>` | take a decision's recommendation; on a decided item, it is fine (closed, nothing queued). |
-| `zmina todo done <id>` | a check (or a decision) is dealt with; a decided item is read and fine: closed, and the dispatcher hears nothing. `ignore` does the same. |
+| `zmina todo done <id>` | a check (or a decision) is dealt with; a decided item is read and fine: closed, and the dispatcher hears nothing. `ignore` and `park` do the same (`park` still makes the `L-n`). That holds when the owner does it (terminal, page, a plugin); a role that closes one records what he said, and the dispatcher is told as for any ask. |
 | `zmina todo answer <id> <text...> [--by <plugin>]` | answer an ask or a waiting task (`T-62`) in the owner's words; on a decided item it says what to redo, and the dispatcher hears `A-5 · redo: <words> — decided: <text>`. The first answer wins: an ask that is closed is refused (`A-3 is already answered`, exit 1), and a plugin's answer to a waiting task already answered or set aside is refused too, so a late tap on a phone never counts beside the keyboard's; at the keyboard a follow-up answer to a waiting task, or one after `ignore`, works as it always did. `--by` is a plugin answering in the owner's voice (see Plugins): the dispatcher's note says `(answered through plugin pager)`; every other action here takes `--by` too. Run by a role (`$ZMINA_ROLE`), it records what the owner said in chat, and the dispatcher's note says so: `(the owner's answer in chat, recorded by <role>)`. The note goes to the dispatcher at once when it can take one, else with the beat. Run by the dispatcher itself (yes, done, park and ignore too), nothing is queued back to it — it prints `recorded`; the log line and a waiting task's answered mark stay. |
 | `zmina choose <role> <n> [--dialog <id>] [--by <plugin>]` | answer the question on a role's screen (a dialog with numbered choices, as `zmina ls --json` gives it) with choice n: the cursor moves there and Enter takes it, as Chat's `choose` does, and only while the session says it waits. `--dialog <id>` (`<role>:<fingerprint>`, or the fingerprint) refuses the press unless the question on the screen is still that one; a plugin must give it (see Plugins). Logged as `chose`. |
 | `zmina todo park <id>` | put it on the parked list (an ask becomes `L-n`, "from A-3"); for a waiting task the dispatcher hears `T-62 · later`. |
@@ -1552,7 +1556,7 @@ Every answer — from these commands or the ui page — closes the ask (a waitin
 note for the dispatcher like `zmina note`: `hand: A-3 · yes: <rec> — <text>`, `ui: T-62 · <words>`,
 `ui: A-4 · later (L-5) — <text>`. **The dispatcher acts on it**: does what was decided, hands the answer to the
 role that asked, moves a waiting task on; for a decided item that is `ui: A-5 · redo: <words> — decided: <text>`: it
-has the role redo it. Event `answered` in the log (done, yes and ignore on a decided item log it and queue nothing).
+has the role redo it. Event `answered` in the log (the owner's done, yes, ignore and park on a decided item log it and queue nothing).
 
 ## Plugins — programs told of what reaches the owner
 

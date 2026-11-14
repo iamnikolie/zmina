@@ -49,13 +49,17 @@ func TestBootCarriesTheDecideRuleWhenOn(t *testing.T) {
 	assert.Contains(t, claude, `zmina todo decided "<what you decided>" --reason "<why>"`)
 	assert.Contains(t, s.BootText(s.Crew.Roles["dispatcher"]), DecideRule, "the dispatcher too")
 	assert.Greater(t, s.RulesSize(r), len(DecideRule), "its size is counted in the rules a fresh start carries")
+	assert.Contains(t, s.bootText(r, false), RoleRules+"\n\n"+DecideRule, "the boot typed again after a /clear, too")
 
 	r.Runtime = "codex"
 	assert.Contains(t, s.BootText(r), CodexWaitRule+"\n\n"+CrossingRule+"\n\n"+DecideRule)
 
+	assert.Contains(t, s.bootText(r, false), DecideRule, "a Codex role's, too")
+
 	off := false
 	s.Crew.Decide = &off
 	assert.NotContains(t, s.BootText(r), DecideRule)
+	assert.NotContains(t, s.bootText(r, false), DecideRule)
 }
 
 // A crew with lessons on tells its roles where a lasting rule goes; one without says nothing of lessons.

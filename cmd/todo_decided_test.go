@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -224,7 +225,148 @@ func TestTodoDecidedFineIsQuiet(t *testing.T) {
 	require.ErrorContains(t, err, "already done", "the first answer wins")
 }
 
-// An answer says the owner disagrees: the dispatcher is told to redo it; so is a park, as for any ask.
+// The owner's park is as quiet as his done: the parked item is made, and the dispatcher hears nothing.
+func TestTodoDecidedParkIsQuiet(t *testing.T) {
+	file := testCrew(t, "  dev: {}\n")
+
+	_, _, err := zm(t, file, "todo", "decided", "use sqlite", "--reason", "one file")
+	require.NoError(t, err)
+
+	out, _, err := zm(t, file, "todo", "park", "A-1")
+	require.NoError(t, err)
+	assert.Equal(t, "A-1 · park · parked, nothing queued\n", out)
+	assert.Empty(t, dispatcherNotes(t, file))
+
+	out, _, err = zm(t, file, "later", "ls")
+	require.NoError(t, err)
+	assert.Contains(t, out, "use sqlite · from A-1", "the item is on the parked list all the same")
+
+	a, err := askStore(mustCrew(t, file)).Get("A-1")
+	require.NoError(t, err)
+	assert.Equal(t, asks.Parked, a.State)
+}
+
+// Only the owner reads a decided item as fine in silence. A role that closes one is recording what he said, as for any
+// ask: the dispatcher is told, and the dispatcher closing one has nothing queued for itself.
+func TestTodoDecidedClosedByARoleIsNotSilent(t *testing.T) {
+	file := testCrew(t, "  dev: {}\n")
+
+	for _, text := range []string{"first call", "second call", "third call", "fourth call"} {
+		_, _, err := zm(t, file, "todo", "decided", text, "--reason", "why", "--from", "dev")
+		require.NoError(t, err)
+	}
+
+	t.Setenv("ZMINA_ROLE", "dev")
+
+	out, _, err := zm(t, file, "todo", "done", "A-1")
+	require.NoError(t, err)
+	assert.Equal(t, "A-1 · done · queued for the dispatcher\n", out)
+	assert.Contains(t, dispatcherNotes(t, file),
+		"dev: A-1 · done — decided: first call (the owner's answer in chat, recorded by dev)")
+
+	a, err := askStore(mustCrew(t, file)).Get("A-1")
+	require.NoError(t, err)
+	assert.Equal(t, asks.Done, a.State)
+	assert.Equal(t, "role dev", a.ClosedBy, "it is a role's close, not the owner's")
+
+	_, _, err = zm(t, file, "todo", "park", "A-2")
+	require.NoError(t, err)
+	assert.Contains(t, dispatcherNotes(t, file), "A-2 · later (L-1) — decided: second call")
+
+	t.Setenv("ZMINA_ROLE", "dispatcher")
+
+	out, _, err = zm(t, file, "todo", "done", "A-3")
+	require.NoError(t, err)
+	assert.Equal(t, "A-3 · done · recorded\n", out)
+	assert.NotContains(t, dispatcherNotes(t, file), "third call", "the dispatcher has it already")
+
+	// The owner at the keyboard, or through a plugin, is silent.
+	t.Setenv("ZMINA_ROLE", "")
+
+	out, _, err = zm(t, file, "todo", "done", "A-4")
+	require.NoError(t, err)
+	assert.Equal(t, "A-4 · done · reviewed, nothing queued\n", out)
+	assert.NotContains(t, dispatcherNotes(t, file), "fourth call")
+}
+
+// An owner's answer through a plugin is his own: a decided item it reads as fine closes in silence.
+func TestTodoDecidedFineThroughAPluginIsQuiet(t *testing.T) {
+	file := testCrew(t, "  dev: {}\n")
+
+	f, err := os.OpenFile(file, os.O_APPEND|os.O_WRONLY, 0o600)
+	require.NoError(t, err)
+	_, err = f.WriteString("plugins:\n  - {name: pager, on: [ask]}\n")
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	_, _, err = zm(t, file, "todo", "decided", "use sqlite", "--reason", "one file")
+	require.NoError(t, err)
+
+	t.Setenv("ZMINA_PLUGIN", "pager")
+
+	out, _, err := zm(t, file, "todo", "done", "A-1", "--by", "pager")
+	require.NoError(t, err)
+	assert.Equal(t, "A-1 · done · reviewed, nothing queued\n", out)
+	assert.Empty(t, dispatcherNotes(t, file))
+
+	a, err := askStore(mustCrew(t, file)).Get("A-1")
+	require.NoError(t, err)
+	assert.Equal(t, "plugin pager", a.ClosedBy)
+}
+
+// A decided item left open past a week is closed by zmina the next time one is recorded, and the log says which; zmina show
+// reads it as closed, not as waiting for review.
+func TestTodoDecidedExpiresPastAWeek(t *testing.T) {
+	file := testCrew(t, "  dev: {}\n")
+	store := askStore(mustCrew(t, file))
+	now := time.Now()
+
+	stale, err := store.Add(asks.Ask{Kind: asks.Decided, Text: "stale call", Reason: "why", Role: "dev"}, now.Add(-8*24*time.Hour))
+	require.NoError(t, err)
+	fresh, err := store.Add(asks.Ask{Kind: asks.Decided, Text: "recent call", Reason: "why", Role: "dev"}, now.Add(-6*24*time.Hour))
+	require.NoError(t, err)
+	check, err := store.Add(asks.Ask{Kind: asks.Check, Text: "an old check"}, now.Add(-20*24*time.Hour))
+	require.NoError(t, err)
+
+	_, _, err = zm(t, file, "todo", "decided", "a new call", "--reason", "why")
+	require.NoError(t, err)
+
+	got, err := store.Get(stale.ID)
+	require.NoError(t, err)
+	assert.Equal(t, asks.Ignored, got.State)
+	assert.Empty(t, got.ClosedBy, "zmina closed it itself")
+
+	got, err = store.Get(fresh.ID)
+	require.NoError(t, err)
+	assert.True(t, got.Open(), "a week not yet passed")
+
+	got, err = store.Get(check.ID)
+	require.NoError(t, err)
+	assert.True(t, got.Open(), "only decided items expire")
+
+	out, _, err := zm(t, file, "log", "--full")
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(out, "decided-expired"), "one event")
+	assert.Contains(t, out, stale.ID)
+
+	assert.Empty(t, dispatcherNotes(t, file), "nothing is told to anyone")
+
+	out, _, err = zm(t, file, "show", stale.ID)
+	require.NoError(t, err)
+	assert.Contains(t, out, "decided by dev · closed after a week, not reviewed · ")
+	assert.NotContains(t, out, "to review")
+	assert.NotContains(t, out, "act: zmina todo done")
+
+	// Nothing is expired a second time, and none is logged when none is.
+	_, _, err = zm(t, file, "todo", "decided", "another call", "--reason", "why")
+	require.NoError(t, err)
+
+	out, _, err = zm(t, file, "log", "--full")
+	require.NoError(t, err)
+	assert.Equal(t, 1, strings.Count(out, "decided-expired"))
+}
+
+// An answer says the owner disagrees: the dispatcher is told to redo it.
 func TestTodoDecidedAnswerQueuesTheRedo(t *testing.T) {
 	file := testCrew(t, "  dev: {}\n")
 
@@ -242,10 +384,6 @@ func TestTodoDecidedAnswerQueuesTheRedo(t *testing.T) {
 	assert.Equal(t, asks.Answered, a.State)
 	assert.Equal(t, "rename it after all", a.Answer)
 	assert.Contains(t, dispatcherNotes(t, file), "hand: A-1 · redo: rename it after all — decided: keep the old flag name")
-
-	_, _, err = zm(t, file, "todo", "park", "A-2")
-	require.NoError(t, err)
-	assert.Contains(t, dispatcherNotes(t, file), "hand: A-2 · later (L-1) — decided: use sqlite")
 
 	_, _, err = zm(t, file, "todo", "answer", "A-1", "again")
 	require.ErrorContains(t, err, "already answered")
@@ -417,11 +555,17 @@ func TestUIDecidedHoldsNothingAndIsNotCounted(t *testing.T) {
 	assert.Equal(t, "cheaper to undo", snap.Todo[1].Reason)
 	assert.Equal(t, "ship to prod", snap.Todo[1].Instead)
 
+	found := false
+
 	for _, c := range snap.Crews {
 		if c.Key == "ops" {
+			found = true
+
 			assert.Equal(t, 1, c.Waiting, "only the task waits on the owner")
 		}
 	}
+
+	require.True(t, found, "the crew is in the snapshot")
 
 	require.Len(t, snap.Work, 1)
 	require.NotNil(t, snap.Work[0].Needs)
@@ -430,4 +574,15 @@ func TestUIDecidedHoldsNothingAndIsNotCounted(t *testing.T) {
 	// The card of a decided item offers Done, as a check does.
 	d := askDecision(asks.Ask{ID: "A-1", Kind: asks.Decided})
 	assert.Equal(t, "done", d.Action)
+
+	// A decided item is never late on its card, however old; a check is.
+	now := time.Now()
+	old := now.Add(-3 * 24 * time.Hour)
+	x := &itemIndex{now: now, asks: map[string]asks.Ask{
+		"A-1": {ID: "A-1", Kind: asks.Decided, State: asks.Open, Created: old},
+		"A-2": {ID: "A-2", Kind: asks.Check, State: asks.Open, Created: old},
+	}}
+	assert.False(t, x.card("A-1").Overdue)
+	assert.True(t, x.card("A-2").Overdue)
+	assert.Equal(t, "need", x.card("A-1").State)
 }

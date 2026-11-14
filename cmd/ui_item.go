@@ -65,6 +65,10 @@ type itemAsk struct {
 	Project string    `json:"project,omitempty"`
 	Open    bool      `json:"open"`
 	Created time.Time `json:"created"`
+	// State is how the ask ended (open, done, yes, answered, parked, ignored); ClosedBy who closed it, empty when zmina
+	// did.
+	State    string `json:"state"`
+	ClosedBy string `json:"closed_by,omitempty"`
 }
 
 func (q itemAsk) decided() bool { return q.Kind == string(asks.Decided) }
@@ -250,7 +254,8 @@ func (x *itemIndex) card(id string) itemCard {
 
 		c.Found, c.Kind, c.Talk, c.Since = true, "ask", a.Role, a.Created
 		c.Ask = &itemAsk{ID: a.ID, Kind: string(a.Kind), Title: a.Title, Text: a.Text, Rec: a.Rec, Reason: a.Reason,
-			Instead: a.Instead, Role: a.Role, Task: a.Task, Project: a.Project, Open: a.Open(), Created: a.Created}
+			Instead: a.Instead, Role: a.Role, Task: a.Task, Project: a.Project, Open: a.Open(), Created: a.Created,
+			State: string(a.State), ClosedBy: a.ClosedBy}
 		if c.Ask.Project == "" && a.Task != "" {
 			c.Ask.Project = x.tasks[a.Task].Where()
 		}
@@ -263,7 +268,8 @@ func (x *itemIndex) card(id string) itemCard {
 		switch {
 		case a.Open():
 			c.State, c.Decision = "need", askDecision(a)
-			c.Overdue = x.now.Sub(a.Created) > overdueAfter
+			// A decided item waits on nobody, so it is never late.
+			c.Overdue = a.Kind != asks.Decided && x.now.Sub(a.Created) > overdueAfter
 		case a.State == asks.Parked:
 			c.State, c.Since = "parked", a.Updated
 		default:

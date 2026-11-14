@@ -35,6 +35,8 @@ class FakeElement {
   replaceChildren(...xs) { this.text = ""; this.children = []; this.append(...xs); }
   appendChild(x) { this.append(x); return x; }
   remove() {}
+  before() {}
+  insertBefore(x) { this.append(x); return x; }
   setAttribute(k, v) { this.attrs[k] = String(v); }
   getAttribute(k) { return this.attrs[k] ?? null; }
   removeAttribute(k) { delete this.attrs[k]; }
@@ -70,6 +72,7 @@ const document = {
 };
 const store = {};
 const phone = process.argv[3] === "phone";
+const counts = process.argv[3] === "counts";
 const listeners = {};
 const media = { matches: phone, addEventListener() {} };
 const ctx = vm.createContext({
@@ -97,7 +100,7 @@ const ctx = vm.createContext({
 });
 
 // patch.js stands in as plain replacement: these cases read what is drawn, not how it is patched.
-if (phone) Object.assign(ctx, { patch: (el, kids) => el.replaceChildren(...kids), setText: (el, t) => { el.textContent = t; }, focusMark: () => null, refocus() {} });
+if (phone || counts) Object.assign(ctx, { patch: (el, kids) => el.replaceChildren(...kids), setText: (el, t) => { el.textContent = t; }, focusMark: () => null, refocus() {} });
 vm.runInContext(fs.readFileSync(process.argv[2], "utf8"), ctx, { filename: "app.js" });
 
 if (phone) {
@@ -213,7 +216,52 @@ if (process.argv[3] === "decided") {
       const row = askRow(it);
       rows[kind] = { buttons: cls(row, "q").map((b) => b.textContent), panel: cls(itemPanel(it, false), "pn").map((p) => p.textContent) };
     }
-    JSON.stringify({ rows, checks: [isCheck({ kind: "decided" }), isCheck({ kind: "decision" })] });
+    // Done on a decided item is only reviewed: nobody is sent anything; on a check it is sent to the dispatcher.
+    const acted = [];
+    act = (it, action, text, toast) => acted.push(it.kind + " " + action + ": " + toast);
+    for (const kind of ["decided", "check"]) done({ crew: "default", id: "A-1", kind });
+    JSON.stringify({ rows, acted, checks: [isCheck({ kind: "decided" }), isCheck({ kind: "decision" })] });
+  `, ctx);
+  process.stdout.write(out + "\n");
+  process.exit(0);
+}
+
+if (counts) {
+  // Decided items wait on nobody: with only those the title, the favicon and the readouts say nothing waits, they are
+  // their own last group, newest first, and on the phone they are not "yours by hand" nor counted among the waiting.
+  ctx.cls = cls;
+  ctx.byId = byId;
+  const out = vm.runInContext(`
+    const now = Date.now(), at = (min) => new Date(now - min * 60000).toISOString();
+    const text = (n) => (typeof n === "string" ? n : n.textContent);
+    const role = (r) => ({ role: r, state: "up", status: "idle", since: at(5), icon: "generic" });
+    const dec = (id, min) => ({ crew: "default", id, kind: "decided", title: "Call " + id, text: "Call " + id, reason: "why", role: "dev", created: at(min) });
+    const ask = { crew: "default", id: "A-9", kind: "decision", title: "Ship it?", text: "Ship it?", rec: "yes", role: "dispatcher", created: at(30) };
+    const check = { crew: "default", id: "A-8", kind: "check", title: "Sign in", text: "Sign in", role: "dispatcher", created: at(50) };
+    const draw = (todo) => {
+      snap = {
+        now: new Date(now).toISOString(), self: "", nodes: [], tints: {}, later: [], alarms: [], log: [], tasks: [], work: [], todo,
+        crews: [{ key: "default", name: "default", dispatcher: "dispatcher", last_tick: at(0), roles: [role("dispatcher"), role("dev")] }],
+      };
+      got = now;
+      filter = "all";
+      render();
+      const lists = phoneLists();
+      return {
+        title: document.title,
+        amber: byId.favicon.href.includes("circle"),
+        say: byId.say.children.map(text).join(""),
+        askHead: text(byId["ask-h"]),
+        decidedHidden: byId.decided.hidden,
+        decidedHead: text(byId["decided-h"]),
+        decidedRows: byId["decided-rows"].children.map((r) => r.dataset.k),
+        moveAsks: byId["move-asks"].children.map((r) => r.dataset.k),
+        moveDecHead: text(byId["move-dec-h"]),
+        moveDec: byId["move-dec"].children.map((r) => r.dataset.k),
+        phone: { waiting: lists.waiting.map((i) => i.id), hand: lists.hand.map((i) => i.id), decided: lists.decided.map((i) => i.id) },
+      };
+    };
+    JSON.stringify({ only: draw([dec("A-2", 90), dec("A-3", 10)]), mixed: draw([dec("A-2", 90), ask, check, dec("A-3", 10)]) });
   `, ctx);
   process.stdout.write(out + "\n");
   process.exit(0);
