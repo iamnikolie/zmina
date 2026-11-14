@@ -121,7 +121,7 @@ func TestTrimNeverFeedsItself(t *testing.T) {
 	*f.now = f.now.Add(time.Minute)
 	did := f.s.Tick()
 	assert.Contains(t, did, "dev: fills 110k right after a trim, over its context_max 100k; not trimmed again in "+
-		"this conversation — raise context_max")
+		"this conversation — zmina restart dev --fresh starts it again from its note")
 
 	*f.now = f.now.Add(3 * time.Hour)
 	sess.StatusUpdatedAt = f.now.Add(-time.Hour).UnixMilli()

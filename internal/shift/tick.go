@@ -285,6 +285,10 @@ func (s *Shift) Tick() []string {
 			if line := s.trim(name, r, now, held[name]); line != "" {
 				did = append(did, line)
 			}
+
+			if line := s.longTalk(name, r, now, held[name]); line != "" {
+				did = append(did, line)
+			}
 		}
 	}
 
@@ -374,7 +378,7 @@ func (s *Shift) trim(name string, r *crew.Role, now time.Time, tasks []string) s
 		}
 		if used > limit {
 			note := fmt.Sprintf("%s: fills %s right after a trim, over its context_max %s; not trimmed again in "+
-				"this conversation — raise context_max", name, Tokens(used), Tokens(limit))
+				"this conversation — zmina restart %s --fresh starts it again from its note", name, Tokens(used), Tokens(limit), name)
 			s.log(name, "trim-stuck", "", note)
 			s.addNotes([]string{note})
 

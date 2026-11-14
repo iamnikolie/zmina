@@ -148,6 +148,8 @@ type Asks interface {
 	Close(id string, st asks.State, answer string, now time.Time) (asks.Ask, error)
 	// Pending is every ask still open (the beat closes the item of a hold that is gone).
 	Pending() []asks.Ask
+	// Scan is every ask, closed ones too, with the files that did not read (what was said once is not said again).
+	Scan() (items []asks.Ask, problems []string, err error)
 }
 
 // Events is the shift's history.
