@@ -319,7 +319,7 @@ func TestTaskDoneAgainChangesNothing(t *testing.T) {
 		out, _, err := zm(t, crewFile, append([]string{"task", "done", "T-1"}, force...)...)
 		require.NoError(t, err)
 		assert.Contains(t, out, "T-1 · dev · done already")
-		assert.Contains(t, out, "nothing changed")
+		assert.Contains(t, out, "not closed again")
 	}
 
 	after, _, err := zm(t, crewFile, "log", "--json")

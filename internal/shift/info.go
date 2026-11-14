@@ -48,29 +48,19 @@ func (s *Shift) markInfo(text string, now time.Time) {
 	}
 }
 
-// markQuiet makes a line an info line that waits long for a line to go with (infoRideQuiet).
+// markQuiet makes a line an info line that waits long for a line to go with: infoRideQuiet, not infoRide. It is
+// kept as an info line queued that much later, so its ride ends then: the state keeps no second mark, and a zmina
+// that knows nothing of quiet lines reads it as it is meant.
 func (s *Shift) markQuiet(text string, now time.Time) {
-	if !s.Crew.InfoLinesOn() {
-		return
-	}
-
-	s.markInfo(text, now)
-
-	if s.State.InfoQuiet == nil {
-		s.State.InfoQuiet = map[string]bool{}
-	}
-
-	s.State.InfoQuiet[text] = true
+	s.markInfo(text, now.Add(infoRideQuiet-infoRide))
 }
 
-// infoRideOf is how long an info line waits for a line to go with.
-func (s *Shift) infoRideOf(text string) time.Duration {
-	if s.State.InfoQuiet[text] {
-		return infoRideQuiet
-	}
+// ridingOnly reports whether all that waits for the dispatcher is info lines still waiting for a line to go with:
+// nothing of it is due, so it holds nothing up (a trim of the dispatcher, the courier's look at a gated queue).
+func (s *Shift) ridingOnly(now time.Time) bool { return s.infoWaits(s.State.Signals, now) }
 
-	return infoRide
-}
+// RidingOnly is ridingOnly at the shift's clock, for the courier.
+func (s *Shift) RidingOnly() bool { return s.ridingOnly(s.Now()) }
 
 // isInfo reports whether a queued signal or note is an info line.
 func (s *Shift) isInfo(text string) bool {
@@ -102,8 +92,8 @@ func (s *Shift) splitInfo(sigs []string) (act, info []string) {
 }
 
 // infoWaits reports whether all that waits for the dispatcher — these signals and the notes — is info lines the
-// each of which was queued less than its ride ago (infoRide, infoRideQuiet for a quiet one): they wait for a line
-// to go with. One that has waited its ride out takes the others with it.
+// each of which has not waited its ride out (infoRide; infoRideQuiet for a quiet one, see markQuiet): they wait for
+// a line to go with. One that has waited its ride out takes the others with it.
 func (s *Shift) infoWaits(sigs []string, now time.Time) bool {
 	all := append(slices.Clone(sigs), s.State.Notes...)
 	if len(all) == 0 {
@@ -111,7 +101,7 @@ func (s *Shift) infoWaits(sigs []string, now time.Time) bool {
 	}
 
 	for _, text := range all {
-		if !s.isInfo(text) || now.Sub(s.State.Info[text]) >= s.infoRideOf(text) {
+		if !s.isInfo(text) || now.Sub(s.State.Info[text]) >= infoRide {
 			return false
 		}
 	}
@@ -174,7 +164,6 @@ func (s *Shift) pruneInfo() {
 	for text := range s.State.Info {
 		if !waits(text) {
 			delete(s.State.Info, text)
-			delete(s.State.InfoQuiet, text)
 		}
 	}
 }

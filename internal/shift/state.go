@@ -78,9 +78,6 @@ type State struct {
 	// it waits in Signals or Notes, with when it was queued. A line that is not here is one to act on: a state
 	// written before the classes has none, and every line of it waits for its ack as it did.
 	Info map[string]time.Time `json:"info,omitempty"`
-	// InfoQuiet marks the info lines that wait long for a line to go with (infoRideQuiet): a release that parked
-	// nothing, a keep: always role started again. A state written before it has none: its info lines wait as before.
-	InfoQuiet map[string]bool `json:"info_quiet,omitempty"`
 	// Unreadable is when the dispatcher was told that a task or ask file does not read, by "tasks/T-5.json" (zero:
 	// logged, not told yet), so each breakage is logged and told once.
 	Unreadable map[string]time.Time `json:"unreadable,omitempty"`

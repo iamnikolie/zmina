@@ -600,8 +600,22 @@ func TestQuietInfoLinesWaitForALineToGoWith(t *testing.T) {
 	line := f.s.deliver(*f.now)
 	assert.Contains(t, line, "acme/site!12 approved")
 	assert.Contains(t, line, "FYI released designer after 34m idle")
+}
 
-	// The mark does not outlive the line.
-	f.s.pruneInfo()
-	assert.True(t, f.s.State.InfoQuiet[note] == f.s.isInfo(note), "the quiet mark goes when the line's class does")
+// A quiet line that rides holds no trim of the dispatcher up, and the courier does not look again for it; a line
+// that is due does both.
+func TestRidingInfoLinesHoldNothingUp(t *testing.T) {
+	f, _ := nativeFixture(t, crewYAML)
+	upNative(t, f, "dispatcher")
+
+	assert.False(t, f.s.ridingOnly(*f.now), "nothing waits")
+
+	f.s.State.Notes = []string{"harvester: started again (keep: always)"}
+	f.s.markQuiet("harvester: started again (keep: always)", *f.now)
+	assert.True(t, f.s.ridingOnly(f.now.Add(time.Hour)))
+	assert.False(t, f.s.ridingOnly(f.now.Add(infoRideQuiet)), "its ride is over: it is due")
+
+	_, err := f.s.Note("mrs", "acme/site!12 approved", false)
+	require.NoError(t, err)
+	assert.False(t, f.s.ridingOnly(f.now.Add(time.Hour)), "a line to act on waits")
 }

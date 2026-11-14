@@ -656,7 +656,8 @@ func queueGated(s *shift.Shift, waiting []string) bool {
 			return true
 		}
 
-		if name == s.Crew.Dispatcher && len(s.State.Signals)+len(s.State.Notes) > 0 {
+		// Info lines still waiting for a line to go with are not due: nothing to look again for.
+		if name == s.Crew.Dispatcher && len(s.State.Signals)+len(s.State.Notes) > 0 && !s.RidingOnly() {
 			return true
 		}
 	}

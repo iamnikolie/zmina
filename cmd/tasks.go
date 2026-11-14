@@ -813,8 +813,13 @@ func (a *app) alreadyDone(id string) error {
 			return err
 		}
 
-		fmt.Fprintf(a.out, "%s · %s · %s already (closed %s): nothing changed\n", t.ID, t.Role, t.Status(),
-			t.Updated.Local().Format("Jan 2 15:04"))
+		at := t.Updated
+		if t.Closed != nil && !t.Closed.At.IsZero() {
+			at = t.Closed.At
+		}
+
+		fmt.Fprintf(a.out, "%s · %s · %s already (closed %s): not closed again\n", t.ID, t.Role, t.Status(),
+			at.Local().Format("Jan 2 15:04"))
 
 		return nil
 	})
@@ -839,10 +844,6 @@ func (a *app) setTask(id string, st task.State, o taskChange) error {
 
 	if errors.As(err, &envFault) {
 		return a.checkEnvFault(envFault)
-	}
-
-	if errors.Is(err, ledger.ErrAlreadyDone) {
-		return a.alreadyDone(id)
 	}
 
 	if err != nil {
