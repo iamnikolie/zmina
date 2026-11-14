@@ -42,6 +42,7 @@ is in the repository's `examples/`.
 
 ```yaml
 namespace: ~/.claude                     # CLAUDE_CONFIG_DIR of Claude roles (default ~/.claude; init writes yours)
+owner: [alex, alex.k]                    # the names the owner goes by in --on: a task waiting on one of them is on his todo
 dir: ~/work                              # default working directory (default ~)
 # claude: /opt/bin/claude                # the claude binary (default: claude from PATH)
 agents: ~/.zmina/agents                  # <role>/AGENT.md boot documents (default: agents/ next to this file)
@@ -1477,7 +1478,8 @@ else: `task set <id> waiting --on <who>`.
 
 One list of what only the owner can answer: the dispatcher's **asks** — a `decision` (a question with its
 recommendation and a one-line reason) or a `check` (something only the owner can do: "sign in and publish the test
-board") — and every task in state `waiting`, with its note. One file per ask in `~/.zmina/asks/A-<n>.json`, written
+board") — and every task in state `waiting`, with its note (one that waits `--on` a name: only when the crew
+file's `owner:` lists that name as the owner's, any case, with or without `@`). One file per ask in `~/.zmina/asks/A-<n>.json`, written
 alone like tasks. An ask file that does not read is on no list: `doctor` names it (`asks` line) and the ticker tells
 the dispatcher once, as for tasks. An ask with `--task T-n` about a waiting task is that task's question: the two show as one item
 (the ask's question and recommendation, the task's note). Order: items that block a role first (a waiting task
