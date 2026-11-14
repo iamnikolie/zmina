@@ -2599,18 +2599,20 @@ be removed with `zmina seat rm` while it does.
 for each step. Off when the key is absent, and then nothing here happens. `auto_review: {rounds: 3}` sets how many reviews of one
 task zmina makes (1 to 5, default 2); another key in the block is an error. It needs a `review:` rule in `routes:`, which says who
 reviews (see Routes); without one the key does nothing, and `zmina doctor` says so in a `review` line (with one, the line names the
-reviewers).
+reviewers). Take the key or the rule away while a review is open and the loop stops with it: nothing it did is undone, and none of
+its lines is held back any more.
 
 - **Due.** A role (`$ZMINA_ROLE`) that closes as done a task with a worktree, which is no review itself, makes its closing "review
-  due" (`task show`: `review: round 1 due`). The owner's own close, the dispatcher's, a task with no worktree and a close past the
-  rounds are as they always were. A seat whose tools carry no `$ZMINA_ROLE` (a shared Codex daemon's) closes as the owner's hand: no review.
+  due" (`task show`: `review: round 1 due`). The packet of such a task tells the worker to close it after saving its result: the
+  review starts on the close. The owner's own close, the dispatcher's, a task with no worktree and a close past the rounds are as
+  they always were. A seat whose tools carry no `$ZMINA_ROLE` (a shared Codex daemon's) closes as the owner's hand: no review.
 - **The review task.** zmina makes it for the seat the review rule picks: `first` for the first review, `again` for the later rounds,
   never the author or a copy of the author. Only the review rule answers: when it finds no seat, or the busy rule gives the work to
-  the author's own seat, nobody is picked (stalled, below). A copy the routes name is not made: the task goes to its base seat and
-  queues. The task has the repo and project of the work and no worktree of its own, a text that says what was asked, the criteria,
-  the worktree and the `git diff` to read, the author's result and check, and (round 2 on) the review before it; and it is handed out,
-  a down seat being started on it as `up --task` does. A seat is not started while the shift is stopped, when it is asleep or
-  broken, when its plan is held, or when it holds other work: the usual note about a task a down role never took follows. Events:
+  the author's own seat, nobody is picked (waits for a seat, below). A copy the routes name is not made: the task goes to its base
+  seat and queues. The task has the repo and project of the work and no worktree of its own, a text that says what was asked, the
+  criteria, the worktree and the `git diff` to read, the author's result and check, and (round 2 on) the review before it; and it is
+  handed out, a down seat being started on it as `up --task` does. A seat is not started while the shift is stopped, when it is asleep
+  or broken, when its plan is held, or when it holds other work: the usual note about a task a down role never took follows. Events:
   `route` and `review`.
 - **The verdict.** The reviewer closes the task: `zmina task done T-15 --verdict accept|reject [--note "<one line>"] [--result <file>]`.
   A review closed as done with no `--verdict` is refused; a reject needs a note or a saved result; a second, different verdict is
@@ -2620,19 +2622,34 @@ reviewers).
   accepted in review T-15 (round 1): <note> (zmina task show T-14)`. The task stays done; merging is the dispatcher's.
 - **Reject.** zmina reopens the author's task with the reviewer's note (`review T-15 by reviewer rejected this (round 1 of 2): …`),
   hands it out again and starts the author's seat when it is down. The author fixes it in the same worktree and closes it again: the
-  close is reviewed again, the next round. The dispatcher hears nothing. Rejected in the last round: one note to act on, `review of
-  T-14 did not converge after 2 rounds: …`, and the task stays done, as the author left it. A reject of a task whose worktree is gone,
-  or that is no longer waiting on the review (the owner reopened it meanwhile), reopens nothing and is told once.
-- **Stalled.** No seat takes the review, or its task was closed without a verdict, dropped or parked: one note to act on, once,
-  `review of T-14 has no verdict: <why>; zmina task new --route --kind review --of T-14 …`. While no seat takes it the ticker asks
-  again each beat, so the review is made when a seat is free; one closed without a verdict is not made again by itself.
-- **Where it lives.** In the task files, nothing in `state.json`: the review task has `review: {of, round, verdict}`, and the author's
-  closing `review: {round, task}`. One step does it all and does nothing twice: it runs inside the close (also when the task was
-  done already) and in the ticker's beat, which finds what a crash left. A task file with a review due keeps its worktree through
-  `task gc` until the review is closed. The round is one over the reviews made of the task.
-- **What the dispatcher stops hearing.** With the key on, the result-ready line of a worktree task waits for its close, and a task
-  closed with its review due, and a review task, give neither that line nor `T-n done`: the lines above are the news. A task the
-  owner or the dispatcher closes, or a close past the rounds, is told as before. Do not make review tasks for worktree tasks yourself.
+  close is reviewed again, the next round. When the seat cannot be started (the reasons above) the task stays open and the
+  dispatcher gets one note, once: `T-14 reopened after a reject in review T-15, dev not started: <why>; zmina up dev --task T-14`.
+  Otherwise the dispatcher hears nothing. Rejected in the last round: one note to act on, `review of T-14 did not converge after 2
+  rounds: …`, and the task stays done, as the author left it. A reject of a task whose worktree is gone, or that is no longer waiting
+  on the review (the owner reopened it meanwhile), reopens nothing and is told once.
+- **Waits for a seat.** No seat takes the review: one note to act on, once, `review of T-14 waits for a seat: <why>; zmina makes it
+  when one is free, and gives up after 24h (…)`. Do not make the review by hand: the one zmina makes would come on top of it. The
+  ticker asks again each beat for 24 hours from the close, and `task gc` leaves the worktree meanwhile; then one last note,
+  `review of T-14 given up: no seat took it in 24h`, and the due review is dropped from the closing, so that nothing waits on it and
+  the worktree is collected as any. The owner or the dispatcher ends it sooner by closing the task again with something to say,
+  `zmina task done T-14 --note "<why>"` (a bare `task done` on a done task changes nothing, and a role's does not end the review).
+- **No verdict.** A review that was closed without one, dropped or parked: one note to act on, once, `review of T-14 has no verdict:
+  …`, naming the command to make a review by hand (it is outside the loop: it has no review of its own to be closed on, and zmina
+  makes no second one by itself). A review reopened after that (`zmina task set T-15 open`) has its verdict acted on as any. A
+  parked review taken from the later list (`later take L-n <role>`) is the same review again, same round, with its text for its new id,
+  and the task it is of follows it; taken by the author's own seat, or with the key off, it is a plain task.
+- **Where it lives.** The round and what is due are in the task files: the review task has `review: {of, round, verdict}`, and the
+  author's closing `review: {round, task}`; the round is one over the highest round made of the task. What the loop has already told
+  the dispatcher is kept in `state.json`'s `record_notified` (an existing map: `review/<id>`, `review-noverdict/<id>`,
+  `review-stalled/<task>/<round>`, `review-reopened/<task>/<round>`, `review-giveup/<task>/<round>`), so no line is told twice and no
+  field was added. One step does it all and does nothing twice: it runs inside the close (also when the task was done already)
+  and in the ticker's beat, which finds what a crash left.
+- **What the dispatcher stops hearing.** With the loop on, the result-ready line of a worktree task waits for its close (at most 30
+  minutes after the result was saved: then it goes, as it does without the loop; a task waiting on the owner is never held), and a
+  task closed with its review due, and a review task, give neither that line nor `T-n done`: the lines above are the news. A task the
+  owner or the dispatcher closes, or a close past the rounds, is told as before. With the key off, or no review rule, nothing is held
+  back: a review task still on the ledger closes as any task, its line says the verdict (`reviewer: T-15 done (accept): <note>`).
+  Do not make review tasks for worktree tasks yourself.
 
 Every zmina that works the crew's directory (ticker, courier, roles' sessions, the owner's shell) must be this build or newer before
 `auto_review` is set: an older one only warns of the unknown key, and drops `review` from a task file it rewrites, so a review task

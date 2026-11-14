@@ -92,8 +92,9 @@ func (l *Ledger) reviewDue(t task.Task, c Change) (*task.ReviewDue, error) {
 	return &task.ReviewDue{Round: round}, nil
 }
 
-// reviewRound is the round the next review of task id is: one over the reviews made of it, whatever became of them, so that
-// no two reviews of a task have the same round and the one a closing is due is found by it.
+// reviewRound is the round the next review of task id is: one over the highest round of the reviews made of it, whatever
+// became of them, so that no two stamps have the same round and the review a closing is due is found by it. A review taken
+// up again from the later list keeps the round it had.
 func (l *Ledger) reviewRound(id string) (int, error) {
 	all, err := l.Store.All()
 	if err != nil {
@@ -104,7 +105,7 @@ func (l *Ledger) reviewRound(id string) (int, error) {
 
 	for _, t := range all {
 		if r := t.Review; r != nil && r.Of == id {
-			round++
+			round = max(round, r.Round+1)
 		}
 	}
 

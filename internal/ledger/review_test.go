@@ -111,6 +111,24 @@ func TestNoReviewIsDueOncePastTheRounds(t *testing.T) {
 	assert.Nil(t, got.Closed.Review)
 }
 
+// The next round is one over the highest round made, so a review taken up again with the round it had costs none.
+func TestTheRoundIsOneOverTheHighestMade(t *testing.T) {
+	l, _, tk := reviewFixture(t)
+
+	madeReview(t, l, tk.ID, 1)
+	madeReview(t, l, tk.ID, 1)
+
+	got, err := l.reviewRound(tk.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 2, got)
+
+	madeReview(t, l, tk.ID, 2)
+
+	got, err = l.reviewRound(tk.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 3, got)
+}
+
 // A done task goes back to open through Set, which takes its closing and so its review off: the loop's reject relies on it.
 func TestReopeningADoneTaskClearsItsClosing(t *testing.T) {
 	l, _, tk := reviewFixture(t)
@@ -134,25 +152,49 @@ func TestReopeningADoneTaskClearsItsClosing(t *testing.T) {
 	assert.Equal(t, 1, again.Closed.Review.Round, "no review was made in between, so it is still round 1")
 }
 
-// Closing a done task again, to say more, keeps the review it is due, and with it the review it names.
-func TestDoneAgainKeepsTheReviewDue(t *testing.T) {
+// A role closing a done task again, to say more, keeps the review it is due, and with it the review it names. The owner and the
+// dispatcher doing it take the loop into their hands: the review is dropped, so nothing waits on one and the worktree is free to
+// collect. Closing it again with nothing new changes nothing, whoever does it.
+func TestDoneAgainKeepsTheReviewDueForARoleAndEndsItForTheOwnerAndTheDispatcher(t *testing.T) {
+	for who, ends := range map[string]bool{"dev": false, "boss": true, Hand: true} {
+		l, _, tk := reviewFixture(t)
+
+		_, err := l.Set(tk.ID, Change{State: task.Done, By: "dev"})
+		require.NoError(t, err)
+
+		read, _ := l.Store.Get(tk.ID)
+		read.Closed.Review.Task = "T-9"
+		require.NoError(t, l.Store.Put(read))
+
+		_, err = l.Set(tk.ID, Change{State: task.Done, By: who})
+		require.ErrorIs(t, err, ErrAlreadyDone, who)
+
+		got, err := l.Set(tk.ID, Change{State: task.Done, By: who, Note: "merged"})
+		require.NoError(t, err, who)
+		assert.Equal(t, who, got.Closed.By)
+
+		if ends {
+			assert.Nil(t, got.Closed.Review, who)
+
+			continue
+		}
+
+		require.NotNil(t, got.Closed.Review, who)
+		assert.Equal(t, task.ReviewDue{Round: 1, Task: "T-9"}, *got.Closed.Review)
+	}
+}
+
+// A done task closed again by the owner that had no review due says nothing of one.
+func TestDoneAgainByTheOwnerWithNoReviewDueIsAsItWas(t *testing.T) {
 	l, _, tk := reviewFixture(t)
+	l.AutoReview = 0
 
 	_, err := l.Set(tk.ID, Change{State: task.Done, By: "dev"})
 	require.NoError(t, err)
 
-	read, _ := l.Store.Get(tk.ID)
-	read.Closed.Review.Task = "T-9"
-	require.NoError(t, l.Store.Put(read))
-
-	got, err := l.Set(tk.ID, Change{State: task.Done, By: "boss", Note: "merged"})
+	got, err := l.Set(tk.ID, Change{State: task.Done, By: Hand, Note: "merged"})
 	require.NoError(t, err)
-	assert.Equal(t, "boss", got.Closed.By)
-	require.NotNil(t, got.Closed.Review)
-	assert.Equal(t, task.ReviewDue{Round: 1, Task: "T-9"}, *got.Closed.Review)
-
-	_, err = l.Set(tk.ID, Change{State: task.Done, By: "dev"})
-	require.ErrorIs(t, err, ErrAlreadyDone)
+	assert.Nil(t, got.Closed.Review)
 }
 
 func TestAReviewTaskClosesOnAVerdict(t *testing.T) {

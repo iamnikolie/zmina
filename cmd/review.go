@@ -6,8 +6,10 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/iamnikolie/zmina/internal/donecheck"
+	"github.com/iamnikolie/zmina/internal/later"
 	"github.com/iamnikolie/zmina/internal/ledger"
 	"github.com/iamnikolie/zmina/internal/route"
 	"github.com/iamnikolie/zmina/internal/shift"
@@ -26,19 +28,25 @@ const (
 	reviewTitleMax = 200
 	// reviewNoteMax bounds a reviewer's note where it is told on.
 	reviewNoteMax = 300
+	// reviewSeatWait is how long the ticker keeps asking for a seat for a review that none took, from the close that made it due.
+	reviewSeatWait = 24 * time.Hour
 )
 
-// reviewAct is what the loop has to do for a done task whose review is due: make the review, say it has no verdict (stall),
-// or act on the verdict it came to (accept, reject). link says the review exists and the closing does not name it yet.
+// reviewAct is what the loop has to do for a done task whose review is due: make the review, give it up when no seat took it in
+// reviewSeatWait, say it has no verdict (stall), or act on the verdict it came to (accept, reject). link says the review exists
+// and the closing does not name it yet.
 type reviewAct struct {
 	do   string
 	rev  task.Task
 	link bool
 }
 
-// reviewToldKey names what the loop told the dispatcher of a review, or needs not tell, in RecordNotified; reviewStalledKey what
-// it told of a round of a task that no seat took.
+// reviewToldKey names, in RecordNotified, that the loop dealt with the verdict of a review; reviewNoVerdictKey that it told of a review
+// closed without one, so a review reopened after that still has its verdict acted on; reviewStalledKey that it told of a round of a
+// task that no seat took.
 func reviewToldKey(rev task.Task) string { return "review/" + rev.ID }
+
+func reviewNoVerdictKey(rev task.Task) string { return "review-noverdict/" + rev.ID }
 
 func reviewStalledKey(root task.Task) string {
 	return "review-stalled/" + root.ID + "/" + strconv.Itoa(root.Closed.Review.Round)
@@ -62,6 +70,10 @@ func reviewDecide(s *shift.Shift, root task.Task, byID map[string]task.Task, rou
 	if due.Task == "" {
 		// A crash between making the review and naming it on the closing leaves it findable by its round.
 		if rev, ok = reviewMade(byID, root.ID, due.Round); !ok {
+			if s.Now().Sub(root.Closed.At) >= reviewSeatWait {
+				return reviewAct{do: "giveup"}
+			}
+
 			return reviewAct{do: "make"}
 		}
 
@@ -73,7 +85,7 @@ func reviewDecide(s *shift.Shift, root task.Task, byID map[string]task.Task, rou
 	switch {
 	case rev.State.Active():
 	case rev.Review == nil || rev.Review.Verdict == "":
-		if !told(reviewToldKey(rev)) {
+		if !told(reviewNoVerdictKey(rev)) {
 			act.do = "stall"
 		}
 	case rev.Review.Verdict == task.VerdictAccept:
@@ -87,15 +99,24 @@ func reviewDecide(s *shift.Shift, root task.Task, byID map[string]task.Task, rou
 	return act
 }
 
-// reviewMade is the review of task id in a round, if one was made.
+// reviewMade is the review of task id in a round, if one was made; the newest when a review taken up again from the later list
+// has the round of the one it replaced.
 func reviewMade(byID map[string]task.Task, id string, round int) (task.Task, bool) {
+	var found task.Task
+
 	for _, t := range byID {
-		if r := t.Review; r != nil && r.Of == id && r.Round == round {
-			return t, true
+		if r := t.Review; r != nil && r.Of == id && r.Round == round && (found.ID == "" || taskNumber(t.ID) > taskNumber(found.ID)) {
+			found = t
 		}
 	}
 
-	return task.Task{}, false
+	return found, found.ID != ""
+}
+
+func taskNumber(id string) int {
+	n, _ := strconv.Atoi(strings.TrimPrefix(id, "T-"))
+
+	return n
 }
 
 // reviewStep is the loop's one step for task id, a task a role closed or a review that was closed: what is due for it is done,
@@ -148,8 +169,10 @@ func (a *app) reviewStep(s *shift.Shift, id string) (said []string, err error) {
 	switch act.do {
 	case "make":
 		return a.startReview(s, root, byID, rounds)
+	case "giveup":
+		return a.reviewGivenUp(s, root)
 	case "stall":
-		return a.reviewStalled(s, root, reviewToldKey(act.rev), "its review was closed without a verdict ("+act.rev.ID+")")
+		return a.reviewNoVerdict(s, root, act.rev)
 	case "accept":
 		return a.reviewAccepted(s, root, act.rev)
 	case "reject":
@@ -169,7 +192,7 @@ func (a *app) reviewLoop(s *shift.Shift, id string) {
 	}
 
 	if err != nil {
-		fmt.Fprintf(a.err, "zmina: warning: review of %s: %s (the ticker tries again)\n", id, refusalReason(err))
+		fmt.Fprintf(a.err, "zmina: warning: review of %s: %s (zmina task show says where the review stands)\n", id, refusalReason(err))
 	}
 }
 
@@ -248,14 +271,14 @@ func (a *app) startReview(s *shift.Shift, root task.Task, byID map[string]task.T
 
 	switch {
 	case err != nil:
-		return a.reviewStalled(s, root, reviewStalledKey(root), "no seat takes it: "+refusalReason(err))
+		return a.reviewWaits(s, root, "no seat takes it: "+refusalReason(err))
 	case pick.d.Rule != route.Review.Number():
 		// The review rule found no seat and the routes went on (to the pool, which takes anything): a review is the
 		// review rule's, so it waits for its seats.
-		return a.reviewStalled(s, root, reviewStalledKey(root), "no seat takes it: "+reviewNoSeat(pick.d))
+		return a.reviewWaits(s, root, "no seat takes it: "+reviewNoSeat(pick.d))
 	case route.Base(pick.role) == route.Base(root.Role):
 		// A busy seat gives way to a free one of its plan (the routes' rule 7), and that may be the author.
-		return a.reviewStalled(s, root, reviewStalledKey(root), "the routes pick "+pick.role+", the seat that did the work")
+		return a.reviewWaits(s, root, "the routes pick "+pick.role+", the seat that did the work")
 	}
 
 	// A new copy is never started for a review: the task goes to its seat and queues behind its work.
@@ -263,26 +286,16 @@ func (a *app) startReview(s *shift.Shift, root task.Task, byID map[string]task.T
 		pick.role = route.Base(pick.role)
 	}
 
-	// The review before this one, when it rejected the work: this one is told to check its notes.
-	prev, _ := reviewMade(byID, root.ID, round-1)
-	if prev.Review == nil || prev.Review.Verdict != task.VerdictReject {
-		prev = task.Task{}
-	}
-
-	crewCmd := reviewZmina(s)
-
 	t, pane, err := a.openTask(s, pick, ledger.NewTask{
-		Title:   "Review of " + root.ID + ": " + shift.QuoteN(root.Headline(), reviewTitleMax),
-		Note:    fmt.Sprintf("review of %s, round %d of %d", root.ID, round, rounds),
-		Repo:    root.Repo,
-		Project: root.Project,
-		Review:  &task.Review{Of: root.ID, Round: round},
-		AskedFor: func(id string) string {
-			return reviewAsked(reviewText{ID: id, Of: root, Round: round, Rounds: rounds, Prev: prev, Crew: crewCmd})
-		},
+		Title:    reviewTitle(root),
+		Note:     fmt.Sprintf("review of %s, round %d of %d", root.ID, round, rounds),
+		Repo:     root.Repo,
+		Project:  root.Project,
+		Review:   &task.Review{Of: root.ID, Round: round},
+		AskedFor: reviewAskedFor(s, root, byID, round, rounds),
 	})
 	if err != nil && t.ID == "" {
-		return a.reviewStalled(s, root, reviewStalledKey(root), "its task could not be made: "+refusalReason(err))
+		return a.reviewWaits(s, root, "its task could not be made: "+refusalReason(err))
 	}
 
 	s.Log(t.Role, "review", t.ID, fmt.Sprintf("round %d of %d: %s of %s (rule %d: %s)", round, rounds, t.ID, root.ID, pick.d.Rule, pick.d.Why))
@@ -291,13 +304,80 @@ func (a *app) startReview(s *shift.Shift, root task.Task, byID map[string]task.T
 		return nil, lerr
 	}
 
-	said := []string{fmt.Sprintf("review %s of %s for %s, round %d of %d", t.ID, root.ID, t.Role, round, rounds)}
+	said := fmt.Sprintf("review %s of %s for %s, round %d of %d", t.ID, root.ID, t.Role, round, rounds)
 
 	if err != nil {
-		return said, err
+		return []string{said}, err
 	}
 
-	return said, a.handTo(s, t, pane)
+	// A seat that is not started has the task on the ledger: the ticker tells the dispatcher of a task a down role never took.
+	if why := a.handTo(s, t, pane); why != "" {
+		said += "; " + t.Role + " is not started: " + why
+	}
+
+	return []string{said}, nil
+}
+
+// reviewTitle is the title of the review of root.
+func reviewTitle(root task.Task) string {
+	return "Review of " + root.ID + ": " + shift.QuoteN(root.Headline(), reviewTitleMax)
+}
+
+// reviewAskedFor builds the text of the review of root in a round once the review has its id. The review before it is named when
+// it rejected the work: this one is told to check its notes.
+func reviewAskedFor(s *shift.Shift, root task.Task, byID map[string]task.Task, round, rounds int) func(id string) string {
+	prev, _ := reviewMade(byID, root.ID, round-1)
+	if prev.Review == nil || prev.Review.Verdict != task.VerdictReject {
+		prev = task.Task{}
+	}
+
+	crewCmd := reviewZmina(s)
+
+	return func(id string) string {
+		return reviewAsked(reviewText{ID: id, Of: root, Round: round, Rounds: rounds, Prev: prev, Crew: crewCmd})
+	}
+}
+
+// continueReview makes the task a parked review becomes a review again (later take): the same round of the same task, its text
+// built afresh for the new task, and, once it is made, the closing of the task it is of names it (reviewLink), so that the loop
+// follows it and its verdict is acted on. It does so only while the task is waiting on that review and the seat is not the author's;
+// any other is taken as the plain task it then is. It returns the task it is a review of.
+func continueReview(s *shift.Shift, n *ledger.NewTask, it later.Item, role string) (task.Task, bool) {
+	rounds := s.Crew.AutoReviewRounds()
+	if rounds == 0 || it.From == "" {
+		return task.Task{}, false
+	}
+
+	from, err := s.Tasks.Get(it.From)
+	if err != nil || from.Review == nil {
+		return task.Task{}, false
+	}
+
+	root, err := s.Tasks.Get(from.Review.Of)
+	if err != nil || root.State != task.Done || root.Closed == nil || root.Closed.Review == nil || root.Closed.Review.Task != from.ID ||
+		route.Base(role) == route.Base(root.Role) {
+		return task.Task{}, false
+	}
+
+	all, err := s.Tasks.All()
+	if err != nil {
+		return task.Task{}, false
+	}
+
+	byID := make(map[string]task.Task, len(all))
+	for _, t := range all {
+		byID[t.ID] = t
+	}
+
+	n.Review = &task.Review{Of: root.ID, Round: from.Review.Round}
+	n.Title = reviewTitle(root)
+	n.AskedFor = reviewAskedFor(s, root, byID, from.Review.Round, rounds)
+
+	if n.Repo == "" {
+		n.Repo, n.Project = from.Repo, from.Project
+	}
+
+	return root, true
 }
 
 // reviewNoSeat is why the review rule did not answer, as the routes' trace says it.
@@ -311,60 +391,108 @@ func reviewNoSeat(d route.Decision) string {
 	return d.Headline()
 }
 
-// handTo gives task t to its role: the hand-out when the role is up, else the role is started on it.
-func (a *app) handTo(s *shift.Shift, t task.Task, pane tmux.Pane) error {
-	if pane.State == tmux.Up {
-		_, err := a.handOut(s, t)
-
-		return err
+// handTo gives task t to its role: the hand-out when the role is up, else the role is started on it. It says why the role is not
+// up on the task when it is not: a start that was skipped or failed, or a hand-out that failed.
+func (a *app) handTo(s *shift.Shift, t task.Task, pane tmux.Pane) string {
+	if pane.State != tmux.Up {
+		return a.startSeat(s, t)
 	}
 
-	return a.startSeat(s, t)
+	if _, err := a.handOut(s, t); err != nil {
+		return refusalReason(err)
+	}
+
+	return ""
 }
 
 // startSeat starts the role of task t on it, as zmina up --task does: in the task's worktree, on the conversation the task
-// recorded, with the task handed to it. It does not when the shift is stopped, the role is asleep or broken, its plan is held,
-// or it holds other work, which comes first: the ticker tells the dispatcher of a task a down role never took.
-func (a *app) startSeat(s *shift.Shift, t task.Task) error {
+// recorded, with the task handed to it. It says why it did not, "" when the role was started: the shift is stopped, the role is
+// asleep or broken, its plan is held, it holds other work (which comes first), or the start failed.
+func (a *app) startSeat(s *shift.Shift, t task.Task) string {
 	seat := t.Role
 
 	switch {
-	case !s.State.Stopped.IsZero(), !s.Asleep(seat).IsZero(), s.State.Role(seat).Broken, s.PlanHeld(seat, s.Now()):
-		return nil
+	case !s.State.Stopped.IsZero():
+		return "the shift is stopped"
+	case !s.Asleep(seat).IsZero():
+		return "it is asleep"
+	case s.State.Role(seat).Broken:
+		return "it is broken (zmina ls)"
+	case s.PlanHeld(seat, s.Now()):
+		return "its plan is held (zmina limits)"
 	}
 
 	for _, other := range s.Tasks.Active() {
 		if other.Role == seat && other.ID != t.ID {
-			return nil
+			return "it holds " + other.ID + ", which comes first"
 		}
 	}
 
-	if t.Worktree != "" {
-		if st, err := os.Stat(t.Worktree); err != nil || !st.IsDir() {
-			return fmt.Errorf("%s: its worktree %s is gone", t.ID, t.Worktree)
-		}
+	if t.Worktree != "" && !isDir(t.Worktree) {
+		return "its worktree " + t.Worktree + " is gone"
 	}
 
 	opts, _, err := s.TaskStart(seat, t, false, false)
+	if err == nil {
+		err = s.UpWith(seat, opts)
+	}
+
+	if err == nil {
+		_, err = s.HandTask(seat, t)
+	}
+
 	if err != nil {
-		return err
+		return refusalReason(err)
 	}
 
-	if err := s.UpWith(seat, opts); err != nil {
-		return fmt.Errorf("%s: %w", seat, err)
-	}
-
-	_, err = s.HandTask(seat, t)
-
-	return err
+	return ""
 }
 
-// reviewStalled tells the dispatcher once, for the key (reviewToldKey, reviewStalledKey), that the review of root has no verdict
-// and why, with the command that makes one by hand.
-func (a *app) reviewStalled(s *shift.Shift, root task.Task, key, why string) ([]string, error) {
-	text := fmt.Sprintf("review of %s has no verdict: %s; %s task new --route --kind review --of %s …", root.ID, why, reviewZmina(s), root.ID)
+// reviewWaits tells the dispatcher once, for each task and round, that no seat took its review: zmina makes it when a seat is free
+// and gives it up after reviewSeatWait, and the owner or the dispatcher ends it sooner by closing the task again. No command to
+// make a review by hand is offered: the one zmina makes would come on top of it.
+func (a *app) reviewWaits(s *shift.Shift, root task.Task, why string) ([]string, error) {
+	text := fmt.Sprintf("review of %s waits for a seat: %s; zmina makes it when one is free, and gives up after %s (%s task done %s --note \"<why>\" ends it sooner)",
+		root.ID, why, donecheck.Span(reviewSeatWait), reviewZmina(s), root.ID)
 
-	told, err := s.NoteOnce(key, "zmina", text, false)
+	told, err := s.NoteOnce(reviewStalledKey(root), "zmina", text, false)
+	if !told {
+		return nil, err
+	}
+
+	s.Log(root.Role, "review-stalled", root.ID, fmt.Sprintf("round %d: %s", root.Closed.Review.Round, why))
+
+	return []string{"review of " + root.ID + " waits for a seat: " + why}, err
+}
+
+// reviewGivenUp ends a review no seat took in reviewSeatWait: the dispatcher is told once and the due review is dropped from the
+// closing, so that nothing waits on it and the worktree is collected as any.
+func (a *app) reviewGivenUp(s *shift.Shift, root task.Task) ([]string, error) {
+	round := root.Closed.Review.Round
+	text := fmt.Sprintf("review of %s given up: no seat took it in %s; %s is done, nobody reviewed it", root.ID, donecheck.Span(reviewSeatWait), root.ID)
+
+	told, err := s.NoteOnce("review-giveup/"+root.ID+"/"+strconv.Itoa(round), "zmina", text, false)
+	if err != nil {
+		return nil, err
+	}
+
+	if told {
+		s.Log(root.Role, "review-stalled", root.ID, fmt.Sprintf("round %d: given up, no seat took it in %s", round, donecheck.Span(reviewSeatWait)))
+	}
+
+	root.Closed.Review = nil
+
+	return []string{"review of " + root.ID + " given up: no seat took it in " + donecheck.Span(reviewSeatWait)}, s.Tasks.Put(root)
+}
+
+// reviewNoVerdict tells the dispatcher once that a review was closed, dropped or parked without a verdict. A review the dispatcher
+// makes by hand is outside the loop (it has no review of its own to be closed on): the loop makes no second one by itself.
+func (a *app) reviewNoVerdict(s *shift.Shift, root, rev task.Task) ([]string, error) {
+	why := "its review " + rev.ID + " was closed without a verdict"
+	text := fmt.Sprintf("review of %s has no verdict: %s; one made by hand is outside the loop: %s task new --route --kind review --of %s …",
+		root.ID, why, reviewZmina(s), root.ID)
+
+	told, err := s.NoteOnce(reviewNoVerdictKey(rev), "zmina", text, false)
 	if !told {
 		return nil, err
 	}
@@ -424,14 +552,28 @@ func (a *app) reviewRejected(s *shift.Shift, root, rev task.Task, rounds int) ([
 	s.Log(rev.Role, "review-verdict", rev.ID, fmt.Sprintf("reject, round %d: %s", round, closeNote(rev)))
 	s.Log(root.Role, "review-reopened", root.ID, fmt.Sprintf("%s rejected it (round %d of %d)", rev.ID, round, rounds))
 
-	said := []string{fmt.Sprintf("review %s rejected %s: reopened for %s", rev.ID, root.ID, root.Role)}
+	said := fmt.Sprintf("review %s rejected %s: reopened for %s", rev.ID, root.ID, root.Role)
 
-	pane, err := s.Tmux.Probe(back.Role)
-	if err != nil {
-		return said, err
+	var notStarted string
+
+	if pane, err := s.Tmux.Probe(back.Role); err != nil {
+		notStarted = refusalReason(err)
+	} else {
+		notStarted = a.handTo(s, back, pane)
 	}
 
-	return said, a.handTo(s, back, pane)
+	if notStarted == "" {
+		return []string{said}, nil
+	}
+
+	// A reopened task keeps the mark that its old hand-out was accepted, so the ticker's note about a task a down role never took
+	// does not come: this is the one.
+	said += "; " + back.Role + " is not started: " + notStarted
+	text := fmt.Sprintf("%s reopened after a reject in review %s, %s not started: %s; %s", root.ID, rev.ID, back.Role, notStarted, a.upTaskLine(s, back))
+
+	_, err = s.NoteOnce("review-reopened/"+root.ID+"/"+strconv.Itoa(round), "zmina", text, false)
+
+	return []string{said}, err
 }
 
 // reviewFollowUp is the note the author's task is reopened with: who rejected it and why, where the notes are, and what to do.

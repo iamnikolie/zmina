@@ -18,7 +18,11 @@ func (s *Shift) TaskPacket(name string, t task.Task) (handoff.Packet, error) {
 	shape := s.Crew.HandoffFor(r)
 	t.Delivery = nil // Receipt metadata must not recursively change the packet identity.
 	t.Late = nil     // Nor do the reports sessions made late: they are no part of what the next session is handed.
-	return handoff.Packet{Version: 1, Role: name, Task: t, Shape: shape, Instructions: fmt.Sprintf("Read repository instructions. Run zmina --crew %s task show %s and confirm this task is still assigned to %s; use the latest note before working.\n", shellWord(s.Crew.Path), t.ID, name) + shape.Request("checkpoint or result") + criteriaRule(t) + fmt.Sprintf(ReportRule, shellWord(s.Crew.Path), t.ID)}, nil
+	instructions := fmt.Sprintf("Read repository instructions. Run zmina --crew %s task show %s and confirm this task is still assigned to %s; use the latest note before working.\n", shellWord(s.Crew.Path), t.ID, name) + shape.Request("checkpoint or result") + criteriaRule(t) + fmt.Sprintf(ReportRule, shellWord(s.Crew.Path), t.ID)
+	if s.reviewApplies(t) {
+		instructions += fmt.Sprintf(ReviewCloseRule, shellWord(s.Crew.Path), t.ID)
+	}
+	return handoff.Packet{Version: 1, Role: name, Task: t, Shape: shape, Instructions: instructions}, nil
 }
 
 // criteriaRule is the part of a packet's instructions that says what done means, when the task has criteria; a task
@@ -38,6 +42,11 @@ func criteriaRule(t task.Task) string {
 
 	return b.String()
 }
+
+// ReviewCloseRule is what a worker is told on top of ReportRule when the crew has its finished work reviewed (auto_review): the
+// review starts when the task is closed, and the dispatcher hears of the result then.
+const ReviewCloseRule = "Then close the task: zmina --crew %s task done %s. This crew has a finished task reviewed when it is " +
+	"closed, and the dispatcher hears of the result then.\n"
 
 // ReportRule is how a worker reports a finished task: the result goes to the ledger, which tells the dispatcher
 // the gist and the command that shows it. A message of the worker's own on top is the same news twice, each with

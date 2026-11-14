@@ -516,8 +516,14 @@ func (l *Ledger) apply(t task.Task, c Change, preflight bool) (task.Task, []stri
 			}
 
 			switch {
+			case alreadyDone && was != nil && (c.By == Hand || c.By == l.Dispatcher):
+				// The owner or the dispatcher closing it again, to say more, takes the loop into their hands: the review it is
+				// due is dropped, and nothing waits on one.
+				if was.Review != nil {
+					changes = append(changes, "review ended")
+				}
 			case alreadyDone && was != nil:
-				// Closing it again, to say more, keeps the review it is due.
+				// A role closing it again, to say more, keeps the review it is due.
 				t.Closed.Review = was.Review
 			case c.State == task.Done && !alreadyDone && !preflight:
 				if t.Closed.Review, err = l.reviewDue(t, c); err != nil {

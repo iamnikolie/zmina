@@ -489,12 +489,12 @@ func TestTheVerdictGate(t *testing.T) {
 	out, _, err := zm(t, file, "task", "done", "T-2", "--force")
 	require.NoError(t, err)
 	assert.Contains(t, out, "T-2 · reviewer · done\n")
-	assert.Contains(t, out, "review: review of T-1 has no verdict: its review was closed without a verdict (T-2)")
+	assert.Contains(t, out, "review: review of T-1 has no verdict: its review T-2 was closed without a verdict")
 	assert.NotNil(t, readTask(t, file, "T-2").Closed.Unchecked)
 
 	lines := dispatcherLines(t, file)
 	require.Len(t, lines, 1)
-	assert.Contains(t, lines[0], "zmina: review of T-1 has no verdict: its review was closed without a verdict (T-2); zmina --crew ")
+	assert.Contains(t, lines[0], "zmina: review of T-1 has no verdict: its review T-2 was closed without a verdict; one made by hand is outside the loop: zmina --crew ")
 	assert.Contains(t, lines[0], " task new --route --kind review --of T-1 …")
 
 	assert.Empty(t, reviewBeatOutput(t, file))
@@ -505,6 +505,15 @@ func TestTheVerdictGate(t *testing.T) {
 	shown, _, err := zm(t, file, "task", "show", "T-2")
 	require.NoError(t, err)
 	assert.Contains(t, shown, "review: round 1 of T-1 · closed without a verdict\n")
+
+	// A review the dispatcher makes by hand is outside the loop: it has no review of its own, and the loop makes no second one.
+	made, _, err := zm(t, file, "task", "new", "--route", "--kind", "review", "--of", "T-1", "review T-1 by hand")
+	require.NoError(t, err)
+	assert.Contains(t, made, "T-3 · reviewer")
+	assert.Nil(t, readTask(t, file, "T-3").Review)
+	assert.Empty(t, reviewBeatOutput(t, file))
+	assert.Equal(t, 3, taskCount(t, file))
+	assert.Len(t, dispatcherLines(t, file), 1)
 }
 
 // A review that is dropped, or parked when its reviewer is released, has no verdict either: dropped, the close says so; parked,
@@ -517,7 +526,7 @@ func TestADroppedOrParkedReviewIsStalled(t *testing.T) {
 
 	out, _, err := zm(t, file, "task", "drop", "T-2")
 	require.NoError(t, err)
-	assert.Contains(t, out, "review: review of T-1 has no verdict: its review was closed without a verdict (T-2)")
+	assert.Contains(t, out, "review: review of T-1 has no verdict: its review T-2 was closed without a verdict")
 	assert.Len(t, dispatcherLines(t, file), 1)
 
 	parked := workTask(t, file, "dev")
@@ -528,7 +537,7 @@ func TestADroppedOrParkedReviewIsStalled(t *testing.T) {
 	as(t, "")
 	require.NoError(t, err, errOut)
 
-	assert.Contains(t, reviewBeatOutput(t, file), "review of T-3 has no verdict: its review was closed without a verdict (T-4)")
+	assert.Contains(t, reviewBeatOutput(t, file), "review of T-3 has no verdict: its review T-4 was closed without a verdict")
 	assert.Len(t, dispatcherLines(t, file), 2)
 
 	assert.Empty(t, reviewBeatOutput(t, file))
@@ -555,13 +564,13 @@ func TestReviewStepIsIdempotent(t *testing.T) {
 
 	assert.Equal(t, 2, taskCount(t, file))
 
-	// A role that closes it again with a note, and the owner, add nothing.
+	// A role that closes it again, with a note or without, adds nothing.
 	assert.Contains(t, closeAs(t, file, "dev", id), "already")
 	assert.Equal(t, 2, taskCount(t, file))
 	assert.Equal(t, "T-2", readTask(t, file, id).Closed.Review.Task)
 
-	closeAs(t, file, "", id, "--note", "merged")
-	assert.Equal(t, "T-2", readTask(t, file, id).Closed.Review.Task, "closing it again to say more keeps the review")
+	closeAs(t, file, "dev", id, "--note", "more to say")
+	assert.Equal(t, "T-2", readTask(t, file, id).Closed.Review.Task, "a role closing it again to say more keeps the review")
 	assert.Equal(t, 2, taskCount(t, file))
 }
 
@@ -616,7 +625,9 @@ func TestNoSeatIsStartedWhileTheShiftIsStopped(t *testing.T) {
 
 	id := workTask(t, file, "dev")
 	require.NoError(t, a.withState(func(s *shift.Shift) error { s.State.Stopped = time.Now(); return nil }))
-	closeAs(t, file, "dev", id)
+
+	out := closeAs(t, file, "dev", id)
+	assert.Contains(t, out, "review: review T-2 of T-1 for reviewer, round 1 of 2; reviewer is not started: the shift is stopped")
 
 	assert.Equal(t, "reviewer", readTask(t, file, "T-2").Role, "the review is made")
 	assert.False(t, isUp(t, file, "reviewer"), "and nothing is started in a stopped shift")
@@ -629,7 +640,9 @@ func TestNoSeatIsStartedWhileItsPlanIsHeld(t *testing.T) {
 	holdBook(t, mustCrew(t, file), time.Now().UTC().Add(2*time.Hour), "")
 
 	id := workTask(t, file, "dev")
-	closeAs(t, file, "dev", id)
+
+	out := closeAs(t, file, "dev", id)
+	assert.Contains(t, out, "reviewer is not started: its plan is held (zmina limits)")
 
 	assert.Equal(t, "reviewer", readTask(t, file, "T-2").Role)
 	assert.False(t, isUp(t, file, "reviewer"), "a held plan is not started")
@@ -665,7 +678,7 @@ func TestTheAuthorNeverReviewsItsOwnWork(t *testing.T) {
 	id := workTask(t, file, "dev")
 
 	out := closeAs(t, file, "dev", id)
-	assert.Contains(t, out, "review: review of T-2 has no verdict: the routes pick dev, the seat that did the work")
+	assert.Contains(t, out, "review: review of T-2 waits for a seat: the routes pick dev, the seat that did the work")
 
 	// What the routes say for this review: the busy reviewer gives way to dev, the seat that did the work. The guard is needed.
 	a := &app{out: io.Discard, err: io.Discard, crew: file}
@@ -681,7 +694,7 @@ func TestTheAuthorNeverReviewsItsOwnWork(t *testing.T) {
 
 	lines := dispatcherLines(t, file)
 	require.Len(t, lines, 1)
-	assert.Contains(t, lines[0], "zmina: review of T-2 has no verdict: the routes pick dev, the seat that did the work; zmina --crew ")
+	assert.Contains(t, lines[0], "zmina: review of T-2 waits for a seat: the routes pick dev, the seat that did the work; zmina makes it when one is free, and gives up after 24h (zmina --crew ")
 
 	// The beat asks again each minute, and says nothing more.
 	assert.Empty(t, reviewBeatOutput(t, file))
@@ -699,7 +712,7 @@ func TestTheAuthorNeverReviewsItsOwnWork(t *testing.T) {
 
 	lines = dispatcherLines(t, file)
 	require.Len(t, lines, 2)
-	assert.Contains(t, lines[1], "review of T-2 has no verdict: its review was closed without a verdict (T-3)")
+	assert.Contains(t, lines[1], "review of T-2 has no verdict: its review T-3 was closed without a verdict")
 }
 
 // A crew whose only reviewer is the author has no seat for the review: the dispatcher is told once.
@@ -715,12 +728,13 @@ func TestNoSeatMeansOneNoteToTheDispatcher(t *testing.T) {
 
 	id := workTask(t, file, "dev")
 	out := closeAs(t, file, "dev", id)
-	assert.Contains(t, out, "review: review of T-1 has no verdict: no seat takes it: review of T-1 by dev")
+	assert.Contains(t, out, "review: review of T-1 waits for a seat: no seat takes it: review of T-1 by dev")
 
 	lines := dispatcherLines(t, file)
 	require.Len(t, lines, 1)
-	assert.Contains(t, lines[0], "review of T-1 has no verdict: no seat takes it: review of T-1 by dev")
-	assert.Contains(t, lines[0], "task new --route --kind review --of T-1")
+	assert.Contains(t, lines[0], "review of T-1 waits for a seat: no seat takes it: review of T-1 by dev")
+	assert.NotContains(t, lines[0], "task new", "a review made by hand would come on top of the one zmina makes")
+	assert.Contains(t, lines[0], "zmina makes it when one is free, and gives up after 24h")
 
 	assert.Empty(t, reviewBeatOutput(t, file))
 	assert.Len(t, dispatcherLines(t, file), 1, "once, however often the beat asks")
@@ -787,4 +801,269 @@ func TestTheAuthorsCopyIsTheAuthorToo(t *testing.T) {
 	assert.Equal(t, task.Open, got.State)
 	assert.Equal(t, "dev#2", got.Role)
 	assert.True(t, isUp(t, file, "dev#2"))
+}
+
+// editCrew rewrites the crew file's text, as the owner editing it between two beats.
+func editCrew(t *testing.T, file, from, to string) {
+	t.Helper()
+
+	raw := string(mustRead(t, file))
+	require.Contains(t, raw, from)
+	require.NoError(t, os.WriteFile(file, []byte(strings.Replace(raw, from, to, 1)), 0o600))
+}
+
+// acceptDelivery gives a task the hand-out its role accepted, as a task that was worked on before it closed has.
+func acceptDelivery(t *testing.T, file, id string) {
+	t.Helper()
+
+	store := taskStore(mustCrew(t, file))
+	got := readTask(t, file, id)
+	got.Delivery = &task.Delivery{ID: "packet", Role: got.Role, Gen: 1, QueuedAt: time.Now().Add(-time.Hour), AcceptedAt: time.Now().Add(-50 * time.Minute)}
+	require.NoError(t, store.Put(got))
+}
+
+// A reject reopens the author's task, and when its seat cannot be started the dispatcher is told once, whatever the old hand-out
+// the task keeps says: the ticker's own note about a task a down role never took does not come for one that was accepted.
+func TestARejectOfAnAuthorThatCannotBeStartedIsToldOnce(t *testing.T) {
+	for name, stop := range map[string]func(t *testing.T, file string) string{
+		"the shift is stopped": func(t *testing.T, file string) string {
+			a := &app{out: io.Discard, err: io.Discard, crew: file}
+			require.NoError(t, a.withState(func(s *shift.Shift) error { s.State.Stopped = time.Now(); return nil }))
+
+			return "the shift is stopped"
+		},
+		"its plan is held": func(t *testing.T, file string) string {
+			holdBook(t, mustCrew(t, file), time.Now().UTC().Add(2*time.Hour), "")
+
+			return "its plan is held (zmina limits)"
+		},
+		"it is broken": func(t *testing.T, file string) string {
+			a := &app{out: io.Discard, err: io.Discard, crew: file}
+			require.NoError(t, a.withState(func(s *shift.Shift) error { s.State.Role("dev").Broken = true; return nil }))
+
+			return "it is broken (zmina ls)"
+		},
+		"it holds other work": func(t *testing.T, file string) string {
+			_, _, err := zm(t, file, "task", "new", "dev", "an earlier task")
+			require.NoError(t, err)
+
+			return "it holds T-3, which comes first"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			file := reviewCrew(t, reviewSeats, "auto_review: on\n")
+			id := workTask(t, file, "dev")
+			closeAs(t, file, "dev", id)
+			acceptDelivery(t, file, id)
+
+			why := stop(t, file)
+
+			out := closeAs(t, file, "reviewer", "T-2", "--verdict", "reject", "--note", "the token is logged")
+			assert.Contains(t, out, "review: review T-2 rejected T-1: reopened for dev; dev is not started: "+why)
+
+			assert.Equal(t, task.Open, readTask(t, file, id).State)
+			assert.False(t, isUp(t, file, "dev"))
+
+			lines := dispatcherLines(t, file)
+			require.Len(t, lines, 1)
+			assert.Contains(t, lines[0], "zmina: T-1 reopened after a reject in review T-2, dev not started: "+why+"; zmina --crew ")
+			assert.Contains(t, lines[0], " up 'dev' --task T-1")
+
+			assert.Empty(t, reviewBeatOutput(t, file))
+			assert.Len(t, dispatcherLines(t, file), 1, "once")
+		})
+	}
+}
+
+// With the key turned off while a review is open, the reviewer's close is an ordinary close: nothing of the loop swallows it, and
+// the dispatcher hears it, with the verdict. The review task still closes on a verdict. The same when the routes lose their review rule.
+func TestTurningTheKeyOffMidFlightSwallowsNothing(t *testing.T) {
+	for name, edit := range map[string]func(t *testing.T, file string){
+		"the key off": func(t *testing.T, file string) { editCrew(t, file, "auto_review: on\n", "") },
+		"no review rule": func(t *testing.T, file string) {
+			editCrew(t, file, "  - review: {first: reviewer, again: [dev2]}\n", "")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			file := reviewCrew(t, reviewSeats, "auto_review: on\n")
+			id := workTask(t, file, "dev")
+			closeAs(t, file, "dev", id, "--note", "shipped")
+			require.Empty(t, dispatcherLines(t, file))
+
+			edit(t, file)
+
+			as(t, "reviewer")
+			_, _, err := zm(t, file, "task", "done", "T-2")
+			as(t, "")
+			require.ErrorContains(t, err, "--verdict", "it is still a review task")
+
+			out := closeAs(t, file, "reviewer", "T-2", "--verdict", "accept", "--note", "fine")
+			assert.Equal(t, "T-2 · reviewer · done\n", out, "the loop is off: it says nothing")
+
+			assert.Equal(t, []string{"reviewer: T-2 done (accept): fine (zmina task show T-2)"}, dispatcherLines(t, file))
+			assert.Empty(t, reviewBeatOutput(t, file))
+			assert.Equal(t, 2, taskCount(t, file))
+		})
+	}
+}
+
+// A review reopened after it was closed without a verdict still has its verdict acted on: the stall did not use the key the verdict does.
+func TestAReopenedReviewsVerdictStillActs(t *testing.T) {
+	file := reviewCrew(t, reviewSeats, "auto_review: on\n")
+	id := workTask(t, file, "dev")
+	closeAs(t, file, "dev", id)
+
+	_, _, err := zm(t, file, "task", "done", "T-2", "--force")
+	require.NoError(t, err)
+	require.Len(t, dispatcherLines(t, file), 1, "no verdict: told")
+
+	_, _, err = zm(t, file, "task", "set", "T-2", "open")
+	require.NoError(t, err)
+	assert.Empty(t, reviewBeatOutput(t, file))
+
+	closeAs(t, file, "reviewer", "T-2", "--verdict", "accept", "--note", "read it after all")
+
+	lines := dispatcherLines(t, file)
+	require.Len(t, lines, 2)
+	assert.Equal(t, "reviewer: T-1 accepted in review T-2 (round 1): read it after all (zmina task show T-1)", lines[1])
+}
+
+// A review no seat takes is asked for again each beat for 24 hours from the close and keeps the worktree; then it is given up, once, and
+// the worktree is collected as any.
+func TestANoSeatReviewEndsAfterADay(t *testing.T) {
+	file := testCrew(t, "  dev: {}\nroutes:\n  - review: {first: dev}\n  - pool: {seats: [dev]}\nauto_review: on\n")
+
+	repo := filepath.Join(filepath.Dir(file), "api")
+	require.NoError(t, os.MkdirAll(repo, 0o700))
+	gitIn(t, repo, "init", "-q", "-b", "main")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "a"), []byte("a"), 0o600))
+	gitIn(t, repo, "add", ".")
+	gitIn(t, repo, "commit", "-q", "-m", "a")
+
+	id := workTask(t, file, "dev")
+	closeAs(t, file, "dev", id)
+	gitIn(t, repo, "merge", "-q", "--ff-only", readTask(t, file, id).Branch)
+
+	require.Len(t, dispatcherLines(t, file), 1, "waits for a seat: told")
+
+	gc, _, err := zm(t, file, "task", "gc", "--dry-run")
+	require.NoError(t, err)
+	assert.Equal(t, "nothing to collect\n", gc, "the worktree stays while the review may still be made")
+
+	setClosedAgo := func(ago time.Duration) {
+		got := readTask(t, file, id)
+		got.Closed.At = time.Now().Add(-ago)
+		require.NoError(t, taskStore(mustCrew(t, file)).Put(got))
+	}
+
+	setClosedAgo(23 * time.Hour)
+	assert.Empty(t, reviewBeatOutput(t, file), "asks again, and says nothing more")
+	assert.Len(t, dispatcherLines(t, file), 1)
+	assert.NotNil(t, readTask(t, file, id).Closed.Review)
+
+	setClosedAgo(25 * time.Hour)
+	assert.Contains(t, reviewBeatOutput(t, file), "review of T-1 given up: no seat took it in 24h")
+
+	lines := dispatcherLines(t, file)
+	require.Len(t, lines, 2)
+	assert.Equal(t, "zmina: review of T-1 given up: no seat took it in 24h; T-1 is done, nobody reviewed it", lines[1])
+	assert.Nil(t, readTask(t, file, id).Closed.Review, "nothing waits on a review any more")
+	assert.Len(t, eventsNamed(t, file, "review-stalled"), 2)
+
+	assert.Empty(t, reviewBeatOutput(t, file))
+	assert.Len(t, dispatcherLines(t, file), 2, "once")
+	assert.Equal(t, 1, taskCount(t, file))
+
+	gc, _, err = zm(t, file, "task", "gc", "--dry-run")
+	require.NoError(t, err)
+	assert.Contains(t, gc, "T-1: would remove")
+}
+
+// The owner, or the dispatcher, closing the task again to say why ends a review that waits for a seat at once.
+func TestTheOwnerEndsAReviewThatWaitsForASeat(t *testing.T) {
+	file := testCrew(t, "  dev: {}\nroutes:\n  - review: {first: dev}\n  - pool: {seats: [dev]}\nauto_review: on\n")
+
+	repo := filepath.Join(filepath.Dir(file), "api")
+	require.NoError(t, os.MkdirAll(repo, 0o700))
+	gitIn(t, repo, "init", "-q", "-b", "main")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "a"), []byte("a"), 0o600))
+	gitIn(t, repo, "add", ".")
+	gitIn(t, repo, "commit", "-q", "-m", "a")
+
+	id := workTask(t, file, "dev")
+	closeAs(t, file, "dev", id)
+	require.NotNil(t, readTask(t, file, id).Closed.Review)
+
+	// With nothing to say it changes nothing.
+	assert.Contains(t, closeAs(t, file, "", id), "already")
+	assert.NotNil(t, readTask(t, file, id).Closed.Review)
+
+	closeAs(t, file, "", id, "--note", "reviewed by hand, merging")
+	assert.Nil(t, readTask(t, file, id).Closed.Review)
+	assert.Empty(t, reviewBeatOutput(t, file))
+	assert.Len(t, dispatcherLines(t, file), 1, "only the first note")
+	assert.Equal(t, 1, taskCount(t, file))
+}
+
+// A review put away when its reviewer was released is a review again when it is taken from the later list: the same round of the
+// same task, the text for its new id, and the loop follows it, so its verdict is acted on. Taken by the author it is a plain task.
+func TestAParkedReviewTakenFromTheLaterListIsAReviewAgain(t *testing.T) {
+	file := reviewCrew(t, reviewSeats, "auto_review: on\n")
+	id := workTask(t, file, "dev")
+	closeAs(t, file, "dev", id)
+
+	as(t, "reviewer")
+	_, errOut, err := zm(t, file, "task", "park", "T-2", "--note", "half read")
+	as(t, "")
+	require.NoError(t, err, errOut)
+	require.Contains(t, reviewBeatOutput(t, file), "review of T-1 has no verdict")
+
+	out, errOut, err := zm(t, file, "later", "take", "L-1", "reviewer")
+	require.NoError(t, err, errOut)
+	assert.Contains(t, out, "T-3 · reviewer")
+
+	taken := readTask(t, file, "T-3")
+	assert.Equal(t, &task.Review{Of: "T-1", Round: 1}, taken.Review)
+	assert.Equal(t, "Review of T-1: fix the login form", taken.Title)
+	assert.Contains(t, taken.Asked, "task done T-3 --verdict accept")
+	assert.NotContains(t, taken.Asked, "T-2")
+	assert.Equal(t, "T-3", readTask(t, file, id).Closed.Review.Task, "the task it is of follows it")
+
+	assert.Empty(t, reviewBeatOutput(t, file))
+
+	_, _, err = zm(t, file, "task", "show", "T-3")
+	require.NoError(t, err)
+
+	as(t, "reviewer")
+	_, _, err = zm(t, file, "task", "done", "T-3")
+	as(t, "")
+	require.ErrorContains(t, err, "--verdict")
+
+	closeAs(t, file, "reviewer", "T-3", "--verdict", "accept", "--note", "fine")
+
+	lines := dispatcherLines(t, file)
+	require.Len(t, lines, 2, "the stall, then the verdict")
+	assert.Equal(t, "reviewer: T-1 accepted in review T-3 (round 1): fine (zmina task show T-1)", lines[1])
+
+	// The next review of T-1 is round 2: the copy took no round of its own.
+	got, _, err := zm(t, file, "task", "show", "T-3")
+	require.NoError(t, err)
+	assert.Contains(t, got, "review: round 1 of T-1 · accept")
+}
+
+func TestAParkedReviewTakenByTheAuthorIsAPlainTask(t *testing.T) {
+	file := reviewCrew(t, reviewSeats, "auto_review: on\n")
+	id := workTask(t, file, "dev")
+	closeAs(t, file, "dev", id)
+
+	as(t, "reviewer")
+	_, errOut, err := zm(t, file, "task", "park", "T-2", "--note", "half read")
+	as(t, "")
+	require.NoError(t, err, errOut)
+
+	_, errOut, err = zm(t, file, "later", "take", "L-1", "dev")
+	require.NoError(t, err, errOut)
+
+	assert.Nil(t, readTask(t, file, "T-3").Review, "the author never reviews its own work")
+	assert.Equal(t, "T-2", readTask(t, file, id).Closed.Review.Task)
 }

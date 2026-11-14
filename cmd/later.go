@@ -253,7 +253,7 @@ func (a *app) laterTakeCommand() *cobra.Command {
 					n.Note += ": " + it.Note
 				}
 
-				n.Sweep, n.AskedFor, n.Title = nil, nil, ""
+				n.Sweep, n.Review, n.AskedFor, n.Title = nil, nil, nil, ""
 
 				// A sweep put away (task park, an idle release) is taken up as a sweep again, over what it still lists.
 				if from, ok := parkedSweep(s, it); ok {
@@ -262,10 +262,19 @@ func (a *app) laterTakeCommand() *cobra.Command {
 					}
 				}
 
+				// A review put away is taken up as the same review again, and the task it is of follows it.
+				reviewed, isReview := continueReview(s, &n, it, role)
+
 				t, err := a.ledger(s).New(n)
 				if err != nil {
 					// A task dropped because its worktree failed is on the ledger; the item stays parked.
 					return err
+				}
+
+				if isReview {
+					if err := reviewLink(s, reviewed, t); err != nil {
+						return err
+					}
 				}
 
 				t.Checkpoint, t.HandoffIncomplete, t.Conversations = it.Checkpoint, it.Incomplete, it.Conversations

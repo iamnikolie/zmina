@@ -191,3 +191,115 @@ func TestResultLineIsUnchangedWhenTheLoopIsInert(t *testing.T) {
 	f.s.NotifyRecords()
 	assert.Len(t, f.s.State.Signals, 1)
 }
+
+// A held result line is held for the close, but not for ever: a worker that saved its result and never closed is heard of once
+// the result is half an hour old.
+func TestHeldResultLineGoesOnceItIsOldEnough(t *testing.T) {
+	f := fixtureWith(t, reviewCrewYAML)
+	f.tk.list = append(f.tk.list, task.Task{ID: "T-1", Role: "designer", State: task.Open, Worktree: "/w/api-T-1"})
+
+	saveResult(t, f, "designer", "T-1")
+
+	f.s.NotifyRecords()
+	assert.Empty(t, f.s.State.Signals, "held for the close")
+
+	*f.now = f.now.Add(resultHoldMax - time.Second)
+	f.s.NotifyRecords()
+	assert.Empty(t, f.s.State.Signals)
+
+	*f.now = f.now.Add(time.Second)
+	f.s.NotifyRecords()
+	require.Len(t, f.s.State.Signals, 1, "told as it is without the key")
+	assert.Contains(t, f.s.State.Signals[0], "T-1 result ready")
+
+	f.s.NotifyRecords()
+	assert.Len(t, f.s.State.Signals, 1, "once")
+}
+
+// A task waiting on the owner's answer is never held: its result is told as it is saved.
+func TestAWaitingTasksResultIsNeverHeld(t *testing.T) {
+	f := fixtureWith(t, reviewCrewYAML)
+	f.tk.list = append(f.tk.list, task.Task{ID: "T-1", Role: "designer", State: task.Waiting, Worktree: "/w/api-T-1"})
+
+	saveResult(t, f, "designer", "T-1")
+	f.s.NotifyRecords()
+	require.Len(t, f.s.State.Signals, 1)
+	assert.Contains(t, f.s.State.Signals[0], "T-1 result ready")
+}
+
+// With the key turned off while a review is on the ledger, nothing of the loop swallows a line: the review's close is told as any
+// close, with its verdict, and the results of both are told.
+func TestTurningTheKeyOffSwallowsNothing(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	f.tk.list = append(f.tk.list,
+		task.Task{ID: "T-1", Role: "designer", State: task.Done, Worktree: "/w/api-T-1",
+			Closed: &task.Closure{By: "designer", At: *f.now, State: task.Done, Note: "shipped", Review: &task.ReviewDue{Round: 1, Task: "T-2"}}},
+		task.Task{ID: "T-2", Role: "harvester", State: task.Done, Review: &task.Review{Of: "T-1", Round: 1, Verdict: task.VerdictReject},
+			Closed: &task.Closure{By: "harvester", At: *f.now, State: task.Done, Note: "the token is logged"}},
+	)
+
+	saveResult(t, f, "designer", "T-1")
+	saveResult(t, f, "harvester", "T-2")
+
+	f.s.NotifyRecords()
+	f.s.NotifyClosed()
+
+	var got []string
+	for _, sig := range f.s.State.Signals {
+		got = append(got, SignalBody(sig))
+	}
+
+	assert.Contains(t, strings.Join(got, "\n"), "T-1 result ready")
+	assert.Contains(t, strings.Join(got, "\n"), "T-2 result ready")
+	assert.Contains(t, got, "harvester: T-2 done (reject): the token is logged (zmina task show T-2)")
+	assert.Contains(t, got, "designer: T-1 done: shipped (zmina task show T-1)")
+}
+
+// With the routes' review rule taken away the loop is inert, and so are its suppressions.
+func TestTheLoopsSuppressionsEndWithTheReviewRule(t *testing.T) {
+	f := fixtureWith(t, crewYAML+"auto_review: on\n")
+	closedTask(f, "T-1", "designer", "shipped")
+	f.tk.list[0].Closed.Review = &task.ReviewDue{Round: 1}
+
+	f.s.NotifyClosed()
+	require.Len(t, f.s.State.Signals, 1)
+	assert.Contains(t, f.s.State.Signals[0], "T-1 done: shipped")
+}
+
+// A packet tells a worker to close its task when the crew has it reviewed on close, since the dispatcher hears of the result then;
+// with the key off, or for a task with no worktree or a review, the packet is what it always was.
+func TestPacketSaysToCloseWhenTheCrewReviewsOnClose(t *testing.T) {
+	off := fixtureWith(t, crewYAML)
+	on := fixtureWith(t, reviewCrewYAML)
+
+	work := task.Task{ID: "T-1", Role: "designer", State: task.Open, Worktree: "/w/api-T-1"}
+
+	was, err := off.s.TaskPacket("designer", work)
+	require.NoError(t, err)
+
+	r, _ := off.s.Role("designer")
+	want := "Read repository instructions. Run zmina --crew " + shellWord(off.s.Crew.Path) + " task show T-1 and confirm this task is still assigned to designer; use the latest note before working.\n" +
+		off.s.Crew.HandoffFor(r).Request("checkpoint or result") +
+		"When done, save it with zmina --crew " + shellWord(off.s.Crew.Path) + " task result T-1 --file <json>: that tells the dispatcher, " +
+		"with the gist and the command that shows it. Send the dispatcher no message of your own about the result: it would hear it twice.\n"
+	assert.Equal(t, want, was.Instructions, "with the key off the packet is what it always was")
+
+	got, err := on.s.TaskPacket("designer", work)
+	require.NoError(t, err)
+	assert.True(t, strings.HasSuffix(got.Instructions, "Then close the task: zmina --crew "+shellWord(on.s.Crew.Path)+
+		" task done T-1. This crew has a finished task reviewed when it is closed, and the dispatcher hears of the result then.\n"), got.Instructions)
+
+	plain, err := on.s.TaskPacket("designer", task.Task{ID: "T-2", Role: "designer", State: task.Open})
+	require.NoError(t, err)
+	assert.NotContains(t, plain.Instructions, "Then close the task", "no worktree, no review")
+
+	review, err := on.s.TaskPacket("designer", task.Task{ID: "T-3", Role: "designer", State: task.Open, Worktree: "/w/x",
+		Review: &task.Review{Of: "T-1", Round: 1}})
+	require.NoError(t, err)
+	assert.NotContains(t, review.Instructions, "Then close the task")
+
+	inert := fixtureWith(t, crewYAML+"auto_review: on\n")
+	same, err := inert.s.TaskPacket("designer", work)
+	require.NoError(t, err)
+	assert.NotContains(t, same.Instructions, "Then close the task", "no review rule, no review")
+}
