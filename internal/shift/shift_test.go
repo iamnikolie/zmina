@@ -503,6 +503,12 @@ func TestTickDeliversToIdleBootedDispatcher(t *testing.T) {
 	assert.Empty(t, tm.typed["dispatcher"], "not while booting")
 
 	*now = now.Add(3 * time.Minute)
+	rg.byPID[dpid] = &registry.Session{Status: "idle"}
+	s.Tick()
+	assert.Empty(t, tm.typed["dispatcher"], "a role started again waits for a line to go with")
+
+	// Its wait over, it goes alone: not into a turn, then to the idle dispatcher.
+	*now = now.Add(infoRideQuiet)
 	rg.byPID[dpid] = &registry.Session{Status: "busy", StatusUpdatedAt: now.UnixMilli()}
 	s.Tick()
 	assert.Empty(t, tm.typed["dispatcher"], "not while busy")
