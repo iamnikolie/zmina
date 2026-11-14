@@ -765,7 +765,7 @@ type uiCrewView struct {
 	Stopped  time.Time `json:"stopped,omitzero"`
 	Stuck    int       `json:"stuck_minutes"`
 	Roles    []uiRole  `json:"roles"`
-	// Waiting is how many todo items the crew has; DoneToday how many tasks it closed as done today; Error why it
+	// Waiting is how many todo items wait on the owner (not the decided ones); DoneToday how many tasks it closed as done today; Error why it
 	// could not be read.
 	Waiting   int `json:"waiting"`
 	DoneToday int `json:"done_today"`
@@ -1022,6 +1022,13 @@ func (a *app) readCrew(s *shift.Shift, key string, cv *uiCrewView, snap *uiSnaps
 		it.Crew = key
 		snap.Todo = append(snap.Todo, it)
 
+		// A decided item waits on nobody: it is not counted as waiting, and is no work's need.
+		if it.decided() {
+			continue
+		}
+
+		cv.Waiting++
+
 		if it.Task != "" {
 			needs[it.Task] = it
 		}
@@ -1062,11 +1069,9 @@ func (a *app) readCrew(s *shift.Shift, key string, cv *uiCrewView, snap *uiSnaps
 		snap.Work = append(snap.Work, w)
 	}
 
-	cv.Waiting = len(items)
-
-	// The owner holds what a waiting task stands on, and an ask that holds up a role.
+	// The owner holds what a waiting task stands on, and an ask that holds up a role; never a decided item.
 	for i := range snap.Todo {
-		if it := &snap.Todo[i]; it.Crew == key {
+		if it := &snap.Todo[i]; it.Crew == key && !it.decided() {
 			it.Holds = it.Blocks != "" || (it.Task != "" && byID[it.Task].State == task.Waiting && !s.Crew.OnOthers(byID[it.Task].On))
 		}
 	}

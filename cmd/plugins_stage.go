@@ -67,6 +67,11 @@ func (a *app) pluginWorld(c *crew.Crew, now time.Time) (*pluginWorld, error) {
 		w.gaps = readGaps(c)
 
 		for _, it := range items {
+			// A decided item waits on nobody: no plugin is told of it.
+			if it.decided() {
+				continue
+			}
+
 			key := plugin.ItemKey(it.ID)
 			w.items[key] = it
 			w.things = append(w.things, plugin.Thing{Key: key, ID: it.ID, Class: plugin.ItemThing, Opened: it.Created, Role: it.Role,
@@ -292,7 +297,8 @@ func turnAsked(c *crew.Crew, role string, rec *shift.TurnRecord) bool {
 	asked, _, _ := askStore(c).Scan()
 
 	for _, a := range asked {
-		if a.Role == role && a.Created.After(since) {
+		// A decided item asks nothing of the owner: it is no card a plugin was told of.
+		if a.Role == role && a.Kind != asks.Decided && a.Created.After(since) {
 			return true
 		}
 	}

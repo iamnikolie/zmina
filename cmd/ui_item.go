@@ -54,16 +54,24 @@ type itemStep struct {
 // itemAsk is an ask as the card shows it.
 type itemAsk struct {
 	ID      string    `json:"id"`
-	Kind    string    `json:"kind"` // decision | check
+	Kind    string    `json:"kind"` // decision | check | decided
 	Title   string    `json:"title"`
 	Text    string    `json:"text"`
 	Rec     string    `json:"rec,omitempty"`
+	Reason  string    `json:"reason,omitempty"`
+	Instead string    `json:"instead,omitempty"`
 	Role    string    `json:"role,omitempty"`
 	Task    string    `json:"task,omitempty"`
 	Project string    `json:"project,omitempty"`
 	Open    bool      `json:"open"`
 	Created time.Time `json:"created"`
+	// State is how the ask ended (open, done, yes, answered, parked, ignored); ClosedBy who closed it, empty when zmina
+	// did.
+	State    string `json:"state"`
+	ClosedBy string `json:"closed_by,omitempty"`
 }
+
+func (q itemAsk) decided() bool { return q.Kind == string(asks.Decided) }
 
 // itemDecision is the one answer the card offers, only while the item waits on the owner: the page sends it as its
 // todo answer would (POST /api/todo).
@@ -148,8 +156,9 @@ func readItemIndex(s *shift.Shift) *itemIndex {
 
 	todos, _ := todo(s.Crew, x.now, views)
 	for _, it := range todos {
-		// An ask about a task is that task's question; a task waiting on the owner is its own item.
-		if it.Task != "" {
+		// An ask about a task is that task's question; a task waiting on the owner is its own item. A decided item
+		// is no question of the task's.
+		if it.Task != "" && !it.decided() {
 			if _, ok := x.todo[it.Task]; !ok || it.Kind != "waiting" {
 				x.todo[it.Task] = it
 			}
@@ -244,18 +253,23 @@ func (x *itemIndex) card(id string) itemCard {
 		}
 
 		c.Found, c.Kind, c.Talk, c.Since = true, "ask", a.Role, a.Created
-		c.Ask = &itemAsk{ID: a.ID, Kind: string(a.Kind), Title: a.Title, Text: a.Text, Rec: a.Rec, Role: a.Role,
-			Task: a.Task, Project: a.Project, Open: a.Open(), Created: a.Created}
+		c.Ask = &itemAsk{ID: a.ID, Kind: string(a.Kind), Title: a.Title, Text: a.Text, Rec: a.Rec, Reason: a.Reason,
+			Instead: a.Instead, Role: a.Role, Task: a.Task, Project: a.Project, Open: a.Open(), Created: a.Created,
+			State: string(a.State), ClosedBy: a.ClosedBy}
 		if c.Ask.Project == "" && a.Task != "" {
 			c.Ask.Project = x.tasks[a.Task].Where()
 		}
 
 		c.Who = "a " + string(a.Kind)
+		if a.Kind == asks.Decided {
+			c.Who = "a decision taken"
+		}
 
 		switch {
 		case a.Open():
 			c.State, c.Decision = "need", askDecision(a)
-			c.Overdue = x.now.Sub(a.Created) > overdueAfter
+			// A decided item waits on nobody, so it is never late.
+			c.Overdue = a.Kind != asks.Decided && x.now.Sub(a.Created) > overdueAfter
 		case a.State == asks.Parked:
 			c.State, c.Since = "parked", a.Updated
 		default:
@@ -369,10 +383,10 @@ func (x *itemIndex) todoDecision(it todoItem) *itemDecision {
 	return &itemDecision{ID: it.ID, Action: "answer", Text: "Yes", Word: "Yes"}
 }
 
-// askDecision is an open ask's one answer: its recommendation, a check's Mark checked, else Yes.
+// askDecision is an open ask's one answer: its recommendation, a check's (and a decided item's) Mark checked, else Yes.
 func askDecision(a asks.Ask) *itemDecision {
 	switch {
-	case a.Kind == asks.Check:
+	case a.Kind == asks.Check || a.Kind == asks.Decided:
 		return &itemDecision{ID: a.ID, Action: "done", Word: "Mark checked"}
 	case a.Rec != "":
 		return &itemDecision{ID: a.ID, Action: "yes", Word: a.Rec}

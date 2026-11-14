@@ -79,6 +79,9 @@ func TestDoctorHygiene(t *testing.T) {
 	require.NoError(t, err)
 	_, err = askStore(c).Add(asks.Ask{Kind: asks.Check, Text: "new check"}, now)
 	require.NoError(t, err)
+	// A decided item waits on nobody, however old: it is no old question for the owner.
+	_, err = askStore(c).Add(asks.Ask{Kind: asks.Decided, Text: "old call", Reason: "why"}, old)
+	require.NoError(t, err)
 	_, err = laterStore(c).Add(later.Item{Text: "old idea"}, old)
 	require.NoError(t, err)
 

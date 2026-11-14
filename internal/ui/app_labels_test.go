@@ -123,6 +123,91 @@ func TestPhoneTabs(t *testing.T) {
 		"Sign in and publish the test board", "Done", "Talk to dispatcher"}, res.Sheet)
 }
 
+// TestDecidedReadsLikeACheckOnThePage runs static/app.js's question row under Node: a decided item (a role took the
+// decision itself) has Done and an answer in words and no No, as a check has, and its opened row says why and what was
+// not done; a decision keeps its No.
+func TestDecidedReadsLikeACheckOnThePage(t *testing.T) {
+	node := requireNode(t, "node is not installed: the page's rows are not rendered")
+
+	raw, err := exec.Command(node, "testdata/app-labels.js", "static/app.js", "decided").Output()
+	require.NoError(t, err)
+
+	var res struct {
+		Rows map[string]struct {
+			Buttons []string `json:"buttons"`
+			Panel   []string `json:"panel"`
+		} `json:"rows"`
+		Acted  []string `json:"acted"`
+		Checks []bool   `json:"checks"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &res))
+
+	assert.Equal(t, []string{"decided done: Reviewed", "check done: Sent to the dispatcher"}, res.Acted,
+		"a decided item read is only reviewed; a check is sent")
+	assert.Equal(t, []string{"Answer…", "Done", "Later"}, res.Rows["decided"].Buttons)
+	assert.Equal(t, res.Rows["check"].Buttons, res.Rows["decided"].Buttons, "as a check")
+	assert.Equal(t, []string{"Answer…", "Later", "No"}, res.Rows["decision"].Buttons)
+	assert.Equal(t, []string{"links point at it", "Instead of: rename the flag"}, res.Rows["decided"].Panel)
+	assert.Equal(t, []bool{true, false}, res.Checks)
+}
+
+// TestDecidedItemsAreCountedNowhere draws the whole page of static/app.js under Node: with only decided items the title,
+// the favicon and the line of counts say nothing waits, and beside a real ask they are not in its count; they are a group
+// of their own, newest first, on the lean page and the cockpit; on the phone they are not among the waiting and not "yours
+// by hand", but a list of their own.
+func TestDecidedItemsAreCountedNowhere(t *testing.T) {
+	node := requireNode(t, "node is not installed: the page is not drawn")
+
+	raw, err := exec.Command(node, "testdata/app-labels.js", "static/app.js", "counts").Output()
+	require.NoError(t, err)
+
+	type view struct {
+		Title         string   `json:"title"`
+		Amber         bool     `json:"amber"`
+		Say           string   `json:"say"`
+		AskHead       string   `json:"askHead"`
+		DecidedHidden bool     `json:"decidedHidden"`
+		DecidedHead   string   `json:"decidedHead"`
+		DecidedRows   []string `json:"decidedRows"`
+		MoveAsks      []string `json:"moveAsks"`
+		MoveDecHead   string   `json:"moveDecHead"`
+		MoveDec       []string `json:"moveDec"`
+		Phone         struct {
+			Waiting, Hand, Decided []string
+		} `json:"phone"`
+	}
+
+	var res map[string]view
+	require.NoError(t, json.Unmarshal(raw, &res))
+
+	newestFirst := []string{"default/A-3", "default/A-2"}
+
+	only := res["only"]
+	assert.Equal(t, "zmina", only.Title, "no answer to give")
+	assert.False(t, only.Amber, "no mark on the favicon")
+	assert.Equal(t, "You hold 0 · answer 0 · in progress 0 · parked 0", only.Say)
+	assert.Equal(t, "Answer 0", only.AskHead)
+	assert.False(t, only.DecidedHidden)
+	assert.Equal(t, "Decided, for your review 2", only.DecidedHead)
+	assert.Equal(t, newestFirst, only.DecidedRows)
+	assert.Empty(t, only.MoveAsks)
+	assert.Equal(t, newestFirst, only.MoveDec, "the cockpit has them in a group of their own")
+	assert.Equal(t, "Decided, for your review", only.MoveDecHead)
+	assert.Empty(t, only.Phone.Waiting)
+	assert.Empty(t, only.Phone.Hand)
+	assert.Equal(t, []string{"A-3", "A-2"}, only.Phone.Decided)
+
+	mixed := res["mixed"]
+	assert.Equal(t, "zmina · answer 2", mixed.Title, "an ask and a check; the decided ones are not counted")
+	assert.True(t, mixed.Amber)
+	assert.Equal(t, "You hold 0 · answer 2 · in progress 0 · parked 0", mixed.Say)
+	assert.Equal(t, newestFirst, mixed.DecidedRows)
+	assert.Equal(t, []string{"default/A-9", "default/A-8"}, mixed.MoveAsks, "the decided ones are not among the asks")
+	assert.Equal(t, []string{"A-9"}, mixed.Phone.Waiting)
+	assert.Equal(t, []string{"A-8"}, mixed.Phone.Hand, "only a check is by hand")
+	assert.Equal(t, []string{"A-3", "A-2"}, mixed.Phone.Decided)
+}
+
 // requireNode is the node binary; without one the test skips, except in CI, where a skip would read as a pass.
 func requireNode(t *testing.T, why string) string {
 	t.Helper()

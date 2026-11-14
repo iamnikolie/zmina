@@ -136,6 +136,11 @@ func pushDue(c *crew.Crew, st *shift.State, items []todoItem, now time.Time) []t
 	var due []todoItem
 
 	for _, it := range items {
+		// A decided item waits on nobody: it is never pushed, whatever notify_on says.
+		if it.decided() {
+			continue
+		}
+
 		last, was := st.Pushed[it.ID]
 
 		switch {

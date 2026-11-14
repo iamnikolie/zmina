@@ -708,7 +708,12 @@ func (s *Shift) rulesText(r *crew.Role, text string) string {
 		text = strings.TrimSpace(text + "\n\n" + RemoteRule)
 	}
 	if text != "" {
-		text = strings.TrimSpace(text + "\n\n" + s.roleRules(r))
+		rules := s.roleRules(r)
+		if s.Crew.DecideOn() {
+			rules += "\n\n" + DecideRule
+		}
+
+		text = strings.TrimSpace(text + "\n\n" + rules)
 	}
 	if s.Crew.ReadGuardFor(r) {
 		rule := ReadRule
@@ -822,6 +827,15 @@ const CodexWaitRule = "[zmina] Waiting: wait for a build, CI, a deploy or a file
 // says by structure, so a line that crossed a newer one can be marked (crossing.go) only for a task it was told.
 const CrossingRule = "[zmina] Say the task with `zmina send <role> --when-idle --task T-n …` when a line is about one: zmina cannot " +
 	"tell it from the words, and a line that crossed a newer one on that task can be marked only when it knows it."
+
+// DecideRule is what a role of a crew with decide on is told at boot, on top of the others: it does not stop for an answer
+// it can give itself, it takes its recommendation and records it for the owner's review; only what is critical waits.
+const DecideRule = "[zmina] Deciding: do not stop on a question you can answer yourself. When you have a recommendation, " +
+	"take it, carry on, and record it for the owner's review: zmina todo decided \"<what you decided>\" --reason " +
+	"\"<why>\" [--instead \"<what you did not do>\"] [--task T-n]. He reads these afterwards; if he wants it redone, that " +
+	"comes back through the dispatcher. Ask and wait (zmina todo add) only for what is critical: production, money, keys " +
+	"or access rights, deleting what cannot be brought back, anything that leaves the crew (a release, a push to a public " +
+	"place, a message to a person), or a choice you cannot recommend on."
 
 // RoleRules are the rules every Claude role hears at boot; CodexRoleRules every Codex role's. A crew with crossing: off
 // leaves CrossingRule out (roleRules).
