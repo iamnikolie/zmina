@@ -98,8 +98,8 @@ func todo(c *crew.Crew, now time.Time, views []shift.View) ([]todoItem, []string
 			items[i].Project, items[i].URL = cmp.Or(items[i].Project, t.Where()), t.URL
 		}
 
-		// A task that waits on someone else is not the owner's to answer.
-		if t.State != task.Waiting || t.On != "" || t.Answered.After(t.Updated) || t.Ignored.After(t.Updated) {
+		// A task that waits on someone else is not the owner's to answer; one that names the owner is.
+		if t.State != task.Waiting || c.OnOthers(t.On) || t.Answered.After(t.Updated) || t.Ignored.After(t.Updated) {
 			continue
 		}
 

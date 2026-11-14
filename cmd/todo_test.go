@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -258,4 +259,45 @@ func TestTodoAnswerByTheDispatcherIsNotEchoed(t *testing.T) {
 	st, err = shift.Read(filepath.Dir(file))
 	require.NoError(t, err)
 	assert.Contains(t, strings.Join(bodies(st.Signals), "\n"), id2+" · later — Tag it?")
+}
+
+// A task that waits on a name the crew file gives the owner waits on the owner: it is on his todo, as a task
+// waiting on nobody by name is; one waiting on anybody else is not.
+func TestTodoHasTasksWaitingOnTheOwnerByName(t *testing.T) {
+	crewFile := testCrew(t, "  dev:\nowner: [alex, '@Sam']\n")
+
+	for i, on := range []string{"Alex", "sam", "pat"} {
+		_, _, err := zm(t, crewFile, "task", "new", "dev", "--title", "work "+on, "x")
+		require.NoError(t, err)
+
+		_, _, err = zm(t, crewFile, "task", "set", "T-"+strconv.Itoa(i+1), "waiting", "--on", on, "--note", "a question")
+		require.NoError(t, err)
+	}
+
+	out, _, err := zm(t, crewFile, "todo", "ls")
+	require.NoError(t, err)
+	assert.Contains(t, out, "T-1")
+	assert.Contains(t, out, "T-2")
+	assert.NotContains(t, out, "T-3", "pat is somebody else")
+
+	// The task still says whose name it carries.
+	out, _, err = zm(t, crewFile, "task", "ls")
+	require.NoError(t, err)
+	assert.Contains(t, out, "waiting on Alex")
+
+	// He answers it as any waiting task.
+	_, _, err = zm(t, crewFile, "todo", "answer", "T-1", "go")
+	require.NoError(t, err)
+
+	out, _, err = zm(t, crewFile, "todo", "ls")
+	require.NoError(t, err)
+	assert.NotContains(t, out, "T-1")
+}
+
+// An owner's name that is a role would hide that role's waits; the crew does not load.
+func TestOwnerNameThatIsARoleIsRefused(t *testing.T) {
+	crewFile := testCrew(t, "  dev:\nowner: [dev]\n")
+
+	_, _, err := zm(t, crewFile, "todo", "ls")
+	require.ErrorContains(t, err, `owner: "dev" is a role of this crew`)
 }

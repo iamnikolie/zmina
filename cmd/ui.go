@@ -1067,7 +1067,7 @@ func (a *app) readCrew(s *shift.Shift, key string, cv *uiCrewView, snap *uiSnaps
 	// The owner holds what a waiting task stands on, and an ask that holds up a role.
 	for i := range snap.Todo {
 		if it := &snap.Todo[i]; it.Crew == key {
-			it.Holds = it.Blocks != "" || (it.Task != "" && byID[it.Task].State == task.Waiting && byID[it.Task].On == "")
+			it.Holds = it.Blocks != "" || (it.Task != "" && byID[it.Task].State == task.Waiting && !s.Crew.OnOthers(byID[it.Task].On))
 		}
 	}
 
@@ -1120,7 +1120,7 @@ func lane(t task.Task, onTodo bool, c *crew.Crew) (string, string) {
 	}
 
 	switch {
-	case t.On != "":
+	case c.OnOthers(t.On):
 		if _, ok := c.Roles[t.On]; ok {
 			return laneGo, t.On
 		}

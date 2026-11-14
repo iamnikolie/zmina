@@ -196,7 +196,7 @@ func itemOpen(c *crew.Crew, id string) bool {
 	case strings.HasPrefix(id, "T-"):
 		t, err := taskStore(c).Get(id)
 
-		return err != nil || t.State == task.Waiting && t.On == "" && !t.Answered.After(t.Updated) && !t.Ignored.After(t.Updated)
+		return err != nil || t.State == task.Waiting && !c.OnOthers(t.On) && !t.Answered.After(t.Updated) && !t.Ignored.After(t.Updated)
 	case strings.HasPrefix(id, "L-"):
 		it, err := laterStore(c).Get(id)
 
@@ -300,7 +300,7 @@ func turnAsked(c *crew.Crew, role string, rec *shift.TurnRecord) bool {
 	tasks, _, _ := taskStore(c).Scan()
 
 	for _, t := range tasks {
-		if t.Role == role && t.State == task.Waiting && t.On == "" && t.Updated.After(since) {
+		if t.Role == role && t.State == task.Waiting && !c.OnOthers(t.On) && t.Updated.After(since) {
 			return true
 		}
 	}

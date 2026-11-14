@@ -257,6 +257,9 @@ type Crew struct {
 	// Spare marks the owner's standby copy of a crew: no ticker by design, its dispatcher started by hand. Its silent
 	// ticker is never an alarm on the cockpit.
 	Spare bool `yaml:"spare"`
+	// Owner lists the names the owner goes by where a task says whom it waits on (his handle in the tracker, his
+	// first name): a task waiting --on one of them waits on the owner and is on his todo, as one with no name is.
+	Owner []string `yaml:"owner"`
 	// Namespace is the CLAUDE_CONFIG_DIR every role runs with.
 	Namespace string `yaml:"namespace"`
 	// Dir is the default working directory.
@@ -875,6 +878,17 @@ func (c *Crew) check() error {
 		return fmt.Errorf("dispatcher %q is not one of the roles", c.Dispatcher)
 	}
 
+	for _, o := range c.Owner {
+		name := strings.TrimPrefix(strings.TrimSpace(o), "@")
+		if name == "" {
+			return errors.New("owner: an empty name")
+		}
+
+		if _, ok := c.Roles[name]; ok {
+			return fmt.Errorf("owner: %q is a role of this crew; a task waiting on it waits on that role", name)
+		}
+	}
+
 	if c.Name != "" && !roleRe.MatchString(c.Name) {
 		return fmt.Errorf("name %q: a lowercase word joined by dashes", c.Name)
 	}
@@ -1342,3 +1356,24 @@ func checkDelivery(v string) error {
 
 	return nil
 }
+
+// IsOwner reports whether name is one of the names the crew file says the owner goes by (owner:), whatever its case
+// and with or without a leading @.
+func (c *Crew) IsOwner(name string) bool {
+	name = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(name), "@"))
+	if c == nil || name == "" {
+		return false
+	}
+
+	for _, o := range c.Owner {
+		if strings.ToLower(strings.TrimPrefix(strings.TrimSpace(o), "@")) == name {
+			return true
+		}
+	}
+
+	return false
+}
+
+// OnOthers reports whether a task waiting on `on` waits on someone other than the owner: a name is given and it is
+// not one of his.
+func (c *Crew) OnOthers(on string) bool { return on != "" && !c.IsOwner(on) }
