@@ -26,6 +26,9 @@ zmina log --since 12h
 zmina --config ops note --from mr-watch --if-up "!35 — 4 new threads"   # a job signals the dispatcher
 zmina watch ls            # detectors the ticker runs (watch: in the crew file), e.g. GitLab MR reviews
 zmina ui                  # one live page for every crew: what you hold, what to answer, what goes
+zmina limits              # how full the Claude and Codex plans are, and what the crew does as a window fills
+zmina route --kind review --of T-14          # which seat the crew file's routes give a piece of work
+zmina plugin ls           # programs told of what reaches you, so a chat bridge can carry your answer back
 zmina tell box-ops/ops "the dump is ready"   # a crew on another machine or user (zmina node), no hub
 ```
 
@@ -89,6 +92,23 @@ conversations (task ledger, event log) and recovery built in (last screens, brok
 that never lose an accepted signal, a state file that is never written over blind). It is not a
 TUI for running many agents on one task (claude-squad does that), not a manager hierarchy or merge
 queue (Gas Town), and not in-process delegation (Claude Code agent teams).
+
+## Plugins, plan limits and routes
+
+A **plugin** is a program of yours that zmina runs with one JSON event on its stdin whenever
+something reaches you: a question on your todo, one on a role's screen, one a role's turn ended on
+in plain words, a reminder. The event carries the exact command that answers it, so a bridge to a
+chat app lets you answer from a phone, and the answer is recorded as yours. zmina has the mechanism
+only: no plugin store, no download and no network code; `notify` keeps working beside it. A plugin
+is trusted with your voice, so it is run only from where the crew file says, as a file nobody else
+can write. `zmina skill plugins` has the events and the rules; `zmina plugin ls` shows what a crew
+runs.
+
+`zmina limits` shows the usage windows of the Claude and Codex plans and how old each reading is.
+As a window fills, the crew warns, asks its roles for checkpoints and holds delivery until the
+reset; `zmina limits release` lifts a hold by hand. The crew file's `routes:` say which seat takes
+which kind of work, with the plans' readings among what a rule may ask; `zmina route` answers for
+one piece of work and `--explain` says why.
 
 ## Runs on
 
