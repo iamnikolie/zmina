@@ -17,18 +17,19 @@ const (
 	longTalkAt = 250_000
 )
 
-// longTalk files one check for the owner about a role whose conversation has grown long and that nothing of zmina's
-// will shorten: its restarts are off, or the restart of this conversation was called off (the owner wrote into it, a
-// note never came). Every turn of such a conversation reads the whole of it again, and the owner is the one who
-// decides whether it goes on: he is told once a conversation. The dispatcher is left out: its recovery pack and
-// context_max keep it. It returns a line for the log.
-func (s *Shift) longTalk(name string, r *crew.Role, now time.Time) string {
-	if s.Asks == nil || name == s.Crew.Dispatcher {
+// longTalk files one check for the owner about a Claude role whose conversation has grown long and that nothing of
+// zmina's is about to shorten: it holds no task a restart_at would restart it for (a role the owner talks to), that
+// restart was given up for this conversation (no note came, a fresh start failed), and its context_max is off, not
+// reached yet, or its trim left it over the limit. Every turn of such a conversation reads the whole of it again,
+// and the owner is the one who decides whether it goes on: he is told once a conversation. The dispatcher is left
+// out: its recovery pack and context_max keep it. It returns a line for the log.
+func (s *Shift) longTalk(name string, r *crew.Role, now time.Time, tasks []string) string {
+	if s.Asks == nil || name == s.Crew.Dispatcher || r.IsCodex() {
 		return ""
 	}
 
 	rs := s.State.Role(name)
-	if !rs.Up || !rs.Downing.IsZero() || !rs.RestartAsked.IsZero() {
+	if !rs.Up || !rs.Downing.IsZero() || !rs.Releasing.IsZero() || !rs.RestartAsked.IsZero() {
 		return ""
 	}
 
@@ -38,7 +39,7 @@ func (s *Shift) longTalk(name string, r *crew.Role, now time.Time) string {
 	}
 
 	// A restart that is still to come shortens it: nothing for the owner to decide.
-	if s.restarts(r) && rs.RestartGaveUp != sess.SessionID {
+	if r.RestartContext() > 0 && len(tasks) > 0 && rs.RestartGaveUp != sess.SessionID {
 		return ""
 	}
 
@@ -56,7 +57,15 @@ func (s *Shift) longTalk(name string, r *crew.Role, now time.Time) string {
 		return ""
 	}
 
-	mark := "conversation " + shortSession(sess.SessionID)
+	// A trim that is due compacts it at the next idle moment; one that left it over the limit will not come again.
+	limit := r.ContextLimit()
+	stuck := rs.TrimSession == sess.SessionID && rs.TrimBase > limit
+
+	if limit > 0 && turn.Context >= limit && !stuck {
+		return ""
+	}
+
+	mark := "conversation " + name + " " + shortSession(sess.SessionID)
 
 	all, _, err := s.Asks.Scan()
 	if err != nil {
@@ -71,7 +80,7 @@ func (s *Shift) longTalk(name string, r *crew.Role, now time.Time) string {
 
 	ask, err := s.Asks.Add(asks.Ask{Kind: asks.Check, Role: "ticker", By: longTalkBy,
 		Title: fmt.Sprintf("%s: a long conversation, %s", name, Tokens(turn.Context)),
-		Text: fmt.Sprintf("%s's conversation holds %s and nothing shortens it by itself. Every turn reads all of it again; "+
+		Text: fmt.Sprintf("%s's conversation holds %s and nothing is about to shorten it. Every turn reads all of it again; "+
 			"turns this full are about half of what the crews cost. To start it again from its note: have it save "+
 			"zmina task checkpoint for what it holds, then zmina restart %s --fresh. To keep it as it is, ignore this: "+
 			"it is said once a conversation. (%s)", name, Tokens(turn.Context), name, mark)}, now)

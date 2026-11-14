@@ -20,13 +20,15 @@ func TestLongConversationIsToldToTheOwnerOnce(t *testing.T) {
 	r, err := f.s.Role("designer")
 	require.NoError(t, err)
 
-	assert.Empty(t, f.s.longTalk("designer", r, *f.now), "its restart is still to come")
+	held := []string{"T-1"}
+
+	assert.Empty(t, f.s.longTalk("designer", r, *f.now, held), "its restart is still to come")
 	assert.Empty(t, store.Pending())
 
 	// The restart of this conversation was called off: nothing shortens it now.
 	f.s.State.Role("designer").RestartGaveUp = "sid-designer"
 
-	line := f.s.longTalk("designer", r, *f.now)
+	line := f.s.longTalk("designer", r, *f.now, held)
 	assert.Contains(t, line, "designer: a long conversation (300k): told the owner (A-1)")
 
 	open := store.Pending()
@@ -34,18 +36,25 @@ func TestLongConversationIsToldToTheOwnerOnce(t *testing.T) {
 	assert.Equal(t, "designer: a long conversation, 300k", open[0].Title)
 	assert.Contains(t, open[0].Text, "zmina restart designer --fresh")
 
-	assert.Empty(t, f.s.longTalk("designer", r, *f.now), "said once")
+	assert.Empty(t, f.s.longTalk("designer", r, *f.now, held), "said once")
 
 	_, err = store.Close("A-1", asks.Ignored, "", *f.now)
 	require.NoError(t, err)
-	assert.Empty(t, f.s.longTalk("designer", r, *f.now), "and not again once he set it aside")
+	assert.Empty(t, f.s.longTalk("designer", r, *f.now, held), "and not again once he set it aside")
+
+	// A role that holds nothing is restarted for no task: the owner talks to it, and is told.
+	f.rg.byPID[f.tm.up["designer"]].SessionID = "next-designer"
+	f.rg.context["next-designer"] = 300_000
+	f.s.State.Role("designer").RestartGaveUp = ""
+	assert.Contains(t, f.s.longTalk("designer", r, *f.now, nil), "told the owner (A-2)")
+	f.rg.byPID[f.tm.up["designer"]].SessionID = "sid-designer"
 
 	// A shorter conversation, and the dispatcher's, are nobody's question.
 	f.rg.context["sid-designer"] = 100_000
 	f.s.State.Role("designer").RestartGaveUp = ""
-	assert.Empty(t, f.s.longTalk("designer", r, *f.now))
+	assert.Empty(t, f.s.longTalk("designer", r, *f.now, held))
 
 	d, err := f.s.Role("dispatcher")
 	require.NoError(t, err)
-	assert.Empty(t, f.s.longTalk("dispatcher", d, *f.now))
+	assert.Empty(t, f.s.longTalk("dispatcher", d, *f.now, nil))
 }

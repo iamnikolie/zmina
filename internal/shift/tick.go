@@ -286,7 +286,7 @@ func (s *Shift) Tick() []string {
 				did = append(did, line)
 			}
 
-			if line := s.longTalk(name, r, now); line != "" {
+			if line := s.longTalk(name, r, now, held[name]); line != "" {
 				did = append(did, line)
 			}
 		}
