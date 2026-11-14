@@ -111,7 +111,10 @@ type cdpPage struct {
 func startChrome(t *testing.T, chrome string) *cdpPage {
 	t.Helper()
 
-	profile := t.TempDir()
+	// Not t.TempDir: Chrome's helper processes outlive the kill by a moment and still write to the profile, and a
+	// directory that could not be removed then would fail a run whose pages all passed.
+	profile, err := os.MkdirTemp("", "zmina-browser-profile-")
+	require.NoError(t, err)
 	args := []string{"--headless=new", "--remote-debugging-port=0", "--user-data-dir=" + profile, "--no-first-run",
 		"--no-default-browser-check", "--disable-gpu", "--window-size=1280,900", "about:blank"}
 
@@ -125,6 +128,10 @@ func startChrome(t *testing.T, chrome string) *cdpPage {
 	t.Cleanup(func() {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
+
+		for i := 0; i < 50 && os.RemoveAll(profile) != nil; i++ {
+			time.Sleep(100 * time.Millisecond)
+		}
 	})
 
 	var port string
