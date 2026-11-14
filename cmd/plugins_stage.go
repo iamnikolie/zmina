@@ -55,8 +55,9 @@ type pluginWorld struct {
 	dialogStill func(f plugin.DialogFacts) bool
 }
 
-// pluginWorld reads what is open: each item on the owner's todo, and each question on a role's screen that its choose
-// command can answer (the one the screen shows, as chooseDialog reads it).
+// pluginWorld reads what is open: each item on the owner's todo, each question on a role's screen that its choose
+// command can answer (the one the screen shows, as chooseDialog reads it), and each question a role's last turn ended on in plain
+// words (standingTurn).
 func (a *app) pluginWorld(c *crew.Crew, now time.Time) (*pluginWorld, error) {
 	w := &pluginWorld{crew: c, items: map[string]todoItem{}, dialogs: map[string]plugin.DialogFacts{}}
 
@@ -85,6 +86,17 @@ func (a *app) pluginWorld(c *crew.Crew, now time.Time) (*pluginWorld, error) {
 				w.gaps.Roles[v.Role] = true
 			}
 
+			// No dialog on its screen: a role idle since a turn that ended on a question to the owner is awaited all the same (a
+			// standing dialog wins, and a role whose screen could not be read is judged by neither).
+			if !ok && known {
+				var turnKnown bool
+
+				facts, ok, turnKnown = standingTurn(c, v, items)
+				if !turnKnown {
+					w.gaps.Roles[v.Role] = true
+				}
+			}
+
 			if !ok {
 				continue
 			}
@@ -92,7 +104,7 @@ func (a *app) pluginWorld(c *crew.Crew, now time.Time) (*pluginWorld, error) {
 			key := plugin.DialogKey(plugin.DialogID(facts.Role, facts.ID))
 			w.dialogs[key] = facts
 			w.things = append(w.things, plugin.Thing{Key: key, ID: plugin.DialogID(facts.Role, facts.ID), Class: plugin.DialogThing,
-				Role: facts.Role, Opened: v.Since})
+				Role: facts.Role, Opened: facts.Since})
 		}
 
 		// Read again right before a question is told, as an item is: one answered, or asked again, since the look is not paged.
@@ -100,6 +112,13 @@ func (a *app) pluginWorld(c *crew.Crew, now time.Time) (*pluginWorld, error) {
 			v, _, ok := s.Look(f.Role)
 			if !ok {
 				return false
+			}
+
+			// A turn's question is on no screen: the record is read again, and the role must be idle since that very turn.
+			if f.Prompt == plugin.PromptTurn {
+				now, standing, known := standingTurn(c, v, nil)
+
+				return known && standing && now.ID == f.ID && now.Since.Equal(f.Since)
 			}
 
 			now, standing, known := standingDialog(s, c, v)
@@ -241,6 +260,47 @@ func standingDialog(s *shift.Shift, c *crew.Crew, v shift.View) (plugin.DialogFa
 	for _, o := range d.Options {
 		f.Options = append(f.Options, plugin.Option{N: o.N, Text: o.Label, Detail: o.Detail})
 	}
+
+	if len(v.Tasks) > 0 {
+		f.Task = v.Tasks[0]
+		if t, err := taskStore(c).Get(f.Task); err == nil {
+			f.TaskTitle = t.Headline()
+		}
+	}
+
+	return f, true, true
+}
+
+// turnAskWindow is how far before a turn's end an item of the role's own on the owner's todo still says it asked properly: the ask
+// is put on the list in the turn that asks, or a little before.
+const turnAskWindow = 15 * time.Minute
+
+// standingTurn is the question a role's last turn ended on, in plain words and with nothing on the owner's todo, that a plugin can
+// be told of: the record its Stop hook kept, while the role is up and idle at its input line (no dialog, no prompt) in the session
+// the record is of, and went idle within moments of the hook (shift.TurnRecord.Stands) — a role that took another turn since is
+// not awaiting it. Not when the role has an open item on the todo created since turnAskWindow before the record: it asked, and a
+// card exists. known is false when the record is there and does not read, and nothing is then judged ended.
+func standingTurn(c *crew.Crew, v shift.View, items []todoItem) (plugin.DialogFacts, bool, bool) {
+	if v.State != shift.PresenceUp || v.Status != "idle" || v.Prompt || v.Dialog != nil {
+		return plugin.DialogFacts{}, false, true
+	}
+
+	rec, err := shift.ReadTurn(c.Layout(), v.Role)
+	if err != nil {
+		return plugin.DialogFacts{}, false, false
+	}
+
+	if !rec.Stands(v) {
+		return plugin.DialogFacts{}, false, true
+	}
+
+	for _, it := range items {
+		if it.Role == v.Role && !it.Created.Before(rec.At.Add(-turnAskWindow)) {
+			return plugin.DialogFacts{}, false, true
+		}
+	}
+
+	f := plugin.DialogFacts{Role: v.Role, ID: rec.ID, Question: rec.Text, Prompt: plugin.PromptTurn, Since: rec.At}
 
 	if len(v.Tasks) > 0 {
 		f.Task = v.Tasks[0]
@@ -622,8 +682,8 @@ var errNotInLook = errors.New("not in the look")
 
 // line is the event of a due send as it goes on the plugin's stdin, and the id it carries: the one a failed try kept, or one built
 // now from what is open (an answered from where the thing lives). A dialog event is armed for one press before it goes: its nonce
-// is in its id, and the first press made with it, in the wait it was told in, disarms it. The error is errNotInLook for a thing that
-// is not in the look, else why the mark could not be written.
+// is in its id, and the first press made with it, in the wait it was told in, disarms it (a turn's question presses nothing, and is
+// not armed). The error is errNotInLook for a thing that is not in the look, else why the mark could not be written.
 func (w *pluginWorld) line(b plugin.Builder, d plugin.Due, now time.Time, armed plugin.Armed, at time.Time) ([]byte, string, error) {
 	switch {
 	case d.Retry != nil:
@@ -638,8 +698,12 @@ func (w *pluginWorld) line(b plugin.Builder, d plugin.Due, now time.Time, armed 
 
 		f.Nonce = plugin.NewNonce()
 
-		if err := armed.Arm(f.Nonce, plugin.DialogID(f.Role, f.ID), f.Since, at); err != nil {
-			return nil, d.Entry.ID, err
+		// A turn's question is answered by a line typed to the role, and nothing is pressed: its id carries a mark like any dialog's,
+		// so that every dialog event has one form, but none is armed, and a choose with it is refused as never told.
+		if f.Prompt != plugin.PromptTurn {
+			if err := armed.Arm(f.Nonce, plugin.DialogID(f.Role, f.ID), f.Since, at); err != nil {
+				return nil, d.Entry.ID, err
+			}
 		}
 
 		ev := b.Dialog(f)

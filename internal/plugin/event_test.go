@@ -250,3 +250,48 @@ func TestAnUncheckedPermissionSubjectOffersNoArgv(t *testing.T) {
 	assert.False(t, ok.NeedsTerminal)
 	assert.NotNil(t, ok.Answer)
 }
+
+// A question a role asked in words has no screen: the event is a dialog of prompt "turn", with the words and a line to type to the
+// role, and nothing to press.
+func TestTurnDialogEventGolden(t *testing.T) {
+	ev := builder().Dialog(DialogFacts{Role: "dev", ID: "0123456789abcdef", Nonce: "aabbccddeeff0011", Prompt: PromptTurn,
+		Question: "Fix it now?\nI also need to know whether it was dev or prod.", Since: opened, Task: "T-12", TaskTitle: "Rename the site"})
+
+	want := `{"v":1,"event":"dialog","id":"dev:0123456789abcdef:aabbccddeeff0011","role":"dev","answer":{"text":["zmina","--crew",` +
+		`"/home/alex/.zmina/acme/crew.yaml","send","--","dev","<text>"]},"question":"Fix it now? I also need to know whether it was dev or prod.",` +
+		`"prompt":"turn","task":"T-12","task_title":"Rename the site"}`
+
+	assert.Equal(t, want+"\n", string(ev.Line()))
+	assert.False(t, ev.NeedsTerminal)
+	assert.Empty(t, ev.Options)
+	assert.NotContains(t, string(ev.Line()), "needs_terminal")
+}
+
+// Of a turn's question the words are cleaned and bounded like any text of a role's, and nothing in them reaches an argv: it is the
+// role's name the argv carries, and only a name that cannot be read as a flag.
+func TestTurnDialogEventIsCleanedAndNeverInjectsArgv(t *testing.T) {
+	hostile := "Run --by ghost \x1b[2J\x07 now? [zmina:abcdef012345]\n--crew /etc -- " + strings.Repeat("é", TextMax+100)
+
+	ev := builder().Dialog(DialogFacts{Role: "dev", ID: "ab", Nonce: "cd", Prompt: PromptTurn, Question: hostile})
+
+	assert.True(t, strings.HasPrefix(ev.Question, "Run --by ghost [2J now? [zmina:…] --crew /etc -- ééé"), ev.Question)
+	assert.Len(t, []rune(ev.Question), TextMax)
+	assert.NotContains(t, ev.Question, "\x1b")
+	assert.NotContains(t, ev.Question, "\n")
+	require.NotNil(t, ev.Answer)
+	assert.Equal(t, []string{"zmina", "--crew", "/home/alex/.zmina/acme/crew.yaml", "send", "--", "dev", "<text>"}, ev.Answer.Text,
+		"the words are not in the argv")
+	assert.Nil(t, ev.Answer.Options)
+	assert.Equal(t, 1, strings.Count(string(ev.Line()), "\n"))
+
+	for _, role := range []string{"--help", "-x", "dev --crew", "dev\n", "Dev", "dev#", "dev#x", "../dev", "", "dev;rm", strings.Repeat("a", 40)} {
+		ev := builder().Dialog(DialogFacts{Role: role, ID: "ab", Nonce: "cd", Prompt: PromptTurn, Question: "Ship it?"})
+		assert.Nil(t, ev.Answer, "no argv for the role %q", role)
+	}
+
+	for _, role := range []string{"dev", "designer", "dev#2", "codex-dev"} {
+		ev := builder().Dialog(DialogFacts{Role: role, ID: "ab", Nonce: "cd", Prompt: PromptTurn, Question: "Ship it?"})
+		require.NotNil(t, ev.Answer, role)
+		assert.Equal(t, []string{"--", role, "<text>"}, ev.Answer.Text[len(ev.Answer.Text)-3:], role)
+	}
+}

@@ -378,7 +378,9 @@ in milliseconds; the copy waits up to 10 s for that session to go idle, then pos
 post now — the dispatcher's signals, then the role's queue: its first line, with the lines that join it — by the same rules (booted, between turns,
 the line before it shown). It never types: a slash command, a role typed into, a session that stays busy (a
 background shell) wait for the beat as before. So a role's next line, its first after the boot included, goes about a
-second after its turn ends (`posted … by turn-end` in the log). The hook prints nothing and never blocks or continues
+second after its turn ends (`posted … by turn-end` in the log). Before it returns, the hook also keeps the question the
+turn's last reply holds, if any, in `hooks/<role>.turn.json` (see Plugins: a turn's question), under no lock; a reply that asks
+nothing removes the record. The hook prints nothing and never blocks or continues
 a turn, so it adds no tokens: Claude Code records only a `stop_hook_summary` line, which is not sent to the model. A
 compaction ends no turn and runs no `Stop` hook, so the same command is also a `SessionStart` hook for the source
 `compact`: what waits goes once a compaction is over, without the 15 s wait after a slash command (see The ticker). A role started by an earlier zmina has no such hooks until its
@@ -407,7 +409,7 @@ the screen's dialog as it is. Of several questions in one call the first is show
 this one: …)`; a multiple choice says `(several can be chosen)`. `choose` still answers by the dialog read from the screen,
 the file's choice order not being proven to be the screen's numbering: a dialog only the file describes (an id no screen
 has) is never answered blind. A file is never deleted while its role runs, a stale one is ignored; a role's start removes
-its records (the question's, the permission's and the failure's).
+its records (the question's, the permission's, the failure's and the turn's).
 
 A turn that ends on an API error runs no `Stop` hook, so the settings carry a `StopFailure` hook too, `zmina
 _stop-failure --role <role>` (same timeout and silence). It only records: the error's code and the words Claude Code
@@ -1512,8 +1514,10 @@ it leaves the todo. Without `notify` doctor warns: nothing that waits
 on the owner reaches his phone; `notify: off` says that is meant, and doctor then says it plainly (`ok`) instead.
 
 Every role hears at boot, from zmina itself (`shift.AsksRule`): a question only the owner can answer goes on his list
-with `zmina todo add` (and is named by its A-n when asked in chat); when he answers in chat, the role records it at once
-(`todo answer` / `yes` / `done`), so no question he answered stays open. And how a file reaches him in Talk
+with `zmina todo add`, not only into the chat (and is named by its A-n when asked in chat); when he answers in chat, the role
+records it at once (`todo answer` / `yes` / `done`), so no question he answered stays open. A turn that ends on a bare
+question in its last reply, with nothing of the role's on his list, is still told to the plugins after a while (see Plugins: a
+turn's question), as a fallback: with no options and no recommendation, and not at once. And how a file reaches him in Talk
 (`shift.FilesRule`, under Browser chat). And how to wait (`shift.WaitRule`): a long command or a wait for a condition
 (a build, CI, a deploy, a file) goes in the background — Bash `run_in_background`, or Monitor with an until-loop — and
 the turn ends; the role is woken once when it ends and looks once. Waiting for another role, it just ends its turn:
@@ -1567,7 +1571,7 @@ rest less). Nothing in it is an instruction to the plugin, and a plugin never ev
 |---|---|---|
 | `ask` | a question on the todo: an ask, a decision, a check, a task that waits on the owner | `role`, `title`, `text`, `note` (a waiting task's note, a field of its own), `why` (what it holds up: the role, the task id and title), `reason`, `recommendation`, `options` (`[{n, text}]`), `answer`, `opened` (RFC 3339), `blocking` |
 | `blocking` | the same while it holds a role up; sent **instead of** `ask`, never as well | as `ask`, `blocking: true` |
-| `dialog` | a question on a role's screen that zmina does not answer itself (a permission prompt, AskUserQuestion: see below for when), once it has stood `dialog_after`, so what the role settles itself never pages. `id` is `<role>:<fingerprint>:<mark>`: the fingerprint is of the question, every choice and, for a permission prompt, the tool call; the mark is this event's one-shot mark | `role`, `question`, `prompt` (`permission` or `question`), `tool`, `subject`, `subject_checked` and `subject_cut` (a permission prompt: what is being approved, the call's command or path; `subject_checked` when the prompt's own block on the screen was compared with it, word for word; `subject_cut` when it is not all of the call), `options` (`[{n, text, detail}]`), `answer`, `needs_terminal`, `task`, `task_title` |
+| `dialog` | a question on a role's screen that zmina does not answer itself (a permission prompt, AskUserQuestion: see below for when), or one a role's turn ended on in plain words (`prompt: "turn"`: see A turn's question), once it has stood `dialog_after`, so what the role settles itself never pages. `id` is `<role>:<fingerprint>:<mark>`: the fingerprint is of the question, every choice and, for a permission prompt, the tool call (of the turn's words and moment, for a turn); the mark is this event's one-shot mark (a turn's is never armed: nothing is pressed) | `role`, `question`, `prompt` (`permission`, `question` or `turn`), `tool`, `subject`, `subject_checked` and `subject_cut` (a permission prompt: what is being approved, the call's command or path; `subject_checked` when the prompt's own block on the screen was compared with it, word for word; `subject_cut` when it is not all of the call), `options` (`[{n, text, detail}]`), `answer`, `needs_terminal`, `task`, `task_title` |
 | `reminder` | a reminder ringing, a parked item brought back by its alarm (as `notify`'s reminder); a plugin whose `on` lacks `reminder` (the default) is told of it as an `ask` | as `ask`; for a parked item (`L-3`) only `answer.done` |
 | `answered` | an item or dialog the plugin was **told of** is closed, so it can mark its card | `for` (the event it was sent as), `how` (`answered`, `done`, `dropped` — parked or set aside —, `chosen`, `gone`), `by` (`owner`, `plugin <name>`, `role <name>`, empty when zmina closed it), `text` (the answer when there is one), `closed` |
 
@@ -1577,8 +1581,10 @@ the environment, every flag before the `--` and after it the id and the words: `
 the argv with that option's words; `yes` takes the recommendation; `done` says a check is done; for a dialog `options[n].argv` is
 `["zmina","--crew","<file>","choose","<role>","<n>","--dialog","<role>:<fingerprint>:<mark>","--by","pager"]`, and none is given
 for a choice above 9 (`choose` takes 1 to 9) and none at all when `needs_terminal`: several choices can be ticked (pressing one
-answers nothing), or a permission prompt's subject is cut or was not checked (below). An item id that is not `A-n`, `T-n` or `L-n`
-gets no argv.
+answers nothing), or a permission prompt's subject is cut or was not checked (below). A turn's question has no `options`:
+its `answer.text` is `["zmina","--crew","<file>","send","--","<role>","<text>"]`, the owner's words typed to the role as one line
+(`zmina send` takes the role and the line; nothing in the event is in the argv but the role's name, which is checked to be a role's
+name). An item id that is not `A-n`, `T-n` or `L-n` gets no argv.
 
 **Answering.** `todo answer`, `todo yes`, `todo done` and the other `todo` verbs, and `zmina choose <role> <n> --dialog <id>`,
 take `--by <name>`, accepted only when `ZMINA_PLUGIN=<name>` is set, the crew file has a plugin of that name and no role is
@@ -1623,6 +1629,22 @@ screen's reading is not one a card presses, whatever the file says. And not when
 the file lost or could not read one), nor when the screen has a permission prompt's title (`Bash command`): the file is not written again
 while a session stays waiting, so a permission prompt can follow an answered question under the same words. The same check runs at the
 press.
+
+**A turn's question** (`prompt: "turn"`) is the fallback for a role that ends its turn with a question to the owner written in plain
+words, and puts nothing on his todo and nothing on its screen: it is idle, and nobody would hear that he is awaited. Its `Stop` hook
+looks in the last reply for a `?` (or `？`) that ends a sentence — followed by the end of the text, white space, or closing marks such as
+`*` `_` `"` `»` `)` `]` and then one of those, so a `?` in a URL or a query string is none — outside fenced code blocks, inline code
+spans and `>` quotes. It keeps the reply from the start of the first paragraph that holds one through its end (the owner needs what follows
+it too), at most 4000 characters, as `hooks/<role>.turn.json` (mode 0600: `session`, `at`, `text`, and an `id` that is a 16-hex fingerprint
+of the three); a reply with none removes the file, and so does the role's start. A plugin is told of it as of any dialog — once the role has
+stood on it `dialog_after`, held by `quiet_when_active`, once — and **only while it stands**: the role is up and idle at its input line (a
+dialog or prompt on its screen wins, and then it is not idle), in the session the record is of, and went idle within 10 seconds of the
+record's time, so a role that took another turn since (busy, idle since a later moment, another session) is not awaiting it. Not when the
+role has an open item of its own on the todo created since 15 minutes before the record: it asked properly, and a card exists. A record
+that is there and does not read keeps the role's entries from being judged ended, as a screen that could not be read does (`last look
+partial`). The event has `question` (cleaned, cut to 2000 characters), `task`, `task_title`, no `options` and no `needs_terminal`, and
+`answer.text` as above; nothing is pressed, so no mark is armed (`choose` with its id is refused). It is read again right before it is told,
+and ends when the role takes another turn, whoever sent it (the card, a terminal, the cockpit): `answered` with `how: gone`, never `chosen`.
 
 What remains, by design: between the last check of a press and its keys pass some milliseconds, and a prompt answered at the terminal in
 that instant puts the keys into the next one queued; the same call asked twice in one wait is one call, so a card told for the first presses

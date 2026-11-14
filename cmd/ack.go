@@ -145,6 +145,18 @@ func hookSource(in io.Reader) string {
 type hookInput struct {
 	Source    string `json:"source"`
 	SessionID string `json:"session_id"`
+	// LastMessage is a Stop hook's last reply of the turn, a string (anything else is no reply: see lastReply).
+	LastMessage json.RawMessage `json:"last_assistant_message"`
+}
+
+// lastReply is the turn's last reply of a Stop hook's input; empty when it has none or it is not a string.
+func (h hookInput) lastReply() string {
+	var s string
+	if json.Unmarshal(h.LastMessage, &s) != nil {
+		return ""
+	}
+
+	return s
 }
 
 // readHook reads a hook's input: empty when run by hand (a terminal on stdin) or when it is not JSON. The whole

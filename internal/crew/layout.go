@@ -73,7 +73,7 @@ func (l Layout) ScreenRulesTold() string { return filepath.Join(l.Dir, "screen-r
 func (l Layout) LaterSweep() string { return filepath.Join(l.Dir, "later-sweep.json") }
 
 // Hooks is the directory of what a role's hooks recorded for zmina to read: one small file a role and kind, replaced by
-// the next record (HookQuestion, HookFailure). A file here is only ever read as a hint, with the session it is about
+// the next record (HookQuestion, HookFailure, HookTurn). A file here is only ever read as a hint, with the session it is about
 // and the time it was written; a role started before a hook existed has none.
 func (l Layout) Hooks() string { return filepath.Join(l.Dir, "hooks") }
 
@@ -91,6 +91,12 @@ func (l Layout) HookPermission(role string) string {
 // HookFailure is the API error a role's StopFailure hook saw end its turn.
 func (l Layout) HookFailure(role string) string {
 	return filepath.Join(l.Hooks(), role+".failure.json")
+}
+
+// HookTurn is the question a role's Stop hook found in its last reply: prose to the owner that nothing on his todo carries
+// (hooks/<role>.turn.json). It is removed when the next reply holds none.
+func (l Layout) HookTurn(role string) string {
+	return filepath.Join(l.Hooks(), role+".turn.json")
 }
 
 // Delivery is the directory of the delivery cards: one file a role (DeliveryCards), the facts zmina saw of each line it

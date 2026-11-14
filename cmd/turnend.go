@@ -22,7 +22,7 @@ const (
 // session id, starts its own detached copy and returns at once: no output, exit 0 whatever happens, so the end of
 // a turn costs the role no tokens and no wait. The copy (--wait) waits for the session to go idle and posts what
 // waits for the role the way the beat would (Shift.TurnEnd), so a line goes when the turn is over, not up to a
-// minute later.
+// minute later. Before it returns it also records the question the turn's last reply holds, if any (recordTurn).
 func (a *app) turnEndCommand() *cobra.Command {
 	var (
 		role, session string
@@ -44,7 +44,8 @@ func (a *app) turnEndCommand() *cobra.Command {
 			}
 
 			in := cmd.InOrStdin()
-			sid := readHook(in).SessionID
+			hook := readHook(in)
+			sid := hook.SessionID
 
 			// Whatever is left is read too, so Claude Code never writes into a closed pipe.
 			if piped(in) {
@@ -62,6 +63,8 @@ func (a *app) turnEndCommand() *cobra.Command {
 
 			_ = spawn([]string{"--crew", a.crewPath(), "_turn-end", "--role", role, "--session", sid, "--wait"})
 
+			a.recordTurn(role, sid, hook.lastReply())
+
 			return nil
 		},
 	}
@@ -71,6 +74,16 @@ func (a *app) turnEndCommand() *cobra.Command {
 	c.Flags().BoolVar(&wait, "wait", false, "wait for the session to go idle, then post (the detached copy)")
 
 	return c
+}
+
+// recordTurn keeps the question the turn's last reply holds, for the plugins to be told that the owner is awaited (shift.RecordTurn):
+// no state lock, one small file, and nothing it does can be seen or can fail the hook, a panic included.
+func (a *app) recordTurn(role, session, reply string) {
+	defer func() { _ = recover() }()
+
+	if l, ok := a.hookLayout(); ok {
+		_ = shift.RecordTurn(l, role, session, reply, time.Now())
+	}
 }
 
 // spawnDetached starts this zmina in a session of its own with nothing on stdin, stdout or stderr, so the hook that
