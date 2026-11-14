@@ -81,6 +81,18 @@ func TestTurnQuestion(t *testing.T) {
 		{name: "a comment inside a line", reply: "Done <!-- why? --> now."},
 		{name: "text around a comment is asked", reply: "Done <!-- why --> now, ok?", want: "Done <!-- why --> now, ok?", asked: true},
 
+		// The items of a list are one paragraph, whether or not blank lines stand between them.
+		{name: "a loose list does not push the question out of the last three", reply: "Should I deploy?\n\n1. a\n\n2. b\n\n3. c",
+			want: "Should I deploy?\n\n1. a\n\n2. b\n\n3. c", asked: true},
+		{name: "a bulleted loose list", reply: "Should I deploy?\n\n- a\n\n- b\n\n* c\n\n+ d", want: "Should I deploy?\n\n- a\n\n- b\n\n* c\n\n+ d", asked: true},
+		{name: "numbers with a bracket", reply: "Which one?\n\n1) a\n\n2) b\n\n3) c\n\n4) d", want: "Which one?\n\n1) a\n\n2) b\n\n3) c\n\n4) d", asked: true},
+		{name: "a list with its question inside", reply: "Plan:\n\n- a\n\n- b?\n\n- c", want: "- a\n\n- b?\n\n- c", asked: true},
+		{name: "a list does not go on through a paragraph of words", reply: "Ask?\n\n- a\n\nWords.\n\n- b\n\n- c"},
+		{name: "a list does not go on through a heading", reply: "Ask?\n\n- a\n\n## Heading\n\nWords.\n\n- b\n\n- c"},
+		{name: "a heading between lists splits them", reply: "Ask?\n\n- a\n\n## Heading\n\n- b\n\n- c", want: "Ask?\n\n- a\n\n## Heading\n\n- b\n\n- c", asked: true},
+		{name: "bold is no list", reply: "Ask?\n\n**a**\n\n**b**\n\n**c**"},
+		{name: "a number that begins a sentence is no list", reply: "Ask?\n\n2026 was long.\n\n2027 will be.\n\n2028 too."},
+
 		// What may follow the mark.
 		{name: "a colon after the mark", reply: "Fix it now?: yes or no", want: "Fix it now?: yes or no", asked: true},
 		{name: "a full stop after the mark", reply: "Really?.", want: "Really?.", asked: true},
@@ -248,8 +260,9 @@ func TestReadTurnTakesOnlyARecordWhoseIdIsItsFingerprint(t *testing.T) {
 	}
 }
 
-// The record is the question and where it is from; a turn that asks nothing takes it away.
-func TestRecordTurnWritesAndRemoves(t *testing.T) {
+// The record is the turn's: the question and where it is from, and when the turn before it ended. A turn that asks nothing leaves a
+// record with no text, and a turn that ends after it knows when that one ended.
+func TestRecordTurnWritesTheTurnAndWhenTheOneBeforeEnded(t *testing.T) {
 	l := crew.Layout{Dir: t.TempDir()}
 	at := time.Date(2026, 11, 13, 9, 30, 0, 0, time.UTC)
 
@@ -260,6 +273,7 @@ func TestRecordTurnWritesAndRemoves(t *testing.T) {
 	require.NotNil(t, rec)
 	assert.Equal(t, "sid-1", rec.SessionID)
 	assert.True(t, at.Equal(rec.At))
+	assert.True(t, rec.Prev.IsZero(), "no turn before it is known")
 	assert.Equal(t, "Ship it?", rec.Text)
 	assert.Regexp(t, `^[0-9a-f]{16}$`, rec.ID)
 
@@ -267,23 +281,70 @@ func TestRecordTurnWritesAndRemoves(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o600), st.Mode().Perm())
 
-	// The same words in another turn are another question.
+	// The same words in another turn are another question, and the record it replaces is the turn before it.
 	require.NoError(t, RecordTurn(l, "dev", "sid-1", "Done.\n\nShip it?", at.Add(time.Minute)))
 
 	again, err := ReadTurn(l, "dev")
 	require.NoError(t, err)
 	assert.NotEqual(t, rec.ID, again.ID)
+	assert.True(t, at.Equal(again.Prev))
 
-	// The next turn asks nothing.
+	// The next turn asks nothing: a record with no text says so, and when it ended.
 	require.NoError(t, RecordTurn(l, "dev", "sid-1", "Shipped.", at.Add(2*time.Minute)))
-	assert.NoFileExists(t, l.HookTurn("dev"))
 
 	none, err := ReadTurn(l, "dev")
 	require.NoError(t, err)
-	assert.Nil(t, none)
+	require.NotNil(t, none)
+	assert.Empty(t, none.Text)
+	assert.True(t, at.Add(2*time.Minute).Equal(none.At))
+	assert.True(t, at.Add(time.Minute).Equal(none.Prev))
+	assert.Regexp(t, `^[0-9a-f]{16}$`, none.ID, "it is a record like any: its id is its fingerprint")
 
-	// Taking away what is not there is no error.
-	require.NoError(t, RecordTurn(l, "dev", "sid-1", "Shipped.", at.Add(3*time.Minute)))
+	// The turn after it is of the same session and knows when that one ended.
+	require.NoError(t, RecordTurn(l, "dev", "sid-1", "Shall I go on?", at.Add(3*time.Minute)))
+
+	next, err := ReadTurn(l, "dev")
+	require.NoError(t, err)
+	assert.Equal(t, "Shall I go on?", next.Text)
+	assert.True(t, at.Add(2*time.Minute).Equal(next.Prev))
+
+	// A turn of another session does not know of one of a conversation that is over; nor does one that is not after it.
+	require.NoError(t, RecordTurn(l, "dev", "sid-2", "Shall I?", at.Add(4*time.Minute)))
+
+	other, err := ReadTurn(l, "dev")
+	require.NoError(t, err)
+	assert.True(t, other.Prev.IsZero())
+
+	require.NoError(t, RecordTurn(l, "dev", "sid-2", "Shall I?", at.Add(time.Minute)))
+
+	earlier, err := ReadTurn(l, "dev")
+	require.NoError(t, err)
+	assert.True(t, earlier.Prev.IsZero(), "a record from the future is no turn before")
+}
+
+// The end of a question keeps the turn: its text is cleared and nothing else, so the turn after it still knows when it ended. A record
+// that is not there, or does not read, has nothing to clear.
+func TestClearTurnKeepsWhenTheTurnEnded(t *testing.T) {
+	l := crew.Layout{Dir: t.TempDir()}
+	at := time.Date(2026, 11, 13, 9, 30, 0, 0, time.UTC)
+
+	require.NoError(t, ClearTurn(l, "dev"), "none")
+	assert.NoFileExists(t, l.HookTurn("dev"))
+
+	require.NoError(t, RecordTurn(l, "dev", "sid-1", "Done.", at))
+	require.NoError(t, RecordTurn(l, "dev", "sid-1", "Ship it?", at.Add(time.Minute)))
+	require.NoError(t, ClearTurn(l, "dev"))
+
+	rec, err := ReadTurn(l, "dev")
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+	assert.Empty(t, rec.Text)
+	assert.True(t, at.Add(time.Minute).Equal(rec.At))
+	assert.True(t, at.Equal(rec.Prev))
+	assert.Equal(t, "sid-1", rec.SessionID)
+
+	require.NoError(t, os.WriteFile(l.HookTurn("dev"), []byte("{"), 0o600))
+	require.Error(t, ClearTurn(l, "dev"), "what does not read is dropped, not cleared")
 }
 
 // A role or a session that cannot name a file records nothing, and a crew directory that is not there is not made.

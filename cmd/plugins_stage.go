@@ -271,18 +271,28 @@ func standingDialog(s *shift.Shift, c *crew.Crew, v shift.View) (plugin.DialogFa
 	return f, true, true
 }
 
-// turnAskWindow is how far before a turn's end an item of the role's own on the owner's todo still says it asked properly: the ask
-// is put on the list in the turn that asks, or a little before.
+// turnAskWindow is how far before a turn's end an item of the role's own on the owner's todo still says it asked properly when it is
+// not known when the turn before it ended (the first turn, or a record a start dropped): the ask is put on the list in the turn that
+// asks, or a little before.
 const turnAskWindow = 15 * time.Minute
 
-// turnAsked reports whether a role put a question on the owner's todo since a moment: an ask it made, or a task it set waiting on the
-// owner, whether it still waits there or the owner has answered it, done it, parked it or set it aside since (a plugin that was told
-// of the item has had its card). A file that does not read says nothing.
-func turnAsked(c *crew.Crew, role string, since time.Time) bool {
+// turnAsked reports whether a role put a question on the owner's todo in the turn that ended on the question the record holds: an ask it
+// made, or a task it set waiting on the owner, whether it still waits there or the owner has answered it, done it, parked it or set it
+// aside since (a plugin that was told of the item has had its card). That turn began after the one before it ended (rec.Prev), so an
+// item made after that is of it, and one made before is of an earlier turn, which says nothing of this one's words; where the earlier
+// turn's end is not known the item must be from turnAskWindow before the record on. A waiting task has no time it began to wait but
+// the time its file was updated, so a later edit of it (a note, a state kept) counts as made in the turn that edited it. A file that
+// does not read says nothing.
+func turnAsked(c *crew.Crew, role string, rec *shift.TurnRecord) bool {
+	since, ok := rec.Prev, !rec.Prev.IsZero()
+	if !ok {
+		since = rec.At.Add(-turnAskWindow)
+	}
+
 	asked, _, _ := askStore(c).Scan()
 
 	for _, a := range asked {
-		if a.Role == role && !a.Created.Before(since) {
+		if a.Role == role && a.Created.After(since) {
 			return true
 		}
 	}
@@ -290,7 +300,7 @@ func turnAsked(c *crew.Crew, role string, since time.Time) bool {
 	tasks, _, _ := taskStore(c).Scan()
 
 	for _, t := range tasks {
-		if t.Role == role && t.State == task.Waiting && t.On == "" && !t.Updated.Before(since) {
+		if t.Role == role && t.State == task.Waiting && t.On == "" && t.Updated.After(since) {
 			return true
 		}
 	}
@@ -301,8 +311,9 @@ func turnAsked(c *crew.Crew, role string, since time.Time) bool {
 // standingTurn is the question a role's last turn ended on, in plain words and with nothing on the owner's todo, that a plugin can
 // be told of: the record its Stop hook kept, while the role is up and idle at its input line (no dialog, no prompt) in the session
 // the record is of, and went idle within moments of the hook (shift.TurnRecord.Stands) — a role that took another turn since is
-// not awaiting it. Not when the role has an item of its own on the todo from turnAskWindow before the record on (turnAsked), open or
-// closed: it asked, and a card exists. known is false when the record is there and does not read, and nothing is then judged ended.
+// not awaiting it. A record with no text is a turn that asked nothing, and is no thing. Not when the role put something of its own on
+// the todo in that turn (turnAsked), open or closed: it asked, and a card exists. known is false when the record is there and does not
+// read, and nothing is then judged ended.
 func standingTurn(c *crew.Crew, v shift.View) (plugin.DialogFacts, bool, bool) {
 	if v.State != shift.PresenceUp || v.Status != "idle" || v.Prompt || v.Dialog != nil {
 		return plugin.DialogFacts{}, false, true
@@ -313,11 +324,11 @@ func standingTurn(c *crew.Crew, v shift.View) (plugin.DialogFacts, bool, bool) {
 		return plugin.DialogFacts{}, false, false
 	}
 
-	if !rec.Stands(v) {
+	if rec == nil || rec.Text == "" || !rec.Stands(v) {
 		return plugin.DialogFacts{}, false, true
 	}
 
-	if turnAsked(c, v.Role, rec.At.Add(-turnAskWindow)) {
+	if turnAsked(c, v.Role, rec) {
 		return plugin.DialogFacts{}, false, true
 	}
 
@@ -712,8 +723,8 @@ var errNotInLook = errors.New("not in the look")
 
 // line is the event of a due send as it goes on the plugin's stdin, and the id it carries: the one a failed try kept, or one built
 // now from what is open (an answered from where the thing lives). A dialog event is armed for one press before it goes: its nonce
-// is in its id, and the first press made with it, in the wait it was told in, disarms it (a turn's question presses nothing, and is
-// not armed). The error is errNotInLook for a thing that is not in the look, else why the mark could not be written.
+// is in its id, and the first press made with it, in the wait it was told in, disarms it (the answer to a turn's question is the
+// press of that one). The error is errNotInLook for a thing that is not in the look, else why the mark could not be written.
 func (w *pluginWorld) line(b plugin.Builder, d plugin.Due, now time.Time, armed plugin.Armed, at time.Time) ([]byte, string, error) {
 	switch {
 	case d.Retry != nil:
@@ -728,12 +739,10 @@ func (w *pluginWorld) line(b plugin.Builder, d plugin.Due, now time.Time, armed 
 
 		f.Nonce = plugin.NewNonce()
 
-		// A turn's question is answered by a line typed to the role, and nothing is pressed: its id carries a mark like any dialog's,
-		// so that every dialog event has one form, but none is armed, and a choose with it is refused as never told.
-		if f.Prompt != plugin.PromptTurn {
-			if err := armed.Arm(f.Nonce, plugin.DialogID(f.Role, f.ID), f.Since, at); err != nil {
-				return nil, d.Entry.ID, err
-			}
+		// A turn's question is armed as any dialog is: the one answer given with its mark (send --by --dialog) spends it, and only the
+		// plugin that was told it has it.
+		if err := armed.Arm(f.Nonce, plugin.DialogID(f.Role, f.ID), f.Since, at); err != nil {
+			return nil, d.Entry.ID, err
 		}
 
 		ev := b.Dialog(f)

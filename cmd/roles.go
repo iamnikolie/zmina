@@ -1004,7 +1004,9 @@ func (a *app) sendCommand() *cobra.Command {
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			text := strings.Join(args[1:], " ")
-			if strings.ContainsAny(text, "\r\n") {
+
+			// The owner's words through a plugin are folded to one line whatever they hold; any other line is one.
+			if via == "" && strings.ContainsAny(text, "\r\n") {
 				return errors.New("send takes one line; for more, use SendMessage from a session")
 			}
 

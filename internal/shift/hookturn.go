@@ -19,9 +19,9 @@ import (
 
 // A role may end its turn on a question to the owner written in prose, with nothing on his todo and no dialog on its screen:
 // it is idle, and nobody is told that he is awaited. The role's Stop hook finds such a question in the last reply and records it
-// (hooks/<role>.turn.json, one file a role, replaced by the next turn's record or removed by a turn that asks nothing). Like every
-// hook record it is a hint: it names its session and the time it was written, and a view stands by it only while the role is idle
-// since that very turn (TurnRecord.Stands).
+// (hooks/<role>.turn.json, one file a role, replaced at the end of each turn: a turn that asks nothing leaves a record with no text,
+// which says when it ended). Like every hook record it is a hint: it names its session and the time it was written, and a view
+// stands by it only while the role is idle since that very turn (TurnRecord.Stands).
 
 const (
 	// turnTextMax is the most characters of a question a record keeps: the question's paragraph and what follows it, cut at its end.
@@ -57,13 +57,17 @@ func zeroWidth(r rune) bool {
 // htmlComment is an HTML comment inside a paragraph: not words to the owner.
 var htmlComment = regexp.MustCompile(`(?s)<!--.*?-->`)
 
-// TurnRecord is what a role's Stop hook wrote when its last reply held a question to the owner: the session the turn was of, when
-// the hook ran, the question's paragraph and what follows it, and a fingerprint of the three.
+// TurnRecord is what a role's Stop hook wrote at the end of a turn: the session the turn was of, when the hook ran, the question
+// the last reply held — its paragraph and what follows it; empty when the reply asked none, which is a record of a turn and no question
+// — and a fingerprint of the three.
 type TurnRecord struct {
 	SessionID string    `json:"session"`
 	At        time.Time `json:"at"`
-	Text      string    `json:"text"`
-	ID        string    `json:"id"`
+	// Prev is when the turn before this one ended, from the record this one replaced; zero when it is not known. What the role put on
+	// the owner's todo after it was put there in this turn, the one that ended on the question.
+	Prev time.Time `json:"prev,omitzero"`
+	Text string    `json:"text"`
+	ID   string    `json:"id"`
 }
 
 // TurnQuestion is the question a role's reply holds, with what the owner needs to read it: the reply from the start of the first
@@ -94,24 +98,39 @@ func TurnQuestion(reply string) (string, bool) {
 
 	// A paragraph runs to the next blank line that is not inside code; the lines of a fence, a quote, a heading or a table in it are
 	// its own, and are not looked in. Only the last of those that hold prose are; the question is kept from the first line of prose of
-	// the first of them that asks.
+	// the first of them that asks. The items of a list are one paragraph, whether or not blank lines stand between them: a loose list
+	// of five items is not five paragraphs that push the question above it out of the last three.
 	type paragraph struct{ from, to, first int }
 
 	var paras []paragraph
 
 	blank := func(i int) bool { return prose[i] && strings.TrimSpace(lines[i]) == "" }
+	afterList := false
 
 	for from, i := 0, 0; i <= len(lines); i++ {
 		if i < len(lines) && !blank(i) {
 			continue
 		}
 
-		for j := from; j < i; j++ {
-			if prose[j] {
-				paras = append(paras, paragraph{from, i, j})
+		first := -1
 
-				break
+		for j := from; j < i && first < 0; j++ {
+			if prose[j] {
+				first = j
 			}
+		}
+
+		switch {
+		case first < 0:
+			// Blank lines, or a paragraph of code, a quote, a heading or a table: no prose, and a list does not go on through it.
+			if i > from {
+				afterList = false
+			}
+		case afterList && listItem(lines[first]):
+			paras[len(paras)-1].to = i
+		default:
+			paras = append(paras, paragraph{from, i, first})
+			afterList = listItem(lines[first])
 		}
 
 		from = i + 1
@@ -132,6 +151,20 @@ func TurnQuestion(reply string) (string, bool) {
 	}
 
 	return "", false
+}
+
+// listItem reports a line that opens an item of a list: a bullet (`-`, `*`, `+`) or a number and a full stop or bracket, then a space.
+// Bold text (`**word**`) and a number that begins a sentence (`2026 was`) are no items.
+func listItem(line string) bool {
+	t := strings.TrimLeft(line, " \t")
+
+	if len(t) >= 2 && strings.ContainsRune("-*+", rune(t[0])) && (t[1] == ' ' || t[1] == '\t') {
+		return true
+	}
+
+	n := len(t) - len(strings.TrimLeft(t, "0123456789"))
+
+	return n >= 1 && n <= 9 && len(t) > n+1 && (t[n] == '.' || t[n] == ')') && (t[n+1] == ' ' || t[n+1] == '\t')
 }
 
 // withoutFenceRemainder takes the start of a text that is cut inside a fenced block off: an odd number of fence lines in it says the
@@ -333,26 +366,43 @@ func turnID(session string, at time.Time, text string) string {
 	return hex.EncodeToString(sum[:])[:16]
 }
 
-// RecordTurn reads what a Stop hook gave (the session and the turn's last reply) and writes the question the reply holds as the
-// role's record, replacing the one before; a reply that holds none removes it. A role that is no file name, or no session, records
-// nothing. An error when the record could not be written or removed.
+// RecordTurn reads what a Stop hook gave (the session and the turn's last reply) and writes the role's record of the turn, replacing the
+// one before: the question the reply holds, or none (an empty text: the turn asked nothing, and is no thing for anyone to be told of).
+// The record keeps when the turn before it ended (Prev), which is the record it replaces, when that is of the same session: so the
+// next look knows which turn an ask of the role was made in. A role that is no file name, or no session, records nothing. An error
+// when the record could not be written.
 func RecordTurn(l crew.Layout, role, session, reply string, now time.Time) error {
 	if !hookRole(role) || session == "" {
 		return nil
 	}
 
-	text, ok := TurnQuestion(reply)
-	if !ok {
-		return DropTurn(l, role)
+	text, _ := TurnQuestion(reply)
+	now = now.UTC()
+	rec := TurnRecord{SessionID: session, At: now, Text: text, ID: turnID(session, now, text)}
+
+	// What cannot be read is no turn before this one: the first, or the one a start, a compaction, a clear or an error dropped.
+	if old, err := ReadTurn(l, role); err == nil && old != nil && old.SessionID == session && old.At.Before(now) {
+		rec.Prev = old.At
 	}
 
-	now = now.UTC()
-
-	return writeRecord(l, l.HookTurn(role), TurnRecord{SessionID: session, At: now, Text: text, ID: turnID(session, now, text)})
+	return writeRecord(l, l.HookTurn(role), rec)
 }
 
-// DropTurn removes a role's turn record: a turn that asks nothing, a turn that ended on an error, the start of a new conversation
-// and an answer that was taken leave none. No record is no error.
+// ClearTurn ends the question a record holds without losing when its turn ended: the record is written again with no text. A role with
+// no record, or none that reads, has nothing to clear (the caller drops what does not read, DropTurn).
+func ClearTurn(l crew.Layout, role string) error {
+	rec, err := ReadTurn(l, role)
+	if err != nil || rec == nil {
+		return err
+	}
+
+	rec.Text, rec.ID = "", turnID(rec.SessionID, rec.At, "")
+
+	return writeRecord(l, l.HookTurn(role), *rec)
+}
+
+// DropTurn removes a role's turn record: a turn that ended on an error, the start of a new conversation (a start, a compaction, a
+// clear) leave none. No record is no error.
 func DropTurn(l crew.Layout, role string) error {
 	if !hookRole(role) {
 		return nil
@@ -365,8 +415,9 @@ func DropTurn(l crew.Layout, role string) error {
 	return nil
 }
 
-// ReadTurn is the question a role's hook recorded: nil, with no error, when it recorded none; an error when the file is there
-// and does not read, or its id is not the fingerprint of its session, moment and words (a record that was written by no hook).
+// ReadTurn is the record a role's hook kept of its last turn (whose Text is empty when the turn asked nothing): nil, with no error,
+// when there is none; an error when the file is there and does not read, or its id is not the fingerprint of its session, moment and
+// words (a record that was written by no hook).
 func ReadTurn(l crew.Layout, role string) (*TurnRecord, error) {
 	if !hookRole(role) {
 		return nil, nil
@@ -393,8 +444,8 @@ func ReadTurn(l crew.Layout, role string) (*TurnRecord, error) {
 		return nil, err
 	}
 
-	if rec.SessionID == "" || rec.Text == "" || rec.At.UnixMilli() <= 0 {
-		return nil, errors.New("a turn record with no session, text or time")
+	if rec.SessionID == "" || rec.At.UnixMilli() <= 0 {
+		return nil, errors.New("a turn record with no session or time")
 	}
 
 	if !validTurnID(rec.ID) || rec.ID != turnID(rec.SessionID, rec.At, rec.Text) {

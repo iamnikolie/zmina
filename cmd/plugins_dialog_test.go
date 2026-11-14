@@ -46,6 +46,9 @@ type dialogScreenTmux struct {
 	screen string
 	input  bool
 	keys   [][]string
+	// draft is what its input line holds, typed is every line typed into it.
+	draft string
+	typed []string
 
 	// waitingFor is what the session file says it waits on: "input needed" (a question) or "permission prompt"; since is when the
 	// wait began, as the session file has it.
@@ -68,7 +71,24 @@ func (f *dialogScreenTmux) Prompt(string) (string, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	return "", f.input, nil
+	return f.draft, f.input, nil
+}
+
+// Type records a line typed into the role's prompt.
+func (f *dialogScreenTmux) Type(_, text string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.typed = append(f.typed, text)
+
+	return nil
+}
+
+func (f *dialogScreenTmux) typedLines() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return append([]string(nil), f.typed...)
 }
 
 func (f *dialogScreenTmux) Capture(string, int) (string, error) {

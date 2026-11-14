@@ -1407,34 +1407,79 @@ func (s *Shift) Send(name, text string) error {
 		return &SendQueued{What: what, Until: until.In(s.Crew.Location())}
 	}
 
-	// Posted to its inbox socket, the line arrives as a message from zmina whatever its input line holds; a post
-	// that never started is typed instead.
+	why, err := s.sendNow(name, text, senderOf(s.By))
+	if why != "" {
+		return Partial(fmt.Errorf("%s: not typed, %s; zmina send --when-idle queues the line for when the role can take it", name, why))
+	}
+
+	return err
+}
+
+// sendNow gives a role one line at once: posted to its inbox socket, which shows it as a message from zmina whatever its input line
+// holds (a post that never started is typed instead), else typed where the queue's typed delivery would put it (typingBlock): never
+// into a dialog, over a draft or a line that has not landed. from is who the line's card says wrote it. why is not empty when nothing was
+// given because it could not be typed, and err is what a post or the typing failed with.
+func (s *Shift) sendNow(name, text, from string) (why string, err error) {
 	if sess := s.native(name, s.Now()); sess != nil && postable(text) {
 		err := s.post(name, sess, text, s.Now())
 		if err == nil {
-			s.cardNew(name, text, Facts{From: senderOf(s.By)})
+			s.cardNew(name, text, Facts{From: from})
 			s.cardAccept(name, text, s.acceptedBy(name), sess.SessionID, s.Now())
 		}
 
 		if err == nil || !unavailable(err) {
-			return err
+			return "", err
 		}
 	}
 
-	// Typed, the line goes where the queue's typed delivery would put it (typingBlock): never into a dialog, over a draft
-	// or a line that has not landed.
 	if why := s.typingBlock(name, s.Now()); why != "" {
-		return Partial(fmt.Errorf("%s: not typed, %s; zmina send --when-idle queues the line for when the role can take it", name, why))
+		return why, nil
 	}
 
 	if err := s.Tmux.Type(name, text); err != nil {
 		// What the look before it closed or failed (typingBlock) is saved with the error.
-		return Partial(err)
+		return "", Partial(err)
 	}
 
 	s.log(name, "sent", "", text)
 
-	return nil
+	return "", nil
+}
+
+// NotNow says a line could not be given to a role at once, and why: nothing was queued, posted or typed.
+type NotNow struct{ Role, Why string }
+
+func (e *NotNow) Error() string { return e.Role + " cannot take it just now: " + e.Why }
+
+// SendNow gives a role one line at once or not at all, and queues nothing: a line that waits for its turn to come may be read long after
+// what it answers is over. It is refused, as a NotNow, when lines already wait for the role (a line that waits is ahead of this one), when
+// its delivery is held (its plan, a turn that ended on an API error), and when the line could not be typed (a draft, a dialog, not at its
+// prompt, a line not landed yet) and the role has no inbox socket to post it to. from is who the line's card says wrote it. A refusal that
+// changed what the look before it closed is an ErrPartial too, so that it is saved.
+func (s *Shift) SendNow(name, text, from string) error {
+	if _, err := s.Role(name); err != nil {
+		return err
+	}
+
+	if !s.has(name) {
+		return fmt.Errorf("%s: %w", name, ErrNotUp)
+	}
+
+	rs := s.State.Role(name)
+
+	switch {
+	case len(rs.Inbox) > 0 || len(rs.Failed) > 0:
+		return &NotNow{name, "lines wait for it ahead of this one"}
+	case s.deliveryHeld(name, s.Now()):
+		return &NotNow{name, "its delivery is held (its plan's limit, or a turn that ended on an API error)"}
+	}
+
+	why, err := s.sendNow(name, text, from)
+	if why != "" {
+		return Partial(&NotNow{name, why})
+	}
+
+	return err
 }
 
 // typingBlock says why a line may not be typed into a role's input line now, "" when it may: the guards the queue's

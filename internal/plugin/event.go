@@ -227,9 +227,9 @@ const PromptTurn = "turn"
 var roleNameRe = regexp.MustCompile(`^[a-z][a-z0-9-]{0,30}(#[0-9]{1,6})?$`)
 
 // DialogFacts is a question on a role's screen: id is the dialog's fingerprint (the screen's, with the call's for a permission
-// prompt; the record's for a turn), the event's id is the role's with it and a nonce, the one-shot mark of this event (see Armed; a
-// turn's is never armed: nothing is pressed). Prompt is permission, question or turn; Tool and Subject are what a permission prompt
-// is about.
+// prompt; the record's for a turn), the event's id is the role's with it and a nonce, the one-shot mark of this event (see Armed; what
+// a turn's mark lets through is the one answer given to the role in words). Prompt is permission, question or turn; Tool and Subject
+// are what a permission prompt is about.
 type DialogFacts struct {
 	Role, ID, Question, Nonce string
 	Prompt, Tool, Subject     string
