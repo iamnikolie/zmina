@@ -210,6 +210,15 @@ func (a *app) diagnose() []check {
 	}
 
 	checkHygiene(c, st, time.Now(), add)
+
+	if c.Reconcile.OrphanMode() != crew.OrphansOff {
+		if t, err := tmux.New(c.Socket()); err == nil {
+			if list, err := t.Sessions(); err == nil {
+				checkOrphans(c, st, list, add)
+			}
+		}
+	}
+
 	checkPlanHolds(c, st, time.Now(), add)
 	checkFailureHolds(c, st, supersededFailureHolds(c, st, failureHolds(c, st, time.Now()), time.Now()), add)
 	checkStores(c, time.Now(), add)

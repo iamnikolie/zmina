@@ -90,7 +90,7 @@ worktree_gc: daily                       # the ticker runs `task gc` once a day:
 later_sweep: {role: dispatcher, every: 7d, older: 14d, max: 12}  # the ticker hands that role the stale parked items as one task, each to get a verdict (role is required; the rest are the defaults; default off; every zmina must be this build before it is set; see Later)
 done_check: make test                    # closing a task with a worktree as done runs this there and needs exit 0 (or {run, timeout: 10m, commit: true, env_fault_rc: 3}; off or none: no check, the default; see What checked means)
 auto_review: on                          # a task a role closes as done (one with a worktree) is reviewed by the seat the routes' review rule picks and a reject reopens it, up to 2 rounds ({rounds: 1-5}); needs a review rule in routes; default off; every zmina must be this build before it is set; see Review
-reconcile: {assign: true}               # a task, or a line from the owner or the dispatcher, for a seat that is down starts it (assign; `on` turns every part on, a block names the parts it wants; default off; every zmina must be this build before it is set; see Reconcile)
+reconcile: on                            # a seat that holds an open task should be up: a task or a line for a seat that is down starts it (assign), the beat starts one found down with an open task (restart; tries: 1-5 failed starts before it is marked broken) and reports, with orphans: down also takes down, a session no role names (orphans: down|report|off); or a block naming only the parts it wants: {assign: true}; default off; every zmina must be this build before it is set; see Reconcile
 courier: off                             # no courier service beside the ticker: a line for a role waits for the beat, up to a minute (on or off; default on; see The ticker)
 retention: 45d                           # how long finished work stays where it is before the ticker's daily pass moves it to archive/ (30d at least, or off; default 30d; see Retention)
 limits:                                  # how the crew spends its plans; pinned and stop in % of the 7-day (Claude) and weekly (Codex) window; see Limits
@@ -2680,7 +2680,7 @@ The state lock leaves two events, crew-wide (no role): `lock-wait` when a comman
 `LockWait` and failed) and `lock-held` when a hold lasted 20 s or more (`held=4m10s verb=tick phase=roles phase_for=3m58s
 step=roles/dev step_for=1m3s tmux=capture-pane tmux_for=9.8s phases=…`: the phase it spent longest in, the one thing in
 it that took longest, the slowest single tmux call, then every phase longest first). The beat's phases are `reconcile`,
-`notices`, `alarms`, `roles` (a step per role), `notes`, `deliver`, `trim`, `reconcile-end`, `finish` and the final
+`notices`, `alarms`, `roles` (a step per role), `orphans` (only with `reconcile: orphans`), `notes`, `deliver`, `trim`, `reconcile-end`, `finish` and the final
 `save`; what a command does before its first mark is `run`. Verbs are the command (`tick`, `task set`), never its
 arguments. `zmina doctor` counts them for the last 24 h.
 
@@ -2936,13 +2936,14 @@ the crew are dropped from it. A role missing from the crew file keeps its state 
 
 ## Reconcile — seats the ticker brings up and takes down
 
-`reconcile` in the crew file is one rule: a seat that holds an open task should be up. It has two moments, when the task is given
-(`assign`) and every beat (not in this build yet: `restart`, `tries`, `orphans` are read and do nothing). Off when the key is
-absent, and then nothing here happens. `reconcile: on` turns every part on; `off` turns it off; a block names the parts it wants and
-a part it does not name is off: `reconcile: {assign: true}`. The parts are `assign` and `restart` (true or false), `tries` (1 to 5,
-default 3) and `orphans` (`down`, `report` or `off`); another key is an error. `zmina doctor` has a `reconcile` line while any part
-is on. Every zmina that works the crew's directory must be this build or newer before it is set: an older one only warns of the
-unknown key.
+`reconcile` in the crew file is one rule: a seat that holds an open task should be up. It has two moments: when the task is given
+(`assign`) and every beat (`restart`, and `orphans`, which is the same care for a session nobody owns). Off when the key is absent,
+and then nothing here happens. `reconcile: on` turns every part on (`tries: 3`, `orphans: down`); `off` turns it off; a block names the
+parts it wants and a part it does not name is off: `reconcile: {assign: true, restart: true, tries: 2, orphans: report}`. `assign` and
+`restart` are true or false, `tries` is 1 to 5 (default 3) and `orphans` is `down`, `report` or `off`; another key is an error.
+`zmina doctor` has a `reconcile` line while any part is on, a warning when it is on in a spare crew (no ticker: `restart` and
+`orphans` never act there), and one for each orphan session alive. Every zmina that works the crew's directory must be this build or
+newer before it is set: an older one only warns of the unknown key.
 
 - **Assign.** A task given to a seat that is down starts the seat on it, as `zmina up <seat> --task T-n` does: in the task's worktree,
   on the conversation the task recorded when one fits, the packet handed with the start. It applies to `task new` (also `--route`:
@@ -2952,11 +2953,12 @@ unknown key.
   `dev up as zm-dev for T-1` under its first line, which stays as scripts read it (under `--json`, on stderr: stdout is the task).
 - **Not started.** The task is recorded as it always was, and the hint `zmina: dev is down: zmina --crew … up 'dev' --task T-1
   starts it on the task` stays, with ` (not started: <why>)` after it; `later take` says `dev not started: <why>`. The task stays
-  open and the usual note about a task a down role never took follows after 5 minutes. No seat is started that is: asleep (its alarm
-  wakes it), broken, going down, put down by hand (`zmina down`: only `zmina up` starts it), a temporary seat past its `expires`, or
-  of a held plan (its boot is a model call); nor in a stopped shift or a retired crew. A seat that is down and holds other work is
-  not started for a new task: that work comes first, and `zmina up <seat>` hands it all. A worktree that is gone is a refusal.
-  Events: `assign-started` and `assign-refused`, beside the `up` the start logs.
+  open and the usual note about a task a down role never took follows after 5 minutes (and `restart`, below, starts the seat when
+  the way is clear). No seat is started that is: asleep (its alarm wakes it), broken, going down, put down by hand (`zmina down`:
+  only `zmina up` starts it), a temporary seat past its `expires`, or of a held plan (its boot is a model call); nor in a stopped
+  shift or a retired crew. A seat that is down and holds other work is not started for a new task: that work comes first, and
+  `zmina up <seat>` hands it all. A worktree that is gone is a refusal. Events: `assign-started` and `assign-refused`, beside the
+  `up` the start logs.
 - **Lines.** `zmina send <seat> --when-idle <text>` for a seat that is down starts it when the line is the owner's or the
   dispatcher's: as `zmina up <seat>` does, resume policy and the tasks it holds handed. Never a line from one seat to another (seats
   would start one another in a chain), a slash command, a line for the dispatcher, or for a copy (`up --as`). The reply ends `; dev is
@@ -2964,9 +2966,43 @@ unknown key.
   only, and the line waits as it always did. Events: `line-started`, `line-refused`.
 - **Released is not put down.** A seat the ticker released (`release_idle_minutes`) is no longer held: a task given to it later
   starts it, which is the case this key is for. Only `zmina down` and `zmina sleep` hold a seat down.
-- **The review loop** goes by the same reasons: an author seat the owner put down by hand is no longer started on a reject (the
-  dispatcher gets the usual one note, `dev not started: it was put down by hand`), and a retired crew or a seat past its `expires` is not
-  started for a review.
+- **Restart.** The beat starts a seat that is down and holds at least one open task (not one waiting on the owner or another, parked
+  or closed), the way it starts a `keep: always` one, with the same guards: not stopped, held, asleep or broken, no session of its
+  name outside zmina, its plan not held, and 5 minutes since its last start. Not for a copy (a copy is gone once down: its tasks wait
+  for `zmina up`), a temporary seat past its `expires`, or a seat going down or being released. It starts in the directory it ran in
+  when that is still there, hands the tasks it holds as after a crash (Rotations, `crash`) and tells the dispatcher once, an
+  `FYI`: `dev: started again (holds T-5)`. At most 2 seats other than the dispatcher are started in a beat (a reboot does not start
+  every seat at once); the rest wait for the next. A plan hold only delays: the beat after it ends tries again. Events as ever: `up`
+  and `ended`.
+- **Tries.** With `restart` on a start that fails, or a session that ends within 10 minutes of its start, is a try: the pause before
+  the next start doubles with each one in a row (5, 10, 20, then 40 minutes) and `tries` of them mark the seat broken: not started
+  again until `zmina up`, one note, `dev: could not be started 3 times (last: <why>); not tried again until zmina up dev`. Ends
+  that came soon after a start give the note a `keep: always` seat gets, `dev: dies on boot …`, after `tries` of them (a `keep: always`
+  seat after 2, as ever). The dispatcher is never marked broken: it is told once (`dispatcher: could not be started 3 times …`,
+  heard once it is up) and tried again on the pause. `zmina up` clears the count.
+- **A terminal attached.** With `restart` on, a seat whose session ended while a terminal was attached to it is left down and held,
+  with the note `ended with a terminal attached: left down (zmina up dev)`: whoever sat there most likely ended it. A detach in the
+  same minute looks the same as a crash; `zmina down` and `zmina sleep` are the ways to keep a seat down on purpose. The dispatcher
+  is always started again.
+- **A session outside zmina.** A seat that should be up but whose session name runs outside zmina is not started (as ever) and the
+  dispatcher is told once: `dev should be up (holds T-5), but a session named zm-dev already runs outside zmina (pid …): end it,
+  then zmina up dev`, again only after that session has been gone.
+- **Orphans.** A session of the crew's tmux server that no role of the crew file names, and that is no copy of one, is reported
+  once, with the tasks it holds named (`holds T-5`); told again after it has been gone and returns. With `orphans: down` it is also
+  taken down, but only when all of these hold: the shift runs; zmina started it (its pane carries zmina's tag); no state is kept
+  for it, or its role has been missing from the crew file for 10 beats (a mistyped edit is not acted on); no active task is its
+  own; nothing waits in its queue; its registry entry says idle for `idle_minutes`; and no terminal is attached. Its last screen is
+  kept (`screens/`), it is killed (no role says how it exits) and the dispatcher gets an `FYI`; event `orphan-down`. A session that
+  holds tasks, or that zmina did not start, is only reported. `orphans: report` never takes one down.
+- **Where it lives.** No field was added to `state.json`: the count of tries is the role's `quick_ends`, the broken mark its `broken`,
+  the terminal rule its `held`, and what was told is in `record_notified` (`reconcile-outside/<seat>`, `orphan/<session>`, cleared
+  when the session is gone). The beat has a phase of its own, `orphans`, only with `orphans` on.
+- **What stays down.** After `zmina stop` and `zmina start` the seats stay held until `zmina up`. A task of a dead copy (`dev#2`)
+  is not reconciled; the `ended` note lists it. A role that was removed from the crew file and still holds a task is an orphan that
+  is reported, never taken down.
+- **The review loop** goes by the same reasons as `assign`: an author seat the owner put down by hand is no longer started on a
+  reject (the dispatcher gets the usual one note, `dev not started: it was put down by hand`), and a retired crew or a seat past its
+  `expires` is not started for a review.
 
 ## Restart — hand-out, failed start
 
@@ -2995,7 +3031,7 @@ What the ticker does once a restart's down is over (item 7, and restart_done aft
   the task deliveries are put back as they were, and the dispatcher hears once that the fresh start failed and the role
   is back on its conversation. The exception: a beat that died after the hand-out and before the start is finished by a
   later one, which finds the renewed deliveries and puts those back, not the originals.
-- **That start fails too.** The role stays down and is not held, so that a role with `keep: always` is opened again
+- **That start fails too.** The role stays down and is not held, so that a role with `keep: always` (or one `reconcile: restart` wants up) is opened again
   by the ticker as after a crash; the dispatcher hears it once, with the `up … --task … --fresh` that starts it by
   hand (the ticker's own "down, has not taken" hint for the tasks is not said besides). The restart is given up for the
   conversation here too, so a role opened again on it (`resume: always`, or by hand) is not asked for its note and
@@ -3074,8 +3110,8 @@ any time. It is not a field of `state.json`.
     held as it always was; the command's error is the news, the dispatcher is not told besides.
   - `up`: `zmina up` of a role that holds tasks, started fresh; the same hand-out and follow-up. No record for a start that
     resumes or of a role that holds none.
-  - `crash`: the ticker's start of a `keep: always` role whose session ended (5 min after its start, `started again
-    (keep: always)`). On its conversation (`resume: always`) it closes `resumed`; fresh, it hands the tasks the role holds
+  - `crash`: the ticker's start of a `keep: always` role, or with `reconcile: restart` a seat holding an open task, whose session ended
+    (5 min after its start, `started again (keep: always)`, `(holds T-5)`). On its conversation (`resume: always`) it closes `resumed`; fresh, it hands the tasks the role holds
     again and follows it. A role that never ran has no conversation to name, and no record; a task it holds is handed all the
     same. A reopen is told by the ticker's own notes (ended, started again, dies on boot): its rotation closes lost without a
     note of its own when its session ended again before it confirmed, and a role that holds nothing is never told of one. A

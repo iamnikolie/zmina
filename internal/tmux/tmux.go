@@ -155,6 +155,54 @@ func (c *Client) Probe(name string) (Pane, error) {
 	}
 }
 
+// SessionInfo is one session of the crew's tmux server.
+type SessionInfo struct {
+	Name string
+	// Tagged is that a pane of the session carries zmina's tag: zmina started it (Start, KeepScreens). A session someone
+	// opened by hand on the same server has none.
+	Tagged bool
+}
+
+// Sessions lists every session of the server, in the order tmux names them, each once: Tagged when any pane of it is
+// tagged. No server (nothing was ever started, or its last session ended) is no sessions, not an error; an error means tmux
+// could not be asked.
+func (c *Client) Sessions() ([]SessionInfo, error) {
+	out, err := c.run("list-panes", "-a", "-F", "#{session_name}\t#{"+tag+"}")
+	if err != nil {
+		if absent(err) {
+			return nil, nil
+		}
+
+		return nil, err
+	}
+
+	var (
+		list  []SessionInfo
+		index = map[string]int{}
+	)
+
+	// Only newlines are trimmed: a pane with no tag ends its line in a tab that is a field separator.
+	for _, line := range strings.Split(strings.TrimRight(out, "\r\n"), "\n") {
+		name, mark, _ := strings.Cut(line, "\t")
+		if name == "" {
+			continue
+		}
+
+		i, seen := index[name]
+		if !seen {
+			i = len(list)
+			index[name] = i
+			list = append(list, SessionInfo{Name: name})
+		}
+
+		if mark != "" {
+			list[i].Tagged = true
+		}
+	}
+
+	return list, nil
+}
+
 // absent tells "there is no such session or server" from a failure to ask.
 func absent(err error) bool {
 	msg := err.Error()

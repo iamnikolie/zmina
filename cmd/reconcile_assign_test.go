@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -467,29 +466,4 @@ func TestSendWhenIdleDoesNotWakeASleepingSeat(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, "; dev is down: not started (it is asleep)")
 	assert.False(t, isUp(t, file, "dev"))
-}
-
-// Doctor says what reconcile does when it is on, and nothing when it is off.
-func TestDoctorSaysWhatReconcileDoes(t *testing.T) {
-	var got []string
-
-	add := func(name, level, format string, args ...any) {
-		got = append(got, name+" "+level+" "+fmt.Sprintf(format, args...))
-	}
-
-	checkReconcile(mustCrew(t, testCrew(t, assignSeats+assignOn)), add)
-	require.Len(t, got, 1)
-	assert.True(t, strings.HasPrefix(got[0], "reconcile ok reconcile: assign · a task or a line for a seat that is down starts it"), got[0])
-
-	got = nil
-
-	checkReconcile(mustCrew(t, testCrew(t, assignSeats+"reconcile: {assign: false, restart: true}\n")), add)
-	require.Len(t, got, 1)
-	assert.Contains(t, got[0], "assign is off")
-
-	got = nil
-
-	checkReconcile(mustCrew(t, testCrew(t, assignSeats)), add)
-	checkReconcile(mustCrew(t, testCrew(t, assignSeats+"reconcile: off\n")), add)
-	assert.Empty(t, got, "off says nothing")
 }

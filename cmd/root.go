@@ -458,6 +458,16 @@ func (l *lazyTmux) Probe(name string) (tmux.Pane, error) {
 	return c.Probe(name)
 }
 
+// Sessions lists the sessions of the crew's tmux server (shift's optional sessionLister): the ticker's look for sessions no role names.
+func (l *lazyTmux) Sessions() ([]tmux.SessionInfo, error) {
+	c, err := l.client()
+	if err != nil {
+		return nil, err
+	}
+
+	return c.Sessions()
+}
+
 func (l *lazyTmux) Start(name, dir string, env, argv []string) error {
 	c, err := l.client()
 	if err != nil {

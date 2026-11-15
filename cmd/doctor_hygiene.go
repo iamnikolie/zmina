@@ -14,6 +14,7 @@ import (
 	"github.com/iamnikolie/zmina/internal/asks"
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/shift"
+	"github.com/iamnikolie/zmina/internal/tmux"
 )
 
 const (
@@ -153,21 +154,68 @@ func checkReview(c *crew.Crew, add func(name, level, format string, args ...any)
 		strings.Join(who, ", "))
 }
 
-// checkReconcile is the crew file's reconcile: what is on. Nothing when it is off.
+// checkReconcile is the crew file's reconcile: which parts are on and what each does. Nothing when it is off. A spare crew has no
+// ticker by design, and restart and orphans are the ticker's: they never act there, which is a warning.
 func checkReconcile(c *crew.Crew, add func(name, level, format string, args ...any)) {
 	r := c.Reconcile
 	if !r.On() {
 		return
 	}
 
-	if !r.Assign {
-		add("reconcile", "ok", "reconcile: assign is off: a task given to a seat that is down only waits for it to be started")
+	var parts []string
 
+	if r.Assign {
+		parts = append(parts, "assign (a task, or a line from the owner or the dispatcher, starts a seat that is down)")
+	}
+
+	if r.Restart {
+		parts = append(parts, fmt.Sprintf("restart (a seat that holds an open task is started again; %d failed starts in a row mark it broken)", r.MaxTries()))
+	}
+
+	if mode := r.OrphanMode(); mode != crew.OrphansOff {
+		text := "orphans: " + mode + " (a session no role names is reported once"
+		if mode == crew.OrphansDown {
+			text += ", and taken down when nothing says it is used"
+		}
+
+		parts = append(parts, text+")")
+	}
+
+	add("reconcile", "ok", "reconcile: %s", strings.Join(parts, " · "))
+
+	if c.Spare && (r.Restart || r.OrphanMode() != crew.OrphansOff) {
+		add("reconcile", "warn", "this is a spare crew (spare: true): it has no ticker by design, and restart and orphans are the ticker's, so they never act here")
+	}
+}
+
+// checkOrphans warns of each live session of the crew's tmux server that no role names, when reconcile: orphans is on: the ticker
+// reports it once and, with orphans: down, takes it down when nothing says someone uses it. Nothing when it is off, or tmux does not answer
+// (the tmux check says that).
+func checkOrphans(c *crew.Crew, st *shift.State, list []tmux.SessionInfo, add func(name, level, format string, args ...any)) {
+	mode := c.Reconcile.OrphanMode()
+	if mode == crew.OrphansOff {
 		return
 	}
 
-	add("reconcile", "ok", "reconcile: assign · a task or a line for a seat that is down starts it, unless it was put down by hand, "+
-		"is asleep or broken, or its plan is held")
+	if st == nil {
+		st = shift.NewState()
+	}
+
+	s := &shift.Shift{Crew: c, State: st}
+
+	for _, o := range s.Orphans(list) {
+		who := "started by zmina"
+		if !o.Tagged {
+			who = "not started by zmina: left alone"
+		}
+
+		what := "reported by the ticker, once"
+		if mode == crew.OrphansDown && o.Tagged {
+			what = "taken down by the ticker once it is idle with nothing queued and no terminal attached"
+		}
+
+		add("orphans", "warn", "%s: a tmux session no role of the crew file names (%s; %s): zmina attach %s", o.Name, who, what, o.Name)
+	}
 }
 
 // checkWorktrees is the closed tasks' worktrees: with worktree_gc on the ticker sweeps them daily, and what is left

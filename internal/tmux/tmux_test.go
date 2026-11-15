@@ -256,3 +256,42 @@ func TestCleanEnvKeepsAPluginsNameAndTheCockpitsSecretsFromRoles(t *testing.T) {
 
 	assert.Equal(t, []string{"PATH=/bin", "ZMINA_CREW=/c/crew.yaml"}, env)
 }
+
+// Sessions lists each session of the server once and says which of them zmina started (a pane carrying its tag): one opened by
+// hand on the same server is listed untagged, a second window does not list its session twice, a session whose process ended
+// stays on the list, and a server that is not there has no sessions.
+func TestSessionsListsEachSessionOnceAndSaysWhichZminaStarted(t *testing.T) {
+	c := server(t)
+
+	none, err := c.Sessions()
+	require.NoError(t, err, "no server is no sessions, not a failure")
+	assert.Empty(t, none)
+
+	require.NoError(t, c.Start("dev", t.TempDir(), nil, []string{"cat"}))
+	require.NoError(t, c.Start("dev#2", t.TempDir(), nil, []string{"cat"}))
+	require.NoError(t, c.Start("gone", t.TempDir(), nil, []string{"true"}))
+
+	_, err = c.run("new-session", "-d", "-s", "by-hand", "--", "cat")
+	require.NoError(t, err)
+
+	_, err = c.run("new-window", "-t", "=dev:", "--", "cat")
+	require.NoError(t, err)
+
+	eventually(t, func() bool { return c.Dead("gone") })
+
+	got, err := c.Sessions()
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []SessionInfo{
+		{Name: "dev", Tagged: true},
+		{Name: "dev#2", Tagged: true},
+		{Name: "gone", Tagged: true},
+		{Name: "by-hand", Tagged: false},
+	}, got)
+
+	require.NoError(t, c.Kill("dev#2"))
+
+	got, err = c.Sessions()
+	require.NoError(t, err)
+	assert.Len(t, got, 3)
+	assert.NotContains(t, got, SessionInfo{Name: "dev#2", Tagged: true})
+}
