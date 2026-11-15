@@ -783,7 +783,9 @@ func (s *Shift) ackRuleFor(r *crew.Role) string {
 // in chat are recorded there, so nothing he answered stays open and nothing he was asked is lost in a conversation.
 const AsksRule = registry.BootMark + " one only he can answer (a decision, a check only he can do) goes on " +
 	"his list, not only into chat: zmina todo add \"<question>\" --title \"<few words>\" [--rec \"<your answer>\" " +
-	"--reason \"<why>\"] [--task T-n]; it prints A-n: name A-n when you ask in chat. When he answers it in chat, " +
+	"--reason \"<why>\"] [--option \"<answer>\"...] [--task T-n]; it prints A-n: name A-n when you ask in chat. Give a " +
+	"decision two to four --option answers of a few words each, your recommended one among them: his phone shows " +
+	"them as buttons and he answers with one tap. When he answers it in chat, " +
 	"record it at once: zmina todo answer A-n \"<his words>\" (zmina todo yes A-n takes your recommendation, zmina todo " +
 	"done A-n closes a check). An answer he gives on his list or the cockpit reaches the dispatcher by itself. Never " +
 	"leave a question he answered open; zmina todo ls shows what is."
