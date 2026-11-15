@@ -304,6 +304,11 @@ type View struct {
 	Broken    bool      `json:"broken,omitempty"`
 	// Asleep is when a role put to sleep (zmina sleep) wakes.
 	Asleep time.Time `json:"asleep,omitzero"`
+	// Place is the node the crew file runs the role on, when the crew declares nodes: (the dispatcher's: home, and only when
+	// it is not run here); Away is true when that is not this node, so the role is never started here. Read from the
+	// crew file on every look; neither is kept in the state.
+	Place string `json:"place,omitempty"`
+	Away  bool   `json:"away,omitempty"`
 	// Problem says why the role cannot start (its dir is gone) or cannot be seen, empty when all is well.
 	Problem string `json:"problem,omitempty"`
 	// StatusError is why an up role's Status is "unknown": its Claude Code session file does not read (empty, cut short,
@@ -464,6 +469,18 @@ func (s *Shift) look(name string, held map[string][]string) (View, Reasoning, bo
 		v.Dir = rs.Dir
 	} else if err := r.DirErr(); err != nil {
 		v.Problem = err.Error()
+	}
+
+	if s.Crew.Spread() {
+		v.Place = s.Crew.PlacementOf(r)
+
+		if !s.Crew.PlacedHere(r) {
+			v.Away = true
+
+			if v.Place == "" {
+				v.Place = s.Crew.Home
+			}
+		}
 	}
 
 	if what, until, ok := s.planHeldWhy(name, s.Now()); ok {
@@ -957,6 +974,11 @@ func (s *Shift) UpWith(name string, o UpOptions) error {
 func (s *Shift) start(name string, o UpOptions) error {
 	r, err := s.Role(name)
 	if err != nil {
+		return err
+	}
+
+	// A role the crew file places on another node is never started here: every start of every kind passes this line.
+	if err := s.errPlacedAway(name); err != nil {
 		return err
 	}
 

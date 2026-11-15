@@ -177,6 +177,9 @@ type Seat struct {
 	Tasks []string
 	// Context is how many tokens its conversation fills, ContextBudget the tokens it may fill (0: not known).
 	Context, ContextBudget int
+	// Away is the <node>/<crew> that runs the seat when the crew file places it on another node, empty for a seat run
+	// here. Work for such a seat is told to that crew's dispatcher; the pool never picks it.
+	Away string
 }
 
 // Base is the role a copy is of: dev for dev#2, the name itself for a role.

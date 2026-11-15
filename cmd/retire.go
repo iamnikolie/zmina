@@ -75,8 +75,13 @@ func (a *app) setRetired(date, movedTo string) error {
 			return err
 		}
 
-		e.SetCrewKey("retired", date)
-		e.SetCrewKey("moved_to", movedTo)
+		// A crew over more than one node keeps the mark inside nodes.<this node>: a retire made here is this node's
+		// and does not travel with the file.
+		for _, kv := range [][2]string{{"retired", date}, {"moved_to", movedTo}} {
+			if err := e.SetNodeKey(s.Crew.Here, kv[0], kv[1]); err != nil {
+				return err
+			}
+		}
 
 		how := "zmina retire"
 		if date == "" {

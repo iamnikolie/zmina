@@ -43,6 +43,11 @@ type sessionLister interface {
 // alarm wakes it) and is not a temporary seat past its expiry. It is the first of the ticker's reasons to start a seat; the rest is
 // what stands in the way (the guards at the start in Tick, and StartBlock for the commands).
 func (s *Shift) wantedUp(name string, r *crew.Role, now time.Time) string {
+	// A seat placed on another node is wanted up by that node's ticker, never by this one's.
+	if !s.Crew.PlacedHere(r) {
+		return ""
+	}
+
 	if r.Keep == crew.KeepAlways {
 		return keepAlwaysWhy
 	}

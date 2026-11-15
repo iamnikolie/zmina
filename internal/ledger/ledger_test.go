@@ -170,6 +170,27 @@ func TestNamedCrewBranches(t *testing.T) {
 	assert.Equal(t, "zmina/ops-t-1", tk.Branch, "two crews never pick the same branch")
 }
 
+// A crew that declares nodes: puts the node in the branch: two nodes that push to one remote never meet on a branch, and
+// a crew that declares none keeps the names it always had.
+func TestNodeIsInTheBranchOfACrewThatDeclaresNodes(t *testing.T) {
+	for name, c := range map[string]struct{ crew, node, want string }{
+		"a named crew":   {"ops", "alpha", "zmina/alpha-ops-t-1"},
+		"the default":    {"", "beta", "zmina/beta-t-1"},
+		"no nodes: ":     {"ops", "", "zmina/ops-t-1"},
+		"no nodes, none": {"", "", "zmina/t-1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			l, trees := fixture(t, c.crew)
+			l.Node = c.node
+
+			tk, err := l.New(NewTask{Role: "dev", Asked: "x", Repo: "api", Worktree: true})
+			require.NoError(t, err)
+			assert.Equal(t, c.want, tk.Branch)
+			assert.True(t, trees.branches[c.want])
+		})
+	}
+}
+
 func TestFailedWorktreeLeavesADroppedRecord(t *testing.T) {
 	l, trees := fixture(t, "")
 	trees.addErr = errors.New("fatal: a branch named 'zmina/t-1' already exists")

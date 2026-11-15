@@ -182,7 +182,15 @@ func (a *app) routeSeats(s *shift.Shift, now time.Time) []route.Seat {
 			budget = r.ContextBudget()
 		}
 
-		seats = append(seats, seatFromView(v, budget, now))
+		seat := seatFromView(v, budget, now)
+
+		// A seat the crew file places on another node is that crew's: work for it is told to its dispatcher.
+		if r, err := s.Role(v.Role); err == nil && v.Away {
+			seat.Away = s.Crew.RoleTell(r)
+			seat.State, seat.Note = route.StateUnavailable, "placed on "+v.Place
+		}
+
+		seats = append(seats, seat)
 	}
 
 	return seats

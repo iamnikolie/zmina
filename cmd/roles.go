@@ -180,6 +180,11 @@ func (a *app) lsCompact(s *shift.Shift, views []shift.View, all bool) error {
 			state += " " + mark
 		}
 
+		// A role the crew file places on another node is not this node's: up here, it is a mistake the line shows.
+		if v.Away {
+			state += " (placed: " + v.Place + ")"
+		}
+
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", role, state, shortSince(v), contextCell(v), dash(strings.Join(v.Tasks, ",")))
 	}
 
@@ -271,6 +276,10 @@ func downMarks(v shift.View) string {
 		m = append(m, strings.Join(v.Tasks, ","))
 	}
 
+	if v.Away {
+		m = append(m, "placed: "+v.Place)
+	}
+
 	if mark := rotationMark(v, time.Now()); mark != "" {
 		m = append(m, mark)
 	}
@@ -337,6 +346,10 @@ func (a *app) lsWide(s *shift.Shift, views []shift.View, now bool) error {
 		role := v.Role
 		if v.Role == s.Crew.Dispatcher {
 			role += " *"
+		}
+
+		if v.Away {
+			role += " (placed: " + v.Place + ")"
 		}
 
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", role, v.Session, stateCell(v),
@@ -408,7 +421,8 @@ func (a *app) upCommand() *cobra.Command {
 			var started []upStart
 
 			upErr := a.withState(func(s *shift.Shift) error {
-				names, err := pick(s, args, all, func(v shift.View) bool { return v.State == shift.PresenceDown })
+				// --all starts the roles that are down and are this node's: a role the crew file places elsewhere is not.
+				names, err := pick(s, args, all, func(v shift.View) bool { return v.State == shift.PresenceDown && !v.Away })
 				if err != nil {
 					return err
 				}
@@ -1077,6 +1091,11 @@ func (a *app) sendCommand() *cobra.Command {
 					}
 
 					return a.answerTurn(s, plug, dialog, args[0], text)
+				}
+
+				// A role the crew file places on another node is not written to from here: its crew's dispatcher is, by tell.
+				if line := s.PlacedAway(args[0]); line != "" {
+					return errors.New(line)
 				}
 
 				// The task a line is about is what its sender says here, never read from its words: it is kept on the line's

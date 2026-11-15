@@ -375,6 +375,7 @@ func (a *app) ledger(s *shift.Shift) *ledger.Ledger {
 		Dir:       s.Crew.Dir,
 		Worktrees: s.Crew.Layout().Worktrees(),
 		Crew:      s.Crew.Name,
+		Node:      s.Crew.Here,
 		Now:       s.Now,
 		Log:       s.Log,
 		// A check does not run as a child of the session or terminal this runs in, and a zmina it starts acts for no one.

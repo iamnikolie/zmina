@@ -2,6 +2,7 @@ package crew
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -53,8 +54,27 @@ func Open(path string) (*Edit, error) {
 	return e, nil
 }
 
+// refusePlace turns away a seat edit that names place: where a role runs is part of the declaration every node holds,
+// so it is edited in the file on every node (zmina move will change it on both ends); it is no seat key.
+func (e *Edit) refusePlace(set map[string]string) error {
+	if _, ok := set["place"]; !ok {
+		return nil
+	}
+
+	if lookup(e.doc.Content[0], "nodes") == nil {
+		return errors.New("place: the crew file declares no nodes:; declare nodes: and home: in the file first")
+	}
+
+	return errors.New("place: this crew runs on more than one node, and where a role runs is one declaration for every node: " +
+		"edit the file on every node until zmina move exists")
+}
+
 // Add appends a role with the given keys (in SeatKeys order). It refuses a role that exists.
 func (e *Edit) Add(name string, set map[string]string) error {
+	if err := e.refusePlace(set); err != nil {
+		return err
+	}
+
 	if !roleRe.MatchString(name) {
 		return fmt.Errorf("role %q: names are lowercase words joined by dashes", name)
 	}
@@ -80,6 +100,10 @@ func (e *Edit) Add(name string, set map[string]string) error {
 
 // Set changes keys of a role; an empty value removes the key.
 func (e *Edit) Set(name string, set map[string]string) error {
+	if err := e.refusePlace(set); err != nil {
+		return err
+	}
+
 	body := lookup(e.roles(false), name)
 	if body == nil {
 		return fmt.Errorf("no role %q in %s", name, e.path)
@@ -140,6 +164,88 @@ func (e *Edit) SetCrewKey(key, value string) {
 	if value != "" {
 		top.Content = append(top.Content, scalar(key), scalar(value))
 	}
+}
+
+// SetNodeKey is SetCrewKey for a key a node sets for itself (NodeKeys: retired, moved_to, spare ...) when the crew file
+// declares nodes:: the key goes inside nodes.<node>, not at the top, so a retire made here stays this node's and does not
+// travel with the file. For a file with no nodes:, a machine that is no node (node is empty) or a key that is no node's
+// own it is SetCrewKey. A node the file does not list cannot hold a key of its own.
+func (e *Edit) SetNodeKey(node, key, value string) error {
+	top := e.doc.Content[0]
+
+	nodes := lookup(top, "nodes")
+	if node == "" || nodes == nil || nodes.Kind != yaml.MappingNode || len(nodes.Content) == 0 || !slices.Contains(NodeKeys, key) {
+		e.SetCrewKey(key, value)
+
+		return nil
+	}
+
+	slot := -1
+
+	for i := 0; i+1 < len(nodes.Content); i += 2 {
+		if nodes.Content[i].Value == node {
+			slot = i + 1
+		}
+	}
+
+	if slot < 0 {
+		return fmt.Errorf("this node (%s) is not one of nodes: (%s): list it there before it keeps a key of its own", node,
+			strings.Join(mapKeys(nodes), ", "))
+	}
+
+	body := nodes.Content[slot]
+	if body.Kind != yaml.MappingNode {
+		// "alpha:" with nothing under it.
+		body = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		nodes.Content[slot] = body
+	}
+
+	if value == "" && lookup(top, key) != nil {
+		// The top-level key says it for every node: this node says nothing, which has to be said.
+		return setPlain(body, key, scalar(""))
+	}
+
+	if value == "" {
+		return setPlain(body, key, nil)
+	}
+
+	return setPlain(body, key, scalar(value))
+}
+
+// setPlain sets key in a mapping node to v, or removes it for a nil v.
+func setPlain(body *yaml.Node, key string, v *yaml.Node) error {
+	for i := 0; i+1 < len(body.Content); i += 2 {
+		if body.Content[i].Value != key {
+			continue
+		}
+
+		if v == nil {
+			body.Content = append(body.Content[:i], body.Content[i+2:]...)
+
+			return nil
+		}
+
+		v.LineComment = body.Content[i+1].LineComment
+		body.Content[i+1] = v
+
+		return nil
+	}
+
+	if v != nil {
+		body.Content = append(body.Content, scalar(key), v)
+	}
+
+	return nil
+}
+
+func mapKeys(m *yaml.Node) []string {
+	var out []string
+
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		out = append(out, m.Content[i].Value)
+	}
+
+	return out
 }
 
 // Save checks the edited file loads, a role's dir having to exist too, keeps the old one in the crew file's history

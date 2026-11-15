@@ -293,7 +293,7 @@ func (e *engine) freeOfPlan(s Seat) *Seat {
 
 		for _, want := range []State{StateIdle, StateDown} {
 			for _, name := range r.Seats {
-				if c, ok := e.env.seat(name); ok && c.State == want && c.Runtime == s.Runtime && c.Base() != s.Base() {
+				if c, ok := e.env.seat(name); ok && c.State == want && c.Runtime == s.Runtime && c.Base() != s.Base() && c.Away == "" {
 					return &c
 				}
 			}
@@ -348,6 +348,11 @@ func (e *engine) otherCrew(r Rule) outcome {
 	return outcome{tell: r.Tell, why: "repo under " + r.UnderText}
 }
 
+// awayTell is the answer for a seat that runs on another node: tell that crew's dispatcher, which owns the seat.
+func awayTell(s Seat, why string) outcome {
+	return outcome{tell: s.Away, why: join(why, s.Name+" is placed on "+s.Away+", not on this node")}
+}
+
 // usable is the seat of a name when work can be given to it, else why not.
 func (e *engine) usable(name string) (Seat, string) {
 	s, ok := e.env.seat(name)
@@ -376,6 +381,10 @@ func (e *engine) continuation(r Rule) outcome {
 
 	if !ok {
 		return outcome{seen: true, why: fmt.Sprintf("%s was done by %s, which is not a seat of this crew", t.ID, t.Seat)}
+	}
+
+	if target.Away != "" {
+		return awayTell(target, fmt.Sprintf("goes on from %s, done by %s", t.ID, target.Name))
 	}
 
 	if target.State == StateUnavailable {
@@ -430,6 +439,10 @@ func (e *engine) project(r Rule) outcome {
 		return outcome{why: fmt.Sprintf("project %s has no owner", name)}
 	}
 
+	if a, ok := e.env.seat(seat); ok && a.Away != "" {
+		return awayTell(a, fmt.Sprintf("project %s is owned by %s", name, seat))
+	}
+
 	s, why := e.usable(seat)
 	if why != "" {
 		return outcome{seen: true, why: fmt.Sprintf("project %s: %s", name, why)}
@@ -451,6 +464,10 @@ func (e *engine) workKind(r Rule) outcome {
 		}
 
 		return outcome{seen: true, why: fmt.Sprintf("kind %s has no seat in routes (%s)", kind, ownerNames(r.Owners))}
+	}
+
+	if a, ok := e.env.seat(seat); ok && a.Away != "" {
+		return awayTell(a, fmt.Sprintf("kind %s goes to %s", kind, seat))
 	}
 
 	s, why := e.usable(seat)
@@ -511,6 +528,10 @@ func (e *engine) review(r Rule) outcome {
 			return Seat{}, "the author"
 		}
 
+		if a, ok := e.env.seat(name); ok && a.Away != "" {
+			return Seat{}, "placed on " + a.Away + ", not on this node"
+		}
+
 		return e.usable(name)
 	}
 
@@ -520,6 +541,11 @@ func (e *engine) review(r Rule) outcome {
 	}
 
 	if !e.in.Rereview && first != "" {
+		// The first review is the first seat's: when it runs on another node, that crew is told.
+		if a, ok := e.env.seat(first); ok && a.Away != "" && Base(first) != author {
+			return awayTell(a, text+", first review")
+		}
+
 		s, why := out(first)
 		if why == "" {
 			return outcome{seat: &s, why: text + ", first review"}

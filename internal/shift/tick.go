@@ -102,10 +102,22 @@ func (s *Shift) Tick() []string {
 		s.sweepRestarts(now)
 	}
 
+	if s.Crew.Spread() {
+		s.sweepAway(now)
+	}
+
 	for _, name := range s.Names() {
 		s.mark("roles", name)
 		r, err := s.Role(name)
 		if err != nil {
+			continue
+		}
+
+		// A role the crew file places on another node is that node's: this beat does nothing for it (its state is kept, it
+		// is no orphan) and puts nothing down. Up here, it is told to the dispatcher once a day.
+		if !s.Crew.PlacedHere(r) {
+			did = append(did, s.awayUp(name, r, now)...)
+
 			continue
 		}
 
@@ -275,6 +287,11 @@ func (s *Shift) Tick() []string {
 			continue
 		}
 
+		// What waits for a role placed on another node waits: this beat types nothing into a session that is not its own.
+		if r, err := s.Role(name); err == nil && !s.Crew.PlacedHere(r) {
+			continue
+		}
+
 		s.mark("deliver", name)
 		if line := s.deliverInbox(name, now); line != "" {
 			typed[name] = true
@@ -283,7 +300,7 @@ func (s *Shift) Tick() []string {
 	}
 
 	for _, name := range s.Names() {
-		if r, err := s.Role(name); err == nil && !typed[name] {
+		if r, err := s.Role(name); err == nil && !typed[name] && s.Crew.PlacedHere(r) {
 			s.mark("trim", name)
 			if line := s.trim(name, r, now, held[name]); line != "" {
 				did = append(did, line)
