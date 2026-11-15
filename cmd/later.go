@@ -306,12 +306,43 @@ func (a *app) laterTakeCommand() *cobra.Command {
 
 					fmt.Fprintf(a.out, " · %s up on %s", role, it.Session)
 				}
-				if _, err := s.HandTask(role, t); err != nil {
-					return err
+				// Without --resume a seat that is down is started on the task when the crew file says reconcile: assign: on the
+				// conversation the item was parked from when the task is compatible (up --task), and the start hands it out.
+				// Refused, or with the key off, the packet is queued for the seat as always.
+				var (
+					startedOn bool
+					notWhy    string
+				)
+
+				if !resume && assignStart(s, role) {
+					if pane, perr := s.Tmux.Probe(role); perr == nil {
+						startedOn, notWhy = a.assignTo(s, t, pane)
+					}
 				}
 
-				// Goes now when the role is up and can take it; one just started by --resume has not booted: the beat.
-				s.DeliverTo(role)
+				if startedOn {
+					session := role
+					if r, rerr := s.Role(role); rerr == nil {
+						session = r.Session
+					}
+
+					fmt.Fprintf(a.out, " · %s up as %s", role, session)
+
+					if notWhy != "" {
+						fmt.Fprintf(a.out, " · its packet was not handed: %s", notWhy)
+					}
+				} else {
+					if _, err := s.HandTask(role, t); err != nil {
+						return err
+					}
+
+					// Goes now when the role is up and can take it; one just started by --resume has not booted: the beat.
+					s.DeliverTo(role)
+
+					if notWhy != "" {
+						fmt.Fprintf(a.out, " · %s not started: %s", role, notWhy)
+					}
+				}
 
 				fmt.Fprintln(a.out)
 

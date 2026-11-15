@@ -296,8 +296,9 @@ func (a *app) pluginDeliverCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// A role has no business telling the owner's plugins of anything: it could stand its own program in their place, or
 			// page him as it likes.
-			if role := os.Getenv("ZMINA_ROLE"); role != "" {
-				return fmt.Errorf("zmina plugin deliver is the ticker's and the owner's; a role (%s) does not run it", role)
+			// The environment names a role, and for a shared Codex seat's tool, which has none, its thread does (a.actor).
+			if who := a.actor(); who != "hand" {
+				return fmt.Errorf("zmina plugin deliver is the ticker's and the owner's; a role (%s) does not run it%s", who, codexThreadWords(who))
 			}
 
 			// The log names who ran it: the beat that started it, or the hand that ran it.
@@ -415,7 +416,7 @@ func (a *app) chooseCommand() *cobra.Command {
 					key = plugin.EventDialogID(role, d.ID, nonce)
 				}
 
-				noteChosen(s, role, key, answeredBy(by(), via), n, label)
+				noteChosen(s, role, key, answeredBy(s.By, via), n, label)
 
 				fmt.Fprintf(a.out, "%s · chose %d: %s\n", role, n, label)
 

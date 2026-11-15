@@ -948,6 +948,7 @@ func (s *Shift) UpWith(name string, o UpOptions) error {
 
 	rs := s.State.Role(name)
 	rs.Held, rs.Broken, rs.QuickEnds = false, false, 0
+	s.State.forgetRestarts(name)
 	s.flush() // with the start it belongs to, whatever the command does after
 
 	return nil

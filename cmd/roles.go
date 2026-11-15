@@ -591,7 +591,7 @@ func (a *app) downCommand() *cobra.Command {
 				return pick(s, args, all, func(v shift.View) bool {
 					return v.State == shift.PresenceUp && v.Role != s.Crew.Dispatcher
 				})
-			}, shift.DownOptions{Force: force, Clear: clear}, false)
+			}, shift.DownOptions{Force: force, Clear: clear}, false, true)
 		},
 	}
 
@@ -605,7 +605,7 @@ func (a *app) downCommand() *cobra.Command {
 
 // downRoles ends roles in three steps so the wait for /exit happens outside the lock: begin every down under it,
 // wait up to ExitWait without it, then finish under it again. quietNotUp skips roles that were not up.
-func (a *app) downRoles(names func(s *shift.Shift) ([]string, error), o shift.DownOptions, quietNotUp bool) error {
+func (a *app) downRoles(names func(s *shift.Shift) ([]string, error), o shift.DownOptions, quietNotUp, routine bool) error {
 	var (
 		begun, waitFor []string
 		errs           []error
@@ -625,6 +625,11 @@ func (a *app) downRoles(names func(s *shift.Shift) ([]string, error), o shift.Do
 				}
 
 				continue
+			}
+
+			// A down by a seat of the crew of a seat with no open task is a routine one, not a down on purpose (zmina down only).
+			if routine {
+				s.ReleaseRoutineDown(n)
 			}
 
 			begun = append(begun, n)
@@ -977,18 +982,56 @@ func (a *app) queueSend(s *shift.Shift, role, text string, facts shift.Facts) er
 			return f.Line == queued || slices.ContainsFunc(f.Parts, func(p shift.Part) bool { return p.Line == queued })
 		})
 
+	var said string
+
 	switch {
 	case id != "" && went:
-		fmt.Fprintf(a.out, "delivered to %s as %s: said again until it acks\n", role, id)
+		said = fmt.Sprintf("delivered to %s as %s: said again until it acks", role, id)
 	case id != "":
-		fmt.Fprintf(a.out, "queued for %s as %s: delivered once it is up and between turns; said again until it acks\n", role, id)
+		said = fmt.Sprintf("queued for %s as %s: delivered once it is up and between turns; said again until it acks", role, id)
 	case went:
-		fmt.Fprintf(a.out, "delivered to %s\n", role)
+		said = fmt.Sprintf("delivered to %s", role)
 	default:
-		fmt.Fprintf(a.out, "queued for %s: typed the first time it is up and idle\n", role)
+		said = fmt.Sprintf("queued for %s: typed the first time it is up and idle", role)
 	}
 
+	fmt.Fprintln(a.out, said+a.startForLine(s, role, text, went))
+
 	return nil
+}
+
+// startForLine starts the seat a line was just queued for when it is down and the crew file says reconcile: assign, and says what
+// the reply adds: "" when nothing was tried. Only the owner's own line, the cockpit's and the dispatcher's start a seat (startsSeats): a line from one seat to
+// another never does, which would let seats start one another in a chain. Nor does a slash command (a command to a session, not
+// work), a line to the dispatcher (the ticker opens it), or one to a copy (zmina up --as starts one). A seat that was put down by
+// hand, is asleep or broken, has its plan held, or is going down is not started (shift.StartBlock); the line waits as it always did.
+func (a *app) startForLine(s *shift.Shift, role, text string, went bool) string {
+	if !s.Crew.Reconcile.Assign || went || role == s.Crew.Dispatcher || strings.HasPrefix(strings.TrimSpace(text), "/") {
+		return ""
+	}
+
+	if !startsSeats(s) {
+		return ""
+	}
+
+	pane, err := s.Tmux.Probe(role)
+	if err != nil || pane.State == tmux.Up {
+		return ""
+	}
+
+	if base, num, isCopy := shift.SplitInstance(role); isCopy {
+		return fmt.Sprintf("; %s is down: not started (a copy is started with zmina up %s --as %d)", role, base, num)
+	}
+
+	if why := s.StartForLine(role); why != "" {
+		s.Log(role, "line-refused", "", "a line from "+s.By+" did not start it: "+why)
+
+		return fmt.Sprintf("; %s is down: not started (%s)", role, why)
+	}
+
+	s.Log(role, "line-started", "", "up for a line from "+s.By+" (reconcile: assign)")
+
+	return fmt.Sprintf("; %s is down: started it", role)
 }
 
 func (a *app) sendCommand() *cobra.Command {

@@ -18,6 +18,48 @@ func (s *Shift) LiveSession(name string) string {
 	return ""
 }
 
+// ActorCodexThread is who a command acts as when it runs in a Codex session that is no seat's, in a crew that has seats on the shared
+// Codex daemon: not the owner's hand. A tool of such a seat carries no $ZMINA_ROLE, only its thread, and a thread that no seat runs now
+// (a child of a seat's, the owner's own Codex, a seat whose record lags) cannot be told from the owner by the environment: it is taken for
+// nobody's, which can read and say what a role can but holds none of the owner's authority. A crew with no shared seats has no such
+// confusion: its Codex sessions are the owner's own, and act as the owner's hand as ever.
+const ActorCodexThread = "codex-thread"
+
+// HasSharedCodexSeat reports whether any role of the crew runs on the shared Codex daemon (codex_transport: shared), the only seats
+// whose tools run without a $ZMINA_ROLE.
+func (s *Shift) HasSharedCodexSeat() bool {
+	for _, r := range s.Crew.Roles {
+		if r.IsCodex() && r.CodexTransport == "shared" {
+			return true
+		}
+	}
+
+	return false
+}
+
+// SeatOfSession is the Codex seat whose live conversation is session: "" when none is. A shared Codex role's tools run
+// in the daemon's process, with no ZMINA_ROLE but with their thread (CODEX_THREAD_ID), and the thread is how such a command
+// is told to be the seat's. Only Codex roles are asked: a Claude role's tools always carry ZMINA_ROLE, and the owner's own
+// session is no seat's. A thread no seat runs now (a child thread of a seat, the owner's own Codex) is nobody's. The state
+// is read, never written: a role the state does not know yet is skipped.
+func (s *Shift) SeatOfSession(session string) string {
+	if session == "" {
+		return ""
+	}
+
+	for _, name := range s.Names() {
+		if rs := s.State.Roles[name]; rs == nil || !rs.Up || !s.isCodex(name) {
+			continue
+		}
+
+		if s.LiveSession(name) == session {
+			return name
+		}
+	}
+
+	return ""
+}
+
 // RebindDelivery moves the delivery of t to session, the conversation the role runs now, when the conversation changed under the
 // running role since the line was submitted (its own /clear, a /resume in its pane): it is the role's, so it holds the hand-out
 // by definition (ledger.Current, Rebind). The hand-out, its number, its acceptance and the task are as they were; the event is

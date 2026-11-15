@@ -96,6 +96,12 @@ func (s *Shift) Tick() []string {
 	// The roles this beat probed up, for the age sweep: a role skipped below (tmux did not answer) is not among them.
 	probedUp := map[string]bool{}
 
+	// The seats other than the dispatcher this beat started, which reconcile: restart holds to reconcileBeatMax.
+	restarts := 0
+	if s.Crew.Reconcile.Restart {
+		s.sweepRestarts(now)
+	}
+
 	for _, name := range s.Names() {
 		s.mark("roles", name)
 		r, err := s.Role(name)
@@ -158,29 +164,20 @@ func (s *Shift) Tick() []string {
 			s.settleEnded(name, now)
 		}
 
-		// A role of a held plan is not started: a fresh start's boot line is a model call (planHeld).
-		if !up && !stopped && r.Keep == crew.KeepAlways && !rs.Held && !rs.Broken && s.flushErr == nil &&
-			s.registryFor(name).LiveByName(r.Session) == nil && now.Sub(rs.Started) >= reopenPause && !s.planHeld(name, now) {
-			// The conversation it was on, read before the start: the record of the reopen names it, and a fresh start hands the
-			// tasks the role holds.
-			from, tasks := s.rotationFrom(name), s.heldTasks(name)
+		// A session outside zmina that kept a seat down and is gone may be told of again.
+		if s.Crew.Reconcile.Restart && !up && s.State.RecordNotified[outsideKey(name)] && s.registryFor(name).LiveByName(r.Session) == nil {
+			s.forgetOutside(name)
+		}
 
-			if err := s.start(name, UpOptions{}); err != nil {
-				// Wait the usual pause before the next try, so a role that cannot start does not fill the log.
-				rs.Started = now
-				did = append(did, "start "+name+": "+err.Error())
-			} else {
-				up = true
+		// A role of a held plan is not started: a fresh start's boot line is a model call (planHeld). A keep: always role is wanted up
+		// always; with reconcile: restart a seat that holds an open task is too (wantedUp).
+		if !up && !stopped && !rs.Held && !rs.Broken && s.flushErr == nil {
+			if why := s.wantedUp(name, r, now); why != "" {
+				reopened, lines, more := s.reopen(name, r, rs, why, now, &restarts)
+				up = up || reopened
 
-				s.rotationReopened(name, from, tasks)
-
-				did = append(did, "started "+name)
-				if name != s.Crew.Dispatcher {
-					// What zmina did, told once: an info line.
-					note := name + ": started again (keep: always)"
-					s.markQuiet(note, now)
-					notes = append(notes, note)
-				}
+				did = append(did, lines...)
+				notes = append(notes, more...)
 			}
 		}
 
@@ -236,6 +233,12 @@ func (s *Shift) Tick() []string {
 			}
 		}
 	}
+
+	// Sessions of the crew's tmux server that no role names (reconcile: orphans): reported once, and taken down when nothing says
+	// someone is using them.
+	orphanDid, orphanNotes := s.reconcileOrphans(now, stopped)
+	did = append(did, orphanDid...)
+	notes = append(notes, orphanNotes...)
 
 	// The rotations that are open: what the fresh conversations did is noted, and each closes when it has its context or its
 	// time ran out.
@@ -544,7 +547,9 @@ func (s *Shift) addNotes(notes []string) {
 }
 
 // ended handles a role that was up and is gone: keeps its last screen, counts ends soon after a start, and marks a
-// keep: always role that keeps dying on boot as broken.
+// keep: always role that keeps dying on boot as broken. With reconcile: restart a seat that holds an open task is marked
+// broken the same way, after the crew file's tries, and a seat that is not keep: always whose session ended with a terminal attached is
+// left down: whoever sat there most likely ended it (zmina down and zmina sleep are the ways to keep a seat down on purpose).
 func (s *Shift) ended(name string, r *crew.Role, now time.Time, tasks []string, p tmux.Pane) []string {
 	rs := s.State.Role(name)
 
@@ -553,12 +558,27 @@ func (s *Shift) ended(name string, r *crew.Role, now time.Time, tasks []string, 
 		note += " (held " + strings.Join(tasks, ", ") + ")"
 	}
 
+	attached := false
+
 	if p.State == tmux.Dead {
+		// Read before the session is killed: nobody is attached to one that is gone.
+		// A keep: always seat is started again whoever sat there: a terminal attached to it is no word that it was ended on purpose.
+		if s.Crew.Reconcile.Restart && name != s.Crew.Dispatcher && r.Keep != crew.KeepAlways {
+			if on, err := s.Tmux.Attached(name); err == nil && on {
+				attached = true
+			}
+		}
+
 		if file := s.saveScreen(name, now); file != "" {
 			note += ", last screen " + file
 		}
 
 		_ = s.Tmux.Kill(name)
+	}
+
+	if attached {
+		rs.Held = true
+		note += "; ended with a terminal attached: left down (zmina up " + name + ")"
 	}
 
 	s.log(name, "ended", strings.Join(tasks, ","), note)
@@ -571,7 +591,11 @@ func (s *Shift) ended(name string, r *crew.Role, now time.Time, tasks []string, 
 
 	notes := []string{note}
 
-	if r.Keep == crew.KeepAlways && name != s.Crew.Dispatcher && rs.QuickEnds >= quickEndsMax {
+	if attached {
+		s.log(name, "held-attached", "", "its session ended with a terminal attached")
+	}
+
+	if limit, ok := s.quickEndLimit(name, r, now); ok && rs.QuickEnds >= limit {
 		rs.Broken = true
 		notes = append(notes, fmt.Sprintf("%s: dies on boot (%d ends within %d min of a start), not started again "+
 			"until zmina up %s", name, rs.QuickEnds, int(quickEnd.Minutes()), name))
@@ -579,6 +603,22 @@ func (s *Shift) ended(name string, r *crew.Role, now time.Time, tasks []string, 
 	}
 
 	return notes
+}
+
+// quickEndLimit is how many ends in a row soon after a start mark the role broken, and whether it can be marked at all: a keep: always
+// role other than the dispatcher at quickEndsMax, and with reconcile: restart a seat that holds an open task (wantedUp) at the crew file's
+// tries. The dispatcher is never marked: a crew with none is worse than one that keeps trying.
+func (s *Shift) quickEndLimit(name string, r *crew.Role, now time.Time) (limit int, ok bool) {
+	switch {
+	case name == s.Crew.Dispatcher:
+		return 0, false
+	case r.Keep == crew.KeepAlways:
+		return quickEndsMax, true
+	case s.wantedUp(name, r, now) != "":
+		return s.Crew.Reconcile.MaxTries(), true
+	}
+
+	return 0, false
 }
 
 // saveScreen keeps the last screen of an ended role in screens/<role>-<time>.txt and returns that path, relative to

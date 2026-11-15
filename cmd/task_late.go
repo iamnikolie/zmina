@@ -27,7 +27,7 @@ func handoffFlag(c *cobra.Command, into *string) {
 // conversation, the packet --handoff names, and the role's live one, asked when the delivery cannot say. work says the command
 // reports or ends the work as the worker does (a result, a checkpoint, a close, a park).
 func (a *app) caller(s *shift.Shift, handoff string, work bool) *ledger.Caller {
-	return &ledger.Caller{By: by(), Session: callerSession(), Handoff: strings.TrimSpace(handoff), Live: s.LiveSession, Work: work}
+	return &ledger.Caller{By: s.By, Session: callerSession(), Handoff: strings.TrimSpace(handoff), Live: s.LiveSession, Work: work}
 }
 
 // hold says where the caller of this command stands against the hand-out of task t. A session of the task's role that is the
@@ -49,7 +49,7 @@ func (a *app) hold(s *shift.Shift, t task.Task, handoff string, work bool) (task
 // what is what it did (result, checkpoint, done, drop, park, set) and revision the record it saved, when it saved one. The
 // error is partial: the state, which holds the note to the dispatcher, is saved.
 func (a *app) lateReport(s *shift.Shift, t task.Task, what, revision string, st ledger.Standing) error {
-	_, err := s.RecordLate(t, task.Late{What: what, Revision: revision, By: by(), Session: callerSession(), Gen: st.Gen, Other: st.Other})
+	_, err := s.RecordLate(t, task.Late{What: what, Revision: revision, By: s.By, Session: callerSession(), Gen: st.Gen, Other: st.Other})
 	if err != nil {
 		return err
 	}

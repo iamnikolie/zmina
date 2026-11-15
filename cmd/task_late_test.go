@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,10 +12,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/iamnikolie/zmina/internal/codex"
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/events"
 	"github.com/iamnikolie/zmina/internal/record"
+	"github.com/iamnikolie/zmina/internal/registry"
+	"github.com/iamnikolie/zmina/internal/shift"
 	"github.com/iamnikolie/zmina/internal/task"
+	"github.com/iamnikolie/zmina/internal/tmux"
 )
 
 // lateCrew is a crew with a dev and a review role, and T-1 for dev handed out as hand-out 3 to the session sess-new: the
@@ -617,4 +623,235 @@ func TestReportsFollowTheRolesLiveConversationAfterAClearInItsPane(t *testing.T)
 	require.NotNil(t, tk.Closed)
 	assert.Equal(t, 1, tk.Closed.Gen)
 	assert.False(t, tk.Closed.Unbound)
+}
+
+// codexSeatCrew is the Codex seats of a crew on a shared App Server daemon: the tools of such a seat run in the daemon's
+// process, so they carry the seat's thread (CODEX_THREAD_ID) and no ZMINA_ROLE. A seat is up under a bridge pid, and the
+// bridge's record in the crew's codex directory names its thread, as the real bridge writes it.
+type codexSeatCrew struct {
+	file string
+	pids map[string]int
+}
+
+// codexSeats is the crew-file lines of seats that run on the shared daemon, and what to put after them.
+func codexSeats(names ...string) string {
+	var out string
+
+	for _, name := range names {
+		out += "  " + name + ":\n    runtime: codex\n    codex_transport: shared\n"
+	}
+
+	return out
+}
+
+// newCodexSeatCrew brings the seats up on their threads (seat -> thread).
+func newCodexSeatCrew(t *testing.T, file string, threads map[string]string) *codexSeatCrew {
+	t.Helper()
+
+	c := &codexSeatCrew{file: file, pids: map[string]int{}}
+	reg := codex.Registry{Dir: filepath.Join(filepath.Dir(file), "codex")}
+	pid := 5000
+
+	for seat, thread := range threads {
+		pid++
+		c.pids[seat] = pid
+
+		require.NoError(t, reg.Save(codex.Record{Session: registry.Session{PID: pid, SessionID: thread, Name: seat}}))
+	}
+
+	a := &app{out: io.Discard, err: io.Discard, crew: file}
+	require.NoError(t, a.withState(func(s *shift.Shift) error {
+		for seat := range threads {
+			s.State.Role(seat).Up = true
+		}
+
+		return nil
+	}))
+
+	return c
+}
+
+// seatTmux answers for the seats that run on the daemon: up under their bridge's pid. Every other role is the real tmux's.
+type seatTmux struct {
+	shift.Tmux
+	pids map[string]int
+}
+
+func (m seatTmux) Probe(name string) (tmux.Pane, error) {
+	if pid, ok := m.pids[name]; ok {
+		return tmux.Pane{State: tmux.Up, PID: pid}, nil
+	}
+
+	return m.Tmux.Probe(name)
+}
+
+// zm runs a command as a tool of the daemon does: the role is $ZMINA_ROLE ("" for a daemon's tool) and the thread is
+// $CODEX_THREAD_ID.
+func (c *codexSeatCrew) zm(t *testing.T, role, thread string, args ...string) (string, string, error) {
+	t.Helper()
+
+	t.Setenv("ZMINA_ROLE", role)
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	t.Setenv("CODEX_THREAD_ID", thread)
+
+	var out, errb bytes.Buffer
+
+	root := newRoot(&app{out: &out, err: &errb, shiftSeams: func(s *shift.Shift) { s.Tmux = seatTmux{Tmux: s.Tmux, pids: c.pids} }})
+	root.SetArgs(append([]string{"--crew", c.file}, args...))
+	err := root.Execute()
+
+	return out.String(), errb.String(), err
+}
+
+// codexLateCrew is T-1 for dev handed out as hand-out 3 to dev's thread thread-dev, with dev and review both on the shared daemon,
+// and review on thread-review.
+func codexLateCrew(t *testing.T) *lateCrew {
+	t.Helper()
+
+	shape := "    handoff:\n      sections:\n        - name: draft\n"
+	file := testCrew(t, "  dev:\n    runtime: codex\n    codex_transport: shared\n"+shape+
+		"  review:\n    runtime: codex\n    codex_transport: shared\n"+shape)
+
+	_, _, err := zm(t, file, "task", "new", "dev", "Answer the question")
+	require.NoError(t, err)
+
+	c, err := crew.Load(file)
+	require.NoError(t, err)
+
+	l := &lateCrew{file: file, c: c}
+	l.handOut(t, task.Delivery{ID: "pkt-a", Role: "dev", Gen: 3, Session: "thread-dev", QueuedAt: time.Now().UTC()})
+
+	return l
+}
+
+// A close from a thread that is a Codex seat's live one is the seat's: the closing says who and under which hand-out, and it is
+// held to the hand-out like a Claude seat's. A thread no seat runs is the owner's hand, as it was.
+func TestASharedCodexSeatsCloseIsTheSeatsByItsThread(t *testing.T) {
+	l := codexLateCrew(t)
+	seats := newCodexSeatCrew(t, l.file, map[string]string{"dev": "thread-dev", "review": "thread-review"})
+
+	// A thread of no seat (a child thread of dev, the owner's own Codex) is nobody: it closes as the hand, not late.
+	_, _, err := seats.zm(t, "", "thread-child", "task", "set", "1", "--note", "from a child thread")
+	require.NoError(t, err)
+
+	// The seat's own thread: its close is dev's, under the hand-out.
+	_, errOut, err := seats.zm(t, "", "thread-dev", "task", "done", "1", "--note", "shipped")
+	require.NoError(t, err, errOut)
+
+	closed := l.task(t).Closed
+	require.NotNil(t, closed)
+	assert.Equal(t, "dev", closed.By)
+	assert.Equal(t, 3, closed.Gen)
+	assert.False(t, closed.Unbound, "its thread is the one the task was handed to")
+	assert.Zero(t, l.lateEvents(t))
+
+	queue, _, err := zm(t, l.file, "queue", "ls")
+	require.NoError(t, err)
+	assert.Contains(t, queue, "dev: T-1 done: shipped", "the dispatcher is told of a seat's close")
+}
+
+// A thread that no seat runs, in a crew that has seats on the shared daemon, is not the owner's hand: it cannot be told from a seat whose
+// record lags, so it acts as codex-thread. Closing a task handed to a seat is then a late report, as another seat's close is, and the
+// refusal says how the owner acts.
+func TestAThreadOfNoSeatActsAsCodexThreadWhereSeatsAreShared(t *testing.T) {
+	l := codexLateCrew(t)
+	seats := newCodexSeatCrew(t, l.file, map[string]string{"dev": "thread-dev", "review": "thread-review"})
+
+	_, _, err := seats.zm(t, "", "thread-child", "task", "done", "1", "--note", "shipped")
+	require.Error(t, err)
+	assert.Equal(t, exitLate, exitCodeOf(t, err))
+	assert.Contains(t, err.Error(), "it is handed to dev, not codex-thread")
+	assert.Contains(t, err.Error(), "run from a plain terminal", "how the owner acts")
+
+	assert.Equal(t, task.Open, l.task(t).State)
+
+	// The owner at a plain shell, which carries no thread, closes it as the hand.
+	_, errOut, err := seats.zm(t, "", "", "task", "done", "1", "--note", "shipped")
+	require.NoError(t, err, errOut)
+	assert.Equal(t, "hand", l.task(t).Closed.By)
+}
+
+// A crew with no seat on the shared daemon has none a thread could be: its Codex sessions are the owner's own and act as the hand, as they
+// always did.
+func TestAThreadActsAsTheHandWhereNoSeatIsShared(t *testing.T) {
+	file := testCrew(t, "  dev: {}\n")
+
+	_, _, err := zm(t, file, "task", "new", "dev", "Answer the question")
+	require.NoError(t, err)
+
+	t.Setenv("CODEX_THREAD_ID", "thread-owner")
+
+	_, errOut, err := zm(t, file, "task", "done", "1", "--note", "shipped")
+	require.NoError(t, err, errOut)
+	assert.Equal(t, "hand", readTask(t, file, "T-1").Closed.By)
+}
+
+// A seat's thread is held to the hand-out: another seat's thread closing the task is a late report, and the task is as it was.
+func TestAnotherSeatsThreadClosingTheTaskIsLate(t *testing.T) {
+	l := codexLateCrew(t)
+	before := l.task(t)
+	seats := newCodexSeatCrew(t, l.file, map[string]string{"dev": "thread-dev", "review": "thread-review"})
+
+	_, _, err := seats.zm(t, "", "thread-review", "task", "done", "1", "--note", "not mine")
+	require.Error(t, err)
+	assert.Equal(t, exitLate, exitCodeOf(t, err))
+	assert.Contains(t, err.Error(), "it is handed to dev, not review")
+
+	got := l.task(t)
+	require.Len(t, got.Late, 1)
+	assert.Equal(t, "review", got.Late[0].By)
+	assert.Equal(t, task.Open, got.State)
+
+	got.Late = nil
+	assert.Equal(t, before, got)
+
+	// The seat's own live thread is not the one the task was handed to (the seat moved to a new thread since): it holds the
+	// hand-out all the same, as a Claude seat's live session does.
+	l.handOut(t, task.Delivery{ID: "pkt-b", Role: "dev", Gen: 4, Session: "thread-old", QueuedAt: time.Now().UTC()})
+
+	_, _, err = seats.zm(t, "", "thread-dev", "task", "done", "1", "--note", "shipped")
+	require.NoError(t, err, "the live session of the task's role holds the hand-out by definition")
+	assert.Equal(t, "dev", l.task(t).Closed.By)
+}
+
+// $ZMINA_ROLE wins over the thread: a role's tool that also carries a thread is the role the environment names.
+func TestZminaRoleWinsOverTheThread(t *testing.T) {
+	l := codexLateCrew(t)
+	seats := newCodexSeatCrew(t, l.file, map[string]string{"dev": "thread-dev", "review": "thread-review"})
+
+	_, _, err := seats.zm(t, "review", "thread-dev", "task", "done", "1", "--note", "not mine")
+	require.Error(t, err)
+	assert.Equal(t, exitLate, exitCodeOf(t, err))
+	assert.Contains(t, err.Error(), "it is handed to dev, not review", "review by the environment, not dev by the thread")
+	assert.Equal(t, task.Open, l.task(t).State)
+}
+
+// task accept --role names the seat for a tool that is none (a child thread): the thread of a seat is that seat's, and it
+// cannot claim another's.
+func TestTaskAcceptRoleWorksWithTheThreadResolution(t *testing.T) {
+	l := codexLateCrew(t)
+	seats := newCodexSeatCrew(t, l.file, map[string]string{"dev": "thread-dev", "review": "thread-review"})
+
+	// The hand-out is not confirmed for a session (nothing was submitted), which is the check after the one on who accepts.
+	notConfirmed := "handoff is not confirmed for this live session"
+
+	_, _, err := seats.zm(t, "", "thread-child", "task", "accept", "1", "--handoff", "pkt-a", "--role", "dev")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, notConfirmed, "a thread of no seat claims the seat by --role, as before")
+
+	_, _, err = seats.zm(t, "", "thread-dev", "task", "accept", "1", "--handoff", "pkt-a")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, notConfirmed, "the seat's thread is dev without --role")
+
+	_, _, err = seats.zm(t, "", "thread-dev", "task", "accept", "1", "--handoff", "pkt-a", "--role", "dev")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, notConfirmed)
+
+	_, _, err = seats.zm(t, "", "thread-review", "task", "accept", "1", "--handoff", "pkt-a", "--role", "dev")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "caller role review cannot claim dev")
+
+	_, _, err = seats.zm(t, "", "thread-child", "task", "accept", "1", "--handoff", "pkt-a")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "only assigned role dev can accept this handoff", "a thread of no seat with no --role is codex-thread: not the assigned role")
 }

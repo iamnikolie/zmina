@@ -360,6 +360,9 @@ type Crew struct {
 	LaterSweep *LaterSweep `yaml:"later_sweep"`
 	// AutoReview is review without the dispatcher: on, off or {rounds: N} (see AutoReview). Absent: off.
 	AutoReview AutoReview `yaml:"auto_review"`
+	// Reconcile is the rule that a seat holding an open task should be up: on, off or a block naming the parts (see
+	// Reconcile). Absent: off, and nothing changes.
+	Reconcile Reconcile `yaml:"reconcile"`
 	// DoneCheck is the command closing a task as done runs in the task's worktree, unless the task sets its own: a
 	// command line, or run, timeout and commit (see donecheck.Spec). Empty, off or none: no check, as before.
 	DoneCheck *donecheck.Spec `yaml:"done_check"`
@@ -496,8 +499,19 @@ func load(path string, strict bool) (*Crew, error) {
 	return c, nil
 }
 
+// ownKeyPrefix starts a top-level key that belongs to the owner: zmina never reads it and never defines a key of
+// that name, so it is no unknown key. It is the extension convention of Docker Compose; an anchor kept under one can
+// be merged into a role with <<.
+const ownKeyPrefix = "x-"
+
+// ownKey says whether a top-level key is the owner's own: the prefix x- in lower case (X-foo is not one) and at least one more
+// character, of any case (x-Notes is).
+func ownKey(key string) bool {
+	return len(key) > len(ownKeyPrefix) && strings.HasPrefix(key, ownKeyPrefix)
+}
+
 // decode reads the crew file. Keys it does not know are warnings (with their line), not errors, so a typo is seen
-// without stopping the crew.
+// without stopping the crew. A top-level key of the owner's own (x-<name>) is no unknown key and is not warned of.
 func decode(raw []byte) (*Crew, []string, error) {
 	var c Crew
 
@@ -523,8 +537,20 @@ func decode(raw []byte) (*Crew, []string, error) {
 
 		// "line 12: field scheduel not found in type crew.Role"
 		line, rest, _ := strings.Cut(e, ": ")
-		key := strings.TrimPrefix(strings.SplitN(rest, " not found", 2)[0], "field ")
-		warnings = append(warnings, fmt.Sprintf("%s: unknown key %q, ignored", line, key))
+		field, typ, _ := strings.Cut(rest, " not found in type ")
+		key := strings.TrimPrefix(field, "field ")
+
+		topLevel := typ == "crew.Crew"
+		if topLevel && ownKey(key) {
+			continue
+		}
+
+		warning := fmt.Sprintf("%s: unknown key %q, ignored", line, key)
+		if topLevel {
+			warning += " (a key of your own is named x-<name>)"
+		}
+
+		warnings = append(warnings, warning)
 	}
 
 	c = Crew{}

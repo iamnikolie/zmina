@@ -93,15 +93,15 @@ func (a *app) lessonAddCommand() *cobra.Command {
 				return errors.New("give the rule, or --file")
 			}
 
-			if role == "" {
-				role = by()
-			}
-
 			if taskID != "" {
 				taskID = task.Normalize(taskID)
 			}
 
 			return a.withState(func(s *shift.Shift) error {
+				if role == "" {
+					role = s.By
+				}
+
 				added, err := addLessons(s, items, role, taskID)
 				for _, l := range added {
 					fmt.Fprintln(a.out, l.ID)
@@ -315,12 +315,12 @@ func (a *app) lessonDropCommand() *cobra.Command {
 						return fmt.Errorf("%s is %s, not waiting", l.ID, l.State)
 					}
 
-					l.State, l.Reason, l.Updated = lesson.Dropped, or(reason, "dropped by "+by()), s.Now()
+					l.State, l.Reason, l.Updated = lesson.Dropped, or(reason, "dropped by "+s.By), s.Now()
 					if err := lessonStore(s.Crew).Put(l); err != nil {
 						return err
 					}
 
-					s.Log(by(), "lesson-drop", l.Task, l.ID+": "+l.Reason)
+					s.Log(s.By, "lesson-drop", l.Task, l.ID+": "+l.Reason)
 				}
 
 				return nil

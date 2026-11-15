@@ -183,11 +183,14 @@ func (s *Shift) StartRotation(name, id string, opts UpOptions, kind string) erro
 // UpHanding is UpWith for a start by hand: a fresh start of a role that holds tasks hands them, with a record of the start that
 // the beat follows to the end (accepted, or lost with the way back). A start that resumes a conversation, or of a role that
 // holds nothing, is UpWith and nothing more. A hand-out that fails is a Partial error, the role being up.
-func (s *Shift) UpHanding(name string, o UpOptions) error {
+func (s *Shift) UpHanding(name string, o UpOptions) error { return s.upHanding(name, o, s.UpWith) }
+
+// upHanding is UpHanding with the start it makes given: UpWith, or a start that keeps the seat's count of failed starts (upFor).
+func (s *Shift) upHanding(name string, o UpOptions, up func(string, UpOptions) error) error {
 	from := s.rotationFrom(name)
 	tasks := s.heldTasks(name)
 
-	if err := s.UpWith(name, o); err != nil {
+	if err := up(name, o); err != nil {
 		return err
 	}
 

@@ -256,3 +256,110 @@ func TestCleanEnvKeepsAPluginsNameAndTheCockpitsSecretsFromRoles(t *testing.T) {
 
 	assert.Equal(t, []string{"PATH=/bin", "ZMINA_CREW=/c/crew.yaml"}, env)
 }
+
+// Sessions lists each session of the server once and says which of them zmina started (a pane carrying its tag): one opened by
+// hand on the same server is listed untagged, a second window does not list its session twice, a session whose process ended
+// stays on the list, and a server that is not there has no sessions.
+func TestSessionsListsEachSessionOnceAndSaysWhichZminaStarted(t *testing.T) {
+	c := server(t)
+	c.Owner = OwnerTag("/crews/dev/crew.yaml")
+
+	none, err := c.Sessions()
+	require.NoError(t, err, "no server is no sessions, not a failure")
+	assert.Empty(t, none)
+
+	require.NoError(t, c.Start("dev", t.TempDir(), nil, []string{"cat"}))
+	require.NoError(t, c.Start("dev#2", t.TempDir(), nil, []string{"cat"}))
+	require.NoError(t, c.Start("gone", t.TempDir(), nil, []string{"true"}))
+
+	_, err = c.run("new-session", "-d", "-s", "by-hand", "--", "cat")
+	require.NoError(t, err)
+
+	_, err = c.run("new-window", "-t", "=dev:", "--", "cat")
+	require.NoError(t, err)
+
+	eventually(t, func() bool { return c.Dead("gone") })
+
+	got, err := c.Sessions()
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []SessionInfo{
+		{Name: "dev", Tagged: true},
+		{Name: "dev#2", Tagged: true},
+		{Name: "gone", Tagged: true},
+		{Name: "by-hand", Tagged: false},
+	}, got)
+
+	require.NoError(t, c.Kill("dev#2"))
+
+	got, err = c.Sessions()
+	require.NoError(t, err)
+	assert.Len(t, got, 3)
+	assert.NotContains(t, got, SessionInfo{Name: "dev#2", Tagged: true})
+}
+
+// Crews that share a tmux server tell their sessions apart by the value of the tag: a session is Tagged for the crew that started it
+// and Foreign for the other; one tagged the old way ("1"), by a client that does not say whose it is, or not at all is neither, and
+// no crew may take it for its own. KeepScreens gives the old tag and none to the crew that asks, and leaves another crew's alone.
+func TestSessionsTellTheCrewsOfOneServerApart(t *testing.T) {
+	a := server(t)
+	a.Owner = OwnerTag("/crews/a/crew.yaml")
+	b := &Client{Bin: a.Bin, Socket: a.Socket, Owner: OwnerTag("/crews/b/crew.yaml")}
+	legacy := &Client{Bin: a.Bin, Socket: a.Socket}
+
+	require.NotEqual(t, a.Owner, b.Owner)
+	assert.Equal(t, a.Owner, OwnerTag("/crews/a/crew.yaml"), "the same for every zmina that works the crew")
+	assert.Empty(t, OwnerTag(""))
+
+	require.NoError(t, a.Start("a-dev", t.TempDir(), nil, []string{"cat"}))
+	require.NoError(t, b.Start("b-dev", t.TempDir(), nil, []string{"cat"}))
+	require.NoError(t, legacy.Start("old", t.TempDir(), nil, []string{"cat"}))
+
+	_, err := a.run("new-session", "-d", "-s", "by-hand", "--", "cat")
+	require.NoError(t, err)
+
+	// A window of a-dev that b tagged: a mixture, which is nobody's to be sure of.
+	_, err = a.run("new-window", "-t", "=a-dev:", "--", "cat")
+	require.NoError(t, err)
+	_, err = a.run("set-option", "-p", "-t", "=a-dev:{end}.{top-left}", tag, b.Owner)
+	require.NoError(t, err)
+
+	seenBy := func(c *Client) map[string]SessionInfo {
+		got, err := c.Sessions()
+		require.NoError(t, err)
+
+		out := map[string]SessionInfo{}
+		for _, s := range got {
+			out[s.Name] = s
+		}
+
+		return out
+	}
+
+	got := seenBy(a)
+	assert.Equal(t, SessionInfo{Name: "a-dev"}, got["a-dev"], "a pane of another crew's among its own: nobody's")
+	assert.Equal(t, SessionInfo{Name: "b-dev", Foreign: true}, got["b-dev"])
+	assert.Equal(t, SessionInfo{Name: "old"}, got["old"], "the old tag proves nothing")
+	assert.Equal(t, SessionInfo{Name: "by-hand"}, got["by-hand"])
+
+	// Take the mixed window away: a-dev is a's alone.
+	_, err = a.run("kill-pane", "-t", "=a-dev:{end}.{top-left}")
+	require.NoError(t, err)
+
+	got = seenBy(a)
+	assert.Equal(t, SessionInfo{Name: "a-dev", Tagged: true}, got["a-dev"])
+	assert.Equal(t, SessionInfo{Name: "b-dev", Foreign: true}, got["b-dev"])
+
+	got = seenBy(b)
+	assert.Equal(t, SessionInfo{Name: "b-dev", Tagged: true}, got["b-dev"])
+	assert.Equal(t, SessionInfo{Name: "a-dev", Foreign: true}, got["a-dev"])
+
+	got = seenBy(legacy)
+	assert.False(t, got["a-dev"].Tagged || got["b-dev"].Tagged || got["old"].Tagged, "a client that says no crew owns nothing")
+
+	// KeepScreens tags a session of the old kind for the crew that keeps it, and never takes another crew's.
+	require.NoError(t, a.KeepScreens("old"))
+	assert.Equal(t, SessionInfo{Name: "old", Tagged: true}, seenBy(a)["old"])
+
+	require.NoError(t, b.KeepScreens("a-dev"))
+	assert.Equal(t, SessionInfo{Name: "a-dev", Tagged: true}, seenBy(a)["a-dev"], "still a's")
+}
