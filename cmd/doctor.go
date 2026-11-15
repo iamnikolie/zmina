@@ -213,6 +213,8 @@ func (a *app) diagnose() []check {
 
 	if c.Reconcile.OrphanMode() != crew.OrphansOff {
 		if t, err := tmux.New(c.Socket()); err == nil {
+			t.Owner = tmux.OwnerTag(c.Path)
+
 			if list, err := t.Sessions(); err == nil {
 				checkOrphans(c, st, list, add)
 			}

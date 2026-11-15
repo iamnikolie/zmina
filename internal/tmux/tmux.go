@@ -3,6 +3,8 @@ package tmux
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -29,6 +31,10 @@ type Client struct {
 	Socket string
 	// Drop lists environment variables (NAME, or PREFIX* ) kept out of the server, on top of DefaultDrop.
 	Drop []string
+	// Owner is the crew this client acts for (OwnerTag of its crew file): the value of the tag it puts on the panes it starts, and
+	// the one Sessions takes for its own. Crews that share a server (a crew file's name: is what picks the socket) tell their sessions
+	// apart by it. Empty: the old tag, "1", which proves nothing of whose a session is.
+	Owner string
 }
 
 // fallback is where Homebrew puts tmux, for callers that run with a minimal PATH (a launchd job: /usr/bin:/bin).
@@ -102,8 +108,36 @@ type Pane struct {
 	PID   int
 }
 
-// tag marks the role's pane.
+// tag marks the role's pane: its value is the crew that started it (Client.Owner), "1" for a pane tagged by a zmina that did not say.
 const tag = "@zmina"
+
+// legacyTag is the value every pane carried before the tag named a crew.
+const legacyTag = "1"
+
+// OwnerTag is what a crew marks its panes with: a hash of the crew file's real path, which is no secret and is the same for every
+// zmina that works the crew, whichever way it names the file. It is empty for no path.
+func OwnerTag(crewPath string) string {
+	if crewPath == "" {
+		return ""
+	}
+
+	if real, err := filepath.EvalSymlinks(crewPath); err == nil {
+		crewPath = real
+	}
+
+	sum := sha256.Sum256([]byte(filepath.Clean(crewPath)))
+
+	return hex.EncodeToString(sum[:6])
+}
+
+// tagValue is what Start puts in the tag.
+func (c *Client) tagValue() string {
+	if c.Owner != "" {
+		return c.Owner
+	}
+
+	return legacyTag
+}
 
 // Probe reads a role's session. An error means tmux could not be asked (a timeout, a broken server) — not that the
 // session is gone: callers must not take it as absence.
@@ -155,16 +189,20 @@ func (c *Client) Probe(name string) (Pane, error) {
 	}
 }
 
-// SessionInfo is one session of the crew's tmux server.
+// SessionInfo is one session of the server.
 type SessionInfo struct {
 	Name string
-	// Tagged is that a pane of the session carries zmina's tag: zmina started it (Start, KeepScreens). A session someone
-	// opened by hand on the same server has none.
+	// Tagged is that the session is this crew's: its panes carry the tag of the client's Owner, and none carries another's. Only
+	// that proves zmina of this crew started it; the old tag ("1"), no tag and a mixture prove nothing, and such a session is not
+	// taken to be this crew's.
 	Tagged bool
+	// Foreign is that the session is another crew's, which shares the server: its panes carry another crew's tag. It is no business
+	// of this crew's, and not to be reported.
+	Foreign bool
 }
 
-// Sessions lists every session of the server, in the order tmux names them, each once: Tagged when any pane of it is
-// tagged. No server (nothing was ever started, or its last session ended) is no sessions, not an error; an error means tmux
+// Sessions lists every session of the server, in the order tmux names them, each once, and says whose each is by its tag (see
+// SessionInfo). No server (nothing was ever started, or its last session ended) is no sessions, not an error; an error means tmux
 // could not be asked.
 func (c *Client) Sessions() ([]SessionInfo, error) {
 	out, err := c.run("list-panes", "-a", "-F", "#{session_name}\t#{"+tag+"}")
@@ -176,8 +214,11 @@ func (c *Client) Sessions() ([]SessionInfo, error) {
 		return nil, err
 	}
 
+	type marks struct{ mine, other, legacy bool }
+
 	var (
 		list  []SessionInfo
+		seen  []marks
 		index = map[string]int{}
 	)
 
@@ -188,16 +229,29 @@ func (c *Client) Sessions() ([]SessionInfo, error) {
 			continue
 		}
 
-		i, seen := index[name]
-		if !seen {
+		i, ok := index[name]
+		if !ok {
 			i = len(list)
 			index[name] = i
 			list = append(list, SessionInfo{Name: name})
+			seen = append(seen, marks{})
 		}
 
-		if mark != "" {
-			list[i].Tagged = true
+		switch {
+		case mark == "":
+		case mark == legacyTag:
+			seen[i].legacy = true
+		case c.Owner != "" && mark == c.Owner:
+			seen[i].mine = true
+		default:
+			seen[i].other = true
 		}
+	}
+
+	for i, m := range seen {
+		list[i].Tagged = m.mine && !m.other && !m.legacy
+		// Another crew's only when nothing of it is ours or unclear: a session with a mixture is nobody's to be sure of.
+		list[i].Foreign = m.other && !m.mine && !m.legacy
 	}
 
 	return list, nil
@@ -280,7 +334,7 @@ func (c *Client) Start(name, dir string, env []string, argv []string) error {
 		args = append(args, escape(a))
 	}
 
-	args = append(args, ";", "set-option", "-p", "-t", first, tag, "1",
+	args = append(args, ";", "set-option", "-p", "-t", first, tag, c.tagValue(),
 		";", "set-option", "-w", "-t", "="+name+":{start}", "remain-on-exit", "on")
 
 	_, err := c.run(args...)
@@ -289,14 +343,17 @@ func (c *Client) Start(name, dir string, env []string, argv []string) error {
 }
 
 // KeepScreens tags the role's pane and sets remain-on-exit on its window, for sessions started before zmina did
-// both at start.
+// both at start. A pane that carries a tag of the old kind or none gets this crew's; one that carries another crew's is left as it is.
 func (c *Client) KeepScreens(name string) error {
 	id, err := c.target(name)
 	if err != nil {
 		return err
 	}
 
-	if _, err := c.run("set-option", "-p", "-t", id, tag, "1"); err != nil {
+	mark := "#{" + tag + "}"
+
+	if _, err := c.run("if-shell", "-F", "-t", id, "#{||:#{==:"+mark+",},#{==:"+mark+","+legacyTag+"}}",
+		"set-option -p -t "+id+" "+tag+" "+c.tagValue()); err != nil {
 		return err
 	}
 

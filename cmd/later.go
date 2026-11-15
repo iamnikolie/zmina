@@ -327,6 +327,10 @@ func (a *app) laterTakeCommand() *cobra.Command {
 					}
 
 					fmt.Fprintf(a.out, " · %s up as %s", role, session)
+
+					if notWhy != "" {
+						fmt.Fprintf(a.out, " · its packet was not handed: %s", notWhy)
+					}
 				} else {
 					if _, err := s.HandTask(role, t); err != nil {
 						return err

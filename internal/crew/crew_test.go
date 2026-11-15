@@ -1056,3 +1056,20 @@ func TestParseSpanRefusesWhatOverflows(t *testing.T) {
 		assert.Error(t, err, in)
 	}
 }
+
+// The prefix is the lower-case x-: X-foo and a bare x- are unknown keys, and what follows the prefix may be of any case.
+func TestOwnKeyPrefixIsLowerCase(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+
+	dir := t.TempDir()
+	c, err := Load(write(t, "dir: "+dir+"\nx-Notes: kept\nroles:\n  dispatcher:\n"))
+	require.NoError(t, err)
+	assert.Empty(t, c.Warnings, "x-Notes is the owner's own")
+
+	for _, key := range []string{"X-foo", "x-"} {
+		c, err := Load(write(t, "dir: "+dir+"\n"+key+": 1\nroles:\n  dispatcher:\n"))
+		require.NoError(t, err)
+		require.Len(t, c.Warnings, 1, key)
+		assert.Contains(t, c.Warnings[0], "unknown key", key)
+	}
+}

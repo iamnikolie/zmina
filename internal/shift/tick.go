@@ -98,6 +98,9 @@ func (s *Shift) Tick() []string {
 
 	// The seats other than the dispatcher this beat started, which reconcile: restart holds to reconcileBeatMax.
 	restarts := 0
+	if s.Crew.Reconcile.Restart {
+		s.sweepRestarts(now)
+	}
 
 	for _, name := range s.Names() {
 		s.mark("roles", name)
@@ -545,8 +548,8 @@ func (s *Shift) addNotes(notes []string) {
 
 // ended handles a role that was up and is gone: keeps its last screen, counts ends soon after a start, and marks a
 // keep: always role that keeps dying on boot as broken. With reconcile: restart a seat that holds an open task is marked
-// broken the same way, after the crew file's tries, and a role whose session ended with a terminal attached is left down: whoever
-// sat there most likely ended it (zmina down and zmina sleep are the ways to keep a seat down on purpose).
+// broken the same way, after the crew file's tries, and a seat that is not keep: always whose session ended with a terminal attached is
+// left down: whoever sat there most likely ended it (zmina down and zmina sleep are the ways to keep a seat down on purpose).
 func (s *Shift) ended(name string, r *crew.Role, now time.Time, tasks []string, p tmux.Pane) []string {
 	rs := s.State.Role(name)
 
@@ -559,7 +562,8 @@ func (s *Shift) ended(name string, r *crew.Role, now time.Time, tasks []string, 
 
 	if p.State == tmux.Dead {
 		// Read before the session is killed: nobody is attached to one that is gone.
-		if s.Crew.Reconcile.Restart && name != s.Crew.Dispatcher {
+		// A keep: always seat is started again whoever sat there: a terminal attached to it is no word that it was ended on purpose.
+		if s.Crew.Reconcile.Restart && name != s.Crew.Dispatcher && r.Keep != crew.KeepAlways {
 			if on, err := s.Tmux.Attached(name); err == nil && on {
 				attached = true
 			}

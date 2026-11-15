@@ -172,46 +172,70 @@ func (a *app) openTask(s *shift.Shift, pick rolePick, n ledger.NewTask) (task.Ta
 	return t, pane, err
 }
 
-// assignStart reports whether a task given to a role that is down starts it: the crew file's reconcile: assign is on, and the
-// role is not the dispatcher, which the ticker opens itself on its own resume policy (a fresh start for a task would lose it).
+// startsSeats reports whether whoever runs this command may have a seat started by what it gives it: the owner's hand, the cockpit
+// (ui), the ticker (the later sweep), and the dispatcher. A seat that starts others by giving them work would let one start another in
+// a chain, so no other role does: what it gives a seat that is down waits, as with the key off.
+func startsSeats(s *shift.Shift) bool {
+	switch by := s.By; by {
+	case "hand", "ui", "ticker":
+		return true
+	default:
+		return by != "" && by == s.Crew.Dispatcher
+	}
+}
+
+// assignStart reports whether a task given to a role that is down starts it: the crew file's reconcile: assign is on, whoever gives it
+// may start a seat (startsSeats), and the role is not the dispatcher, which the ticker opens itself on its own resume policy (a fresh
+// start for a task would lose it).
 func assignStart(s *shift.Shift, role string) bool {
-	return s.Crew.Reconcile.Assign && role != s.Crew.Dispatcher
+	return s.Crew.Reconcile.Assign && role != s.Crew.Dispatcher && startsSeats(s)
 }
 
 // assignTo is what a task just recorded for a role does to a role that is down (pane): with reconcile: assign the role is started
-// on it, handed as up --task does (shift.StartOnTask). It reports whether it was, and why not when it tried and was refused; with the
-// key off, or for a role that is up, it does nothing, as before.
-func (a *app) assignTo(s *shift.Shift, t task.Task, pane tmux.Pane) (started bool, notStarted string) {
+// on it, handed as up --task does (shift.StartOnTask). It reports whether it was, and a reason: why not when it was refused, or why
+// its packet was not handed when it was started but not handed; with the key off, or for a role that is up, it does nothing, as before.
+func (a *app) assignTo(s *shift.Shift, t task.Task, pane tmux.Pane) (started bool, why string) {
 	if pane.State == tmux.Up || !assignStart(s, t.Role) {
 		return false, ""
 	}
 
-	notStarted, started = a.handTo(s, t, pane, true)
+	why, started = a.handTo(s, t, pane, true)
 
-	if started {
+	switch {
+	case started && why != "":
+		s.Log(t.Role, "assign-started", t.ID, "up for the task it was given (reconcile: assign); its packet was not handed: "+why)
+	case started:
 		s.Log(t.Role, "assign-started", t.ID, "up for the task it was given (reconcile: assign)")
-	} else if notStarted != "" {
-		s.Log(t.Role, "assign-refused", t.ID, notStarted)
+	case why != "":
+		s.Log(t.Role, "assign-refused", t.ID, why)
 	}
 
-	return started, notStarted
+	return started, why
 }
 
 // saidAssigned says what became of a task recorded for a role that is down: the start, or, when the role stays down, the command
 // that starts it, with why zmina did not when it tried (reconcile: assign). A role that is up has nothing to say. With asJSON the
-// output on stdout is the task's, so the start is said on stderr and the command is not said at all, as before.
-func (a *app) saidAssigned(s *shift.Shift, t task.Task, pane tmux.Pane, started bool, notStarted string, asJSON bool) {
+// output on stdout is the task's, so the start is said on stderr and the command is not said at all, as before. A seat that was
+// started and not handed its packet is said to be up, and the packet is named as the thing that is missing.
+func (a *app) saidAssigned(s *shift.Shift, t task.Task, pane tmux.Pane, started bool, why string, asJSON bool) {
 	switch {
 	case pane.State == tmux.Up:
 		return
-	case started && asJSON:
-		fmt.Fprintln(a.err, s.StartedLine(t.Role, t.ID))
 	case started:
-		fmt.Fprintln(a.out, s.StartedLine(t.Role, t.ID))
-	case asJSON && notStarted == "":
+		out := a.out
+		if asJSON {
+			out = a.err
+		}
+
+		fmt.Fprintln(out, s.StartedLine(t.Role, t.ID))
+
+		if why != "" {
+			fmt.Fprintf(a.err, "zmina: %s is up, but its packet was not handed: %s (zmina task handoff %s --queue hands it)\n", t.Role, why, t.ID)
+		}
+	case asJSON && why == "":
 		return
 	default:
-		fmt.Fprintf(a.err, "zmina: %s is down: %s starts it on the task%s\n", t.Role, a.upTaskLine(s, t), notStartedWhy(notStarted))
+		fmt.Fprintf(a.err, "zmina: %s is down: %s starts it on the task%s\n", t.Role, a.upTaskLine(s, t), notStartedWhy(why))
 	}
 }
 
@@ -983,6 +1007,10 @@ func (a *app) setTask(id string, st task.State, o taskChange) error {
 
 		if startedOn {
 			fmt.Fprintln(a.out, s.StartedLine(t.Role, t.ID))
+
+			if notStartedW != "" {
+				fmt.Fprintf(a.err, "zmina: %s is up, but its packet was not handed: %s (zmina task handoff %s --queue hands it)\n", t.Role, notStartedW, t.ID)
+			}
 		} else if notStartedW != "" {
 			fmt.Fprintf(a.err, "zmina: %s is down: %s starts it on the task%s\n", t.Role, a.upTaskLine(s, t), notStartedWhy(notStartedW))
 		}

@@ -235,8 +235,25 @@ func TestReleaseFinishedAfterItsBeatDied(t *testing.T) {
 	assert.Contains(t, strings.Join(out, "|"), "designer: release finished after its beat ended")
 	assert.True(t, rs.Downing.IsZero())
 	assert.Nil(t, rs.Pending)
-	assert.False(t, rs.Held, "a release is no hand's down: a task given to the seat later may start it")
-	assert.Empty(t, f.s.StartBlock("designer", *f.now), "so nothing keeps it from being started for a task")
+	assert.True(t, rs.Held, "released roles stay down, held as they always were: zmina explain says so")
 	assert.False(t, f.tm.Has("designer"))
 	assert.True(t, f.ev.has("designer", "released-late"))
+}
+
+// A released seat is held and says so (zmina explain: put down by hand) as it always was; only with reconcile: assign is a release no
+// hand's down, and the seat is not held.
+func TestAReleasedSeatIsHeldUnlessAssignIsOn(t *testing.T) {
+	for extra, held := range map[string]bool{"": true, "reconcile: {restart: true}\n": true, "reconcile: {assign: true}\n": false} {
+		f := releasing(t, extra)
+
+		f.s.Tick()
+		require.Equal(t, []string{"designer"}, f.s.Released, extra)
+		require.NoError(t, f.s.FinishDown("designer"))
+
+		assert.Equal(t, held, f.s.State.Role("designer").Held, "%q", extra)
+
+		_, e := look(t, f)
+		require.NotNil(t, e.LastKnown, extra)
+		assert.Equal(t, held, strings.Contains(e.LastKnown.Words, "put down by hand"), "%q: %s", extra, e.LastKnown.Words)
+	}
 }

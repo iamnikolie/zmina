@@ -120,7 +120,7 @@ func (a *app) watchAckCommand() *cobra.Command {
 			}
 
 			return a.withState(func(s *shift.Shift) error {
-				acked, err := s.AckWatch(args[0], args[1:], all, by())
+				acked, err := s.AckWatch(args[0], args[1:], all, s.By)
 				if err != nil {
 					return err
 				}

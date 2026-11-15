@@ -327,23 +327,30 @@ func TestASharedCodexSeatsCloseIsToldToTheDispatcher(t *testing.T) {
 	assert.Equal(t, []string{"dev: T-1 done: shipped (zmina task show T-1)"}, dispatcherLines(t, file))
 }
 
-// A thread that is no seat's live one (a child thread of the seat, the owner's own Codex) closes as the owner's hand, as it did: no
-// review, no role's done note.
-func TestAThreadOfNoSeatClosesAWorktreeTaskWithoutAReview(t *testing.T) {
+// A thread that is no seat's live one (a child thread of the seat, the owner's own Codex), in a crew with seats on the shared daemon, is
+// not the owner's hand: it closes as codex-thread, which is a role's close to the loop: the review is due. (With no shared seat in the crew
+// such a thread is the hand, and no review: TestAThreadActsAsTheHandWhereNoSeatIsShared.)
+func TestAThreadOfNoSeatClosesAWorktreeTaskAsCodexThread(t *testing.T) {
 	file := reviewCrew(t, codexSeats("dev")+"  dev2: {}\n  reviewer: {}\n", "auto_review: on\n")
 	id := workTask(t, file, "dev")
 	seats := newCodexSeatCrew(t, file, map[string]string{"dev": "thread-1"})
 
 	out, errOut, err := seats.zm(t, "", "thread-child", "task", "done", id, "--note", "shipped")
 	require.NoError(t, err, errOut)
-	assert.Equal(t, "T-1 · dev · done\n", out)
+	assert.Equal(t, "T-1 · dev · done\nreview: review T-2 of T-1 for reviewer, round 1 of 2\n", out)
 
 	got := readTask(t, file, id)
 	require.NotNil(t, got.Closed)
-	assert.Equal(t, "hand", got.Closed.By)
-	assert.Nil(t, got.Closed.Review)
-	assert.Equal(t, 1, taskCount(t, file), "no review task was made")
-	assert.False(t, isUp(t, file, "reviewer"))
+	assert.Equal(t, "codex-thread", got.Closed.By)
+	require.NotNil(t, got.Closed.Review)
+	assert.Equal(t, 2, taskCount(t, file), "the review task was made")
+
+	// The owner's own shell carries no thread: its close is the hand's, with no review.
+	other := workTask(t, file, "dev")
+	_, errOut, err = seats.zm(t, "", "", "task", "done", other, "--note", "shipped")
+	require.NoError(t, err, errOut)
+	assert.Equal(t, "hand", readTask(t, file, other).Closed.By)
+	assert.Nil(t, readTask(t, file, other).Closed.Review)
 }
 
 // $ZMINA_ROLE wins over a thread: a tool of another role that carries a seat's thread closes as the role the environment names.
@@ -906,14 +913,6 @@ func TestARejectOfAnAuthorThatCannotBeStartedIsToldOnce(t *testing.T) {
 
 			return "it is broken (zmina ls)"
 		},
-		// The loop is stricter than it was: an author the owner put down by hand is not started on a reject (only a hand's up
-		// clears the hold). The dispatcher is told once, as for any seat that cannot be started.
-		"it was put down by hand": func(t *testing.T, file string) string {
-			a := &app{out: io.Discard, err: io.Discard, crew: file}
-			require.NoError(t, a.withState(func(s *shift.Shift) error { s.State.Role("dev").Held = true; return nil }))
-
-			return "it was put down by hand"
-		},
 		"it holds other work": func(t *testing.T, file string) string {
 			_, _, err := zm(t, file, "task", "new", "dev", "an earlier task")
 			require.NoError(t, err)
@@ -1137,4 +1136,72 @@ func TestAParkedReviewTakenByTheAuthorIsAPlainTask(t *testing.T) {
 
 	assert.Nil(t, readTask(t, file, "T-3").Review, "the author never reviews its own work")
 	assert.Equal(t, "T-2", readTask(t, file, id).Closed.Review.Task)
+}
+
+// With reconcile off, or assign off, the review loop is what it was: a seat put down by hand (zmina down) is started on the review, and
+// so is the author on a reject, the hold cleared as zmina up clears it. With assign on the loop goes by the one list of reasons
+// (shift.StartBlock) and a seat put down by hand is left down, the dispatcher told once.
+func TestReviewLoopStartsASeatPutDownByHandOnlyWhileAssignIsOff(t *testing.T) {
+	for key, started := range map[string]bool{
+		"":                                      true,
+		"reconcile: off\n":                      true,
+		"reconcile: {restart: true}\n":          true,
+		"reconcile: {assign: false}\n":          true,
+		"reconcile: {assign: true}\n":           false,
+		"reconcile: {assign: true, tries: 2}\n": false,
+	} {
+		t.Run(strings.TrimSpace(key), func(t *testing.T) {
+			// The reviewer, put down by the owner's hand.
+			file := reviewCrew(t, reviewSeats, "auto_review: on\n"+key)
+
+			putDownByHand(t, file, "reviewer")
+
+			a := &app{out: io.Discard, err: io.Discard, crew: file}
+			require.NoError(t, a.readState(func(s *shift.Shift) error {
+				require.True(t, s.State.Role("reviewer").Held, "put down by hand")
+
+				return nil
+			}))
+
+			id := workTask(t, file, "dev")
+			out := closeAs(t, file, "dev", id)
+
+			if started {
+				assert.Contains(t, out, "review: review T-2 of T-1 for reviewer, round 1 of 2")
+				assert.NotContains(t, out, "not started")
+				assert.True(t, isUp(t, file, "reviewer"), "started on the review, as before")
+			} else {
+				assert.Contains(t, out, "reviewer is not started: it was put down by hand")
+				assert.False(t, isUp(t, file, "reviewer"))
+			}
+
+			// The author put down by hand, and the reviewer's reject.
+			putDownByHand(t, file, "dev")
+			acceptDelivery(t, file, id)
+
+			out = closeAs(t, file, "reviewer", "T-2", "--verdict", "reject", "--note", "the token is logged")
+			assert.Contains(t, out, "review T-2 rejected T-1: reopened for dev")
+			assert.Equal(t, started, isUp(t, file, "dev"), "the author is started on a reject only where the loop starts a seat put down by hand")
+
+			if !started {
+				assert.Contains(t, out, "dev is not started: it was put down by hand")
+			}
+		})
+	}
+}
+
+// putDownByHand starts a role (unless it is up), waits for its prompt (a down into a screen with none is refused) and puts it down as the owner does.
+func putDownByHand(t *testing.T, file, role string) {
+	t.Helper()
+	as(t, "")
+
+	if !isUp(t, file, role) {
+		_, _, err := zm(t, file, "up", role)
+		require.NoError(t, err)
+	}
+
+	awaitPrompt(t, file, role)
+
+	_, _, err := zm(t, file, "down", role)
+	require.NoError(t, err)
 }

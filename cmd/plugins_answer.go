@@ -102,7 +102,7 @@ func (a *app) answerTurn(s *shift.Shift, via, dialog, role, text string) error {
 
 	line := turnAnswerLine(via, f.Since.In(s.Crew.Location()).Format("15:04"), f.Question, words)
 
-	if err := s.SendNow(role, line, answeredBy(by(), via)); err != nil {
+	if err := s.SendNow(role, line, answeredBy(s.By, via)); err != nil {
 		// Nothing was given: the card is as it was. Not when tmux did not answer in time, which may have typed it.
 		if !tmux.NoAnswer(err) {
 			_ = armed.Rearm(mark, now)
@@ -117,7 +117,7 @@ func (a *app) answerTurn(s *shift.Shift, via, dialog, role, text string) error {
 
 	// Given: what the owner said is in the ledger, as the answer to a todo item is, and no other card of the question answers it again.
 	s.Log(role, "answered", f.Task, fmt.Sprintf("its turn's question: «%s» (answered through plugin %s)", quoted(words, 200), via))
-	noteDecision(s, plugin.EventDialogID(role, fingerprint, mark), answeredBy(by(), via), 0, quoted(words, plugin.AnswerMax))
+	noteDecision(s, plugin.EventDialogID(role, fingerprint, mark), answeredBy(s.By, via), 0, quoted(words, plugin.AnswerMax))
 
 	for _, pl := range s.Crew.Plugins {
 		other := plugin.Armed{Path: s.Crew.Layout().PluginArmed(pl.Name), Lock: s.Crew.Layout().PluginArmedLock(pl.Name)}
@@ -127,7 +127,7 @@ func (a *app) answerTurn(s *shift.Shift, via, dialog, role, text string) error {
 	l := s.Crew.Layout()
 	if err := shift.ClearTurn(l, role); err != nil {
 		if err := shift.DropTurn(l, role); err != nil {
-			pluginProblem(s.Crew, by(), via, fmt.Sprintf("the owner's answer to %s's turn question was given, but its record could not be cleared (%v): "+
+			pluginProblem(s.Crew, s.By, via, fmt.Sprintf("the owner's answer to %s's turn question was given, but its record could not be cleared (%v): "+
 				"the spent mark refuses a second answer", role, err))
 		}
 	}

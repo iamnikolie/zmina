@@ -24,11 +24,11 @@ func (a *app) noteCommand() *cobra.Command {
 		Short: "Queue a task signal for the dispatcher; the ticker types it with the health notes once it is idle",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if from == "" {
-				from = by()
-			}
-
 			return a.withState(func(s *shift.Shift) error {
+				if from == "" {
+					from = s.By
+				}
+
 				queued, err := s.Note(from, strings.Join(args, " "), ifUp)
 				if errors.Is(err, shift.ErrNotUp) {
 					return &exitError{code: exitDown, msg: "the dispatcher is not up; nothing queued"}

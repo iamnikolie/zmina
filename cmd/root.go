@@ -261,7 +261,7 @@ func (a *app) newShift() (*shift.Shift, error) {
 		Node:              node,
 		ReconcileMessages: a.reconcileMessages,
 		Crew:              c,
-		Tmux:              &lazyTmux{socket: c.Socket(), drop: c.DropEnv},
+		Tmux:              &lazyTmux{socket: c.Socket(), drop: c.DropEnv, owner: tmux.OwnerTag(c.Path)},
 		Reg:               &registry.Registry{Namespace: c.Namespace},
 		Peer:              peer.Inbox{},
 		CodexInbox:        codex.Inbox{},
@@ -313,7 +313,7 @@ func (a *app) readState(fn func(s *shift.Shift) error) error {
 	s.State = st
 	a.actAs(s)
 
-	return fn(s)
+	return codexThreadHint(s, fn(s))
 }
 
 // withState runs fn on the shift under the state lock and saves the state after. A save that fails fails the
@@ -347,7 +347,7 @@ func (a *app) withState(fn func(s *shift.Shift) error) error {
 
 	// A command that failed leaves the state as it was (what it typed or started is already saved by the flush after
 	// it); one that failed after doing part of its work says so with shift.Partial, and that part is saved.
-	ferr := fn(s)
+	ferr := codexThreadHint(s, fn(s))
 	if ferr != nil && !errors.Is(ferr, shift.ErrPartial) {
 		l.Release()
 
@@ -399,15 +399,69 @@ func eventLog(c *crew.Crew) *events.Log {
 // it has no $ZMINA_ROLE and by() says hand, but it carries its thread ($CODEX_THREAD_ID), and the seat whose live
 // conversation that is acts as itself (s.By). It needs the state, so it runs after the state is set, not in newShift. The
 // environment wins: a command with $ZMINA_ROLE is that role. A thread that is no seat's live one (a child thread, the owner's
-// own Codex) stays the owner's hand, as before.
+// own Codex) stays the owner's hand in a crew with no seat on the shared daemon, and acts as codex-thread in one that has: there it
+// cannot be told from a seat whose record lags, and no seat's tool may pass for the owner's hand.
 func (a *app) actAs(s *shift.Shift) {
 	if os.Getenv("ZMINA_ROLE") != "" {
 		return
 	}
 
-	if seat := s.SeatOfSession(os.Getenv("CODEX_THREAD_ID")); seat != "" {
-		s.By = seat
+	thread := os.Getenv("CODEX_THREAD_ID")
+	if thread == "" {
+		return
 	}
+
+	if seat := s.SeatOfSession(thread); seat != "" {
+		s.By = seat
+
+		return
+	}
+
+	// A crew with seats on the shared daemon cannot tell such a thread from the owner's by its environment: it acts as nobody's, not as the
+	// owner's hand (shift.ActorCodexThread). A crew with none has no seat it could be, and its Codex is the owner's own.
+	if s.HasSharedCodexSeat() {
+		s.By = shift.ActorCodexThread
+	}
+}
+
+// codexThreadHint says, on a refusal to a command that acts as codex-thread, how the owner acts: from a plain shell, which has no
+// Codex thread in its environment. Nothing for any other actor.
+func codexThreadHint(s *shift.Shift, err error) error {
+	if err == nil || s.By != shift.ActorCodexThread {
+		return err
+	}
+
+	return fmt.Errorf("%w (this command runs in a Codex session no seat of the crew owns, so it acts as %s and not as the owner: "+
+		"what only the owner's hand or the dispatcher may do, run from a plain terminal)", err, shift.ActorCodexThread)
+}
+
+// codexThreadWords is the hint of codexThreadHint for a refusal written by hand, empty for any other actor.
+func codexThreadWords(who string) string {
+	if who != shift.ActorCodexThread {
+		return ""
+	}
+
+	return " (a Codex session no seat of the crew owns acts as " + who + ", not as the owner: run it from a plain terminal)"
+}
+
+// actor is who runs this command as the shift would know, for a check made before the state is read: $ZMINA_ROLE, else the owner's
+// hand, and for a Codex session with neither, what actAs makes of its thread (a seat, or codex-thread). The state is only read.
+func (a *app) actor() string {
+	if role := os.Getenv("ZMINA_ROLE"); role != "" {
+		return role
+	}
+
+	if os.Getenv("CODEX_THREAD_ID") == "" {
+		return by()
+	}
+
+	who := by()
+
+	if err := a.readState(func(s *shift.Shift) error { who = s.By; return nil }); err != nil {
+		return by()
+	}
+
+	return who
 }
 
 // by is who runs this command: the role a session runs as ($ZMINA_ROLE), else the owner's hand.
@@ -423,6 +477,8 @@ func by() string {
 type lazyTmux struct {
 	socket string
 	drop   []string
+	// owner is the crew's tag on the panes it starts (tmux.OwnerTag).
+	owner string
 
 	mu sync.Mutex
 	c  *tmux.Client
@@ -443,7 +499,7 @@ func (l *lazyTmux) client() (*tmux.Client, error) {
 		return nil, err
 	}
 
-	c.Drop = l.drop
+	c.Drop, c.Owner = l.drop, l.owner
 	l.c = c
 
 	return l.c, nil

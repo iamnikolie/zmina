@@ -189,7 +189,10 @@ when opening the same thread from the app. Stop the idle role, change its transp
 move that thread to the shared daemon. Do not set `args` in shared mode: use role fields/profile for
 per-thread settings; global server flags belong to the daemon. `down` disconnects this role, not the daemon.
 The daemon's tool processes carry no `$ZMINA_ROLE`; zmina takes a command whose `$CODEX_THREAD_ID` is a seat's live thread as that seat's
-(`task done`: its review, done note and hand-out check; `ack`, `note`, `todo`, `lesson` and `inbox` still read `$ZMINA_ROLE` only).
+(`task done`: its review, done note and hand-out check; so do `ack`, `note`, `todo`, `lesson`, `watch ack`, `inbox` and the notes of what a role read). A thread no seat runs now
+(a child thread, a seat whose record lags, the owner's own Codex) cannot be told from the owner by its environment: in a crew that has a seat
+with `codex_transport: shared` it acts as `codex-thread`, a name of no role, which holds none of the owner's authority (a refusal says to run the
+command from a plain terminal, which carries no thread; `task accept --role` still names the seat it claims); in a crew with no such seat it is the owner's hand, as ever.
 A Codex seat runs on the normal service tier (`service_tier: default`) unless its role or its profile names one:
 `service_tier: priority` is Codex's fast mode, twice the price (`zmina usage` prices it so). The owner's global
 `service_tier` in `<codex_home>/config.toml` never reaches a crew: zmina passes the tier with every thread start and
@@ -2610,16 +2613,16 @@ its lines is held back any more.
   due" (`task show`: `review: round 1 due`). The packet of such a task tells the worker to close it after saving its result: the
   review starts on the close. The owner's own close, the dispatcher's, a task with no worktree and a close past the rounds are as
   they always were. A shared Codex daemon's tools carry no `$ZMINA_ROLE` but their thread: a close whose `$CODEX_THREAD_ID` is a
-  Codex seat's live thread is that seat's, and reviewed; a thread no seat runs (a child thread, the owner's own Codex) closes as the
-  owner's hand: no review.
+  Codex seat's live thread is that seat's, and reviewed; a thread no seat runs (a child thread, the owner's own Codex) closes as
+  `codex-thread`, which is a role's close and reviewed, where the crew has a seat on the daemon, and as the owner's hand, no review, where it has none.
 - **The review task.** zmina makes it for the seat the review rule picks: `first` for the first review, `again` for the later rounds,
   never the author or a copy of the author. Only the review rule answers: when it finds no seat, or the busy rule gives the work to
   the author's own seat, nobody is picked (waits for a seat, below). A copy the routes name is not made: the task goes to its base
   seat and queues. The task has the repo and project of the work and no worktree of its own, a text that says what was asked, the
   criteria, the worktree and the `git diff` to read, the author's result and check, and (round 2 on) the review before it; and it is
-  handed out, a down seat being started on it as `up --task` does. A seat is not started while the shift is stopped, when it is asleep,
-  broken or put down by hand, when its plan is held, or when it holds other work (Reconcile): the usual note about a task a down role
-  never took follows. Events: `route` and `review`.
+  handed out, a down seat being started on it as `up --task` does. A seat is not started while the shift is stopped, when it is asleep or
+  broken, when its plan is held, or when it holds other work (with `reconcile: assign` also when it was put down by hand, is going down or
+  past its `expires`, or the crew is retired: Reconcile): the usual note about a task a down role never took follows. Events: `route` and `review`.
 - **The verdict.** The reviewer closes the task: `zmina task done T-15 --verdict accept|reject [--note "<one line>"] [--result <file>]`.
   A review closed as done with no `--verdict` is refused; a reject needs a note or a saved result; a second, different verdict is
   refused; `--verdict` on a task that is no review is an error. The owner and the dispatcher `--force` a review closed with none,
@@ -2946,7 +2949,9 @@ parts it wants and a part it does not name is off: `reconcile: {assign: true, re
 newer before it is set: an older one only warns of the unknown key.
 
 - **Assign.** A task given to a seat that is down starts the seat on it, as `zmina up <seat> --task T-n` does: in the task's worktree,
-  on the conversation the task recorded when one fits, the packet handed with the start. It applies to `task new` (also `--route`:
+  on the conversation the task recorded when one fits, the packet handed with the start. Only when the owner's hand, the cockpit, the
+  ticker (its sweep) or the dispatcher gives it: a task one seat gives another is recorded as with the key off (the hint, no start), so
+  that seats cannot start one another in a chain. It applies to `task new` (also `--route`:
   a copy the routes name, `dev#2`, is started as `up dev --as 2` is), the ticker's later sweep, `task set T-n open --role <seat>`
   (a task waiting on the owner is not started for: it waits) and `later take L-n <seat>` without `--resume` (with it the start is
   `--resume`'s, once). The dispatcher is never started by a task: the ticker opens it, on its own resume policy. `task new` prints
@@ -2957,15 +2962,21 @@ newer before it is set: an older one only warns of the unknown key.
   the way is clear). No seat is started that is: asleep (its alarm wakes it), broken, going down, put down by hand (`zmina down`:
   only `zmina up` starts it), a temporary seat past its `expires`, or of a held plan (its boot is a model call); nor in a stopped
   shift or a retired crew. A seat that is down and holds other work is not started for a new task: that work comes first, and
-  `zmina up <seat>` hands it all. A worktree that is gone is a refusal. Events: `assign-started` and `assign-refused`, beside the
-  `up` the start logs.
-- **Lines.** `zmina send <seat> --when-idle <text>` for a seat that is down starts it when the line is the owner's or the
+  `zmina up <seat>` hands it all. A worktree that is gone is a refusal. A seat that was started and whose packet could not be handed
+  is up: `zmina: dev is up, but its packet was not handed: <why>`, never "not started". The start keeps the seat's count of failed
+  starts (Tries, below) where `zmina up` clears it. Events: `assign-started` and `assign-refused`, beside the `up` the start logs.
+- **Lines.** `zmina send <seat> --when-idle <text>` for a seat that is down starts it when the line is the owner's, the cockpit's or the
   dispatcher's: as `zmina up <seat>` does, resume policy and the tasks it holds handed. Never a line from one seat to another (seats
   would start one another in a chain), a slash command, a line for the dispatcher, or for a copy (`up --as`). The reply ends `; dev is
   down: started it` or `; dev is down: not started (<why>)`, by the reasons above. A line has no net: a refusal reaches the sender
   only, and the line waits as it always did. Events: `line-started`, `line-refused`.
-- **Released is not put down.** A seat the ticker released (`release_idle_minutes`) is no longer held: a task given to it later
-  starts it, which is the case this key is for. Only `zmina down` and `zmina sleep` hold a seat down.
+- **Released is not put down.** With `assign` on, a seat the ticker released (`release_idle_minutes`) is not held: a task given to it
+  later starts it, which is the case this key is for (without the key it stays held, as `zmina explain` has always said).
+- **A routine down.** The dispatcher puts a seat down after its work as a matter of course, and a seat held for that would never be
+  started again by a task. So with `assign` on a `zmina down` run by a seat of the crew (the dispatcher) on a `keep: manual` seat that holds
+  no open task leaves it not held (event `down-routine`), and a task given to it later starts it. A down by the owner's hand or the
+  cockpit, of a seat that still holds an open task, of a `keep: always` seat, by a Codex session no seat owns, and `zmina stop`, `sleep` and
+  the rest, stay held: down on purpose, only `zmina up` starts the seat. Without the key a down is held, as it always was.
 - **Restart.** The beat starts a seat that is down and holds at least one open task (not one waiting on the owner or another, parked
   or closed), the way it starts a `keep: always` one, with the same guards: not stopped, held, asleep or broken, no session of its
   name outside zmina, its plan not held, and 5 minutes since its last start. Not for a copy (a copy is gone once down: its tasks wait
@@ -2979,30 +2990,34 @@ newer before it is set: an older one only warns of the unknown key.
   again until `zmina up`, one note, `dev: could not be started 3 times (last: <why>); not tried again until zmina up dev`. Ends
   that came soon after a start give the note a `keep: always` seat gets, `dev: dies on boot …`, after `tries` of them (a `keep: always`
   seat after 2, as ever). The dispatcher is never marked broken: it is told once (`dispatcher: could not be started 3 times …`,
-  heard once it is up) and tried again on the pause. `zmina up` clears the count.
+  heard once it is up) and tried again on the pause. `zmina up` clears the count. A seat wanted up for its task alone is also started
+  again only 6 times in 24 hours: it may live past ten minutes each time and still never finish what it holds. The seventh time it is
+  marked broken, with one note, `dev: started again 6 times in 24h and still holds T-5, so it is not making progress; not started again
+  until zmina up dev`; `zmina up` begins the count afresh (the starts are `reconcile-restart/<seat>/<time>` keys of `record_notified`).
 - **A terminal attached.** With `restart` on, a seat whose session ended while a terminal was attached to it is left down and held,
   with the note `ended with a terminal attached: left down (zmina up dev)`: whoever sat there most likely ended it. A detach in the
   same minute looks the same as a crash; `zmina down` and `zmina sleep` are the ways to keep a seat down on purpose. The dispatcher
-  is always started again.
+  and a `keep: always` seat are always started again.
 - **A session outside zmina.** A seat that should be up but whose session name runs outside zmina is not started (as ever) and the
   dispatcher is told once: `dev should be up (holds T-5), but a session named zm-dev already runs outside zmina (pid …): end it,
   then zmina up dev`, again only after that session has been gone.
 - **Orphans.** A session of the crew's tmux server that no role of the crew file names, and that is no copy of one, is reported
   once, with the tasks it holds named (`holds T-5`); told again after it has been gone and returns. With `orphans: down` it is also
-  taken down, but only when all of these hold: the shift runs; zmina started it (its pane carries zmina's tag); no state is kept
+  taken down, but only when all of these hold: the shift runs; this crew's zmina started it (its pane carries the crew's own tag, a hash of the crew file's path, so that crews sharing a tmux server tell theirs apart); no state is kept
   for it, or its role has been missing from the crew file for 10 beats (a mistyped edit is not acted on); no active task is its
   own; nothing waits in its queue; its registry entry says idle for `idle_minutes`; and no terminal is attached. Its last screen is
   kept (`screens/`), it is killed (no role says how it exits) and the dispatcher gets an `FYI`; event `orphan-down`. A session that
-  holds tasks, or that zmina did not start, is only reported. `orphans: report` never takes one down.
+  holds tasks, or that is not shown to be this crew's (tagged the old way, or not at all), is only reported; a session of another crew on the same server is not even reported. `orphans: report` never takes one down.
 - **Where it lives.** No field was added to `state.json`: the count of tries is the role's `quick_ends`, the broken mark its `broken`,
   the terminal rule its `held`, and what was told is in `record_notified` (`reconcile-outside/<seat>`, `orphan/<session>`, cleared
   when the session is gone). The beat has a phase of its own, `orphans`, only with `orphans` on.
 - **What stays down.** After `zmina stop` and `zmina start` the seats stay held until `zmina up`. A task of a dead copy (`dev#2`)
   is not reconciled; the `ended` note lists it. A role that was removed from the crew file and still holds a task is an orphan that
   is reported, never taken down.
-- **The review loop** goes by the same reasons as `assign`: an author seat the owner put down by hand is no longer started on a
+- **The review loop** goes by the same reasons when `assign` is on: an author seat the owner put down by hand is not started on a
   reject (the dispatcher gets the usual one note, `dev not started: it was put down by hand`), and a retired crew or a seat past its
-  `expires` is not started for a review.
+  `expires` is not started for a review. With the key off, or `assign` off, it is what it always was: a stopped shift, a seat asleep or
+  broken and a plan held are the only reasons, and zmina up's start clears a hold. It is not held to who gave the work: it is zmina's own.
 
 ## Restart — hand-out, failed start
 
@@ -3333,7 +3348,8 @@ to that: it must be the task's own role (a copy is not its base) and, where its 
 `CODEX_THREAD_ID`) and the hand-out's are both known, the same one. The task's own role is held to it for any change of
 the task; another role only for what reports or ends the work as the worker does, so a note or another field set on
 someone else's task is as it always was. The owner's hand and the dispatcher are not held (a tool with no `$ZMINA_ROLE` whose
-`$CODEX_THREAD_ID` is a Codex seat's live thread is that seat, not the hand). A session of the task's role
+`$CODEX_THREAD_ID` is a Codex seat's live thread is that seat, not the hand, and one whose thread no seat runs is `codex-thread`, held like a role,
+where the crew has a seat on the shared daemon). A session of the task's role
 that is the role's live one (the registry's) holds the hand-out by definition: when the conversation changed under the
 running role (its own `/clear`, one in its pane, a `/resume`) its first report moves the delivery to the new
 conversation, as one `rebound` event and no note, with the hand-out, its number and its acceptance as they were, and

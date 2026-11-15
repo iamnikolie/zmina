@@ -504,7 +504,8 @@ func load(path string, strict bool) (*Crew, error) {
 // be merged into a role with <<.
 const ownKeyPrefix = "x-"
 
-// ownKey says whether a top-level key is the owner's own: x- and at least one more character, in lower case.
+// ownKey says whether a top-level key is the owner's own: the prefix x- in lower case (X-foo is not one) and at least one more
+// character, of any case (x-Notes is).
 func ownKey(key string) bool {
 	return len(key) > len(ownKeyPrefix) && strings.HasPrefix(key, ownKeyPrefix)
 }

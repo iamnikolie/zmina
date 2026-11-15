@@ -311,8 +311,8 @@ func (a *app) startReview(s *shift.Shift, root task.Task, byID map[string]task.T
 	}
 
 	// A seat that is not started has the task on the ledger: the ticker tells the dispatcher of a task a down role never took.
-	if why, _ := a.handTo(s, t, pane, true); why != "" {
-		said += "; " + t.Role + " is not started: " + why
+	if why, started := a.handTo(s, t, pane, true); why != "" {
+		said += "; " + t.Role + notHandedWords(started, why)
 	}
 
 	return []string{said}, nil
@@ -393,7 +393,8 @@ func reviewNoSeat(d route.Decision) string {
 
 // handTo gives task t to its role: the hand-out when the role is up, else, with start, the role is started on it (StartOnTask). It
 // says why the role is not up on the task when it is not: a start that was refused or failed, or a hand-out that failed; started is
-// true when it started the role. Without start a role that is down is left down, with no reason and not started: the caller says how
+// true when it started the role. A role that was started and not handed its packet is started with a why, which is the hand-out's
+// error: up, not "not started". Without start a role that is down is left down, with no reason and not started: the caller says how
 // it is started.
 func (a *app) handTo(s *shift.Shift, t task.Task, pane tmux.Pane, start bool) (why string, started bool) {
 	if pane.State != tmux.Up {
@@ -401,11 +402,9 @@ func (a *app) handTo(s *shift.Shift, t task.Task, pane tmux.Pane, start bool) (w
 			return "", false
 		}
 
-		if why = s.StartOnTask(t); why != "" {
-			return why, false
-		}
+		started, why = s.StartOnTask(t)
 
-		return "", true
+		return why, started
 	}
 
 	if _, err := a.handOut(s, t); err != nil {
@@ -413,6 +412,15 @@ func (a *app) handTo(s *shift.Shift, t task.Task, pane tmux.Pane, start bool) (w
 	}
 
 	return "", false
+}
+
+// notHandedWords is how the loop's line says why a role is not up on a task: not started (and why), or started and its packet not handed.
+func notHandedWords(started bool, why string) string {
+	if started {
+		return " is up, but its packet was not handed: " + why
+	}
+
+	return " is not started: " + why
 }
 
 // reviewWaits tells the dispatcher once, for each task and round, that no seat took its review: zmina makes it when a seat is free
@@ -521,12 +529,15 @@ func (a *app) reviewRejected(s *shift.Shift, root, rev task.Task, rounds int) ([
 
 	said := fmt.Sprintf("review %s rejected %s: reopened for %s", rev.ID, root.ID, root.Role)
 
-	var notStarted string
+	var (
+		notStarted string
+		started    bool
+	)
 
 	if pane, err := s.Tmux.Probe(back.Role); err != nil {
 		notStarted = refusalReason(err)
 	} else {
-		notStarted, _ = a.handTo(s, back, pane, true)
+		notStarted, started = a.handTo(s, back, pane, true)
 	}
 
 	if notStarted == "" {
@@ -535,8 +546,14 @@ func (a *app) reviewRejected(s *shift.Shift, root, rev task.Task, rounds int) ([
 
 	// A reopened task keeps the mark that its old hand-out was accepted, so the ticker's note about a task a down role never took
 	// does not come: this is the one.
-	said += "; " + back.Role + " is not started: " + notStarted
-	text := fmt.Sprintf("%s reopened after a reject in review %s, %s not started: %s; %s", root.ID, rev.ID, back.Role, notStarted, a.upTaskLine(s, back))
+	said += "; " + back.Role + notHandedWords(started, notStarted)
+
+	state := "not started"
+	if started {
+		state = "up, its packet not handed"
+	}
+
+	text := fmt.Sprintf("%s reopened after a reject in review %s, %s %s: %s; %s", root.ID, rev.ID, back.Role, state, notStarted, a.upTaskLine(s, back))
 
 	_, err = s.NoteOnce("review-reopened/"+root.ID+"/"+strconv.Itoa(round), "zmina", text, false)
 

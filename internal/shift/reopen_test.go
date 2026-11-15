@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -348,10 +349,10 @@ func TestReconcileRestartStartsAtMostTwoSeatsABeat(t *testing.T) {
 	f.holds("dev3", openTask("T-3", "dev3"))
 
 	f.s.Tick()
-	assert.ElementsMatch(t, []string{"dispatcher", "dev", "dev2"}, f.tm.starts, "the dispatcher is not counted: two seats, in the order of the crew")
+	assert.Equal(t, []string{"dispatcher", "dev", "dev2"}, f.tm.starts, "the dispatcher is not counted: two seats, in the order of the crew")
 
 	f.beat(time.Minute)
-	assert.ElementsMatch(t, []string{"dispatcher", "dev", "dev2", "dev3", "harvester"}, f.tm.starts, "the rest on the next beat, keep: always included")
+	assert.Equal(t, []string{"dispatcher", "dev", "dev2", "dev3", "harvester"}, f.tm.starts, "the rest on the next beat, in order, keep: always included")
 }
 
 // A session of the seat's name that runs outside zmina is not taken: the seat stays down, and the dispatcher is told once, again only
@@ -495,3 +496,118 @@ func TestReconcileRestartLadderStartsAtTheOldPause(t *testing.T) {
 		assert.True(t, started(f, "harvester"), "after a long run it is started again at once: %q", key)
 	}
 }
+
+// A seat that dies after more than ten minutes each time is no quick end, and the pause of a failed start does not bound it: the beat
+// starts it again only so many times in a day, then marks it broken with one note; a hand's up begins the count afresh.
+func TestReconcileRestartCapsStartsOfASeatThatNeverFinishes(t *testing.T) {
+	f := reconciling(t, "reconcile: {restart: true}\n", soloCrew)
+	f.holds("dev", openTask("T-1", "dev"))
+	rs := f.s.State.Role("dev")
+
+	f.beat(0)
+	require.True(t, f.tm.Has("dev"), "the first start")
+
+	for i := 1; i < reconcileRestartCap; i++ {
+		f.tm.die("dev")
+		f.beat(11 * time.Minute)
+		require.True(t, f.tm.Has("dev"), "start %d", i+1)
+		require.False(t, rs.Broken)
+	}
+
+	assert.Equal(t, reconcileRestartCap, f.s.restartsSince("dev", *f.now))
+
+	f.tm.die("dev")
+	f.beat(11 * time.Minute)
+	assert.False(t, f.tm.Has("dev"), "no more")
+	assert.True(t, rs.Broken)
+	assert.True(t, f.ev.has("dev", "broken"))
+
+	count := func() int {
+		n := 0
+
+		for _, l := range f.dispatcherLines() {
+			if strings.Contains(l, "started again 6 times in 24h and still holds T-1") {
+				n++
+			}
+		}
+
+		return n
+	}
+
+	assert.Equal(t, 1, count())
+	assert.Contains(t, strings.Join(f.dispatcherLines(), "|"), "dev: started again 6 times in 24h and still holds T-1, so it is not making progress; not started again until zmina up dev")
+
+	f.beat(3 * time.Hour)
+	f.beat(3 * time.Hour)
+	assert.Equal(t, 1, count(), "told once")
+	assert.False(t, f.tm.Has("dev"))
+
+	// A hand's up begins afresh: the count of starts is forgotten with the mark.
+	require.NoError(t, f.s.Up("dev"))
+	assert.False(t, rs.Broken)
+	assert.Zero(t, f.s.restartsSince("dev", *f.now))
+
+	f.tm.die("dev")
+	f.beat(11 * time.Minute)
+	assert.True(t, f.tm.Has("dev"), "wanted up again")
+}
+
+// Starts older than a day are not counted, and the beat forgets their records; a keep: always seat has no such cap.
+func TestReconcileRestartCapForgetsADayAndSparesKeepAlways(t *testing.T) {
+	f := reconciling(t, "reconcile: {restart: true}\n", soloCrew)
+	f.holds("dev", openTask("T-1", "dev"))
+
+	for i := range reconcileRestartCap {
+		f.s.State.MarkRestart("dev", f.now.Add(-time.Duration(25+i)*time.Hour))
+	}
+
+	f.beat(time.Minute)
+	assert.True(t, f.tm.Has("dev"), "all of them are past the day")
+	assert.Equal(t, 1, f.s.restartsSince("dev", *f.now))
+
+	for key := range f.s.State.RecordNotified {
+		if strings.HasPrefix(key, restartPrefix) {
+			ts := strings.TrimPrefix(key, restartPrefix+"dev/")
+			assert.NotEmpty(t, ts)
+			assert.Equal(t, strconvInt(f.now.Unix()), ts, "only this beat's start is kept: %s", key)
+		}
+	}
+
+	h := fixtureWith(t, "reconcile: {restart: true}\n"+crewYAML)
+	h.s.Tick()
+
+	for range reconcileRestartCap + 2 {
+		h.tm.die("harvester")
+		h.beat(11 * time.Minute)
+		require.True(t, h.tm.Has("harvester"))
+	}
+
+	assert.False(t, h.s.State.Role("harvester").Broken)
+	assert.Zero(t, h.s.restartsSince("harvester", *h.now), "a keep: always seat is not counted")
+}
+
+// A keep: always seat is started again whoever sat in its terminal, with the key on too: only a seat that is not keep: always is held
+// for a terminal attached when it ended.
+func TestReconcileRestartHoldsNoKeepAlwaysSeatForATerminal(t *testing.T) {
+	f := fixtureWith(t, "reconcile: {restart: true}\n"+crewYAML+"  dev:\n")
+	f.holds("dev", openTask("T-1", "dev"))
+	f.s.Tick()
+	f.beat(11 * time.Minute)
+	require.True(t, f.tm.Has("harvester"))
+	require.True(t, f.tm.Has("dev"))
+
+	f.tm.attached["harvester"] = true
+	f.tm.attached["dev"] = true
+	f.tm.die("harvester")
+	f.tm.die("dev")
+	did := f.beat(time.Minute)
+
+	assert.False(t, f.s.State.Role("harvester").Held, "keep: always: started again")
+	assert.True(t, f.tm.Has("harvester"))
+	assert.NotContains(t, strings.Join(did, "|"), "harvester: ended; ended with a terminal attached")
+
+	assert.True(t, f.s.State.Role("dev").Held, "a seat kept up for its task alone is held")
+	assert.False(t, f.tm.Has("dev"))
+}
+
+func strconvInt(n int64) string { return strconv.FormatInt(n, 10) }

@@ -277,16 +277,19 @@ func (a *app) todoAddCommand() *cobra.Command {
 				return errors.New("a decided item is recorded with zmina todo decided, which asks for its reason")
 			}
 
-			ask.Kind, ask.Text, ask.By = k, strings.Join(args, " "), by()
-			if ask.Role == "" {
-				ask.Role = ask.By
-			}
+			ask.Kind, ask.Text = k, strings.Join(args, " ")
 
 			if ask.Task != "" {
 				ask.Task = task.Normalize(ask.Task)
 			}
 
 			return a.withState(func(s *shift.Shift) error {
+				// Who asks is who runs the command: a shared Codex seat's tools carry no $ZMINA_ROLE, and the shift knows them by their thread.
+				ask.By = s.By
+				if ask.Role == "" {
+					ask.Role = ask.By
+				}
+
 				added, err := askStore(s.Crew).Add(ask, s.Now())
 				if err != nil {
 					return err
@@ -328,16 +331,18 @@ func (a *app) todoDecidedCommand() *cobra.Command {
 				return errors.New("a decision needs its reason: --reason \"<why>\"")
 			}
 
-			ask.Kind, ask.Text, ask.By = asks.Decided, strings.Join(args, " "), by()
-			if ask.Role == "" {
-				ask.Role = ask.By
-			}
+			ask.Kind, ask.Text = asks.Decided, strings.Join(args, " ")
 
 			if ask.Task != "" {
 				ask.Task = task.Normalize(ask.Task)
 			}
 
 			return a.withState(func(s *shift.Shift) error {
+				ask.By = s.By
+				if ask.Role == "" {
+					ask.Role = ask.By
+				}
+
 				expireDecided(s)
 
 				added, err := askStore(s.Crew).Add(ask, s.Now())
@@ -469,7 +474,7 @@ func (a *app) todoEditCommand() *cobra.Command {
 					return err
 				}
 
-				s.Log(by(), "asked", ask.Task, ask.ID+" edited: "+strings.Join(changed, ", "))
+				s.Log(s.By, "asked", ask.Task, ask.ID+" edited: "+strings.Join(changed, ", "))
 				fmt.Fprintf(a.out, "%s · %s\n", ask.ID, strings.Join(changed, ", "))
 
 				return nil
@@ -630,11 +635,11 @@ func (a *app) todoAnswerCommand(action string) *cobra.Command {
 		Short: short + "; the dispatcher hears it as a note" + quiet,
 		Args:  args,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if from == "" {
-				from = by()
-			}
-
 			return a.withState(func(s *shift.Shift) error {
+				if from == "" {
+					from = s.By
+				}
+
 				// A plugin's answer is the owner's own, given through it: it is recorded as his, and as through the plugin.
 				via, err := pluginVoice(s.Crew, voice)
 				if err != nil {
@@ -867,7 +872,7 @@ func answerTodo(s *shift.Shift, from, via, action, id, words string) (string, er
 	case via != "":
 		// Through a plugin: the owner's own answer, given on his phone or wherever the plugin reaches him.
 		note += " (answered through plugin " + via + ")"
-	case from != "hand" && from != "ui" && os.Getenv("ZMINA_ROLE") != "":
+	case from != "hand" && from != "ui" && s.By != "hand" && s.By != "ui":
 		// A role that records what the owner said in chat says so: the answer is his words relayed, not his own click.
 		note += " (the owner's answer in chat, recorded by " + from + ")"
 	}

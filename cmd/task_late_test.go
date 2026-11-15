@@ -750,18 +750,40 @@ func TestASharedCodexSeatsCloseIsTheSeatsByItsThread(t *testing.T) {
 	assert.Contains(t, queue, "dev: T-1 done: shipped", "the dispatcher is told of a seat's close")
 }
 
-// A thread that no seat runs closes as the owner's hand: no seat, no review, no done note of a role's, as before.
-func TestAThreadOfNoSeatClosesAsTheHand(t *testing.T) {
+// A thread that no seat runs, in a crew that has seats on the shared daemon, is not the owner's hand: it cannot be told from a seat whose
+// record lags, so it acts as codex-thread. Closing a task handed to a seat is then a late report, as another seat's close is, and the
+// refusal says how the owner acts.
+func TestAThreadOfNoSeatActsAsCodexThreadWhereSeatsAreShared(t *testing.T) {
 	l := codexLateCrew(t)
 	seats := newCodexSeatCrew(t, l.file, map[string]string{"dev": "thread-dev", "review": "thread-review"})
 
-	_, errOut, err := seats.zm(t, "", "thread-child", "task", "done", "1", "--note", "shipped")
-	require.NoError(t, err, errOut)
+	_, _, err := seats.zm(t, "", "thread-child", "task", "done", "1", "--note", "shipped")
+	require.Error(t, err)
+	assert.Equal(t, exitLate, exitCodeOf(t, err))
+	assert.Contains(t, err.Error(), "it is handed to dev, not codex-thread")
+	assert.Contains(t, err.Error(), "run from a plain terminal", "how the owner acts")
 
-	closed := l.task(t).Closed
-	require.NotNil(t, closed)
-	assert.Equal(t, "hand", closed.By)
-	assert.Zero(t, l.lateEvents(t))
+	assert.Equal(t, task.Open, l.task(t).State)
+
+	// The owner at a plain shell, which carries no thread, closes it as the hand.
+	_, errOut, err := seats.zm(t, "", "", "task", "done", "1", "--note", "shipped")
+	require.NoError(t, err, errOut)
+	assert.Equal(t, "hand", l.task(t).Closed.By)
+}
+
+// A crew with no seat on the shared daemon has none a thread could be: its Codex sessions are the owner's own and act as the hand, as they
+// always did.
+func TestAThreadActsAsTheHandWhereNoSeatIsShared(t *testing.T) {
+	file := testCrew(t, "  dev: {}\n")
+
+	_, _, err := zm(t, file, "task", "new", "dev", "Answer the question")
+	require.NoError(t, err)
+
+	t.Setenv("CODEX_THREAD_ID", "thread-owner")
+
+	_, errOut, err := zm(t, file, "task", "done", "1", "--note", "shipped")
+	require.NoError(t, err, errOut)
+	assert.Equal(t, "hand", readTask(t, file, "T-1").Closed.By)
 }
 
 // A seat's thread is held to the hand-out: another seat's thread closing the task is a late report, and the task is as it was.
@@ -831,5 +853,5 @@ func TestTaskAcceptRoleWorksWithTheThreadResolution(t *testing.T) {
 
 	_, _, err = seats.zm(t, "", "thread-child", "task", "accept", "1", "--handoff", "pkt-a")
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "only assigned role dev can accept this handoff", "a thread of no seat with no --role is the hand")
+	assert.ErrorContains(t, err, "only assigned role dev can accept this handoff", "a thread of no seat with no --role is codex-thread: not the assigned role")
 }

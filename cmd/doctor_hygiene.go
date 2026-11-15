@@ -204,9 +204,9 @@ func checkOrphans(c *crew.Crew, st *shift.State, list []tmux.SessionInfo, add fu
 	s := &shift.Shift{Crew: c, State: st}
 
 	for _, o := range s.Orphans(list) {
-		who := "started by zmina"
+		who := "started by this crew's zmina"
 		if !o.Tagged {
-			who = "not started by zmina: left alone"
+			who = "not proven to be this crew's: left alone"
 		}
 
 		what := "reported by the ticker, once"

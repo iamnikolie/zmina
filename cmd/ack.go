@@ -27,13 +27,14 @@ func (a *app) ackCommand() *cobra.Command {
 				return errors.New("name the ids to ack (S-12 S-13), or --all")
 			}
 
-			caller := by()
-			if role == "" {
-				role = caller
-			}
-
 			return a.withState(func(s *shift.Shift) error {
-				acked, warn := s.AckLines(args, all, role, caller)
+				// The caller is who the shift knows runs it: a shared Codex seat's tools carry their thread and no $ZMINA_ROLE.
+				caller, who := s.By, role
+				if who == "" {
+					who = caller
+				}
+
+				acked, warn := s.AckLines(args, all, who, caller)
 				for _, w := range warn {
 					fmt.Fprintln(a.err, "zmina ack: "+w)
 				}
@@ -69,14 +70,14 @@ func (a *app) pendingCommand() *cobra.Command {
 		Short: "Lines delivered and not acked yet: the calling role's (--role, --all for every role)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if role == "" && !every {
-				role = by()
-				if role == "hand" {
-					role = ""
-				}
-			}
-
 			return a.readState(func(s *shift.Shift) error {
+				if role == "" && !every {
+					role = s.By
+					if role == "hand" || role == shift.ActorCodexThread {
+						role = ""
+					}
+				}
+
 				if brief {
 					// The hook a socket role runs at a session's start and after a trim: what it prints goes into the
 					// context. The tag rule only after a trim (a start's boot line names its own tag), and only to

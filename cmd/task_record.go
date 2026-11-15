@@ -71,7 +71,7 @@ func (a *app) taskRecordCommand(kind string) *cobra.Command {
 // the role's, this is a claim about one role's reading. Noted in the role's rotation record with no lock, and never a
 // failure of the read.
 func noteFetched(s *shift.Shift, t task.Task) {
-	if by() != t.Role {
+	if s.By != t.Role {
 		return
 	}
 

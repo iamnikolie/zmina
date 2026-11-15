@@ -3,6 +3,7 @@ package shift
 import (
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,6 +20,13 @@ const (
 	reconcileBeatMax = 2
 	// reconcileWaitStep is how many times the pause between two starts of a seat doubles at most: reopenPause << 3 is 40 minutes.
 	reconcileWaitStep = 3
+	// reconcileRestartCap is how many times in reconcileRestartWindow the ticker starts again a seat that is wanted up only for the task
+	// it holds before it gives it up as broken. A seat that dies after more than ten minutes each time is no quick end, and the pause
+	// of a failed start does not bound it: it would be started again for ever without ever finishing what it holds.
+	reconcileRestartCap    = 6
+	reconcileRestartWindow = 24 * time.Hour
+	// restartPrefix opens the RecordNotified key of each such start: restartPrefix + seat + "/" + unix seconds.
+	restartPrefix = "reconcile-restart/"
 	// keepAlwaysWhy is what wantedUp says of a seat that is wanted up because the crew file says keep: always.
 	keepAlwaysWhy = "keep: always"
 )
@@ -130,6 +138,20 @@ func (s *Shift) reopen(name string, r *crew.Role, rs *RoleState, why string, now
 		return false, nil, nil
 	}
 
+	// A seat wanted up for its task alone is started again only so many times in a day: past that it is broken, with one note.
+	if rc && why != keepAlwaysWhy {
+		if n := s.restartsSince(name, now); n >= reconcileRestartCap {
+			rs.Broken = true
+			note := fmt.Sprintf("%s: started again %d times in %s and still %s, so it is not making progress; not started again until zmina up %s",
+				name, n, "24h", why, name)
+			s.log(name, "broken", "", note)
+
+			return false, nil, []string{note}
+		}
+
+		s.State.MarkRestart(name, now)
+	}
+
 	// The conversation it was on, read before the start: the record of the reopen names it, and a fresh start hands the
 	// tasks the role holds.
 	from, tasks := s.rotationFrom(name), s.heldTasks(name)
@@ -162,6 +184,62 @@ func (s *Shift) reopen(name string, r *crew.Role, rs *RoleState, why string, now
 	}
 
 	return true, did, notes
+}
+
+// restartKey is the RecordNotified key of a start of the seat at a time.
+func restartKey(name string, at time.Time) string {
+	return restartPrefix + name + "/" + strconv.FormatInt(at.Unix(), 10)
+}
+
+// MarkRestart records a start of the seat by the beat, as a key of RecordNotified (no field of its own): restartsSince counts them.
+func (st *State) MarkRestart(name string, at time.Time) {
+	if st.RecordNotified == nil {
+		st.RecordNotified = map[string]bool{}
+	}
+
+	st.RecordNotified[restartKey(name, at)] = true
+}
+
+// restartsSince is how many starts of the seat the beat made in the last reconcileRestartWindow.
+func (s *Shift) restartsSince(name string, now time.Time) int {
+	n := 0
+
+	for key := range s.State.RecordNotified {
+		rest, ok := strings.CutPrefix(key, restartPrefix+name+"/")
+		if !ok {
+			continue
+		}
+
+		if at, err := strconv.ParseInt(rest, 10, 64); err == nil && now.Sub(time.Unix(at, 0)) < reconcileRestartWindow {
+			n++
+		}
+	}
+
+	return n
+}
+
+// sweepRestarts drops the records of starts that are past the window, of every seat.
+func (s *Shift) sweepRestarts(now time.Time) {
+	for key := range s.State.RecordNotified {
+		rest, ok := strings.CutPrefix(key, restartPrefix)
+		if !ok {
+			continue
+		}
+
+		stamp := rest[strings.LastIndex(rest, "/")+1:]
+		if at, err := strconv.ParseInt(stamp, 10, 64); err != nil || now.Sub(time.Unix(at, 0)) >= reconcileRestartWindow {
+			delete(s.State.RecordNotified, key)
+		}
+	}
+}
+
+// forgetRestarts drops the records of starts of the seat: a hand's up starts it afresh.
+func (st *State) forgetRestarts(name string) {
+	for key := range st.RecordNotified {
+		if strings.HasPrefix(key, restartPrefix+name+"/") {
+			delete(st.RecordNotified, key)
+		}
+	}
 }
 
 // outsideKey is the RecordNotified key of the note that a seat which should be up is kept down by a session outside zmina.
@@ -257,7 +335,8 @@ func (s *Shift) reconcileOrphans(now time.Time, stopped bool) (did, notes []stri
 
 // Orphans are the sessions of the list that no role of the crew file names and that are no copy of one: what Names lists (the roles,
 // and the copies the state records) is not among them, and neither is a copy (dev#2) of a role the crew file has, whose state the
-// beat forgets by itself. A session of a role that has left the crew file is.
+// beat forgets by itself, nor a session of another crew that shares the tmux server (tmux.SessionInfo.Foreign): that crew's roles
+// are none of this one's business. A session of a role that has left the crew file is.
 func (s *Shift) Orphans(list []tmux.SessionInfo) []tmux.SessionInfo {
 	known := map[string]bool{}
 	for _, name := range s.Names() {
@@ -267,7 +346,7 @@ func (s *Shift) Orphans(list []tmux.SessionInfo) []tmux.SessionInfo {
 	var out []tmux.SessionInfo
 
 	for _, info := range list {
-		if !known[info.Name] && !s.copyOfARole(info.Name) {
+		if !known[info.Name] && !info.Foreign && !s.copyOfARole(info.Name) {
 			out = append(out, info)
 		}
 	}
@@ -317,7 +396,7 @@ func (s *Shift) orphanText(info tmux.SessionInfo, mode string, holds []string) s
 
 	switch {
 	case !info.Tagged:
-		text += ", and zmina did not start it: left alone; zmina attach " + info.Name + " to look"
+		text += ", and nothing proves this crew's zmina started it (no tag of this crew's): left alone; zmina attach " + info.Name + " to look"
 	case mode == crew.OrphansDown:
 		text += fmt.Sprintf("; taken down once it has been idle %d min with nothing queued for it and no terminal attached (reconcile: orphans)", s.Crew.IdleMinutes)
 	default:

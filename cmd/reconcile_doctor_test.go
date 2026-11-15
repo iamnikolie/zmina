@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -64,7 +66,8 @@ func TestDoctorWarnsOfEachLiveOrphan(t *testing.T) {
 	file := testCrew(t, assignSeats+"reconcile: {orphans: down}\n")
 	c := mustCrew(t, file)
 
-	list := []tmux.SessionInfo{{Name: "dev", Tagged: true}, {Name: "dev#2", Tagged: true}, {Name: "ghost", Tagged: true}, {Name: "by-hand", Tagged: false}}
+	list := []tmux.SessionInfo{{Name: "dev", Tagged: true}, {Name: "dev#2", Tagged: true}, {Name: "ghost", Tagged: true}, {Name: "by-hand", Tagged: false},
+		{Name: "theirs", Foreign: true}}
 
 	var got []string
 
@@ -74,15 +77,15 @@ func TestDoctorWarnsOfEachLiveOrphan(t *testing.T) {
 
 	checkOrphans(c, nil, list, add)
 	assert.Equal(t, []string{
-		"orphans warn ghost: a tmux session no role of the crew file names (started by zmina; taken down by the ticker once it is idle with nothing queued and no terminal attached): zmina attach ghost",
-		"orphans warn by-hand: a tmux session no role of the crew file names (not started by zmina: left alone; reported by the ticker, once): zmina attach by-hand",
-	}, got, "dev is a role and dev#2 a copy of one")
+		"orphans warn ghost: a tmux session no role of the crew file names (started by this crew's zmina; taken down by the ticker once it is idle with nothing queued and no terminal attached): zmina attach ghost",
+		"orphans warn by-hand: a tmux session no role of the crew file names (not proven to be this crew's: left alone; reported by the ticker, once): zmina attach by-hand",
+	}, got, "dev is a role, dev#2 a copy of one, and theirs another crew's")
 
 	got = nil
 
 	checkOrphans(mustCrew(t, testCrew(t, assignSeats+"reconcile: {orphans: report}\n")), nil, list[2:3], add)
 	require.Len(t, got, 1)
-	assert.Contains(t, got[0], "(started by zmina; reported by the ticker, once)")
+	assert.Contains(t, got[0], "(started by this crew's zmina; reported by the ticker, once)")
 
 	got = nil
 
@@ -142,4 +145,45 @@ func TestTickReportsAnOrphanOfTheCrewsTmuxServerOnce(t *testing.T) {
 	out, _, err = zm(t, off, "tick")
 	require.NoError(t, err)
 	assert.NotContains(t, out, "orphan")
+}
+
+// Two crews whose files give the same name: share a tmux server. Each tags its panes with its own value, so the beat of one does not
+// take the roles of the other for orphans: they are not reported, not by the beat and not by doctor, though no role of this crew's
+// names them.
+func TestAnotherCrewsRoleOnTheSameServerIsNoOrphan(t *testing.T) {
+	file := testCrew(t, assignSeats+"reconcile: {orphans: down}\n")
+
+	raw := string(mustRead(t, file))
+	name := strings.TrimSpace(strings.TrimPrefix(strings.SplitN(raw, "\n", 2)[0], "name:"))
+
+	other := t.TempDir()
+	otherFile := filepath.Join(other, "crew.yaml")
+	require.NoError(t, os.WriteFile(otherFile, []byte(fmt.Sprintf("name: %s\nnamespace: %s\ndir: %s\nclaude: %s\nremote_control: false\nroles:\n  dispatcher:\n    boot: hello\n  theirs: {}\n",
+		name, filepath.Join(other, "ns"), other, filepath.Join(filepath.Dir(file), "claude"))), 0o600))
+
+	_, _, err := zm(t, otherFile, "up", "theirs")
+	require.NoError(t, err)
+	require.True(t, isUp(t, otherFile, "theirs"))
+
+	out, _, err := zm(t, file, "tick")
+	require.NoError(t, err)
+	assert.NotContains(t, out, "orphan", "another crew's session is no orphan of this one")
+	assert.True(t, isUp(t, otherFile, "theirs"))
+
+	out, _, _ = zm(t, file, "doctor")
+	assert.NotRegexp(t, `orphans\s+theirs`, out)
+
+	// The same session tagged the old way (or not at all) is an orphan nobody can show to be this crew's: reported, never taken down.
+	c := mustCrew(t, file)
+
+	tm, err := tmux.New(c.Socket())
+	require.NoError(t, err)
+
+	_, err = exec.Command(tm.Bin, "-L", tm.Socket, "set-option", "-p", "-t", "=theirs:{start}.{top-left}", "@zmina", "1").CombinedOutput()
+	require.NoError(t, err)
+
+	out, _, err = zm(t, file, "tick")
+	require.NoError(t, err)
+	assert.Contains(t, out, "orphan session theirs")
+	assert.True(t, isUp(t, otherFile, "theirs"), "reported, not taken down")
 }

@@ -23,7 +23,9 @@ type listingTmux struct {
 	*fakeTmux
 	// extra puts a session on the list whether or not a role is up under its name: true is tagged, false is not. A name that is up or
 	// dead and not here is tagged.
-	extra   map[string]bool
+	extra map[string]bool
+	// foreign are sessions of another crew that shares the server.
+	foreign map[string]bool
 	err     error
 	killErr error
 	asked   int
@@ -38,7 +40,7 @@ func (l *listingTmux) Sessions() ([]tmux.SessionInfo, error) {
 
 	names := map[string]bool{}
 
-	for _, group := range [][]string{mapKeys(l.up), mapKeys(l.dead), mapKeys(l.extra)} {
+	for _, group := range [][]string{mapKeys(l.up), mapKeys(l.dead), mapKeys(l.extra), mapKeys(l.foreign)} {
 		for _, name := range group {
 			names[name] = true
 		}
@@ -50,6 +52,12 @@ func (l *listingTmux) Sessions() ([]tmux.SessionInfo, error) {
 		tagged := true
 		if v, ok := l.extra[name]; ok {
 			tagged = v
+		}
+
+		if l.foreign[name] {
+			out = append(out, tmux.SessionInfo{Name: name, Foreign: true})
+
+			continue
 		}
 
 		out = append(out, tmux.SessionInfo{Name: name, Tagged: tagged})
@@ -362,7 +370,7 @@ func TestAStoppedShiftStillReportsAnOrphan(t *testing.T) {
 	assert.Contains(t, strings.Join(f.dispatcherLines(), "|"), "taken down once it has been idle 30 min with nothing queued for it and no terminal attached")
 }
 
-// An orphan zmina did not start is reported as such, and never taken down.
+// An orphan this crew's zmina is not shown to have started is reported as such, and never taken down.
 func TestAnUntaggedSessionIsReportedAsNotZminas(t *testing.T) {
 	f, lt := orphaned(t, "reconcile: {orphans: down}\n")
 	lt.extra["ghost"] = false
@@ -373,5 +381,26 @@ func TestAnUntaggedSessionIsReportedAsNotZminas(t *testing.T) {
 
 	f.beat(time.Minute)
 	assert.True(t, f.tm.Has("by-hand"))
-	assert.Contains(t, strings.Join(f.dispatcherLines(), "|"), "by-hand: a tmux session no role of the crew file names, and zmina did not start it: left alone")
+	assert.Contains(t, strings.Join(f.dispatcherLines(), "|"), "by-hand: a tmux session no role of the crew file names, and nothing proves this crew's zmina started it (no tag of this crew's): left alone")
+}
+
+// A session of another crew that shares the tmux server is no orphan of this one: it is not reported and not taken down, however idle
+// it is, with nothing queued and nobody attached; and the plain list of a crew's own sessions is not touched by it.
+func TestAnotherCrewsSessionIsNeitherReportedNorTakenDown(t *testing.T) {
+	for _, key := range []string{"reconcile: {orphans: down}\n", "reconcile: {orphans: report}\n"} {
+		f, lt := orphaned(t, key)
+		lt.foreign = map[string]bool{"ghost": true}
+		f.rg.byPID[4242].StatusUpdatedAt = f.now.Add(-5 * time.Hour).UnixMilli()
+
+		for range 3 {
+			f.beat(time.Hour)
+		}
+
+		assert.True(t, f.tm.Has("ghost"), "%s: not touched", key)
+		assert.Zero(t, eventsOf(f, "orphan"), key)
+		assert.Zero(t, eventsOf(f, "orphan-down"), key)
+		assert.Empty(t, f.s.State.RecordNotified, key)
+		assert.Empty(t, f.s.Orphans([]tmux.SessionInfo{{Name: "ghost", Foreign: true}}))
+		assert.Len(t, f.s.Orphans([]tmux.SessionInfo{{Name: "ghost"}}), 1, "the same name with no tag of another crew's is an orphan")
+	}
 }

@@ -467,3 +467,173 @@ func TestSendWhenIdleDoesNotWakeASleepingSeat(t *testing.T) {
 	assert.Contains(t, out, "; dev is down: not started (it is asleep)")
 	assert.False(t, isUp(t, file, "dev"))
 }
+
+// A seat that starts others by giving them work would start them in a chain: only the owner's hand, the cockpit, the ticker (the sweep) and
+// the dispatcher have what they give a seat that is down start it. What any other role gives is recorded as with the key off: the hint,
+// no start, no event.
+func TestARolesTaskForADownSeatStartsNothing(t *testing.T) {
+	file := testCrew(t, assignSeats+"  dev3: {}\n"+assignOn)
+	parkItem(t, file, later.Item{Text: "rotate the deploy key"})
+
+	_, err := taskStore(mustCrew(t, file)).Add(task.Task{Role: "dev", Asked: "fix the form"}, time.Now())
+	require.NoError(t, err)
+
+	as(t, "dev3")
+
+	out, errOut, err := zm(t, file, "task", "new", "dev2", "Review")
+	require.NoError(t, err)
+	assert.Equal(t, "T-2 · dev2\n", out)
+	assert.Equal(t, "zmina: dev2 is down: zmina --crew "+quoteCommandArg(file)+" up 'dev2' --task T-2 starts it on the task\n", errOut, "the hint of the key off, no word of a refusal")
+	assert.False(t, isUp(t, file, "dev2"))
+
+	out, errOut, err = zm(t, file, "task", "set", "T-1", "open", "--role", "dev2")
+	require.NoError(t, err)
+	assert.Equal(t, "T-1 · dev2 · open\n", out)
+	assert.Empty(t, errOut)
+	assert.False(t, isUp(t, file, "dev2"))
+
+	out, _, err = zm(t, file, "later", "take", "L-1", "dev2")
+	require.NoError(t, err)
+	assert.Equal(t, "T-3 · dev2 · L-1 taken\n", out)
+	assert.False(t, isUp(t, file, "dev2"))
+
+	assert.Empty(t, eventsNamed(t, file, "assign-started"))
+	assert.Empty(t, eventsNamed(t, file, "assign-refused"))
+	assert.Len(t, inboxOf(t, file, "dev2"), 2, "queued for the seat, as with the key off: T-1 and T-3")
+
+	// The dispatcher starts it (the owner's hand does, as the other tests show).
+	f := testCrew(t, assignSeats+assignOn)
+	as(t, "dispatcher")
+
+	out, _, err = zm(t, f, "task", "new", "dev", "Review")
+	require.NoError(t, err)
+	assert.Regexp(t, `\ndev up as \S+ for T-1\n$`, out)
+	assert.True(t, isUp(t, f, "dev"))
+}
+
+// Who may have a seat started by what they give it: the owner's hand, the cockpit, the ticker (its sweep) and the dispatcher.
+func TestStartsSeatsNamesWhoMay(t *testing.T) {
+	file := testCrew(t, assignSeats+assignOn)
+	s := &shift.Shift{Crew: mustCrew(t, file), State: shift.NewState()}
+
+	for by, want := range map[string]bool{"hand": true, "ui": true, "ticker": true, "dispatcher": true, "dev": false, "dev2#2": false,
+		"codex-thread": false, "": false} {
+		s.By = by
+		assert.Equal(t, want, startsSeats(s), "%q", by)
+	}
+}
+
+// A task given to a seat that is down starts it; when its packet cannot then be handed the seat is up, and every word says so: it is not
+// "not started".
+func TestTaskNewThatCannotHandThePacketSaysTheSeatIsUp(t *testing.T) {
+	file := testCrew(t, assignSeats+assignOn)
+	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(file), "handoffs"), []byte("a file where the packets go"), 0o600))
+
+	out, errOut, err := zm(t, file, "task", "new", "dev", "Fix the form")
+	require.NoError(t, err)
+	assert.Regexp(t, `^T-1 · dev\ndev up as \S+ for T-1\n$`, out)
+	assert.Contains(t, errOut, "zmina: dev is up, but its packet was not handed:")
+	assert.Contains(t, errOut, "(zmina task handoff T-1 --queue hands it)")
+	assert.NotContains(t, errOut, "not started")
+	assert.True(t, isUp(t, file, "dev"))
+	assert.Len(t, eventsNamed(t, file, "assign-started"), 1)
+	assert.Empty(t, eventsNamed(t, file, "assign-refused"))
+}
+
+// zmina down by the dispatcher of a seat that holds no open task is routine: with assign on the seat is not held, and a task given to it
+// later starts it. The owner's down, and a down of a seat that still holds an open task, or of a keep: always seat, stay held; with the key
+// off nothing changes.
+func TestADownByTheDispatcherIsRoutineOnlyWithAssign(t *testing.T) {
+	seats := assignSeats + "  keeper:\n    keep: always\n"
+
+	for name, c := range map[string]struct {
+		key  string
+		who  string
+		role string
+		task bool
+		held bool
+	}{
+		"the dispatcher, no task": {assignOn, "dispatcher", "dev", false, false},
+		"the owner's hand":        {assignOn, "", "dev", false, true},
+		"it holds an open task":   {assignOn, "dispatcher", "dev", true, true},
+		"a keep: always seat":     {assignOn, "dispatcher", "keeper", false, true},
+		"the key off":             {"", "dispatcher", "dev", false, true},
+		"assign off, restart on":  {"reconcile: {restart: true}\n", "dispatcher", "dev", false, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			file := testCrew(t, seats+c.key)
+
+			putDownBy(t, file, c.role, c.who, c.task)
+
+			a := &app{out: io.Discard, err: io.Discard, crew: file}
+			require.NoError(t, a.readState(func(s *shift.Shift) error {
+				assert.Equal(t, c.held, s.State.Role(c.role).Held)
+
+				return nil
+			}))
+
+			if c.key == assignOn && !c.held {
+				assert.Len(t, eventsNamed(t, file, "down-routine"), 1)
+
+				as(t, "")
+
+				out, _, err := zm(t, file, "task", "new", c.role, "Fix the form")
+				require.NoError(t, err)
+				assert.Regexp(t, `dev up as \S+ for T-\d+`, out, "a later task starts it")
+			}
+		})
+	}
+}
+
+// zmina stop is no routine down: with assign on the seats stay held, as a stop and a start always left them.
+func TestAStopByTheDispatcherLeavesSeatsHeld(t *testing.T) {
+	file := testCrew(t, assignSeats+assignOn)
+
+	as(t, "")
+	_, _, err := zm(t, file, "up", "dev")
+	require.NoError(t, err)
+	awaitPrompt(t, file, "dev")
+
+	as(t, "dispatcher")
+	_, _, err = zm(t, file, "stop", "--clear")
+	require.NoError(t, err)
+
+	a := &app{out: io.Discard, err: io.Discard, crew: file}
+	require.NoError(t, a.readState(func(s *shift.Shift) error {
+		assert.True(t, s.State.Role("dev").Held)
+
+		return nil
+	}))
+}
+
+// putDownBy starts a seat (with an open task when task is set), waits for its prompt and puts it down as who ("" the owner's hand).
+func putDownBy(t *testing.T, file, role, who string, hasTask bool) {
+	t.Helper()
+	as(t, "")
+
+	if hasTask {
+		_, err := taskStore(mustCrew(t, file)).Add(task.Task{Role: role, Asked: "fix the form"}, time.Now())
+		require.NoError(t, err)
+	}
+
+	_, _, err := zm(t, file, "up", role)
+	require.NoError(t, err)
+	awaitPrompt(t, file, role)
+
+	as(t, who)
+
+	_, _, err = zm(t, file, "down", role)
+	require.NoError(t, err)
+
+	as(t, "")
+}
+
+// awaitPrompt waits for the fake claude of a seat to draw its input line.
+func awaitPrompt(t *testing.T, file, role string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		out, _, _ := zm(t, file, "peek", role, "-n", "5")
+
+		return strings.Contains(out, "❯")
+	}, 15*time.Second, 100*time.Millisecond)
+}

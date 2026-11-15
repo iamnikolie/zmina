@@ -44,7 +44,7 @@ func (a *app) downEveryRole(clear bool) error {
 		}
 
 		return names, nil
-	}, shift.DownOptions{Force: true, Clear: clear}, true)
+	}, shift.DownOptions{Force: true, Clear: clear}, true, false)
 }
 
 func (a *app) startCommand() *cobra.Command {
