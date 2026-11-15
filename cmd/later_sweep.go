@@ -292,8 +292,8 @@ type sweepSpec struct {
 var sweepStarter = func(a *app, s *shift.Shift, sp sweepSpec) (task.Task, tmux.Pane, error) { return a.startSweep(s, sp) }
 
 // startSweep makes the sweep task for the seat over the items, the way task new makes a task: through the routes' record and
-// the ledger, and handed to the role at once when it is up. The text that names the task is built once it is numbered, and is
-// written with it. It logs one later-sweep event.
+// the ledger, and handed to the role at once when it is up (a role that is down is started on it with reconcile: assign). The text
+// that names the task is built once it is numbered, and is written with it. It logs one later-sweep event.
 func (a *app) startSweep(s *shift.Shift, sp sweepSpec) (task.Task, tmux.Pane, error) {
 	byDispatcher := sweepByDispatcher(s, sp.Role)
 
@@ -328,6 +328,19 @@ func (a *app) startSweep(s *shift.Shift, sp sweepSpec) (task.Task, tmux.Pane, er
 	if pane.State == tmux.Up {
 		if t, err = a.handOut(s, t); err != nil {
 			return t, pane, err
+		}
+
+		return t, pane, nil
+	}
+
+	// A seat that is down is started on the sweep when the crew file says reconcile: assign; the beat's line then says it is up. A
+	// refusal is on the log, and the task stays as it was (the ticker tells the dispatcher of a task a down role never took).
+	started, _ := a.assignTo(s, t, pane)
+	if started {
+		pane.State = tmux.Up
+
+		if again, gerr := s.Tasks.Get(t.ID); gerr == nil {
+			t = again
 		}
 	}
 

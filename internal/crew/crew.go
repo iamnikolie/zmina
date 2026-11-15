@@ -360,6 +360,9 @@ type Crew struct {
 	LaterSweep *LaterSweep `yaml:"later_sweep"`
 	// AutoReview is review without the dispatcher: on, off or {rounds: N} (see AutoReview). Absent: off.
 	AutoReview AutoReview `yaml:"auto_review"`
+	// Reconcile is the rule that a seat holding an open task should be up: on, off or a block naming the parts (see
+	// Reconcile). Absent: off, and nothing changes.
+	Reconcile Reconcile `yaml:"reconcile"`
 	// DoneCheck is the command closing a task as done runs in the task's worktree, unless the task sets its own: a
 	// command line, or run, timeout and commit (see donecheck.Spec). Empty, off or none: no check, as before.
 	DoneCheck *donecheck.Spec `yaml:"done_check"`

@@ -311,7 +311,7 @@ func (a *app) startReview(s *shift.Shift, root task.Task, byID map[string]task.T
 	}
 
 	// A seat that is not started has the task on the ledger: the ticker tells the dispatcher of a task a down role never took.
-	if why := a.handTo(s, t, pane); why != "" {
+	if why, _ := a.handTo(s, t, pane, true); why != "" {
 		said += "; " + t.Role + " is not started: " + why
 	}
 
@@ -391,61 +391,28 @@ func reviewNoSeat(d route.Decision) string {
 	return d.Headline()
 }
 
-// handTo gives task t to its role: the hand-out when the role is up, else the role is started on it. It says why the role is not
-// up on the task when it is not: a start that was skipped or failed, or a hand-out that failed.
-func (a *app) handTo(s *shift.Shift, t task.Task, pane tmux.Pane) string {
+// handTo gives task t to its role: the hand-out when the role is up, else, with start, the role is started on it (StartOnTask). It
+// says why the role is not up on the task when it is not: a start that was refused or failed, or a hand-out that failed; started is
+// true when it started the role. Without start a role that is down is left down, with no reason and not started: the caller says how
+// it is started.
+func (a *app) handTo(s *shift.Shift, t task.Task, pane tmux.Pane, start bool) (why string, started bool) {
 	if pane.State != tmux.Up {
-		return a.startSeat(s, t)
+		if !start {
+			return "", false
+		}
+
+		if why = s.StartOnTask(t); why != "" {
+			return why, false
+		}
+
+		return "", true
 	}
 
 	if _, err := a.handOut(s, t); err != nil {
-		return refusalReason(err)
+		return refusalReason(err), false
 	}
 
-	return ""
-}
-
-// startSeat starts the role of task t on it, as zmina up --task does: in the task's worktree, on the conversation the task
-// recorded, with the task handed to it. It says why it did not, "" when the role was started: the shift is stopped, the role is
-// asleep or broken, its plan is held, it holds other work (which comes first), or the start failed.
-func (a *app) startSeat(s *shift.Shift, t task.Task) string {
-	seat := t.Role
-
-	switch {
-	case !s.State.Stopped.IsZero():
-		return "the shift is stopped"
-	case !s.Asleep(seat).IsZero():
-		return "it is asleep"
-	case s.State.Role(seat).Broken:
-		return "it is broken (zmina ls)"
-	case s.PlanHeld(seat, s.Now()):
-		return "its plan is held (zmina limits)"
-	}
-
-	for _, other := range s.Tasks.Active() {
-		if other.Role == seat && other.ID != t.ID {
-			return "it holds " + other.ID + ", which comes first"
-		}
-	}
-
-	if t.Worktree != "" && !isDir(t.Worktree) {
-		return "its worktree " + t.Worktree + " is gone"
-	}
-
-	opts, _, err := s.TaskStart(seat, t, false, false)
-	if err == nil {
-		err = s.UpWith(seat, opts)
-	}
-
-	if err == nil {
-		_, err = s.HandTask(seat, t)
-	}
-
-	if err != nil {
-		return refusalReason(err)
-	}
-
-	return ""
+	return "", false
 }
 
 // reviewWaits tells the dispatcher once, for each task and round, that no seat took its review: zmina makes it when a seat is free
@@ -559,7 +526,7 @@ func (a *app) reviewRejected(s *shift.Shift, root, rev task.Task, rounds int) ([
 	if pane, err := s.Tmux.Probe(back.Role); err != nil {
 		notStarted = refusalReason(err)
 	} else {
-		notStarted = a.handTo(s, back, pane)
+		notStarted, _ = a.handTo(s, back, pane, true)
 	}
 
 	if notStarted == "" {

@@ -235,7 +235,8 @@ func TestReleaseFinishedAfterItsBeatDied(t *testing.T) {
 	assert.Contains(t, strings.Join(out, "|"), "designer: release finished after its beat ended")
 	assert.True(t, rs.Downing.IsZero())
 	assert.Nil(t, rs.Pending)
-	assert.True(t, rs.Held, "released roles stay down")
+	assert.False(t, rs.Held, "a release is no hand's down: a task given to the seat later may start it")
+	assert.Empty(t, f.s.StartBlock("designer", *f.now), "so nothing keeps it from being started for a task")
 	assert.False(t, f.tm.Has("designer"))
 	assert.True(t, f.ev.has("designer", "released-late"))
 }

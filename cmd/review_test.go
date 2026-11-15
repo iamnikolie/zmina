@@ -906,6 +906,14 @@ func TestARejectOfAnAuthorThatCannotBeStartedIsToldOnce(t *testing.T) {
 
 			return "it is broken (zmina ls)"
 		},
+		// The loop is stricter than it was: an author the owner put down by hand is not started on a reject (only a hand's up
+		// clears the hold). The dispatcher is told once, as for any seat that cannot be started.
+		"it was put down by hand": func(t *testing.T, file string) string {
+			a := &app{out: io.Discard, err: io.Discard, crew: file}
+			require.NoError(t, a.withState(func(s *shift.Shift) error { s.State.Role("dev").Held = true; return nil }))
+
+			return "it was put down by hand"
+		},
 		"it holds other work": func(t *testing.T, file string) string {
 			_, _, err := zm(t, file, "task", "new", "dev", "an earlier task")
 			require.NoError(t, err)

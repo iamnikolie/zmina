@@ -122,6 +122,7 @@ func checkHygiene(c *crew.Crew, st *shift.State, now time.Time, add func(name, l
 
 	checkWorktrees(c, st, add)
 	checkReview(c, add)
+	checkReconcile(c, add)
 }
 
 // checkReview is the crew file's auto_review: on, with who reviews, or on and doing nothing since the routes name no reviewer.
@@ -150,6 +151,23 @@ func checkReview(c *crew.Crew, add func(name, level, format string, args ...any)
 
 	add("review", "ok", "auto_review: %d %s · %s", c.AutoReview.Rounds, plural(c.AutoReview.Rounds, "round", "rounds"),
 		strings.Join(who, ", "))
+}
+
+// checkReconcile is the crew file's reconcile: what is on. Nothing when it is off.
+func checkReconcile(c *crew.Crew, add func(name, level, format string, args ...any)) {
+	r := c.Reconcile
+	if !r.On() {
+		return
+	}
+
+	if !r.Assign {
+		add("reconcile", "ok", "reconcile: assign is off: a task given to a seat that is down only waits for it to be started")
+
+		return
+	}
+
+	add("reconcile", "ok", "reconcile: assign · a task or a line for a seat that is down starts it, unless it was put down by hand, "+
+		"is asleep or broken, or its plan is held")
 }
 
 // checkWorktrees is the closed tasks' worktrees: with worktree_gc on the ticker sweeps them daily, and what is left

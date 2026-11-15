@@ -977,18 +977,56 @@ func (a *app) queueSend(s *shift.Shift, role, text string, facts shift.Facts) er
 			return f.Line == queued || slices.ContainsFunc(f.Parts, func(p shift.Part) bool { return p.Line == queued })
 		})
 
+	var said string
+
 	switch {
 	case id != "" && went:
-		fmt.Fprintf(a.out, "delivered to %s as %s: said again until it acks\n", role, id)
+		said = fmt.Sprintf("delivered to %s as %s: said again until it acks", role, id)
 	case id != "":
-		fmt.Fprintf(a.out, "queued for %s as %s: delivered once it is up and between turns; said again until it acks\n", role, id)
+		said = fmt.Sprintf("queued for %s as %s: delivered once it is up and between turns; said again until it acks", role, id)
 	case went:
-		fmt.Fprintf(a.out, "delivered to %s\n", role)
+		said = fmt.Sprintf("delivered to %s", role)
 	default:
-		fmt.Fprintf(a.out, "queued for %s: typed the first time it is up and idle\n", role)
+		said = fmt.Sprintf("queued for %s: typed the first time it is up and idle", role)
 	}
 
+	fmt.Fprintln(a.out, said+a.startForLine(s, role, text, went))
+
 	return nil
+}
+
+// startForLine starts the seat a line was just queued for when it is down and the crew file says reconcile: assign, and says what
+// the reply adds: "" when nothing was tried. Only the owner's own line and the dispatcher's start a seat: a line from one seat to
+// another never does, which would let seats start one another in a chain. Nor does a slash command (a command to a session, not
+// work), a line to the dispatcher (the ticker opens it), or one to a copy (zmina up --as starts one). A seat that was put down by
+// hand, is asleep or broken, has its plan held, or is going down is not started (shift.StartBlock); the line waits as it always did.
+func (a *app) startForLine(s *shift.Shift, role, text string, went bool) string {
+	if !s.Crew.Reconcile.Assign || went || role == s.Crew.Dispatcher || strings.HasPrefix(strings.TrimSpace(text), "/") {
+		return ""
+	}
+
+	if by := s.By; by != s.Crew.Dispatcher && by != "hand" && by != "ui" {
+		return ""
+	}
+
+	pane, err := s.Tmux.Probe(role)
+	if err != nil || pane.State == tmux.Up {
+		return ""
+	}
+
+	if base, num, isCopy := shift.SplitInstance(role); isCopy {
+		return fmt.Sprintf("; %s is down: not started (a copy is started with zmina up %s --as %d)", role, base, num)
+	}
+
+	if why := s.StartForLine(role); why != "" {
+		s.Log(role, "line-refused", "", "a line from "+s.By+" did not start it: "+why)
+
+		return fmt.Sprintf("; %s is down: not started (%s)", role, why)
+	}
+
+	s.Log(role, "line-started", "", "up for a line from "+s.By+" (reconcile: assign)")
+
+	return fmt.Sprintf("; %s is down: started it", role)
 }
 
 func (a *app) sendCommand() *cobra.Command {

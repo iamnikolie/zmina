@@ -156,7 +156,8 @@ func (s *Shift) callOff(name, why string) (did, note string) {
 }
 
 // putDown ends a released role (BeginDown: the caller finishes the down outside the lock) and names the later items
-// its tasks became.
+// its tasks became. The role is not Held afterwards: a release is the ticker's own act, and a task given to the role later may
+// start it (StartBlock).
 func (s *Shift) putDown(name string) (did, note string) {
 	rs := s.State.Role(name)
 
@@ -172,6 +173,10 @@ func (s *Shift) putDown(name string) (did, note string) {
 	if _, err := s.BeginDown(name, DownOptions{}); err != nil {
 		return name + ": release: " + err.Error(), ""
 	}
+
+	// A release is no hand's down: a released seat is not Held, so that a task given to it later starts it (reconcile). Only
+	// a keep: manual seat is ever released, and the ticker never starts one of those, so Held did nothing here but refuse.
+	rs.Held = false
 
 	tasks := strings.Join(rs.ReleaseTasks, ",")
 	rs.Releasing, rs.ReleaseTasks, rs.ReleaseIdle = time.Time{}, nil, 0
