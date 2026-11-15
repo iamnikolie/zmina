@@ -69,6 +69,128 @@ func TestUnknownKeysAreWarnings(t *testing.T) {
 	assert.Error(t, err, "a wrong type is still an error")
 }
 
+// A top-level key named x-<something> is the owner's own: never read, never warned of.
+func TestOwnKeysAreNoWarnings(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+
+	dir := t.TempDir()
+	body := "dir: " + dir + "\n" +
+		"x-people:\n  alex:\n    about: the owner\n    zones: [one, two]\n" +
+		"x-notes: moved the crew here in spring\n" +
+		"roles:\n  dispatcher:\n  dev:\n    about: code\n"
+
+	c, err := Load(write(t, body))
+	require.NoError(t, err)
+	assert.Empty(t, c.Warnings, "x- keys are accepted silently")
+	assert.Equal(t, []string{"dispatcher", "dev"}, c.Names(), "the roles still load")
+	assert.Equal(t, "code", c.Roles["dev"].About)
+
+	// A typo beside them is the one warning, and it says how to name a key of one's own.
+	c, err = Load(write(t, body+"namespce: /x\n"))
+	require.NoError(t, err)
+	require.Len(t, c.Warnings, 1)
+	assert.Contains(t, c.Warnings[0], `unknown key "namespce", ignored`)
+	assert.Contains(t, c.Warnings[0], "(a key of your own is named x-<name>)")
+	assert.NotContains(t, c.Warnings[0], "x-people")
+
+	// The hint is for top-level keys only: a typo inside a role gets none.
+	c, err = Load(write(t, "dir: "+dir+"\nroles:\n  dispatcher:\n    scheduel: x\n"))
+	require.NoError(t, err)
+	require.Len(t, c.Warnings, 1)
+	assert.Contains(t, c.Warnings[0], `unknown key "scheduel", ignored`)
+	assert.NotContains(t, c.Warnings[0], "x-<name>")
+}
+
+func TestOwnKeysOnlyOnTopLevelAndOnlyWhenWhole(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+
+	dir := t.TempDir()
+
+	// x- inside a role is not covered: roles have a fixed set of keys.
+	c, err := Load(write(t, "dir: "+dir+"\nroles:\n  dispatcher:\n    x-pin: 1\n"))
+	require.NoError(t, err)
+	require.Len(t, c.Warnings, 1)
+	assert.Contains(t, c.Warnings[0], `unknown key "x-pin", ignored`)
+	assert.NotContains(t, c.Warnings[0], "x-<name>", "no hint inside a role")
+
+	// A bare x- and an upper-case X- are not the owner's convention.
+	c, err = Load(write(t, "dir: "+dir+"\nx-: 1\nX-foo: 2\nroles:\n  dispatcher:\n"))
+	require.NoError(t, err)
+	require.Len(t, c.Warnings, 2)
+	assert.Contains(t, c.Warnings[0], `unknown key "x-", ignored`)
+	assert.Contains(t, c.Warnings[1], `unknown key "X-foo", ignored`)
+
+	// A key of the same name twice is still a YAML error.
+	_, err = Load(write(t, "dir: "+dir+"\nx-a: 1\nx-a: 2\nroles:\n  dispatcher:\n"))
+	assert.Error(t, err)
+}
+
+// zmina seat edits the file as a tree: the owner's own keys are kept, and so is an anchor under one.
+func TestOwnKeysSurviveASeatEdit(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+
+	dir := t.TempDir()
+	path := write(t, "dir: "+dir+"\n"+
+		"x-people:  # who is who\n  alex:\n    about: the owner\n"+
+		"x-notes: kept as text\n"+
+		"roles:\n  dispatcher:\n")
+
+	e, err := Open(path)
+	require.NoError(t, err)
+	require.NoError(t, e.Add("dev", map[string]string{"about": "code"}))
+	require.NoError(t, e.Save())
+
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	body := string(raw)
+	assert.Contains(t, body, "x-people: # who is who\n  alex:\n    about: the owner")
+	assert.Contains(t, body, "x-notes: kept as text")
+
+	c, err := Load(path)
+	require.NoError(t, err)
+	assert.Empty(t, c.Warnings)
+	assert.Equal(t, []string{"dispatcher", "dev"}, c.Names())
+
+	// Set round-trips it as well.
+	e, err = Open(path)
+	require.NoError(t, err)
+	require.NoError(t, e.Set("dev", map[string]string{"model": "opus"}))
+	require.NoError(t, e.Save())
+
+	raw, err = os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), "x-notes: kept as text")
+}
+
+// An anchor kept under an x- key is merged into a role with <<, and the merge survives a seat edit.
+func TestOwnKeyHoldsAnAnchorForARole(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+
+	dir := t.TempDir()
+	path := write(t, "dir: "+dir+"\n"+
+		"x-defaults: &defaults\n  model: opus\n  keep: manual\n"+
+		"roles:\n  dispatcher:\n  dev:\n    <<: *defaults\n    about: code\n")
+
+	c, err := Load(path)
+	require.NoError(t, err)
+	assert.Empty(t, c.Warnings)
+	assert.Equal(t, "opus", c.Roles["dev"].Model)
+	assert.Equal(t, KeepManual, c.Roles["dev"].Keep)
+	assert.Equal(t, "code", c.Roles["dev"].About)
+
+	e, err := Open(path)
+	require.NoError(t, err)
+	require.NoError(t, e.Add("scribe", map[string]string{"about": "notes"}))
+	require.NoError(t, e.Save())
+
+	c, err = Load(path)
+	require.NoError(t, err)
+	assert.Empty(t, c.Warnings)
+	assert.Equal(t, "opus", c.Roles["dev"].Model, "the merge is still there after a save")
+	assert.Equal(t, "notes", c.Roles["scribe"].About)
+}
+
 func TestRelativePathsFollowTheCrewFile(t *testing.T) {
 	root := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(root, "work", "api"), 0o700))

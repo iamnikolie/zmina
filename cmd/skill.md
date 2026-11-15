@@ -35,7 +35,7 @@ crew is named `<name>` unless it says otherwise, so it gets its own tmux
 server, ticker and session prefix), or any file with `--crew` / `$ZMINA_CREW`. A crew file that is not there is
 refused naming the crews that are: `crew: … does not exist; the crews here: ops (--config ops)`. Relative paths in
 the file are relative to the file. Keys zmina does not know are warnings with their line (a typo
-shows), not errors. `zmina init` writes a starter with
+shows), not errors; a top-level key of your own is named `x-<name>` (notes, anchors for `<<`): never read, never warned of. `zmina init` writes a starter with
 every role that has `<agents>/<role>/AGENT.md` (`--agents`, default `agents/` next to the crew
 file). Change it with `zmina seat` (below), not by hand. A full example crew with boot documents
 is in the repository's `examples/`.
@@ -105,6 +105,7 @@ routes:                                  # the dispatcher's routing rules in ord
 busy: copy-or-pool                       # a busy seat gives way to its copy, or a free seat of its plan (pool: no copies); default copy-or-pool
 route_override: optional                 # required: a seat picked by hand against the routes has to say why (default optional)
 day_start: "09:00"                       # when morning, tomorrow, thu or a date rings (default 09:00)
+# x-defaults: &d {model: opus}           # a key of your own: x- and a name; zmina never reads or warns of it; an anchor here merges into a role with <<: *d
 # name: ops                              # a second crew: tmux -L zmina-ops, its own ticker
 # prefix: ops-                           # default session names (default zm-); no '/': it reads as <node>/<crew>
 # retired: "2026-11-05"                  # zmina retire writes these two: this crew is no longer the live one
