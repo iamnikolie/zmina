@@ -60,6 +60,11 @@ type TerminalServices struct {
 	// Items resolves the ids a conversation names (crew, comma-separated ids) as the node's JSON: tasks, parked items
 	// and asks, each with its chain. Read-only.
 	Items func(crew, ids string) ([]byte, error)
+	// CrewPut puts the owner's crew file in place of this node's (crew/put): the crew's key as nodes address it, the file's
+	// bytes, the sum of the file the owner meant to replace ("" for none), whether the crew may be made, and who pushed
+	// it for the history. The mesh has checked the request's form, its size and the names; the node checks that the file
+	// loads, that the file there is the one the owner meant to replace, and writes it.
+	CrewPut func(crew string, payload []byte, base string, create bool, by string) (CrewPutResult, error)
 }
 
 // TerminalRequest is signed against a fresh server challenge, so a certified peer cannot turn a
@@ -84,6 +89,11 @@ type TerminalRequest struct {
 	// (terminalMessageV2) always names it and any operation is done only by that node; in the old form only a write
 	// (todo/act, alarm/act) names it. So a peer that got a request cannot pass it on to another node's session.
 	To string `json:"to,omitempty"`
+	// Payload is the crew file a push carries (crew/put), Base the sum of the file it replaces on the target ("" when it
+	// has none: a crew that is made), Create says the crew may be made there. All inside what the owner signs.
+	Payload []byte `json:"payload,omitempty"`
+	Base    string `json:"base,omitempty"`
+	Create  bool   `json:"create,omitempty"`
 }
 
 // terminalMessage is what an owner request in the old form signs: the operation, the challenge the serving node chose
@@ -175,6 +185,10 @@ func (n *Node) serveTerminal(ctx context.Context, c *conn, w wire, s *TerminalSe
 	switch {
 	case form == formNone:
 		return fail(errors.New("terminal access requires the owner's signature"))
+	case w.Op == "crew/put" && form != formBound:
+		// Whatever strict_requests says: a push changes what the node runs, and only a request bound to this node, to the key
+		// it proved and to this session's challenge may.
+		return fail(errors.New("crew/put takes only an owner request bound to this node: update zmina on the owner's node"))
 	case form == formLegacy && n.StrictRequests:
 		return fail(errors.New("this node takes only owner requests addressed to it (strict_requests is on): update zmina on the owner's node"))
 	case form == formLegacy:
@@ -187,6 +201,9 @@ func (n *Node) serveTerminal(ctx context.Context, c *conn, w wire, s *TerminalSe
 	}
 	if s == nil {
 		return fail(errors.New("this node has no terminal service; update zmina"))
+	}
+	if w.Op == "crew/put" {
+		return n.serveCrewPut(c, req, s)
 	}
 	if w.Op == "terminal/list" {
 		targets, err := s.List()

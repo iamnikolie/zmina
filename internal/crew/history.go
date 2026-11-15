@@ -241,6 +241,58 @@ func (h *History) Commit(path string, raw []byte, by, how string) (Saved, error)
 	}
 	defer unlock()
 
+	return h.commitLocked(path, raw, by, how)
+}
+
+// BaseError is the refusal of CommitIf: the crew file is not the one the change was based on. Have is the hash of the
+// file as it is ("" when there is none) and Current its bytes.
+type BaseError struct {
+	Have    string
+	Current []byte
+}
+
+func (e *BaseError) Error() string { return "the crew file is not the one this change was based on" }
+
+// CommitIf is Commit for a change that replaces one particular file (compare and swap): under the history's lock it
+// reads the crew file, and writes raw only when its hash is base ("" for a file that is not there). A file that is already
+// raw is left alone: wrote is false. Any other file is a *BaseError, and nothing is written.
+func (h *History) CommitIf(path string, raw []byte, base, by, how string) (saved Saved, wrote bool, err error) {
+	unlock, err := h.lock()
+	if err != nil {
+		return saved, false, fmt.Errorf("not saved, its previous version could not be kept: %w", err)
+	}
+	defer unlock()
+
+	have := ""
+
+	cur, err := os.ReadFile(path)
+
+	switch {
+	case err == nil:
+		have = sumOf(cur)
+	case !errors.Is(err, os.ErrNotExist):
+		return saved, false, fmt.Errorf("crew: %w", err)
+	default:
+		cur = nil
+	}
+
+	if have != "" && have == sumOf(raw) {
+		return saved, false, nil
+	}
+
+	if have != base {
+		return saved, false, &BaseError{Have: have, Current: cur}
+	}
+
+	saved, err = h.commitLocked(path, raw, by, how)
+
+	return saved, err == nil, err
+}
+
+// commitLocked is Commit with the history's lock held.
+func (h *History) commitLocked(path string, raw []byte, by, how string) (Saved, error) {
+	var saved Saved
+
 	if old, err := os.ReadFile(path); err == nil {
 		r, err := h.recordLocked(old, "", "")
 		if err != nil {

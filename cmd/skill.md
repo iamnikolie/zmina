@@ -876,7 +876,7 @@ network under it is a transport and an address: today ssh, or any command line t
 | `zmina node revoke <n>` | on the owner's node: put the key of the certificate this node holds for `<n>` on the revocation list (the next version, signed). The list rides in every hello, so a node that meets it refuses that key's sessions and envelopes and does not keep it in a told node; a node of an older zmina ignores it. Revoking cannot be undone from the command line. `zmina node peer rm <n>` stops this node calling it. |
 | `zmina node peer add <n> --ssh … \| --cmd …` / `peer rm <n>` | the address book by hand. |
 | `zmina node peer add <n> [--ssh … \| --cmd …] --relay[=false]` | let that peer carry for the nodes it says it reaches (`--relay=false` takes it back; with no address it marks a peer that calls in). Only a relay may: an envelope for a node this one cannot reach goes to a relay that says it reaches it, and a terminal tunnel to such a node runs through one. A peer's own claim never makes it a relay, so a certified node cannot draw other nodes' envelopes (signed, not encrypted) or tunnels to itself. Default off: direct addresses need nothing. |
-| `zmina node ls [--json]` | this node and its crews, each with its dispatcher's session name (`ops (ops-dispatcher)`; `--json`: `dispatchers`) and, when not running, why (`[stopped 2d ago]`; `--json`: `health`); each peer: how known (`hand`, `called` — it called in, `told` — another node told of it), `relay` when the owner made it one, its addresses or the relays that reach it (`through`), last good session, `terminal_v2` or `no terminal_v2` as of that session, its certificate's expiry when it is near or past and `key revoked`, last failure, its crews as of that session (`crews: ops, site [retired, moved to box-ops/site]`); what waits to leave. Under the node's line: its own certificate (`certificate: expires 2028-03-01 (in 364 days)`, `[warn]` 30 days before, `[fail]` once expired, `[warn] no expiry` for one issued before expiries) and the revocation list it holds (`revoked (list version 2): box (key 3fa9c1d2e4b5…)`); `--json`: `cert`, `peer_certs`, `revoked`. A crew whose file declares `nodes:` also tells its file's `sum` and the roles it has up (`held`; `--json`: `health`), and `node ls` adds a line for it: `ops: in sync with beta`, `ops: differs from beta`, a role up on two nodes, a role held by no node (Placement). |
+| `zmina node ls [--json]` | this node and its crews, each with its dispatcher's session name (`ops (ops-dispatcher)`; `--json`: `dispatchers`) and, when not running, why (`[stopped 2d ago]`; `--json`: `health`); each peer: how known (`hand`, `called` — it called in, `told` — another node told of it), `relay` when the owner made it one, its addresses or the relays that reach it (`through`), last good session, `terminal_v2` or `no terminal_v2` and `crew_sync` or `no crew_sync` (it takes the owner's push of a crew file: Placement) as of that session, its certificate's expiry when it is near or past and `key revoked`, last failure, its crews as of that session (`crews: ops, site [retired, moved to box-ops/site]`); what waits to leave. Under the node's line: its own certificate (`certificate: expires 2028-03-01 (in 364 days)`, `[warn]` 30 days before, `[fail]` once expired, `[warn] no expiry` for one issued before expiries) and the revocation list it holds (`revoked (list version 2): box (key 3fa9c1d2e4b5…)`); `--json`: `cert`, `peer_certs`, `revoked`. A crew whose file declares `nodes:` also tells its file's `sum` and the roles it has up (`held`; `--json`: `health`), and `node ls` adds a line for it: `ops: in sync with beta`, `ops: differs from beta`, a role up on two nodes, a role held by no node (Placement). |
 | `zmina node strict [on\|off]` | whether this node refuses owner requests in the old form, the ones that name no node (off by default; no word prints the setting). Turn it on node by node once every node runs a zmina that binds its requests: `zmina node ls` shows `terminal_v2` on each peer that says so. Until then a node takes both forms and logs an event `terminal-unbound` (at most one a day per caller) when it takes an old one. |
 | `zmina node sync [--peer <n>]` | one round now. Exit 1 when a peer failed. |
 | `zmina tell [--queue] <node>[/<crew>] <text>` | one line for that crew's dispatcher (no crew: the node's default crew, or its only one). On this node it is queued at once; for another it is signed, queued in `outbox/`, and handed over now if that peer answers, else by the next round. A long line is stored whole on the far side (below). Receipts follow as the far dispatcher takes it (queued, submitted, read): `zmina message ls`. A crew known not to be running is refused before anything is queued (below); `--queue` queues on purpose. |
@@ -1032,21 +1032,53 @@ crew under the node) and `zmina doctor` (`placement`) read them:
 
 What a peer told may be a minute old (the ticker syncs every minute), and a peer that does not answer keeps its last word.
 
+### Pushing the file: `zmina crew push`
+
+| Command | Does |
+|---|---|
+| `zmina crew push <node> [--create] [--base <sum>]` | on the owner's node: send this crew's file to `<node>` (a node of `nodes:`, not this one), in place of its own. The file goes as it is on disk, with the crew's key (`~/.zmina/<key>/`; `default` for the default crew). Refused, nothing sent, when that node did not say `crew_sync` in its last session. |
+
+- **It replaces one file, the one the node last told.** The request carries the hash the node told for the crew in its last
+  hello (`--base <sum>` says another). The node compares it with its file under the lock of its history and writes only on
+  a match; an edit made there meanwhile is never overwritten unseen. Already this file: `beta already holds this file`,
+  nothing written. Another file: nothing is written, and the push prints which file the node holds against this node's,
+  the difference (`-` there, `+` here) and the way on, `zmina crew push beta --base <its hash>`, for once you have
+  looked. A node that told no sum (the crew is a plain one there, or not there) is refused the same way.
+- **A crew that is not there** is refused unless `--create`, which makes `~/.zmina/<key>/crew.yaml` on that node, under a
+  name of lower-case words joined by dashes that is no directory zmina keeps there (`tasks`, `later`, `mesh`, …) and in a
+  directory that is not there yet. Its ticker is installed there by hand (`zmina ticker install`). `--create` and `--base`
+  are not both.
+- **The file must load on that node** (read for it, so its overlay is merged and a key that is not per node is an error) and
+  declare `nodes:`, or it is refused and the old file stays. It is kept in the node's crew file history (`zmina crew
+  history` there: by `mesh <owner node>`, how `crew push`) with an event `crew-changed`, and a ticker that reads it next
+  beat acts on the new placement as above; nothing is restarted.
+- **This is remote command execution by design:** the crew file names `claude`, `notify`, `plugins` and the roles' boot
+  lines, which that node then runs. It is the owner's authority, like `node enroll --cmd`. So the node takes a push only
+  as a request signed by the owner key, bound to that node's key and to the session's own challenge (the form
+  `terminal_v2` brought: an old-form request is refused for a push even with `strict_requests` off, and one signed for
+  another node or session is refused), so a relay that carries it can neither alter it (the file and the base are in what
+  is signed) nor send it again. The file is at most 256 KiB; the crew's name is a plain name that is looked up among the
+  node's own crews, never a path. A node of an older zmina does not know `crew/put` and refuses it as an unknown op;
+  the owner's node does not send it one: `crew_sync` is a word in the hello, signed over the other side's nonce like
+  `terminal_v2`, and `zmina node ls` shows `crew_sync` or `no crew_sync` for each peer. Crew files must hold no secrets:
+  a relay sees what it carries.
+
 ### Setting it up, and moving a role by hand
 
 **Every zmina must be this build before `nodes:` is set.** An older zmina reads `nodes:`, `home:` and `place:` as unknown
-keys (warnings), ignores them and runs every role: that is the double running above. Update every node (`zmina version`),
-copy the same `crew.yaml` to each (`zmina node ls` then says `in sync`), install the ticker on each (`zmina ticker
-install`), and start the node you want first. Roles then run only where they are placed; a node with no role placed on it
-and not `home` runs nothing.
+keys (warnings), ignores them and runs every role: that is the double running above. Update every node (`zmina version`;
+`zmina node ls` shows `crew_sync` on each that is), write the file on the owner's node and send it to each other node with
+`zmina crew push <node> --create` (or copy the same `crew.yaml` by hand: `zmina node ls` then says `in sync`), install
+the ticker on each (`zmina ticker install`), and start the node you want first. Roles then run only where they are placed;
+a node with no role placed on it and not `home` runs nothing.
 
-There is no command yet that copies the file or moves a role (`zmina crew push` and `zmina move` are not built). To move a
+There is no command yet that moves a role (`zmina move` is not built). To move a
 role by hand: on the node where it runs, park what it holds (`zmina task park <id> --note "<what remains>"`), push the task's
-branch from its worktree to the shared remote, and put it down (`zmina down dev`); change its `place` in the file on
-**both** nodes; on the new node give the role the work as a new task (`zmina task new dev … --note "from T-14 on alpha"`)
+branch from its worktree to the shared remote, and put it down (`zmina down dev`); change its `place` in the file and send
+it to every node (`zmina crew push`); on the new node give the role the work as a new task (`zmina task new dev … --note "from T-14 on alpha"`)
 and start it. Ledgers are per node: the parked item and the old task stay on the old node's lists, and the new task is a
-new id there; the branch name says which node made it. A change made on one node only shows as `differs from …` until
-the other has it.
+new id there; the branch name says which node made it. A file changed on one node only shows as `differs from …` until
+the others have it.
 
 ## Browser chat
 
@@ -2310,6 +2342,7 @@ nothing, so the ticker's every beat costs one small read.
 | `zmina crew history [--json]` | the versions, newest first: number (0 is the file as it is now), when, who, what changed and how. |
 | `zmina crew history --diff <n>` | what changed between version `n` and the file as it is now (unified diff). |
 | `zmina crew history --restore <n>` | put version `n` back. It must load; what it replaces is kept as a version, so a restore can be undone. Works when the file now does not load. |
+| `zmina crew push <node> [--create] [--base <sum>]` | send this crew's file to another node of its `nodes:`, in place of that node's (owner's node only; compare and swap on the file it last told, so an edit there is never overwritten unseen). The node keeps what it replaces as a version: by `mesh <owner node>`, how `crew push`. See Placement. |
 
 ## Usage
 

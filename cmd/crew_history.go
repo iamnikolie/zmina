@@ -18,10 +18,11 @@ import (
 func (a *app) crewCommand() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "crew",
-		Short: "The crew file itself: the versions it has had, and putting one back",
+		Short: "The crew file itself: the versions it has had, putting one back, and sending it to another node",
 	}
 
 	c.AddCommand(a.crewHistoryCommand())
+	c.AddCommand(a.crewPushCommand())
 
 	return c
 }

@@ -579,6 +579,12 @@ func peerLine(p mesh.Peer, now time.Time) string {
 		} else {
 			parts = append(parts, "no terminal_v2")
 		}
+
+		if p.CrewSync {
+			parts = append(parts, "crew_sync")
+		} else {
+			parts = append(parts, "no crew_sync")
+		}
 	}
 
 	if p.Err != "" {

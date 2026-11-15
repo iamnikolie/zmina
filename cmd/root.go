@@ -63,6 +63,8 @@ type app struct {
 	// shiftSeams replaces what a new shift talks to (its tmux, session registry, inbox socket) once it is built
 	// (nil: the real ones; tests set fakes).
 	shiftSeams func(s *shift.Shift)
+	// pushTransport reaches the node a crew file is pushed to (nil: mesh.Exec, the address book's ssh or command; tests set pipes).
+	pushTransport mesh.Transport
 }
 
 // NewRoot builds the whole command tree writing to out and errw.

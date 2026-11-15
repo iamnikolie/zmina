@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
@@ -310,4 +311,28 @@ func (c *Crew) overlay(v yaml.Node, node string) error {
 	c.Nodes, c.Home = nodes, home
 
 	return nil
+}
+
+// ReservedKeys are the names a crew made by a push (zmina crew push --create) may not take: directories of the node and of
+// a crew's own state that sit directly under ~/.zmina, where the default crew keeps its files.
+func ReservedKeys() []string {
+	l := Layout{Dir: "x"}
+	keys := []string{"mesh", "mesh-ui", "agents", "archive", "bin"}
+
+	for _, p := range []string{l.Tasks(), l.Later(), l.Alarms(), l.Asks(), l.Inbox(), l.Limits(), l.Screens(), l.Hooks(),
+		l.Delivery(), l.RotationsDir(), l.Worktrees(), l.Plugins(), l.History()} {
+		keys = append(keys, strings.Split(filepath.ToSlash(strings.TrimPrefix(p, "x"+string(filepath.Separator))), "/")[0])
+	}
+
+	return keys
+}
+
+// NewCrewKey says whether a name may be the key of a crew made by a push: lower-case words joined by dashes, as a crew's
+// name is, and none of the ReservedKeys. "default" is the node's default crew, which a push may make as well.
+func NewCrewKey(key string) bool {
+	if key == "default" {
+		return true
+	}
+
+	return roleRe.MatchString(key) && !slices.Contains(ReservedKeys(), key)
 }
