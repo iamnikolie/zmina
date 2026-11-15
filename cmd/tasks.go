@@ -769,7 +769,7 @@ func (a *app) checkEnvFault(f *ledger.EnvFault) error {
 			return err
 		}
 
-		tell, err = s.RecordCheckEnv(t, by(), f.Result)
+		tell, err = s.RecordCheckEnv(t, s.By, f.Result)
 
 		return err
 	})
@@ -806,7 +806,7 @@ func checkExit(err error) error {
 // is held to the task's current hand-out (ledger.Current).
 func (a *app) changeOf(s *shift.Shift, st task.State, o taskChange) ledger.Change {
 	return ledger.Change{State: st, On: o.on, Note: o.note, Role: o.role, Force: o.force, Title: o.title,
-		Project: o.project, URL: o.url, Budget: o.budget, Criteria: o.setCriteria, By: by(), Check: o.check,
+		Project: o.project, URL: o.url, Budget: o.budget, Criteria: o.setCriteria, By: s.By, Check: o.check,
 		ClearCheck: o.clearCheck, Verdict: o.verdict, Caller: a.caller(s, o.handoff, st == task.Done || st == task.Dropped)}
 }
 

@@ -18,6 +18,29 @@ func (s *Shift) LiveSession(name string) string {
 	return ""
 }
 
+// SeatOfSession is the Codex seat whose live conversation is session: "" when none is. A shared Codex role's tools run
+// in the daemon's process, with no ZMINA_ROLE but with their thread (CODEX_THREAD_ID), and the thread is how such a command
+// is told to be the seat's. Only Codex roles are asked: a Claude role's tools always carry ZMINA_ROLE, and the owner's own
+// session is no seat's. A thread no seat runs now (a child thread of a seat, the owner's own Codex) is nobody's. The state
+// is read, never written: a role the state does not know yet is skipped.
+func (s *Shift) SeatOfSession(session string) string {
+	if session == "" {
+		return ""
+	}
+
+	for _, name := range s.Names() {
+		if rs := s.State.Roles[name]; rs == nil || !rs.Up || !s.isCodex(name) {
+			continue
+		}
+
+		if s.LiveSession(name) == session {
+			return name
+		}
+	}
+
+	return ""
+}
+
 // RebindDelivery moves the delivery of t to session, the conversation the role runs now, when the conversation changed under the
 // running role since the line was submitted (its own /clear, a /resume in its pane): it is the role's, so it holds the hand-out
 // by definition (ledger.Current, Rebind). The hand-out, its number, its acceptance and the task are as they were; the event is

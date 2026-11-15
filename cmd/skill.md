@@ -187,6 +187,8 @@ A standalone server holds a separate writer lease and can cause "Another Codex s
 when opening the same thread from the app. Stop the idle role, change its transport, then resume it to
 move that thread to the shared daemon. Do not set `args` in shared mode: use role fields/profile for
 per-thread settings; global server flags belong to the daemon. `down` disconnects this role, not the daemon.
+The daemon's tool processes carry no `$ZMINA_ROLE`; zmina takes a command whose `$CODEX_THREAD_ID` is a seat's live thread as that seat's
+(`task done`: its review, done note and hand-out check; `ack`, `note`, `todo`, `lesson` and `inbox` still read `$ZMINA_ROLE` only).
 A Codex seat runs on the normal service tier (`service_tier: default`) unless its role or its profile names one:
 `service_tier: priority` is Codex's fast mode, twice the price (`zmina usage` prices it so). The owner's global
 `service_tier` in `<codex_home>/config.toml` never reaches a crew: zmina passes the tier with every thread start and
@@ -2606,7 +2608,9 @@ its lines is held back any more.
 - **Due.** A role (`$ZMINA_ROLE`) that closes as done a task with a worktree, which is no review itself, makes its closing "review
   due" (`task show`: `review: round 1 due`). The packet of such a task tells the worker to close it after saving its result: the
   review starts on the close. The owner's own close, the dispatcher's, a task with no worktree and a close past the rounds are as
-  they always were. A seat whose tools carry no `$ZMINA_ROLE` (a shared Codex daemon's) closes as the owner's hand: no review.
+  they always were. A shared Codex daemon's tools carry no `$ZMINA_ROLE` but their thread: a close whose `$CODEX_THREAD_ID` is a
+  Codex seat's live thread is that seat's, and reviewed; a thread no seat runs (a child thread, the owner's own Codex) closes as the
+  owner's hand: no review.
 - **The review task.** zmina makes it for the seat the review rule picks: `first` for the first review, `again` for the later rounds,
   never the author or a copy of the author. Only the review rule answers: when it finds no seat, or the busy rule gives the work to
   the author's own seat, nobody is picked (waits for a seat, below). A copy the routes name is not made: the task goes to its base
@@ -3257,7 +3261,8 @@ A role (`$ZMINA_ROLE`, the dispatcher aside) that saves a result or checkpoint o
 to that: it must be the task's own role (a copy is not its base) and, where its conversation (`CLAUDE_CODE_SESSION_ID`,
 `CODEX_THREAD_ID`) and the hand-out's are both known, the same one. The task's own role is held to it for any change of
 the task; another role only for what reports or ends the work as the worker does, so a note or another field set on
-someone else's task is as it always was. The owner's hand and the dispatcher are not held. A session of the task's role
+someone else's task is as it always was. The owner's hand and the dispatcher are not held (a tool with no `$ZMINA_ROLE` whose
+`$CODEX_THREAD_ID` is a Codex seat's live thread is that seat, not the hand). A session of the task's role
 that is the role's live one (the registry's) holds the hand-out by definition: when the conversation changed under the
 running role (its own `/clear`, one in its pane, a `/resume`) its first report moves the delivery to the new
 conversation, as one `rebound` event and no note, with the hand-out, its number and its acceptance as they were, and

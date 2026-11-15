@@ -311,6 +311,7 @@ func (a *app) readState(fn func(s *shift.Shift) error) error {
 	}
 
 	s.State = st
+	a.actAs(s)
 
 	return fn(s)
 }
@@ -329,6 +330,7 @@ func (a *app) withState(fn func(s *shift.Shift) error) error {
 	}
 
 	s.State = l.State
+	a.actAs(s)
 	s.Flush = l.Flush
 	s.Mark = l.Mark
 	s.CommittedMessageStages = map[string]map[string]time.Time{}
@@ -391,6 +393,21 @@ func taskStore(c *crew.Crew) *task.Store {
 
 func eventLog(c *crew.Crew) *events.Log {
 	return &events.Log{Path: c.Layout().Events()}
+}
+
+// actAs makes a command a shared Codex seat's tool runs the seat's: such a tool runs in the App Server daemon's process, so
+// it has no $ZMINA_ROLE and by() says hand, but it carries its thread ($CODEX_THREAD_ID), and the seat whose live
+// conversation that is acts as itself (s.By). It needs the state, so it runs after the state is set, not in newShift. The
+// environment wins: a command with $ZMINA_ROLE is that role. A thread that is no seat's live one (a child thread, the owner's
+// own Codex) stays the owner's hand, as before.
+func (a *app) actAs(s *shift.Shift) {
+	if os.Getenv("ZMINA_ROLE") != "" {
+		return
+	}
+
+	if seat := s.SeatOfSession(os.Getenv("CODEX_THREAD_ID")); seat != "" {
+		s.By = seat
+	}
 }
 
 // by is who runs this command: the role a session runs as ($ZMINA_ROLE), else the owner's hand.

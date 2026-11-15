@@ -294,6 +294,69 @@ func TestARoleClosingAWorktreeTaskMakesTheReviewAndStartsTheReviewer(t *testing.
 	assert.Equal(t, "nothing to collect\n", gc)
 }
 
+// A close from a shared Codex seat's tool, which carries its thread and no $ZMINA_ROLE, is the seat's own close: the review is due,
+// the task says the seat closed it, and the dispatcher hears nothing of it.
+func TestASharedCodexSeatClosingAWorktreeTaskMakesTheReview(t *testing.T) {
+	file := reviewCrew(t, codexSeats("dev")+"  dev2: {}\n  reviewer: {}\n", "auto_review: on\n")
+	id := workTask(t, file, "dev")
+	seats := newCodexSeatCrew(t, file, map[string]string{"dev": "thread-1"})
+
+	out, errOut, err := seats.zm(t, "", "thread-1", "task", "done", id, "--note", "shipped")
+	require.NoError(t, err, errOut)
+	assert.Equal(t, "T-1 · dev · done\nreview: review T-2 of T-1 for reviewer, round 1 of 2\n", out)
+
+	work := readTask(t, file, id)
+	require.NotNil(t, work.Closed)
+	assert.Equal(t, "dev", work.Closed.By)
+	require.NotNil(t, work.Closed.Review)
+	assert.Equal(t, "T-2", work.Closed.Review.Task)
+	assert.True(t, isUp(t, file, "reviewer"), "zmina started the reviewer on its task")
+	assert.Empty(t, dispatcherLines(t, file))
+}
+
+// Without the review loop the seat's close is told to the dispatcher as a role's is: its note says who closed.
+func TestASharedCodexSeatsCloseIsToldToTheDispatcher(t *testing.T) {
+	file := reviewCrew(t, codexSeats("dev")+"  dev2: {}\n  reviewer: {}\n", "")
+	id := workTask(t, file, "dev")
+	seats := newCodexSeatCrew(t, file, map[string]string{"dev": "thread-1"})
+
+	_, errOut, err := seats.zm(t, "", "thread-1", "task", "done", id, "--note", "shipped")
+	require.NoError(t, err, errOut)
+
+	assert.Equal(t, "dev", readTask(t, file, id).Closed.By)
+	assert.Equal(t, []string{"dev: T-1 done: shipped (zmina task show T-1)"}, dispatcherLines(t, file))
+}
+
+// A thread that is no seat's live one (a child thread of the seat, the owner's own Codex) closes as the owner's hand, as it did: no
+// review, no role's done note.
+func TestAThreadOfNoSeatClosesAWorktreeTaskWithoutAReview(t *testing.T) {
+	file := reviewCrew(t, codexSeats("dev")+"  dev2: {}\n  reviewer: {}\n", "auto_review: on\n")
+	id := workTask(t, file, "dev")
+	seats := newCodexSeatCrew(t, file, map[string]string{"dev": "thread-1"})
+
+	out, errOut, err := seats.zm(t, "", "thread-child", "task", "done", id, "--note", "shipped")
+	require.NoError(t, err, errOut)
+	assert.Equal(t, "T-1 · dev · done\n", out)
+
+	got := readTask(t, file, id)
+	require.NotNil(t, got.Closed)
+	assert.Equal(t, "hand", got.Closed.By)
+	assert.Nil(t, got.Closed.Review)
+	assert.Equal(t, 1, taskCount(t, file), "no review task was made")
+	assert.False(t, isUp(t, file, "reviewer"))
+}
+
+// $ZMINA_ROLE wins over a thread: a tool of another role that carries a seat's thread closes as the role the environment names.
+func TestZminaRoleOverTheThreadDecidesWhoClosed(t *testing.T) {
+	file := reviewCrew(t, codexSeats("dev")+"  dev2: {}\n  reviewer: {}\n", "")
+	id := workTask(t, file, "dev")
+	seats := newCodexSeatCrew(t, file, map[string]string{"dev": "thread-1"})
+
+	_, errOut, err := seats.zm(t, "dev2", "thread-1", "task", "done", id, "--note", "shipped")
+	require.NoError(t, err, errOut)
+	assert.Equal(t, "dev2", readTask(t, file, id).Closed.By)
+}
+
 // The owner at the keyboard and the dispatcher close as they always did: no review. A task with no worktree has none either.
 func TestNoReviewForTheOwnersOrTheDispatchersCloseOrATaskWithoutAWorktree(t *testing.T) {
 	file := reviewCrew(t, reviewSeats, "auto_review: on\n")

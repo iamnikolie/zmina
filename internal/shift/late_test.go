@@ -2,6 +2,7 @@ package shift
 
 import (
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -9,7 +10,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/iamnikolie/zmina/internal/codex"
 	"github.com/iamnikolie/zmina/internal/record"
+	"github.com/iamnikolie/zmina/internal/registry"
 	"github.com/iamnikolie/zmina/internal/task"
 )
 
@@ -286,4 +289,41 @@ func TestAbortOfARecordThatKeptNoBeforeBindsTheOldSessionAgain(t *testing.T) {
 	assert.False(t, f.who(t, "sid-designer").Late, "the old conversation holds it again")
 	assert.True(t, f.who(t, "sid-new").Late)
 	assert.Equal(t, 3, deliveryOf(t, f).Gen)
+}
+
+// SeatOfSession is the Codex seat whose live thread it is, and nothing else: not a Claude seat that runs the same id, not a seat
+// that is down, not a thread no seat runs, and no state is made for a role by asking.
+func TestSeatOfSessionIsTheCodexSeatWhoseLiveThreadItIs(t *testing.T) {
+	f := fixtureWith(t, crewYAML)
+	s := f.s
+
+	r, err := s.Role("designer")
+	require.NoError(t, err)
+
+	r.Runtime = "codex"
+
+	reg := &codex.Registry{Dir: filepath.Join(s.Crew.StateDir(), "codex")}
+
+	require.NoError(t, s.Up("designer"))
+	require.NoError(t, s.Up("harvester"))
+
+	p, err := s.probe("designer")
+	require.NoError(t, err)
+	require.NoError(t, reg.Save(codex.Record{Session: registry.Session{PID: p.PID, Name: r.Session, SessionID: "thread-1"}}))
+
+	// harvester is a Claude seat: a conversation of the same id is not a Codex thread.
+	f.rg.byPID[f.tm.up["harvester"]] = &registry.Session{SessionID: "thread-1"}
+
+	assert.Equal(t, "designer", s.SeatOfSession("thread-1"))
+	assert.Empty(t, s.SeatOfSession("thread-2"), "a thread no seat runs")
+	assert.Empty(t, s.SeatOfSession(""))
+
+	// A seat that is down has no live thread, whatever its bridge's record says.
+	s.State.Role("designer").Up = false
+	assert.Empty(t, s.SeatOfSession("thread-1"))
+
+	// A role the state has no entry for is skipped, and asking does not make one.
+	delete(s.State.Roles, "designer")
+	assert.Empty(t, s.SeatOfSession("thread-1"))
+	assert.NotContains(t, s.State.Roles, "designer")
 }
