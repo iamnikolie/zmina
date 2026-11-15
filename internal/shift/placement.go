@@ -79,7 +79,11 @@ func (s *Shift) awayUp(name string, r *crew.Role, now time.Time) (did []string) 
 	return did
 }
 
-// sweepAway drops the keys of the daily notes of past days.
+// twicePrefix opens the RecordNotified key of the daily note that a role is up on this node and on another: twicePrefix +
+// role + "/" + the day.
+const twicePrefix = "role-twice/"
+
+// sweepAway drops the keys of the daily notes of past days (a role placed elsewhere that is up here, a role up on two nodes).
 func (s *Shift) sweepAway(now time.Time) {
 	if len(s.State.RecordNotified) == 0 {
 		return
@@ -88,8 +92,49 @@ func (s *Shift) sweepAway(now time.Time) {
 	day := now.In(s.Crew.Location()).Format(time.DateOnly)
 
 	for key := range s.State.RecordNotified {
-		if rest, ok := strings.CutPrefix(key, awayPrefix); ok && !strings.HasSuffix(rest, "/"+day) {
-			delete(s.State.RecordNotified, key)
+		for _, prefix := range []string{awayPrefix, twicePrefix} {
+			if rest, ok := strings.CutPrefix(key, prefix); ok && !strings.HasSuffix(rest, "/"+day) {
+				delete(s.State.RecordNotified, key)
+			}
 		}
 	}
+}
+
+// roleTwice is the backstop of the placement: a role up on this node that another node lately told up too is one role on two
+// nodes, whatever the file says (a hand start, a file not yet copied, a node of an older zmina that runs every role). Each
+// such role is an event (role-twice) and one note to the dispatcher, once a day; nothing is taken down: which of the two
+// goes is the owner's to say. It asks tmux only for the roles a peer says it holds.
+func (s *Shift) roleTwice(now time.Time) (did []string) {
+	if s.PeerHeld == nil || !s.Crew.Spread() {
+		return nil
+	}
+
+	held := s.PeerHeld()
+	if len(held) == 0 {
+		return nil
+	}
+
+	day := now.In(s.Crew.Location()).Format(time.DateOnly)
+
+	for _, name := range s.Crew.Names() {
+		nodes := held[name]
+		if name == s.Crew.Dispatcher || len(nodes) == 0 {
+			continue
+		}
+
+		if p, err := s.probe(name); err != nil || p.State != tmux.Up {
+			continue
+		}
+
+		text := fmt.Sprintf("%s is up on this node (%s) and on %s: one role on two nodes; zmina down %s on the one the crew file "+
+			"does not place it on (it places it on %s)", name, s.Crew.Here, strings.Join(nodes, ", "), name, s.Crew.WhereIs(s.Crew.Roles[name]))
+
+		if told, _ := s.NoteOnce(twicePrefix+name+"/"+day, "zmina", text, false); told {
+			s.log(name, "role-twice", strings.Join(nodes, ","), text)
+
+			did = append(did, name+": up here and on "+strings.Join(nodes, ", "))
+		}
+	}
+
+	return did
 }

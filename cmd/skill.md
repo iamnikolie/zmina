@@ -1012,7 +1012,8 @@ roles:
   default crew), so two nodes pushing to one remote never pick one branch. A machine that is no node keeps `zmina/<crew>-t-14`.
 - **`zmina retire`** writes `retired` and `moved_to` inside `nodes.<this node>`, not at the top: the mark is this node's and
   does not travel with the file (so that node's file now differs, and `node ls` says so). `spare: true`, which only the file sets, is a per-node key too: put it under `nodes.<node>`. `zmina seat set <role> place=…` is refused on such a crew: edit the file on every node
-  until `zmina move` exists.
+  until `zmina move` exists. Any other `seat add`, `set` or `rm` on such a crew works, and says that it changed the file
+  here only: the node then shows `differs from …` until `zmina crew push` sends the file.
 
 ### Drift and double running
 
@@ -1026,7 +1027,7 @@ crew under the node) and `zmina doctor` (`placement`) read them:
 | `in sync with beta` | beta holds the same file, byte for byte. |
 | `differs from beta` | the files differ (an edit on one node, a `retire`, a file not copied yet): copy one file to every node. |
 | `beta tells no sum for this crew` | an older zmina that reads no `nodes:` (it runs **every** role: do not leave it so), or a file that declares none. |
-| `dev is up on this node and on beta` | one role on two nodes: `zmina down dev` on the one the file does not place it on. Nothing is taken down by zmina. |
+| `dev is up on this node and on beta` | one role on two nodes: `zmina down dev` on the one the file does not place it on. Nothing is taken down by zmina. The ticker of each node also logs it, event `role-twice`, and tells its dispatcher once a day for each such role, while the other node's word is under 10 min old. |
 | `dev is up on this node, but the crew file places it on beta` | the same, seen from the state here. |
 | `qa is held by no node` | its `place` is no node of `nodes:`. |
 

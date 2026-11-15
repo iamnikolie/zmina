@@ -232,6 +232,9 @@ type Shift struct {
 	HasTranscript func(namespace, sessionID string) bool
 	// OtherCrews names the crews of this crew's name elsewhere, each with how it stands; nil when none are known.
 	OtherCrews func() []string
+	// PeerHeld says which other nodes lately told this crew's roles up (role -> node names), from the address book (no network);
+	// nil for a crew that declares no nodes. A role up here and on another node is one role twice (roleTwice).
+	PeerHeld func() map[string][]string
 	// lastStop is the stop Start just lifted, lastBeat the beat before this one: the boot either goes on to is still
 	// the boot of a crew that stood still.
 	lastStop, lastBeat time.Time

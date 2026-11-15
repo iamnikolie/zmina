@@ -246,6 +246,9 @@ func (s *Shift) Tick() []string {
 		}
 	}
 
+	// A role up here that another node lately told up too: one role on two nodes (nothing is taken down).
+	did = append(did, s.roleTwice(now)...)
+
 	// Sessions of the crew's tmux server that no role names (reconcile: orphans): reported once, and taken down when nothing says
 	// someone is using them.
 	orphanDid, orphanNotes := s.reconcileOrphans(now, stopped)

@@ -286,6 +286,11 @@ func (a *app) newShift() (*shift.Shift, error) {
 		HasTranscript:     hasTranscript,
 	}
 
+	// A crew over nodes asks the address book which other nodes lately told its roles up (the backstop against one role on two).
+	if c.Spread() {
+		s.PeerHeld = func() map[string][]string { return peersHeld(a.crewKey(), time.Now()) }
+	}
+
 	if a.shiftSeams != nil {
 		a.shiftSeams(s)
 	}

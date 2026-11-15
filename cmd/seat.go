@@ -166,6 +166,13 @@ func (a *app) editSeat(role, detail string, fn func(s *shift.Shift, e *crew.Edit
 		s.Log(role, "seat", "", strings.TrimSpace(did+" "+detail))
 		fmt.Fprintf(a.out, "%s %s in %s (the version it replaced is kept: zmina crew history)\n", role, did, s.Crew.Path)
 
+		// A crew over nodes is one file on every node: an edit made here is made on this node only.
+		if s.Crew.Spread() {
+			fmt.Fprintln(a.err, "zmina: warning: this crew declares nodes:, so its file is one for every node, and this edit changed it "+
+				"here only: zmina node ls says «differs from …» until zmina crew push <node> sends it; a push to a node whose file "+
+				"was edited there is refused, and shows the difference")
+		}
+
 		return nil
 	})
 }

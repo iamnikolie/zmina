@@ -305,3 +305,72 @@ func TestStartOfACrewThatIsNotSpreadIsUnchanged(t *testing.T) {
 	s.Node = "alpha"
 	assert.Empty(t, s.PlacedAway("harvester"))
 }
+
+// A role up here that another node lately told up too is one role on two nodes: an event and one note to the dispatcher a day,
+// nothing taken down. A role up on one node only, the dispatcher, and a role a peer does not hold are not.
+func TestARoleUpOnTwoNodesIsAnEventAndOneNoteADay(t *testing.T) {
+	f, _ := placedFixture(t, spreadYAML, "alpha")
+	f.s.Tick()
+
+	// ops is home's and up here; beta tells it up too, and the dispatcher, and docs, which is not up here.
+	f.tm.up["ops"] = 4002
+	f.rg.byPID[4002] = &registry.Session{PID: 4002, Status: "idle", StatusUpdatedAt: f.now.Add(-time.Hour).UnixMilli(), SessionID: "sid-ops"}
+
+	asked := 0
+	f.s.PeerHeld = func() map[string][]string {
+		asked++
+
+		return map[string][]string{"ops": {"beta"}, "dispatcher": {"beta"}, "docs": {"beta"}}
+	}
+
+	for range 3 {
+		*f.now = f.now.Add(10 * time.Minute)
+		f.s.Tick()
+	}
+
+	assert.Equal(t, 1, eventsOf(f, "role-twice"), "once a day, however many beats")
+	assert.Equal(t, "ops is up on this node (alpha) and on beta: one role on two nodes; zmina down ops on the one the crew file does not place it on (it places it on alpha)",
+		eventDetails(f, "role-twice"))
+	assert.True(t, f.tm.Has("ops"), "nothing is taken down")
+	assert.True(t, f.s.State.RecordNotified[twicePrefix+"ops/"+f.now.Format(time.DateOnly)])
+	assert.Zero(t, eventsOf(f, "orphan-down"))
+
+	// Past the day it is told again, and the old day's key goes.
+	*f.now = f.now.Add(24 * time.Hour)
+	f.s.Tick()
+	assert.Equal(t, 2, eventsOf(f, "role-twice"))
+
+	n := 0
+
+	for key := range f.s.State.RecordNotified {
+		if strings.HasPrefix(key, twicePrefix) {
+			n++
+		}
+	}
+
+	assert.Equal(t, 1, n)
+
+	// Once the other node says it no longer holds it, there is nothing to tell.
+	f.s.PeerHeld = func() map[string][]string { return nil }
+	*f.now = f.now.Add(24 * time.Hour)
+	f.s.Tick()
+	assert.Equal(t, 2, eventsOf(f, "role-twice"))
+}
+
+func TestRoleTwiceIsQuietWithoutPeersOrNodes(t *testing.T) {
+	// A crew that declares no nodes asks nobody, and the seam is not set for it.
+	s, tm, rg, _ := fixture(t)
+	require.Nil(t, s.PeerHeld)
+
+	s.PeerHeld = func() map[string][]string { t.Fatal("asked"); return nil }
+
+	tm.up["designer"] = 4003
+	rg.byPID[4003] = &registry.Session{PID: 4003, Status: "idle", SessionID: "sid-designer"}
+	s.Tick()
+
+	// A spread crew with no seam (a machine with no address book) says nothing.
+	f, _ := placedFixture(t, spreadYAML, "alpha")
+	f.tm.up["ops"] = 4004
+	f.s.Tick()
+	assert.Zero(t, eventsOf(f, "role-twice"))
+}
