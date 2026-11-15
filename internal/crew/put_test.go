@@ -166,10 +166,11 @@ func TestPutRefusesAFileThatDoesNotLoad(t *testing.T) {
 		"not yaml":          {"roles: [a\n  b: {", "beta", "does not load"},
 		"no roles":          {"home: alpha\nnodes: {alpha: {}}\n", "alpha", "no roles"},
 		"a bad overlay key": {pushedFile + "x-ok: 1\n", "beta", ""},
-		"an overlay that fails only for this node": {strings.Replace(pushedFile, "beta: {prefix: be-}", "beta: {notify_on: 3}", 1), "beta", "nodes.beta"},
-		"a bad key under a node":                   {strings.Replace(pushedFile, "beta: {prefix: be-}", "beta: {roles: {}}", 1), "beta", "is not set per node"},
-		"no nodes declared":                        {"name: acme\nroles:\n  dispatcher: {}\n", "beta", "declares no nodes:"},
-		"binary":                                   {"\x00\x01\x02", "beta", "does not load"},
+		"an overlay that fails only for this node":      {strings.Replace(pushedFile, "beta: {prefix: be-}", "beta: {notify_on: 3}", 1), "beta", "nodes.beta"},
+		"a bad key under a node":                        {strings.Replace(pushedFile, "beta: {prefix: be-}", "beta: {roles: {}}", 1), "beta", "is not set per node"},
+		"no nodes declared":                             {"name: acme\nroles:\n  dispatcher: {}\n", "beta", "declares no nodes:"},
+		"a key that is not per node under another node": {strings.Replace(pushedFile, "alpha: {prefix: al-}", "alpha: {roles: {}}", 1), "beta", "would not load on alpha"},
+		"binary": {"\x00\x01\x02", "beta", "does not load"},
 	} {
 		if c.says == "" {
 			continue // a file that loads: covered by the push that succeeds

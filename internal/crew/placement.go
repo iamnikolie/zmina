@@ -19,7 +19,7 @@ import (
 // top-level key when this node loads the file. Anything else under a node is a load error: an override that is
 // silently ignored is the drift the one file is there to end.
 var NodeKeys = []string{"prefix", "claude", "codex", "namespace", "dir", "agents", "notify", "notify_on", "quiet_hours",
-	"plugins", "drop_env", "timezone", "courier", "worktree_gc", "spare", "retired", "moved_to"}
+	"plugins", "drop_env", "timezone", "courier", "worktree_gc", "lessons", "spare", "retired", "moved_to"}
 
 // nodeNameRe is what a node's name may be: the mesh's own rule (it goes into addresses and branch names).
 var nodeNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`)
@@ -28,22 +28,34 @@ var nodeNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`)
 // the mesh.
 func ThisNodeFile() string { return ExpandHome("~/.zmina/mesh/node.json") }
 
-// ThisNode is the name of the node this machine is (zmina node init), "" for a machine that is none.
+// ThisNode is the name of the node this machine is (zmina node init), "" for a machine whose name cannot be read.
 func ThisNode() string {
+	name, _ := thisNode()
+
+	return name
+}
+
+// thisNode is ThisNode with why it is none: no file, a file that does not read, or a name that is no node's. A crew over nodes
+// runs nothing on a machine that has no name, so the reason is what its warning says.
+func thisNode() (name, why string) {
 	raw, err := os.ReadFile(ThisNodeFile())
 	if err != nil {
-		return ""
+		return "", err.Error()
 	}
 
 	var nf struct {
 		Name string `json:"name"`
 	}
 
-	if json.Unmarshal(raw, &nf) != nil || !nodeNameRe.MatchString(nf.Name) {
-		return ""
+	if err := json.Unmarshal(raw, &nf); err != nil {
+		return "", ThisNodeFile() + ": " + err.Error()
 	}
 
-	return nf.Name
+	if !nodeNameRe.MatchString(nf.Name) {
+		return "", fmt.Sprintf("%s: %q is no node's name", ThisNodeFile(), nf.Name)
+	}
+
+	return nf.Name, ""
 }
 
 // Spread reports a crew file that declares nodes: it is one crew over more than one machine, each role placed on a
@@ -104,12 +116,22 @@ func (c *Crew) DispatcherNodes() []string {
 	return out
 }
 
-// PlacedHere reports whether this node runs the role. A crew that is not spread runs every role, and so does a machine
-// that is no node (doctor warns of it), as before the file could say otherwise. The dispatcher is replicated: it is
-// placed on home and on every node that holds a role. A copy (dev#2) is placed where its role is.
+// Runs reports whether this machine runs anything of the crew: a crew that declares no nodes always does, one that does only
+// on a node it lists. A machine whose node name cannot be read (no node.json, one that does not read, a name that is no
+// node's) is none, and a node the file does not list is none: neither runs a role, the dispatcher or a job of the crew.
+func (c *Crew) Runs() bool { return !c.Spread() || (c.Here != "" && c.HasNode(c.Here)) }
+
+// PlacedHere reports whether this node runs the role. A crew that is not spread runs every role, as before the file could say
+// otherwise. A crew that is, on a machine whose node name is not known, runs none: guessing that a machine is a node that
+// runs everything would start every role twice. The dispatcher is replicated: it is placed on home and on every node that
+// holds a role. A copy (dev#2) is placed where its role is.
 func (c *Crew) PlacedHere(r *Role) bool {
-	if !c.Spread() || c.Here == "" || r == nil {
+	if !c.Spread() || r == nil {
 		return true
+	}
+
+	if c.Here == "" {
+		return false
 	}
 
 	if r.Name == c.Dispatcher {
@@ -190,7 +212,7 @@ func SumOf(raw []byte) string { return sumOf(raw) }
 // placement reads what the file says of nodes, checks it and, for the node this machine is, merges its overlay over the
 // top-level keys. It runs on the decoded file before the defaults are completed, so an overlaid prefix or namespace
 // is the one every default follows. here is the node name, or "" for a machine that is none.
-func (c *Crew) placement(here string, warn func(string)) error {
+func (c *Crew) placement(here, why string, warn func(string)) error {
 	if !c.Spread() {
 		if c.Nodes != nil {
 			c.Nodes = nil // nodes: {} says nothing
@@ -210,14 +232,21 @@ func (c *Crew) placement(here string, warn func(string)) error {
 	}
 
 	names := c.NodeNames()
+	c.Here = here
 
 	for _, n := range names {
 		if !nodeNameRe.MatchString(n) {
 			return fmt.Errorf("nodes: %q is not a node name (letters, digits, '.', '_' and '-')", n)
 		}
 
+		// A key that is not per node is a hard error where it matters (this node's own overlay: the file is refused here) and a
+		// warning everywhere else, so one node's typo, or a key of a newer zmina, does not stop the nodes it is not for.
 		if err := checkOverlay(n, c.Nodes[n]); err != nil {
-			return err
+			if n == here {
+				return err
+			}
+
+			warn(err.Error() + "; ignored here (the node it is for refuses the file)")
 		}
 	}
 
@@ -248,9 +277,16 @@ func (c *Crew) placement(here string, warn func(string)) error {
 		}
 	}
 
-	c.Here = here
+	switch {
+	case here == "":
+		warn("this machine's node name cannot be read (" + why + "): a crew over nodes runs nothing here, not a role or the " +
+			"dispatcher, until it is; zmina node init, or mend ~/.zmina/mesh/node.json")
 
-	if here == "" || !c.HasNode(here) {
+		return nil
+	case !c.HasNode(here):
+		warn(fmt.Sprintf("this node (%s) is not one of nodes: (%s), and a node's name is matched exactly: it runs nothing of "+
+			"this crew, not a role or the dispatcher, until the file lists it", here, strings.Join(names, ", ")))
+
 		return nil
 	}
 

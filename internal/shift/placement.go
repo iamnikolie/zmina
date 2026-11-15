@@ -23,6 +23,11 @@ func (s *Shift) PlacedAway(name string) string {
 		return ""
 	}
 
+	// A machine that is no node, or that the file does not list, runs none of the crew: which node runs the role is not the answer.
+	if !s.Crew.Runs() {
+		return name + ": " + s.notRunningWhy()
+	}
+
 	if r.Name == s.Crew.Dispatcher {
 		return fmt.Sprintf("%s runs on %s (home and the nodes that hold a role), not on this node (%s)", name,
 			strings.Join(s.Crew.DispatcherNodes(), ", "), s.Crew.Here)
@@ -48,6 +53,10 @@ func (s *Shift) placedAwayShort(name string) string {
 		return ""
 	}
 
+	if !s.Crew.Runs() {
+		return "this node runs nothing of the crew (zmina doctor)"
+	}
+
 	if r.Name == s.Crew.Dispatcher {
 		return "it runs on " + strings.Join(s.Crew.DispatcherNodes(), ", ") + ", not on this node"
 	}
@@ -55,13 +64,67 @@ func (s *Shift) placedAwayShort(name string) string {
 	return "it is placed on " + s.Crew.PlacementOf(r) + ", not on this node"
 }
 
+// notRunningWhy says why this machine runs nothing of a crew over nodes: its node name cannot be read, or the file does not
+// list it.
+func (s *Shift) notRunningWhy() string {
+	if s.Crew.Here == "" {
+		return "this machine's node name cannot be read, so a crew over nodes runs nothing here (not a role, the dispatcher or a job) " +
+			"until it can: zmina node init, or mend ~/.zmina/mesh/node.json"
+	}
+
+	return fmt.Sprintf("this node (%s) is not one of nodes: (%s), so it runs nothing of this crew (not a role, the dispatcher or a job) "+
+		"until the file lists it; a node's name is matched exactly", s.Crew.Here, strings.Join(s.Crew.NodeNames(), ", "))
+}
+
+// notRunningPrefix opens the RecordNotified key of the daily log line of a machine that runs nothing of the crew.
+const notRunningPrefix = "node-not-running/"
+
+// notRunning is the whole beat of a machine that runs nothing of the crew (its node name cannot be read, or the file does
+// not list it): it has no role, no dispatcher and no job to run, so it only shows that the ticker beat and says once a day, in
+// the log, why nothing runs. Every command says the same on every load.
+func (s *Shift) notRunning(now time.Time) []string {
+	s.State.LastTick = now
+	s.sweepAway(now)
+
+	key := notRunningPrefix + now.In(s.Crew.Location()).Format(time.DateOnly)
+	if s.State.RecordNotified[key] {
+		return nil
+	}
+
+	s.MarkNoted(key)
+
+	why := s.notRunningWhy()
+	s.log("", "node-not-running", "", why)
+
+	return []string{why}
+}
+
+// workPrefix opens the RecordNotified key of the note that a role placed on another node holds work here: workPrefix + role.
+// It is kept while the role holds something, and goes when it holds nothing.
+const workPrefix = "placement-work/"
+
 // awayUp is the beat's look at a role the crew file places on another node: it is skipped, never started, never put down.
-// A session of it that is up here is two of one role if the other node runs it too, so the dispatcher is told, once a
-// day, and nothing is taken down: that is the owner's to decide. It returns a line for the log and notes.
+// Its Up in the state follows the probe, both ways, because that is what the hello tells as held: a session that is up here is
+// told, and one that ended is not still told. A session that is up is two of one role if the other node runs it too, so the
+// dispatcher is told, once a day, and nothing is taken down: that is the owner's to decide. It returns lines for the log.
 func (s *Shift) awayUp(name string, r *crew.Role, now time.Time) (did []string) {
 	p, err := s.probe(name)
-	if err != nil || p.State != tmux.Up {
+	if err != nil {
 		return nil
+	}
+
+	up := p.State == tmux.Up
+
+	if rs := s.State.Roles[name]; rs != nil {
+		rs.Up = up
+	} else if up {
+		s.State.Role(name).Up = true
+	}
+
+	did = append(did, s.awayWork(name, r)...)
+
+	if !up {
+		return did
 	}
 
 	day := s.Now().In(s.Crew.Location()).Format(time.DateOnly)
@@ -79,6 +142,57 @@ func (s *Shift) awayUp(name string, r *crew.Role, now time.Time) (did []string) 
 	return did
 }
 
+// awayWork tells the dispatcher once that a role the crew file places on another node still holds work on this node's ledger
+// or lines in its queue: the beat does nothing for it here, so they would sit. The way on is by hand: park what it holds and
+// give the work to the node it is placed on. The note is made again only after the role has held nothing.
+func (s *Shift) awayWork(name string, r *crew.Role) []string {
+	key := workPrefix + name
+
+	if name == s.Crew.Dispatcher {
+		return nil
+	}
+
+	holds := s.heldBy(name)
+
+	lines := 0
+	if rs := s.State.Roles[name]; rs != nil {
+		lines = len(rs.Inbox)
+	}
+
+	if len(holds) == 0 && lines == 0 {
+		delete(s.State.RecordNotified, key)
+
+		return nil
+	}
+
+	var what []string
+
+	if len(holds) > 0 {
+		what = append(what, strings.Join(holds, ", "))
+	}
+
+	if lines > 0 {
+		noun := "lines"
+		if lines == 1 {
+			noun = "line"
+		}
+
+		what = append(what, fmt.Sprintf("%d queued %s", lines, noun))
+	}
+
+	text := fmt.Sprintf("%s holds %s on this node (%s), but the crew file places it on %s, so nothing here works on it: park what it "+
+		"holds (zmina task park <id>) and give the work to %s by hand (zmina tell %s \"<what remains>\")", name, strings.Join(what, " and "),
+		s.Crew.Here, s.Crew.WhereIs(r), s.Crew.WhereIs(r), s.Crew.RoleTell(r))
+
+	if told, _ := s.NoteOnce(key, "zmina", text, false); told {
+		s.log(name, "placed-elsewhere-work", strings.Join(holds, ","), text)
+
+		return []string{name + ": holds " + strings.Join(what, " and ") + ", placed on " + s.Crew.WhereIs(r)}
+	}
+
+	return nil
+}
+
 // twicePrefix opens the RecordNotified key of the daily note that a role is up on this node and on another: twicePrefix +
 // role + "/" + the day.
 const twicePrefix = "role-twice/"
@@ -92,8 +206,8 @@ func (s *Shift) sweepAway(now time.Time) {
 	day := now.In(s.Crew.Location()).Format(time.DateOnly)
 
 	for key := range s.State.RecordNotified {
-		for _, prefix := range []string{awayPrefix, twicePrefix} {
-			if rest, ok := strings.CutPrefix(key, prefix); ok && !strings.HasSuffix(rest, "/"+day) {
+		for _, prefix := range []string{awayPrefix, twicePrefix, notRunningPrefix} {
+			if rest, ok := strings.CutPrefix(key, prefix); ok && rest != day && !strings.HasSuffix(rest, "/"+day) {
 				delete(s.State.RecordNotified, key)
 			}
 		}

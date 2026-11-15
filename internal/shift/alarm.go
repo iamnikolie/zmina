@@ -394,6 +394,11 @@ func (s *Shift) Sleep(name string, at time.Time, when, note string, o DownOption
 		return alarm.Alarm{}, false, err
 	}
 
+	// A sleep is a down and a start at its end: refused for a role placed on another node, as a restart is.
+	if err := s.errPlacedAway(name); err != nil {
+		return alarm.Alarm{}, false, err
+	}
+
 	wait := false
 
 	if s.has(name) {

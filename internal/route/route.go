@@ -267,6 +267,9 @@ type Decision struct {
 	Name string
 	// Why says why this seat, in a line.
 	Why string
+	// AwaySeat is, for an ActionTell, the seat that runs on another node when that is why the answer is a tell (To is that
+	// node's crew), empty when the work is another crew's.
+	AwaySeat string
 	// Alternatives are the other seats the rule looked at, with why each was not picked.
 	Alternatives []Alternative
 	// Limits are the plans' readings in percent, nil for one that is unknown; Stale is true when either is.

@@ -75,6 +75,12 @@ func (a *app) setRetired(date, movedTo string) error {
 			return err
 		}
 
+		// The mark is this node's, so a machine that cannot say which node it is writes none: it would land at the top, for every node.
+		if s.Crew.Spread() && s.Crew.Here == "" {
+			return errors.New("this machine's node name cannot be read, so a retire (this node's mark) has no node to be written under: " +
+				"zmina node init, or mend ~/.zmina/mesh/node.json")
+		}
+
 		// A crew over more than one node keeps the mark inside nodes.<this node>: a retire made here is this node's
 		// and does not travel with the file.
 		for _, kv := range [][2]string{{"retired", date}, {"moved_to", movedTo}} {

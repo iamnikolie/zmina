@@ -96,7 +96,9 @@ type outcome struct {
 	// seen says the rule had an input of the work to look at: its reason counts when no rule answers.
 	seen bool
 	tell string
-	seat *Seat
+	// awaySeat is the seat a tell is for when it runs on another node: the work is its, and this node does not run it.
+	awaySeat string
+	seat     *Seat
 	// fresh, when above 0, is the copy number a continuation takes instead of the seat itself.
 	fresh int
 	alts  []Alternative
@@ -142,6 +144,7 @@ func Decide(t Table, in Input, env Env) Decision {
 		to, act, why, alts := e.settle(o)
 
 		d.To, d.Action, d.Rule, d.Name, d.Why = to, act, r.Kind.Number(), r.Kind.Label(), why
+		d.AwaySeat = o.awaySeat
 		d.Alternatives = append(d.Alternatives, alts...)
 		d.Trace = append(d.Trace, Step{Rule: d.Rule, Name: d.Name, Matched: true, Why: to + " (" + why + ")"})
 
@@ -350,7 +353,7 @@ func (e *engine) otherCrew(r Rule) outcome {
 
 // awayTell is the answer for a seat that runs on another node: tell that crew's dispatcher, which owns the seat.
 func awayTell(s Seat, why string) outcome {
-	return outcome{tell: s.Away, why: join(why, s.Name+" is placed on "+s.Away+", not on this node")}
+	return outcome{tell: s.Away, awaySeat: s.Name, why: join(why, s.Name+" is placed on "+s.Away+", not on this node")}
 }
 
 // usable is the seat of a name when work can be given to it, else why not.
@@ -540,18 +543,23 @@ func (e *engine) review(r Rule) outcome {
 		again = []string{first}
 	}
 
+	// awayFirst is the first review's seat when it runs on another node: it is passed over like a seat that cannot take work, and
+	// the seats this node runs take the review; only with none of them is the other crew the answer (the caller tells nobody).
+	var awayFirst *Seat
+
 	if !e.in.Rereview && first != "" {
-		// The first review is the first seat's: when it runs on another node, that crew is told.
 		if a, ok := e.env.seat(first); ok && a.Away != "" && Base(first) != author {
-			return awayTell(a, text+", first review")
-		}
+			awayFirst = &a
 
-		s, why := out(first)
-		if why == "" {
-			return outcome{seat: &s, why: text + ", first review"}
-		}
+			alts = append(alts, Alternative{To: first, Why: "placed on " + a.Away + ", not on this node"})
+		} else {
+			s, why := out(first)
+			if why == "" {
+				return outcome{seat: &s, why: text + ", first review"}
+			}
 
-		alts = append(alts, Alternative{To: first, Why: why})
+			alts = append(alts, Alternative{To: first, Why: why})
+		}
 	}
 
 	var free []Seat
@@ -573,6 +581,13 @@ func (e *engine) review(r Rule) outcome {
 	}
 
 	if chosen == nil {
+		if awayFirst != nil {
+			o := awayTell(*awayFirst, "first review of "+text+", and no seat of this node can take it")
+			o.alts = dedupeAlts(alts)
+
+			return o
+		}
+
 		return outcome{seen: true, why: "review of " + text + ": no seat that is not the author can take it", alts: alts}
 	}
 
@@ -606,11 +621,12 @@ func (e *engine) review(r Rule) outcome {
 		kind = "re-review"
 	}
 
-	return outcome{
-		seat: chosen,
-		why:  join(kind+", "+text, strings.Join(passed, "; "), fmt.Sprintf("%s %s, not the author", chosen.Name, chosen.State)),
-		alts: dedupeAlts(alts),
+	why := join(kind+", "+text, strings.Join(passed, "; "), fmt.Sprintf("%s %s, not the author", chosen.Name, chosen.State))
+	if awayFirst != nil {
+		why = join(why, "the first review seat "+awayFirst.Name+" is placed on "+awayFirst.Away+", not on this node")
 	}
+
+	return outcome{seat: chosen, why: why, alts: dedupeAlts(alts)}
 }
 
 // dedupeAlts keeps the first of each seat, in order.

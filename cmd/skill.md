@@ -113,9 +113,9 @@ day_start: "09:00"                       # when morning, tomorrow, thu or a date
 # moved_to: box-ops/ops                  # ... and went on as this crew; alone it marks the crew retired too
 # spare: true                            # the owner's standby copy: no ticker by design; the cockpit never shows it red
 # home: alpha                            # a crew over more than one node (see Placement): the node that runs the roles with no place, and a dispatcher; required once nodes: is set
-# nodes:                                 # the machines it runs on, each with the keys it sets for itself (prefix, claude, notify ...: anything else is a load error); one file, the same on every node
-#   alpha: {prefix: al-}
-#   beta: {prefix: be-, claude: /opt/bin/claude}
+# nodes:                                 # the machines it runs on, each with the keys it sets for itself (claude, notify, lessons ...: anything else under a node is a load error on that node); one file, the same on every node
+#   alpha: {}
+#   beta: {claude: /opt/bin/claude}       # a prefix here renames every session of that node: Placement says when it is safe
 # projects:                              # the ui page's colour per task project (default: one of five, by name)
 #   site: {tint: p3}                     # p1 … p5: pin one when two projects collide
 roles:
@@ -965,8 +965,8 @@ hello, branches and ticker are unchanged.
 name: acme
 home: alpha                  # required once nodes: is set: runs the roles with no place, and a dispatcher
 nodes:                       # the member nodes; each value is what that node sets for itself
-  alpha: {prefix: al-}
-  beta:  {prefix: be-, claude: /opt/bin/claude, notify: [push, --x]}
+  alpha: {}
+  beta:  {claude: /opt/bin/claude, notify: [push, --x]}
 roles:
   dispatcher: {}
   dev: {place: beta}         # a node's name; default: home
@@ -982,34 +982,63 @@ roles:
   is ignored, with a warning.
 - **Per-node keys** sit under `nodes.<node>` and are merged over the top-level keys when that node loads the file:
   `prefix, claude, codex, namespace, dir, agents, notify, notify_on, quiet_hours, plugins, drop_env, timezone, courier,
-  worktree_gc, spare, retired, moved_to`. Anything else under a node (`roles`, `place`, `home`, a typo) is a **load
-  error** naming the key and its line, on every node: an override that is silently ignored is the drift this removes.
-  There are no per-node role keys: paths are the same on every node, and session names follow `prefix`.
+  worktree_gc, lessons, spare, retired, moved_to`. A key a node names replaces the crew's whole (a `notify` string over
+  a list, a list over a string; `""` or `[]` says none), one it does not name stays; a key with nothing under it (`notify:`) is null and
+  changes nothing. There are no per-node role keys: paths are the same on every node, and session names follow `prefix`.
+  Anything else under a node (`roles`, `place`, `home`, a typo) is not per node: under **this node's** entry it is a **load
+  error** naming the key and its line, so this node does not start on a file it would half read; under another node's entry
+  it is a warning that the entry is ignored here, so one node's typo, or a key a newer zmina added, stops only the node it is for.
 - **Which node this is** comes from `~/.zmina/mesh/node.json` (`zmina node init`), read only for a file that declares
-  `nodes:`. A machine that is no node runs every role and `zmina doctor` warns of it; a node the file does not list runs
-  nothing, not even a dispatcher.
+  `nodes:`, and matched against `nodes:` exactly (`Alpha` is not `alpha`). It **fails closed**: a machine whose name cannot be
+  read (no file, one that does not read, a name that is no node's) and a node the file does not list run **nothing** of the
+  crew: no role, no dispatcher, no job of the beat (below), no detector. The beat only shows that the ticker runs and says,
+  once a day in the log (`node-not-running`), why; every command warns on every load (`zmina node init`, or list the node),
+  and `zmina doctor` fails for an unreadable name and warns for an unlisted node. Guessing instead would start every role a second time.
 - **No secrets in the crew file**: it is copied to every node, and `claude`, `notify` and `plugins` run as commands there.
+- **A per-node `prefix` renames every session of the node** (`zm-dev` becomes `be-dev`): a crew that is running on it keeps the old
+  sessions as sessions no role names, and starts its roles again under the new names. Stop the crew on that node first
+  (`zmina stop`: every role goes down), then change the prefix, then `zmina start`. Set it before a node first runs the crew, or not at all.
+
+### What runs on every node that lists the crew
+
+The beat's jobs for the crew itself are not placed: each runs on **every listed node, on that node's own ledger, state and
+files**, and none on a node that runs nothing of it. They are: the morning line for the dispatcher (`morning:`, that node's cost), pushes through
+`notify` (`notify_on`), plugins, lessons (`lessons:`), the review loop (`auto_review:`), the later sweep (`later_sweep:`), the daily
+worktree sweep (`worktree_gc:`), the budget notes, the detectors (`watch:`), and the dispatcher's own `schedule:`. A job that
+would be done twice, with two lessons runs or two pushes of one reminder to one bot, is kept to one node by the keys a node may
+set for itself: `lessons: off`, `plugins: []`, `notify: []` (or `notify: off`), `worktree_gc: off` under the nodes that should not. The
+rest have no per-node key and are kept to a node by the role they act through: a `later_sweep:` or `schedule:` for a role
+placed on one node is made there and refused on the others (the task for a role placed elsewhere is refused, and the sweep says so
+once a day), and `auto_review:` reviews with the seats of its own node. The courier and mesh sync are the node's, not the crew's.
 
 ### What a node does with a role placed elsewhere
 
 - It never starts it, by any road: `zmina up` (one line, naming the node: `dev is placed on beta, not on this node
-  (alpha): run it there, or zmina tell beta/acme "<text>" to its dispatcher`), `restart`, a `keep: always` restart, a
-  schedule, an alarm's wake, the review loop, and with `reconcile:` neither `assign` nor `restart` (Reconcile).
-  `zmina up --all` skips such roles.
+  (alpha): run it there, or zmina tell beta/acme "<text>" to its dispatcher`), a `keep: always` restart, a
+  schedule, an alarm's wake, the review loop, `zmina later take`, and with `reconcile:` neither `assign` nor `restart` (Reconcile).
+  `zmina up --all` skips such roles. `zmina restart` and `zmina sleep` of one that is up here are **refused before anything is put
+  down**: the start that ends them would be refused, and the role left down. `zmina down` of it works, and is the way out of a double run.
 - `zmina task new <role>` and `zmina send <role>` (`--when-idle` too) are **refused**, with the same line: a task is on its
   node's ledger, and one node never writes another's; `task new --route` refuses work the routes give such a seat, naming
   `zmina tell`. `zmina tell` is how the other node is asked.
-- The ticker's beat skips it: no start, schedule, restart, release, trim or delivery, and nothing of its state is changed
-  (lines that wait for it keep waiting: the role is still in the file). The one thing it asks tmux is whether it is up here, for the note below; a session
-  of it that is up here is **not an orphan**.
+- The ticker's beat skips it: no start, schedule, restart, release, trim or delivery (lines that wait for it keep waiting: the
+  role is still in the file). The one thing it asks tmux is whether it is up here, and its `Up` in the state follows that, both
+  ways, because it is what the hello tells as held. A session of it that is up here is **not an orphan**.
 - If one is up here anyway (a hand start, a file copied late) the dispatcher is told once a day, `dev is up on this node
   (alpha), but the crew file places it on beta`, and nothing is taken down: two copies of one role is the owner's to
-  settle (`zmina down dev` here, or change `place` on every node). `down` works on it as on any role.
+  settle (`zmina down dev` here, or change `place` on every node).
+- If one still holds an active task or queued lines on this node (it was placed elsewhere after work was given to it) the
+  dispatcher is told once: nothing here works on them. Park what it holds (`zmina task park <id>`) and give the work to
+  the node it is placed on by hand (`zmina tell <node>/<crew> "<what remains>"`); the note is made again only after the role held nothing.
 - `zmina ls` shows it as `dev (placed: beta)` (`--json`: `place`, set for every role but the dispatcher of a crew that declares nodes, and `away: true` when the role is
   not this node's). `zmina route` answers `tell <node>/<crew>` for a rule that names
-  such a seat, and the pool never picks one (it says `placed on beta/acme, not on this node` among the alternatives).
+  such a seat, and the pool never picks one (it says `placed on beta/acme, not on this node` among the alternatives). A first
+  review whose seat is placed elsewhere falls through to the seats of this node that the review rule lists next; only when none
+  can take it is the answer a tell, and the review loop then notes it once for the dispatcher (`review seat reviewer is placed on beta/acme: tell
+  beta/acme …`) and tells nobody for it.
 - **Task branches** carry the node when the file declares `nodes:`: `zmina/<node>-<crew>-t-14` (`zmina/<node>-t-14` for the
-  default crew), so two nodes pushing to one remote never pick one branch. A machine that is no node keeps `zmina/<crew>-t-14`.
+  default crew), so two nodes pushing to one remote never pick one branch. Dots a git branch name cannot hold (two in a row,
+  one at the end, a `.lock` end) are left out of the node's name there.
 - **`zmina retire`** writes `retired` and `moved_to` inside `nodes.<this node>`, not at the top: the mark is this node's and
   does not travel with the file (so that node's file now differs, and `node ls` says so). `spare: true`, which only the file sets, is a per-node key too: put it under `nodes.<node>`. `zmina seat set <role> place=…` is refused on such a crew: edit the file on every node
   until `zmina move` exists. Any other `seat add`, `set` or `rm` on such a crew works, and says that it changed the file
@@ -1020,7 +1049,8 @@ roles:
 A node tells its peers, in its signed hello, for each crew that declares `nodes:`: the hash of its crew file (`sum`) and
 the roles it has up (`held`, the dispatcher and copies apart). A crew that declares none tells neither, so the hello of
 every other crew is what it was. Peers of an older zmina drop both fields; they send none. `zmina node ls` (a line per
-crew under the node) and `zmina doctor` (`placement`) read them:
+crew under the node) and `zmina doctor` (`placement`) read them, for the nodes the file lists only (a peer's crew of the same name that is none of
+them is another crew):
 
 | Line | Means |
 |---|---|
@@ -1030,6 +1060,7 @@ crew under the node) and `zmina doctor` (`placement`) read them:
 | `dev is up on this node and on beta` | one role on two nodes: `zmina down dev` on the one the file does not place it on. Nothing is taken down by zmina. The ticker of each node also logs it, event `role-twice`, and tells its dispatcher once a day for each such role, while the other node's word is under 10 min old. |
 | `dev is up on this node, but the crew file places it on beta` | the same, seen from the state here. |
 | `qa is held by no node` | its `place` is no node of `nodes:`. |
+| `no word from gamma` | a node the file lists that this node has never met; or `no word from gamma about this crew`: met, and it tells nothing of a crew of this name (not pushed there yet). |
 
 What a peer told may be a minute old (the ticker syncs every minute), and a peer that does not answer keeps its last word.
 

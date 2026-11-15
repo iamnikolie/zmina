@@ -1404,17 +1404,28 @@ func (a *app) tickCommand() *cobra.Command {
 			}
 
 			a.meshTick()
-			a.budgetTick(time.Now())
-			a.morningTick(time.Now())
-			a.pushTick(time.Now())
-			a.lessonsBeat(time.Now())
-			a.worktreeBeat(time.Now())
-			a.laterSweepBeat(time.Now())
-			a.reviewBeat()
+
+			runs := a.crewRuns()
+
+			// The crew's own jobs run on a node that runs the crew: a crew over nodes does none on a machine whose node name cannot be
+			// read, or that the file does not list. On a listed node each runs on that node's own ledger (Placement).
+			if runs {
+				a.budgetTick(time.Now())
+				a.morningTick(time.Now())
+				a.pushTick(time.Now())
+				a.lessonsBeat(time.Now())
+				a.worktreeBeat(time.Now())
+				a.laterSweepBeat(time.Now())
+				a.reviewBeat()
+			}
+
 			a.retentionBeat(time.Now())
 			a.versionBeat(time.Now())
 			a.diskBeat(time.Now())
-			a.pluginsBeat(time.Now())
+
+			if runs {
+				a.pluginsBeat(time.Now())
+			}
 
 			return err
 		},
@@ -1424,6 +1435,14 @@ func (a *app) tickCommand() *cobra.Command {
 	_ = c.Flags().MarkHidden("deliver")
 
 	return c
+}
+
+// crewRuns says whether this machine runs the crew the command is for (crew.Runs): always for a crew that declares no nodes, and a
+// crew that does not read is not told off here, its beat fails as it did.
+func (a *app) crewRuns() bool {
+	c, err := crew.Load(a.crewPath())
+
+	return err != nil || c.Runs()
 }
 
 func (a *app) printTick(lines []string) {

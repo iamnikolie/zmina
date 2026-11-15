@@ -86,7 +86,7 @@ func TestPlacedHereTable(t *testing.T) {
 		"home runs the unplaced roles and the dispatcher":     {"alpha", map[string]bool{"dispatcher": true, "ops": true, "dev": false}},
 		"the node that holds a role runs it and a dispatcher": {"beta", map[string]bool{"dispatcher": true, "ops": false, "dev": true}},
 		"a node the file does not list runs nothing":          {"gamma", map[string]bool{"dispatcher": false, "ops": false, "dev": false}},
-		"a machine that is no node runs every role":           {"", map[string]bool{"dispatcher": true, "ops": true, "dev": true}},
+		"a machine whose node name is unknown runs nothing":   {"", map[string]bool{"dispatcher": false, "ops": false, "dev": false}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cr := loadFor(t, spreadFile, c.node)
@@ -180,7 +180,10 @@ func TestNodeOverlayIsMergedOverTheTopLevelKeys(t *testing.T) {
 	assert.Equal(t, "alpha", beta.Home)
 }
 
-func TestAKeyThatIsNotPerNodeIsALoadError(t *testing.T) {
+// A key that is not set per node is a hard error where it matters, in the overlay of the node that reads the file, and a warning
+// on every other node (and where the node is not known): one node's typo, or a key a newer zmina added, does not stop the
+// nodes it is not for.
+func TestAKeyThatIsNotPerNodeIsAnErrorForItsNodeAndAWarningForTheOthers(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 
 	for key, snippet := range map[string]string{
@@ -194,15 +197,29 @@ func TestAKeyThatIsNotPerNodeIsALoadError(t *testing.T) {
 	} {
 		t.Run(key, func(t *testing.T) {
 			body := "home: alpha\nnodes:\n  alpha: {}\n  beta:\n" + snippet + "\nroles:\n  dispatcher: {}\n  dev: {}\n"
+			word := `"` + strings.SplitN(strings.TrimSpace(snippet), ":", 2)[0] + `"`
 
+			// The node it is under: refused, naming the key and its line.
 			_, err := LoadFor(write(t, body), "beta")
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), "nodes.beta (line 5): key "+`"`+strings.SplitN(strings.TrimSpace(snippet), ":", 2)[0]+`"`+" is not set per node")
+			assert.Contains(t, err.Error(), "nodes.beta (line 5): key "+word+" is not set per node")
 			assert.Contains(t, err.Error(), "per node: prefix, claude")
 
-			// The same file is refused on every node: it is one declaration.
-			_, err = LoadFor(write(t, body), "alpha")
-			assert.Error(t, err)
+			// Every other node, and a machine that is none: loads, warned.
+			for _, node := range []string{"alpha", "gamma", ""} {
+				c, err := LoadFor(write(t, body), node)
+				require.NoError(t, err, node)
+
+				found := false
+
+				for _, w := range c.Warnings {
+					if strings.Contains(w, "nodes.beta (line 5): key "+word+" is not set per node") && strings.Contains(w, "ignored here") {
+						found = true
+					}
+				}
+
+				assert.True(t, found, "%q: warned of: %v", node, c.Warnings)
+			}
 		})
 	}
 }
@@ -227,31 +244,141 @@ func TestAnOverlayThatIsNoMappingOrDoesNotDecodeIsALoadError(t *testing.T) {
 	assert.True(t, c.HasNode("alpha"))
 }
 
-// Load asks the machine who it is only for a file that declares nodes:.
-func TestLoadReadsTheNodeNameOfThisMachine(t *testing.T) {
+// Load asks the machine who it is only for a file that declares nodes:. A machine whose name cannot be read, for any reason,
+// runs nothing of such a crew (guessing that it is a node that runs everything would start every role twice), and says so
+// on every load.
+func TestLoadReadsTheNodeNameOfThisMachineAndFailsClosed(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	t.Setenv("HOME", t.TempDir())
 
 	path := write(t, spreadFile)
 
-	c, err := Load(path)
-	require.NoError(t, err)
-	assert.Empty(t, c.Here, "a machine that is no node")
-	assert.True(t, c.PlacedHere(c.Roles["dev"]))
+	failsClosed := func(why string) {
+		t.Helper()
+
+		c, err := Load(path)
+		require.NoError(t, err, why)
+		assert.Empty(t, c.Here, why)
+		assert.False(t, c.Runs(), why)
+
+		for _, name := range c.Names() {
+			assert.False(t, c.PlacedHere(c.Roles[name]), why+": "+name)
+		}
+
+		require.NotEmpty(t, c.Warnings, why)
+		assert.Contains(t, c.Warnings[len(c.Warnings)-1], "node name cannot be read", why)
+		assert.Contains(t, c.Warnings[len(c.Warnings)-1], "runs nothing here", why)
+		assert.Contains(t, c.Warnings[len(c.Warnings)-1], "zmina node init", why)
+	}
+
+	failsClosed("no node.json")
 
 	require.NoError(t, os.MkdirAll(filepath.Dir(ThisNodeFile()), 0o700))
+
+	for why, body := range map[string]string{
+		"bad json":       `{"name":`,
+		"no name":        `{}`,
+		"a bad name":     `{"name":"b/../x"}`,
+		"a name of path": `{"name":".ssh"}`,
+		"a number":       `{"name":3}`,
+	} {
+		require.NoError(t, os.WriteFile(ThisNodeFile(), []byte(body), 0o600))
+		failsClosed(why)
+		assert.Empty(t, ThisNode(), why)
+	}
+
+	// Unreadable: a directory where the file should be.
+	require.NoError(t, os.Remove(ThisNodeFile()))
+	require.NoError(t, os.Mkdir(ThisNodeFile(), 0o700))
+	failsClosed("unreadable")
+	require.NoError(t, os.Remove(ThisNodeFile()))
+
 	require.NoError(t, os.WriteFile(ThisNodeFile(), []byte(`{"name":"beta"}`), 0o600))
 
-	c, err = Load(path)
+	c, err := Load(path)
 	require.NoError(t, err)
 	assert.Equal(t, "beta", c.Here)
+	assert.True(t, c.Runs())
 	assert.Equal(t, "be-", c.Prefix)
 	assert.True(t, c.PlacedHere(c.Roles["dev"]))
 	assert.False(t, c.PlacedHere(c.Roles["ops"]))
+	assert.Empty(t, c.Warnings)
+}
 
-	// A node.json that does not say a plain name is no node.
-	require.NoError(t, os.WriteFile(ThisNodeFile(), []byte(`{"name":"b/../x"}`), 0o600))
-	assert.Empty(t, ThisNode())
+// A node the file does not list runs nothing, says so on every load, and is not told to be a node by its name differing in case.
+func TestANodeThatIsNotListedRunsNothingAndSaysSo(t *testing.T) {
+	c := loadFor(t, spreadFile, "Alpha")
+
+	assert.False(t, c.Runs())
+
+	for _, name := range c.Names() {
+		assert.False(t, c.PlacedHere(c.Roles[name]), name)
+	}
+
+	require.Len(t, c.Warnings, 1)
+	assert.Contains(t, c.Warnings[0], "this node (Alpha) is not one of nodes: (alpha, beta)")
+	assert.Contains(t, c.Warnings[0], "matched exactly")
+	assert.Contains(t, c.Warnings[0], "runs nothing of this crew, not a role or the dispatcher")
+
+	// A listed node runs, and a crew that declares no nodes always does.
+	assert.True(t, loadFor(t, spreadFile, "alpha").Runs())
+	assert.True(t, loadFor(t, "roles:\n  dispatcher: {}\n", "").Runs())
+	assert.True(t, loadFor(t, "roles:\n  dispatcher: {}\n", "anything").Runs())
+}
+
+// A node's own notify replaces the crew's whatever form either has, and "" or [] says none; a key with nothing under it
+// changes nothing. lessons and plugins are per node too, so a job can be kept to one node.
+func TestNodeOverlayReplacesNotifyLessonsAndPluginsWhole(t *testing.T) {
+	file := func(node string) string {
+		return `home: alpha
+notify: [push, --all]
+lessons: on
+plugins:
+  - {name: pager, on: [ask]}
+nodes:
+  alpha:
+` + node + `
+  beta: {}
+roles:
+  dispatcher: {}
+`
+	}
+
+	for name, c := range map[string]struct {
+		overlay string
+		check   func(t *testing.T, c *Crew)
+	}{
+		"a string over a list": {"    notify: 'sh -c \"echo $1\"'", func(t *testing.T, c *Crew) {
+			assert.Equal(t, `sh -c "echo $1"`, c.Notify.Shell)
+			assert.Nil(t, c.Notify.Argv, "the list is gone, so Line is the string's")
+			assert.Equal(t, []string{"/bin/sh", "-c", `sh -c "echo $1"`}, c.Notify.Line())
+		}},
+		"a list over a list": {"    notify: [other]", func(t *testing.T, c *Crew) { assert.Equal(t, []string{"other"}, c.Notify.Argv) }},
+		"an empty string says none": {"    notify: ''", func(t *testing.T, c *Crew) {
+			assert.True(t, c.Notify.Empty())
+		}},
+		"an empty list says none": {"    notify: []", func(t *testing.T, c *Crew) { assert.True(t, c.Notify.Empty()) }},
+		"a key with nothing under it changes nothing": {"    notify:", func(t *testing.T, c *Crew) {
+			assert.Equal(t, []string{"push", "--all"}, c.Notify.Argv)
+		}},
+		"lessons off for this node": {"    lessons: off", func(t *testing.T, c *Crew) { assert.False(t, c.Lessons.On) }},
+		"no plugin for this node":   {"    plugins: []", func(t *testing.T, c *Crew) { assert.Empty(t, c.Plugins) }},
+		"nothing named: the crew's": {"    prefix: al-", func(t *testing.T, c *Crew) {
+			assert.True(t, c.Lessons.On)
+			require.Len(t, c.Plugins, 1)
+			assert.Equal(t, []string{"push", "--all"}, c.Notify.Argv)
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c.check(t, loadFor(t, file(c.overlay), "alpha"))
+
+			// The other node keeps the crew's.
+			other := loadFor(t, file(c.overlay), "beta")
+			assert.True(t, other.Lessons.On)
+			assert.Equal(t, []string{"push", "--all"}, other.Notify.Argv)
+			assert.Len(t, other.Plugins, 1)
+		})
+	}
 }
 
 func TestRoleTellNamesTheNodeAndTheCrew(t *testing.T) {

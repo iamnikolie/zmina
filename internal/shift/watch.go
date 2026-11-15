@@ -60,6 +60,11 @@ func (s *Shift) watchState(name string) *watch.State {
 // DueWatches begins the runs of the watches that are on and due (the last run older than every), skipping one whose
 // previous run still goes. A run that came due several times while the machine slept runs once.
 func (s *Shift) DueWatches() []WatchRun {
+	// A machine that runs nothing of a crew over nodes runs none of its detectors either.
+	if !s.Crew.Runs() {
+		return nil
+	}
+
 	now := s.Now()
 
 	var runs []WatchRun

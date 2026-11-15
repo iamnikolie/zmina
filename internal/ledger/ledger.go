@@ -247,10 +247,23 @@ func (l *Ledger) branch(id string) string {
 	}
 
 	if l.Node != "" {
-		name = l.Node + "-" + name
+		name = refSafe(l.Node) + "-" + name
 	}
 
 	return "zmina/" + name
+}
+
+// refSafe is a node's name as part of a git branch: a node's name may hold dots, and git refuses a name with two in a row, one at
+// its end or one ending .lock, so runs of dots become one and the ends are trimmed (a.b stays, a..b is a.b, x.lock is x).
+func refSafe(name string) string {
+	for strings.Contains(name, "..") {
+		name = strings.ReplaceAll(name, "..", ".")
+	}
+
+	name = strings.Trim(name, ".")
+	name = strings.TrimSuffix(name, ".lock")
+
+	return strings.Trim(name, ".")
 }
 
 // repo resolves a repo given by name (a directory under the crew's dir) or by path to its top level.

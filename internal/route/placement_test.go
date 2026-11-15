@@ -94,19 +94,47 @@ func TestBusySeatDoesNotGiveWayToAnAwaySeat(t *testing.T) {
 	assert.Equal(t, "designer", d.To, "the pool's seats are away: it queues behind its work")
 }
 
-func TestAFirstReviewByAnAwaySeatAnswersTellAndARereviewSkipsIt(t *testing.T) {
+// A first review whose seat runs on another node is taken by a seat of this node that the rule lists next: the review is not
+// held up for want of the first seat, and nobody is told. Only when no seat of this node can take it is the answer the other
+// crew, named as the seat's, and then the caller is the one to say so (it tells nobody).
+func TestAFirstReviewByAnAwaySeatFallsThroughToTheSeatsHere(t *testing.T) {
 	seats := with(crewSeats(), away(codex("codex-reviewer", StateDown), "beta/acme"))
 	in := Input{Kind: ReviewKind, Of: &Task{ID: "T-3", Seat: "dev"}}
 
 	d := Decide(table, in, env(seats, plans(10, 10)))
 
 	require.True(t, d.Matched())
+	assert.Equal(t, ActionTask, d.Action)
+	assert.Equal(t, "codex-dev", d.To, "the first of the seats it lists that is not the author and is idle")
+	assert.Equal(t, 5, d.Rule)
+	assert.Empty(t, d.AwaySeat)
+	assert.Contains(t, d.Why, "the first review seat codex-reviewer is placed on beta/acme, not on this node")
+	assert.Contains(t, d.Alternatives, Alternative{To: "codex-reviewer", Why: "placed on beta/acme, not on this node"})
+
+	// No seat of this node can take it: the seats it lists are the author, away or asleep.
+	nobody := with(crewSeats(), away(codex("codex-reviewer", StateDown), "beta/acme"), away(codex("codex-dev", StateIdle), "beta/acme"),
+		away(claude("dev2", StateDown), "beta/acme"), away(claude("dev3", StateDown), "beta/acme"), asleep(claude("dev", StateDown)))
+
+	d = Decide(table, in, env(nobody, plans(10, 10)))
+
+	require.True(t, d.Matched())
 	assert.Equal(t, ActionTell, d.Action)
 	assert.Equal(t, "beta/acme", d.To)
+	assert.Equal(t, "codex-reviewer", d.AwaySeat, "the seat the tell is for: the review loop words its note by it")
 	assert.Equal(t, 5, d.Rule)
+	assert.Contains(t, d.Why, "and no seat of this node can take it")
 
-	in.Rereview = true
-	d = Decide(table, in, env(with(seats, away(claude("dev2", StateDown), "beta/acme")), plans(10, 10)))
+	// Another crew's work is a tell with no away seat.
+	other := Decide(table, Input{Repo: "/work/acme-lg/api"}, env(crewSeats(), plans(10, 10)))
+	assert.Equal(t, ActionTell, other.Action)
+	assert.Empty(t, other.AwaySeat)
+}
+
+func TestARereviewSkipsAnAwaySeat(t *testing.T) {
+	seats := with(crewSeats(), away(claude("dev2", StateDown), "beta/acme"))
+	in := Input{Kind: ReviewKind, Of: &Task{ID: "T-3", Seat: "dev"}, Rereview: true}
+
+	d := Decide(table, in, env(seats, plans(10, 10)))
 
 	require.True(t, d.Matched())
 	assert.Equal(t, ActionTask, d.Action)

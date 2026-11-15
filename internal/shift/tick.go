@@ -58,6 +58,13 @@ func (s *Shift) Tick() []string {
 	defer s.FlushCards()
 
 	now := s.Now()
+
+	// A machine that runs nothing of a crew over nodes (its node name cannot be read, or the file does not list it) does nothing
+	// of the beat: no role, no dispatcher, no job, none of the notes.
+	if !s.Crew.Runs() {
+		return s.notRunning(now)
+	}
+
 	s.rotationBook = nil
 	s.mark("reconcile", "")
 	if s.ReconcileMessages != nil {

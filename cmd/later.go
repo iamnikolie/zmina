@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"text/tabwriter"
@@ -228,6 +229,11 @@ func (a *app) laterTakeCommand() *cobra.Command {
 				role := args[1]
 				if _, err := s.Role(role); err != nil {
 					return err
+				}
+
+				// A task for a role the crew file places on another node is that node's ledger's, as task new says.
+				if line := s.PlacedAway(role); line != "" {
+					return errors.New(line)
 				}
 
 				store := laterStore(s.Crew)

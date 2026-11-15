@@ -119,6 +119,14 @@ func loadPushed(dir string, raw []byte, node string) (*Crew, error) {
 			strings.ReplaceAll(err.Error(), "crew: "+name+": ", ""))
 	}
 
+	// The file goes to every node in the end: a key that is not per node under another node's entry is a warning here, and the
+	// error that stops that node, so it is not taken.
+	for _, n := range c.NodeNames() {
+		if err := checkOverlay(n, c.Nodes[n]); err != nil {
+			return nil, fmt.Errorf("the file would not load on %s, so it is not taken: %w", n, err)
+		}
+	}
+
 	if !c.Spread() {
 		return nil, errors.New("the file declares no nodes:, so it is not a crew over nodes: a push is for one file on every node " +
 			"(a crew that runs on one node is not pushed)")

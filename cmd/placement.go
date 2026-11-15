@@ -39,10 +39,11 @@ func placementNotes(c *crew.Crew, local mesh.CrewHealth, peers []mesh.Peer, up [
 
 	switch {
 	case c.Here == "":
-		add("warn", "this machine is no node (zmina node init), so it runs every role of the file; a node runs only its own")
+		add("fail", "this machine's node name cannot be read (~/.zmina/mesh/node.json: zmina node init), so it runs nothing of this crew: "+
+			"not a role, the dispatcher or a job of the crew")
 	case !c.HasNode(c.Here):
-		add("warn", "this node (%s) is not one of nodes: (%s): it runs nothing of this crew, and its dispatcher does not run",
-			c.Here, strings.Join(c.NodeNames(), ", "))
+		add("warn", "this node (%s) is not one of nodes: (%s), and a node's name is matched exactly: it runs nothing of this crew, "+
+			"not a role, the dispatcher or a job of the crew", c.Here, strings.Join(c.NodeNames(), ", "))
 	}
 
 	for _, name := range c.Unplaced() {
@@ -64,11 +65,23 @@ func placementNotes(c *crew.Crew, local mesh.CrewHealth, peers []mesh.Peer, up [
 		held = up
 	}
 
+	heard := map[string]bool{}
+	met := map[string]bool{}
+
 	for _, p := range peers {
+		// Only the nodes the file lists are this crew's: another peer's crew of the same name (two default crews) is another crew.
+		if !c.HasNode(p.Name) || p.Name == c.Here {
+			continue
+		}
+
+		met[p.Name] = p.Cert != nil
+
 		for _, h := range p.Crews {
 			if h.Crew != local.Crew {
 				continue
 			}
+
+			heard[p.Name] = true
 
 			switch h.Sum {
 			case "":
@@ -100,6 +113,18 @@ func placementNotes(c *crew.Crew, local mesh.CrewHealth, peers []mesh.Peer, up [
 	if len(silent) > 0 {
 		add("warn", "%s tells no sum for this crew: an older zmina that reads no nodes:, or a file that declares none; "+
 			"it may run every role", strings.Join(silent, ", "))
+	}
+
+	// A node the file lists and that has said nothing of this crew: never met, or met and not running a crew of this name.
+	for _, n := range c.NodeNames() {
+		switch {
+		case n == c.Here || heard[n]:
+		case met[n]:
+			add("warn", "no word from %s about this crew: it runs no crew of this name yet (zmina crew push %s --create), or tells "+
+				"nothing of its crews", n, n)
+		default:
+			add("warn", "no word from %s: this node has not met it (zmina node ls; zmina node peer add or enroll)", n)
+		}
 	}
 
 	return out

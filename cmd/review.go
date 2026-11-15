@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -269,7 +270,14 @@ func (a *app) startReview(s *shift.Shift, root task.Task, byID map[string]task.T
 	// answer before the review rule.
 	pick, err := a.pickRole(s, routeAsk{kind: route.ReviewKind, of: root.ID, rereview: round > 1}, true, "", []string{"review of " + root.ID})
 
+	var tell *routeTellError
+
 	switch {
+	case errors.As(err, &tell) && tell.d.AwaySeat != "":
+		// No seat of this node can take it, and the one the review rule names runs on another node. Nothing is told for the owner:
+		// a line to another crew is a decision of the dispatcher's, and this note says which.
+		return a.reviewWaits(s, root, fmt.Sprintf("review seat %s is placed on %s: tell %s with what is to be reviewed (zmina does not tell for you)",
+			tell.d.AwaySeat, tell.d.To, tell.d.To))
 	case err != nil:
 		return a.reviewWaits(s, root, "no seat takes it: "+refusalReason(err))
 	case pick.d.Rule != route.Review.Number():

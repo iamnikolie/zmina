@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/iamnikolie/zmina/internal/alarm"
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/registry"
 	"github.com/iamnikolie/zmina/internal/task"
@@ -112,15 +113,75 @@ func TestTickSkipsARolePlacedOnAnotherNode(t *testing.T) {
 	assert.True(t, g.s.State.Role("ops").Started.IsZero())
 }
 
-// A node that holds nothing runs no dispatcher either.
-func TestANodeThatHoldsNothingRunsNothing(t *testing.T) {
-	f, _ := placedFixture(t, spreadYAML, "gamma")
+// A node the file does not list runs nothing: no role, no dispatcher, no detector, and the beat says once a day, in the log, why.
+func TestANodeThatIsNotListedRunsNothingAndSaysOncePerDay(t *testing.T) {
+	f, _ := placedFixture(t, spreadYAML+"watch:\n  ci-red:\n    kind: exec\n    every: 1m\n    run: [detector]\n    baseline: false\n", "gamma")
 
-	assert.Empty(t, f.s.Tick())
+	did := f.s.Tick()
+
+	require.Len(t, did, 1)
+	assert.Contains(t, did[0], "this node (gamma) is not one of nodes: (alpha, beta)")
+	assert.Contains(t, did[0], "runs nothing of this crew (not a role, the dispatcher or a job)")
 	assert.Empty(t, f.tm.starts)
+	assert.Equal(t, 1, eventsOf(f, "node-not-running"))
+	assert.Equal(t, *f.now, f.s.State.LastTick, "the beat still shows that the ticker runs")
+	assert.Empty(t, f.s.DueWatches(), "a detector is a job of the crew too")
+
+	// The same watch on a node that is listed is due, so that the line above is the gate's and not an empty list.
+	g, _ := placedFixture(t, spreadYAML+"watch:\n  ci-red:\n    kind: exec\n    every: 1m\n    run: [detector]\n    baseline: false\n", "alpha")
+	assert.Len(t, g.s.DueWatches(), 1)
+
+	// Said once a day, however many beats; again the next day, and the day before's key goes.
+	for range 3 {
+		*f.now = f.now.Add(10 * time.Minute)
+		assert.Empty(t, f.s.Tick())
+	}
+
+	assert.Equal(t, 1, eventsOf(f, "node-not-running"))
+
+	*f.now = f.now.Add(24 * time.Hour)
+	assert.Len(t, f.s.Tick(), 1)
+	assert.Equal(t, 2, eventsOf(f, "node-not-running"))
+
+	n := 0
+
+	for key := range f.s.State.RecordNotified {
+		if strings.HasPrefix(key, notRunningPrefix) {
+			n++
+		}
+	}
+
+	assert.Equal(t, 1, n)
+
+	// Whatever starts a role there says why not.
+	assert.Contains(t, f.s.PlacedAway("ops"), "this node (gamma) is not one of nodes:")
+	assert.Equal(t, "this node runs nothing of the crew (zmina doctor)", f.s.StartBlock("dev", *f.now))
 }
 
-// A machine that is no node, and a crew with no nodes:, run every role: the beat is the one it always was.
+// A machine whose node name cannot be read fails closed: it runs nothing, whatever the file says, where guessing that it is a
+// node that runs everything would start every role a second time.
+func TestAMachineWhoseNodeNameIsUnknownRunsNothing(t *testing.T) {
+	f, _ := placedFixture(t, spreadYAML, "")
+
+	did := f.s.Tick()
+
+	require.Len(t, did, 1)
+	assert.Contains(t, did[0], "node name cannot be read")
+	assert.Contains(t, did[0], "zmina node init")
+	assert.Empty(t, f.tm.starts, "no keep: always role, no dispatcher")
+	assert.Empty(t, f.s.DueWatches())
+
+	for _, name := range []string{"dispatcher", "ops", "dev", "qa"} {
+		err := f.s.Up(name)
+		require.Error(t, err, name)
+		assert.Contains(t, err.Error(), "node name cannot be read", name)
+	}
+
+	assert.Empty(t, f.tm.starts)
+	assert.Contains(t, f.s.StartBlock("ops", *f.now), "runs nothing of the crew")
+}
+
+// A crew with no nodes: runs every role whoever the machine is: the beat is the one it always was.
 func TestTickOfACrewThatIsNotSpreadIsUnchanged(t *testing.T) {
 	s, tm, _, _ := fixture(t)
 
@@ -128,10 +189,15 @@ func TestTickOfACrewThatIsNotSpreadIsUnchanged(t *testing.T) {
 
 	assert.ElementsMatch(t, []string{"dispatcher", "harvester"}, tm.starts)
 	assert.Contains(t, did, "started dispatcher")
+	assert.True(t, s.Crew.Runs())
 
-	g, _ := placedFixture(t, spreadYAML, "")
-	g.s.Tick()
-	assert.ElementsMatch(t, []string{"dispatcher", "ops", "qa"}, g.tm.starts, "no node: every keep: always role")
+	// Reading the same file for a node of any name changes nothing.
+	for _, node := range []string{"", "alpha"} {
+		g, _ := placedFixture(t, crewYAML, node)
+		assert.True(t, g.s.Crew.Runs(), node)
+		g.s.Tick()
+		assert.ElementsMatch(t, []string{"dispatcher", "harvester"}, g.tm.starts, node)
+	}
 }
 
 // A role placed elsewhere that is up here is told to the dispatcher once a day, never taken down; its session is no orphan.
@@ -301,9 +367,15 @@ func TestStartOfACrewThatIsNotSpreadIsUnchanged(t *testing.T) {
 	require.NoError(t, s.Up("designer"))
 	assert.Equal(t, []string{"designer"}, tm.starts)
 
-	// Even a machine that names itself a node: the crew file declares none.
-	s.Node = "alpha"
-	assert.Empty(t, s.PlacedAway("harvester"))
+	// Read for a node of any name, or none, the file that declares no nodes places every role here (Shift.Node is not what decides).
+	for _, node := range []string{"", "alpha"} {
+		g, _ := placedFixture(t, crewYAML, node)
+
+		for _, name := range g.s.Names() {
+			assert.Empty(t, g.s.PlacedAway(name), node+" "+name)
+			assert.Empty(t, g.s.StartBlock(name, g.s.Now()), node+" "+name)
+		}
+	}
 }
 
 // A role up here that another node lately told up too is one role on two nodes: an event and one note to the dispatcher a day,
@@ -373,4 +445,103 @@ func TestRoleTwiceIsQuietWithoutPeersOrNodes(t *testing.T) {
 	f.tm.up["ops"] = 4004
 	f.s.Tick()
 	assert.Zero(t, eventsOf(f, "role-twice"))
+}
+
+// The state of a role placed elsewhere follows the probe, both ways, because what the hello tells as held is made from it: a
+// session up here is told, and a session that ended is no longer told (a stale "up" would make a double run that is not one).
+func TestUpOfARolePlacedElsewhereFollowsTheProbeBothWays(t *testing.T) {
+	f, _ := placedFixture(t, spreadYAML, "alpha")
+	f.s.Tick()
+	assert.False(t, f.s.State.Role("dev").Up)
+
+	// Up here, never started by this node's ticker: told.
+	f.tm.up["dev"] = 4010
+	f.rg.byPID[4010] = &registry.Session{PID: 4010, Status: "idle", StatusUpdatedAt: f.now.Add(-time.Hour).UnixMilli(), SessionID: "sid-dev"}
+	*f.now = f.now.Add(time.Minute)
+	f.s.Tick()
+	assert.True(t, f.s.State.Role("dev").Up, "up here, so held")
+
+	// Its session ends on its own: no longer told, and nothing of the beat's ended-role handling ran for it.
+	delete(f.tm.up, "dev")
+	*f.now = f.now.Add(time.Minute)
+	did := f.s.Tick()
+	assert.False(t, f.s.State.Role("dev").Up, "gone, so not held any more")
+	assert.NotContains(t, strings.Join(did, "\n"), "dev: ended")
+
+	// A role that was in the state as up, and is not up, is not held; one that is up and was never in it is.
+	f.s.State.Role("qa").Up = true
+	*f.now = f.now.Add(time.Minute)
+	f.s.Tick()
+	assert.False(t, f.s.State.Role("qa").Up)
+
+	// A tmux that does not answer changes nothing.
+	f.s.State.Role("qa").Up = true
+	f.tm.probeErr["qa"] = assert.AnError
+	*f.now = f.now.Add(time.Minute)
+	f.s.Tick()
+	assert.True(t, f.s.State.Role("qa").Up)
+}
+
+// A role placed elsewhere that still holds open work or queued lines on this node's ledger is told once: the beat does nothing
+// for it here. The note does not name a command that moves it. It is made again only after the role has held nothing.
+func TestARolePlacedElsewhereThatHoldsWorkIsNotedOnce(t *testing.T) {
+	f, _ := placedFixture(t, spreadYAML, "alpha")
+	f.tk.list = []task.Task{openTask("T-14", "dev"), openTask("T-15", "docs")}
+	f.s.enqueue("dev", "a line queued earlier", Facts{From: "zmina"})
+	f.s.enqueue("qa", "another", Facts{From: "zmina"})
+	f.s.enqueue("qa", "and another", Facts{From: "zmina"})
+
+	for range 3 {
+		*f.now = f.now.Add(10 * time.Minute)
+		f.s.Tick()
+	}
+
+	assert.Equal(t, 2, eventsOf(f, "placed-elsewhere-work"), "dev and qa, once each however many beats; docs is this node's")
+
+	text := eventDetails(f, "placed-elsewhere-work")
+	assert.Contains(t, text, "dev holds T-14 and 1 queued line on this node (alpha), but the crew file places it on beta, so nothing here works on it: "+
+		"park what it holds (zmina task park <id>) and give the work to beta by hand (zmina tell beta")
+	assert.Contains(t, text, "qa holds 2 queued lines on this node (alpha)")
+	assert.NotContains(t, text, "zmina move", "naming the command that moves it waits for the command")
+	assert.NotContains(t, text, "docs holds")
+
+	// It held something and holds nothing now: the key goes, and holding again is told again.
+	f.tk.list = []task.Task{openTask("T-15", "docs")}
+	f.s.State.Role("dev").Inbox = nil
+	*f.now = f.now.Add(10 * time.Minute)
+	f.s.Tick()
+	assert.False(t, f.s.State.RecordNotified[workPrefix+"dev"])
+
+	f.tk.list = []task.Task{openTask("T-6", "dev")}
+	*f.now = f.now.Add(10 * time.Minute)
+	f.s.Tick()
+	assert.Equal(t, 3, eventsOf(f, "placed-elsewhere-work"))
+}
+
+// A restart, an own restart and a sleep of a role placed elsewhere that is up here are refused before anything is put down: the
+// start that follows would be refused, and the role left down. down itself works on it.
+func TestRestartOfARolePlacedElsewhereIsRefusedUpFrontAndDownWorks(t *testing.T) {
+	f, _ := placedFixture(t, spreadYAML, "alpha")
+	f.tm.up["dev"] = 4011
+	f.rg.byPID[4011] = &registry.Session{PID: 4011, Status: "idle", StatusUpdatedAt: f.now.Add(-time.Hour).UnixMilli(), SessionID: "sid-dev"}
+
+	_, _, err := f.s.BeginRotationDown("dev", KindManual, DownOptions{Force: true})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "dev is placed on beta, not on this node (alpha)")
+	assert.True(t, f.tm.Has("dev"), "nothing was put down")
+	assert.True(t, f.s.State.Role("dev").Downing.IsZero(), "no down was begun")
+
+	_, _, _, err = f.s.ClaimOwnRestart("dev", Own{}, false, false, false)
+	require.Error(t, err)
+
+	f.s.Alarms = &alarm.Store{Dir: f.s.Crew.Layout().Alarms()}
+
+	_, _, err = f.s.Sleep("dev", *f.now, "1h", "", DownOptions{Force: true})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "dev is placed on beta")
+	assert.True(t, f.tm.Has("dev"))
+
+	// The owner's way out of a double run is a plain down, and it works.
+	require.NoError(t, f.s.Down("dev", DownOptions{Force: true}))
+	assert.False(t, f.tm.Has("dev"))
 }

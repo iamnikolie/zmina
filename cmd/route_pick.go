@@ -67,8 +67,13 @@ func (a *app) pickRole(s *shift.Shift, ask routeAsk, useRoute bool, because stri
 		case !d.Matched():
 			return p, fmt.Errorf("%s (name the role: zmina task new <role> <asked...>)", d.Headline())
 		case d.Action == route.ActionTell:
-			return p, fmt.Errorf("the routes say %s: that is another crew's work, not a seat of this one: zmina tell %s %s",
-				d.Headline(), shellWord(d.To), quoteCommandArg(p.asked))
+			why := "that is another crew's work, not a seat of this one"
+			if d.AwaySeat != "" {
+				why = d.AwaySeat + " runs on another node, not on this one"
+			}
+
+			return p, &routeTellError{d: d, msg: fmt.Sprintf("the routes say %s: %s: zmina tell %s %s", d.Headline(), why,
+				shellWord(d.To), quoteCommandArg(p.asked))}
 		}
 
 		p.role = d.To
@@ -217,3 +222,12 @@ func routeLine(r *task.Route) string {
 
 	return out
 }
+
+// routeTellError is the refusal of --route when the routes answer tell: the work is another crew's, or a seat that runs on another
+// node. It keeps the answer, so a caller that is no hand (the review loop) can word it by what it was.
+type routeTellError struct {
+	d   route.Decision
+	msg string
+}
+
+func (e *routeTellError) Error() string { return e.msg }

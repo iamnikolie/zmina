@@ -2,7 +2,11 @@ package mesh
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/json"
+	"fmt"
+	"net"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -89,4 +93,84 @@ func TestHelloTellsSumAndHeld(t *testing.T) {
 	require.Len(t, other[0].Crews, 1)
 	assert.Equal(t, sumA, other[0].Crews[0].Sum)
 	assert.Empty(t, other[0].Crews[0].Held)
+}
+
+// beforeCrewHealth, beforeCrewsMessage and beforeReadCrewHealth are what a node of the zmina from before sum and held did with the
+// hello's crew health: a struct with its five fields, the message it verified the signature over, and the reader. They are
+// copied here as they were, so that a test reads the new bytes the old way.
+type beforeCrewHealth struct {
+	Crew    string `json:"crew"`
+	TickAge int64  `json:"tick_age"`
+	Stopped int64  `json:"stopped,omitempty"`
+	Retired bool   `json:"retired,omitempty"`
+	MovedTo string `json:"moved_to,omitempty"`
+}
+
+func beforeCrewsMessage(side string, nonce, crews []byte) []byte {
+	return []byte(fmt.Sprintf("zmina-crews-v1\x00%s\x00%x\x00%s", side, nonce, crews))
+}
+
+func beforeReadCrewHealth(data []byte) []beforeCrewHealth {
+	if len(data) == 0 {
+		return nil
+	}
+
+	var in []beforeCrewHealth
+	if err := json.Unmarshal(data, &in); err != nil {
+		return nil
+	}
+
+	out := make([]beforeCrewHealth, 0, len(in))
+
+	for _, h := range in {
+		if !regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`).MatchString(h.Crew) {
+			continue
+		}
+
+		out = append(out, h)
+	}
+
+	return out
+}
+
+// A node of the zmina from before sum and held, calling a node that tells them, verifies the signature over the bytes as they were
+// sent and reads the crews it knew: the new fields are dropped, and nothing about the session fails.
+func TestACallerFromBeforeSumAndHeldReadsAndVerifiesTheNewHealth(t *testing.T) {
+	owner := newOwner(t, "alpha")
+	caller := enroll(t, owner, "beta")
+
+	owner.Health = func() []CrewHealth {
+		return []CrewHealth{{Crew: "ops", TickAge: 7, Stopped: 3, MovedTo: "box/ops", Sum: sumA, Held: []string{"dev", "qa"}},
+			{Crew: "plain", TickAge: 2}}
+	}
+
+	client, server := net.Pipe()
+	require.NoError(t, client.SetDeadline(time.Now().Add(5*time.Second)))
+
+	go func() {
+		defer func() { _ = server.Close() }()
+		_ = owner.Serve(server, (&inbox{}).deliver, time.Now)
+	}()
+
+	// The hello of a caller from before: no capability words but the ones it had, and no crews of its own.
+	c := newConn(client)
+	challenge, err := nonce()
+	require.NoError(t, err)
+	require.NoError(t, c.send(wire{Op: "hello", V: protocolVersion, Cert: &caller.Cert, Nonce: challenge}))
+
+	hi, err := c.expect("hello")
+	require.NoError(t, err)
+	require.NotEmpty(t, hi.Crews)
+	assert.Contains(t, string(hi.Crews), `"sum":"`+sumA+`"`, "what was sent does carry the new fields")
+
+	assert.True(t, ed25519.Verify(owner.Cert.Key, beforeCrewsMessage("server", challenge, hi.Crews), hi.CrewsSig),
+		"the signature is over the bytes sent, so the old verification holds")
+
+	got := beforeReadCrewHealth(hi.Crews)
+	assert.Equal(t, []beforeCrewHealth{{Crew: "ops", TickAge: 7, Stopped: 3, MovedTo: "box/ops"}, {Crew: "plain", TickAge: 2}}, got)
+
+	// And the session goes on: it proves its own key and is let in.
+	require.NoError(t, c.send(wire{Op: "auth", Sig: ed25519.Sign(caller.Key, helloMessage("client", hi.Nonce))}))
+	_, err = c.expect("ok")
+	require.NoError(t, err)
 }

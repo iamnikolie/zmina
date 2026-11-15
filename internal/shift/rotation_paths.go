@@ -119,6 +119,12 @@ func taskIDs(tasks []task.Task) string {
 // find by the claim. A down that cannot begin (a draft in the input line, a dialog) leaves no record: nothing changed. kind says
 // which rotation it is, why what it reads after "restarted fresh: " (whyManual, whyOwn).
 func (s *Shift) BeginRotationDown(name, kind string, o DownOptions) (wait bool, claim time.Time, err error) {
+	// A down that is followed by a start is refused for a role the crew file places on another node, before anything is put down:
+	// the start would be refused too, and the role would be left down. zmina down of it is not this, and works.
+	if err := s.errPlacedAway(name); err != nil {
+		return false, time.Time{}, err
+	}
+
 	why := rotationWhy(kind)
 	from := s.rotationFrom(name)
 	tasks := s.heldTasks(name)

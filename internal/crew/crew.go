@@ -451,12 +451,18 @@ func ConfigPath(name string) string {
 
 // Load reads, completes and checks a crew file. A role whose dir is missing loads with DirErr set. A file that declares
 // nodes: is read for the node this machine is (ThisNode); LoadFor says which node.
-func Load(path string) (*Crew, error) { return load(path, false, ThisNode) }
+func Load(path string) (*Crew, error) { return load(path, false, thisNode) }
 
 // LoadFor is Load for the named node ("" for a machine that is none), whoever the machine is: the node whose overlay
 // of nodes: is merged and whose slice PlacedHere answers for.
 func LoadFor(path, node string) (*Crew, error) {
-	return load(path, false, func() string { return node })
+	return load(path, false, func() (string, string) {
+		if node == "" {
+			return "", "no node was named"
+		}
+
+		return node, ""
+	})
 }
 
 // NoFileError is a crew file that is not there.
@@ -468,11 +474,11 @@ func (e *NoFileError) Error() string {
 
 // LoadStrict reads a crew file and also refuses a role whose dir is not a directory: for checking an edit before
 // it is written.
-func LoadStrict(path string) (*Crew, error) { return load(path, true, ThisNode) }
+func LoadStrict(path string) (*Crew, error) { return load(path, true, thisNode) }
 
 // load reads the crew file; node says which node this is, and is asked only of a file that declares nodes:, so a crew
 // that does not reads nothing more than it did.
-func load(path string, strict bool, node func() string) (*Crew, error) {
+func load(path string, strict bool, node func() (name, why string)) (*Crew, error) {
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, &NoFileError{Path: path}
@@ -492,12 +498,12 @@ func load(path string, strict bool, node func() string) (*Crew, error) {
 		return nil, fmt.Errorf("crew: %s: %w", path, err)
 	}
 
-	here := ""
+	here, why := "", ""
 	if len(c.Nodes) > 0 {
-		here = node()
+		here, why = node()
 	}
 
-	if err := c.placement(here, func(w string) { warnings = append(warnings, w) }); err != nil {
+	if err := c.placement(here, why, func(w string) { warnings = append(warnings, w) }); err != nil {
 		return nil, fmt.Errorf("crew: %s: %w", path, err)
 	}
 
