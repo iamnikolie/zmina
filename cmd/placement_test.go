@@ -2,15 +2,19 @@ package cmd
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/iamnikolie/zmina/internal/crew"
+	"github.com/iamnikolie/zmina/internal/mesh"
+	"github.com/iamnikolie/zmina/internal/shift"
 )
 
 // spreadDecl is the declaration of a crew over two nodes, appended after the roles of a test crew.
@@ -201,6 +205,162 @@ func TestTaskBranchNamesTheNodeOfASpreadCrew(t *testing.T) {
 	out, _, err = zm(t, file, "task", "new", "ops", "--repo", "api", "--worktree", "fix the footer")
 	require.NoError(t, err)
 	assert.Contains(t, out, "zmina/"+name+"-t-2 from main")
+}
+
+// The hello tells a file's sum and the roles up here only for a crew that declares nodes:; any other crew is told as it always
+// was.
+func TestCrewHealthTellsSumAndHeldOnlyForASpreadCrew(t *testing.T) {
+	uiHome(t)
+	asNode(t, "alpha")
+
+	ops := crewPathOf(t, "ops")
+	body, err := os.ReadFile(ops)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(ops, append(body, []byte("home: alpha\nnodes:\n  alpha: {}\n  beta: {}\n")...), 0o600))
+
+	for _, key := range []string{"default", "ops"} {
+		a := &app{out: io.Discard, err: io.Discard, crew: crewPathOf(t, key)}
+		require.NoError(t, a.withState(func(s *shift.Shift) error {
+			s.State.Role("dev").Up = true
+			s.State.Role("dispatcher").Up = true
+
+			return nil
+		}))
+	}
+
+	byCrew := map[string]mesh.CrewHealth{}
+	for _, h := range crewHealth() {
+		byCrew[h.Crew] = h
+	}
+
+	require.Contains(t, byCrew, "default")
+	require.Contains(t, byCrew, "ops")
+
+	raw, err := os.ReadFile(ops)
+	require.NoError(t, err)
+	assert.Equal(t, crew.SumOf(raw), byCrew["ops"].Sum)
+	assert.Equal(t, []string{"dev"}, byCrew["ops"].Held, "the dispatcher runs on every node and is not told")
+
+	assert.Empty(t, byCrew["default"].Sum)
+	assert.Empty(t, byCrew["default"].Held)
+
+	told, err := json.Marshal(byCrew["default"])
+	require.NoError(t, err)
+	assert.NotContains(t, string(told), "sum")
+	assert.NotContains(t, string(told), "held")
+
+}
+
+func healthOfCrew(crewKey, sum string, held ...string) mesh.CrewHealth {
+	return mesh.CrewHealth{Crew: crewKey, TickAge: 5, Sum: sum, Held: held}
+}
+
+func peerWith(name string, h ...mesh.CrewHealth) mesh.Peer { return mesh.Peer{Name: name, Crews: h} }
+
+func notesText(notes []placementNote) []string {
+	var out []string
+
+	for _, n := range notes {
+		out = append(out, n.Level+": "+n.Text)
+	}
+
+	return out
+}
+
+func loadSpread(t *testing.T, body, node string) *crew.Crew {
+	t.Helper()
+	t.Setenv("CLAUDE_CONFIG_DIR", "")
+
+	path := filepath.Join(t.TempDir(), "crew.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+
+	c, err := crew.LoadFor(path, node)
+	require.NoError(t, err)
+
+	return c
+}
+
+func TestPlacementNotesSaySyncDriftAndWhatIsHeld(t *testing.T) {
+	c := loadSpread(t, "home: alpha\nnodes: {alpha: {}, beta: {}, gamma: {}}\nroles:\n  dispatcher: {}\n  dev: {place: beta}\n  ops: {}\n  qa: {place: nowhere}\n", "alpha")
+	local := healthOfCrew("acme", "aa", "ops")
+
+	got := notesText(placementNotes(c, local, []mesh.Peer{
+		peerWith("beta", healthOfCrew("acme", "aa", "dev")),
+		peerWith("gamma", healthOfCrew("acme", "bb")),
+		peerWith("delta", healthOfCrew("acme", "")),
+		peerWith("other", healthOfCrew("elsewhere", "cc")),
+	}, nil))
+
+	assert.Equal(t, []string{
+		"ok: nodes: alpha (home): ops · beta: dev · gamma · this node: alpha",
+		`warn: qa is held by no node: its place "nowhere" is not one of nodes: (alpha, beta, gamma)`,
+		"ok: in sync with beta",
+		"warn: differs from gamma: the file is not the same on every node; copy one file to every node (crew.yaml, byte for byte), or compare them by hand",
+		"warn: delta tells no sum for this crew: an older zmina that reads no nodes:, or a file that declares none; it may run every role",
+	}, got)
+}
+
+func TestPlacementNotesFlagARoleUpOnTwoNodesAndOneUpWhereItIsNotPlaced(t *testing.T) {
+	c := loadSpread(t, "home: alpha\nnodes: {alpha: {}, beta: {}}\nroles:\n  dispatcher: {}\n  dev: {place: beta}\n  ops: {}\n", "alpha")
+
+	got := notesText(placementNotes(c, healthOfCrew("acme", "aa", "ops", "dev"),
+		[]mesh.Peer{peerWith("beta", healthOfCrew("acme", "aa", "dev"))}, []string{"ops", "dev"}))
+
+	assert.Contains(t, got, "warn: dev is up on this node, but the crew file places it on beta: zmina down dev here, or fix its place in the file on every node")
+	assert.Contains(t, got, "warn: dev is up on this node and on beta: one role on two nodes; zmina down it on the one the file does not place it on")
+	assert.NotContains(t, strings.Join(got, "\n"), "ops is up")
+
+	// The dispatcher is on every node that holds a role: its being up on both is the design.
+	got = notesText(placementNotes(c, healthOfCrew("acme", "aa"),
+		[]mesh.Peer{peerWith("beta", healthOfCrew("acme", "aa", "dispatcher"))}, nil))
+	assert.NotContains(t, strings.Join(got, "\n"), "dispatcher is up")
+}
+
+func TestPlacementNotesSayWhenThisMachineIsNoNodeOrNotListed(t *testing.T) {
+	body := "home: alpha\nnodes: {alpha: {}, beta: {}}\nroles:\n  dispatcher: {}\n  dev: {place: beta}\n"
+
+	got := notesText(placementNotes(loadSpread(t, body, ""), healthOfCrew("acme", "aa"), nil, nil))
+	assert.Contains(t, got, "warn: this machine is no node (zmina node init), so it runs every role of the file; a node runs only its own")
+
+	got = notesText(placementNotes(loadSpread(t, body, "gamma"), healthOfCrew("acme", "aa"), nil, nil))
+	assert.Contains(t, got, "warn: this node (gamma) is not one of nodes: (alpha, beta): it runs nothing of this crew, and its dispatcher does not run")
+
+	plain := loadSpread(t, "roles:\n  dispatcher: {}\n", "alpha")
+	assert.Empty(t, placementNotes(plain, healthOfCrew("acme", ""), nil, nil), "a crew that declares no nodes has nothing to say")
+}
+
+// doctor and node ls show it: in sync with a peer that tells the same sum, differs from one that tells another.
+func TestDoctorAndNodeLsShowPlacement(t *testing.T) {
+	uiHome(t)
+
+	ops := crewPathOf(t, "ops")
+	body, err := os.ReadFile(ops)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(ops, append(body, []byte("home: alpha\nnodes:\n  alpha: {}\n  beta: {}\n  gamma: {}\n")...), 0o600))
+
+	_, _, err = zm(t, crewPathOf(t, "default"), "node", "init", "--name", "alpha", "--owner")
+	require.NoError(t, err)
+
+	me, err := mesh.Open(meshDir())
+	require.NoError(t, err)
+
+	sum := crew.SumOf(mustRead(t, ops))
+	require.NoError(t, me.UpdatePeers(func(ps []mesh.Peer) []mesh.Peer {
+		return append(ps,
+			mesh.Peer{Name: "beta", Source: "test", Crews: []mesh.CrewHealth{healthOfCrew("ops", sum)}},
+			mesh.Peer{Name: "gamma", Source: "test", Crews: []mesh.CrewHealth{healthOfCrew("ops", strings.Repeat("f", 64))}})
+	}))
+
+	out, _, err := zm(t, ops, "node", "ls")
+	require.NoError(t, err)
+	assert.Contains(t, out, "  ops: in sync with beta")
+	assert.Contains(t, out, "  ops: differs from gamma")
+	assert.NotContains(t, out, "default:", "a crew that declares no nodes is not compared")
+
+	out, _, _ = zm(t, ops, "doctor") // a machine of a test has no claude: doctor fails on that, and says the rest
+	assert.Regexp(t, `ok +placement +in sync with beta`, out)
+	assert.Regexp(t, `warn +placement +differs from gamma`, out)
+	assert.Regexp(t, `ok +placement +nodes: alpha \(home\): dev`, out)
 }
 
 // zmina route answers tell for a seat placed on another node, and the pool never picks one.

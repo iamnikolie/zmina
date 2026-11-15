@@ -228,6 +228,7 @@ func (a *app) diagnose() []check {
 	a.checkSockets(c, add)
 	checkVersions(c, st, add)
 	a.checkNode(add)
+	a.checkPlacement(c, st, add)
 
 	return out
 }

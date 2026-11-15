@@ -60,6 +60,19 @@ func healthOf(c uiCrew) (mesh.CrewHealth, bool) {
 		h.Stopped = max(int64(now.Sub(st.Stopped).Seconds()), 1)
 	}
 
+	// Only a crew whose file declares nodes: tells its file's sum and the roles it has up: for any other crew the hello is
+	// what it always was. The file is one for every node there, so a peer's sum that differs is drift, and a role up on two
+	// nodes is the split brain placement exists to prevent.
+	if cr.Spread() {
+		h.Sum = cr.Sum()
+
+		for _, name := range cr.Names() {
+			if rs := st.Roles[name]; name != cr.Dispatcher && rs != nil && rs.Up {
+				h.Held = append(h.Held, name)
+			}
+		}
+	}
+
 	return h, true
 }
 

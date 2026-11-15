@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"time"
 )
 
@@ -18,6 +19,11 @@ type CrewHealth struct {
 	Retired bool  `json:"retired,omitempty"`
 	// MovedTo is the crew the owner says it went on as (zmina retire --moved-to).
 	MovedTo string `json:"moved_to,omitempty"`
+	// Sum is the hash of the crew file as this node holds it, told only for a crew whose file declares nodes: (one file
+	// for every node, so two nodes that tell different sums hold different files). Held are the roles of it up on this
+	// node, the dispatcher and copies apart. Both are fields a zmina from before them never reads or tells.
+	Sum  string   `json:"sum,omitempty"`
+	Held []string `json:"held,omitempty"`
 }
 
 // tickerGone is how long a ticker may be silent before a crew counts as not running: past a slow beat or two.
@@ -59,8 +65,11 @@ func spanWords(seconds int64) string {
 	return fmt.Sprintf("%dm", int(d.Minutes()))
 }
 
-// crewsMax is how many crews of one node are told or kept.
-const crewsMax = 64
+// crewsMax is how many crews of one node are told or kept, and heldMax how many held roles of one crew.
+const (
+	crewsMax = 64
+	heldMax  = 64
+)
 
 // crewData is this node's crews as they go in a hello.
 func (n *Node) crewData() []byte {
@@ -91,6 +100,8 @@ func crewsMessage(side string, nonce, crews []byte) []byte {
 // dispatcher's boot line and a sender's terminal, so they carry nothing but a name.
 var (
 	plainCrew    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+	plainRole    = regexp.MustCompile(`^[a-z][a-z0-9-]{0,30}$`)
+	plainSum     = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	plainAddress = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}/[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 )
 
@@ -120,7 +131,31 @@ func readCrewHealth(data []byte) []CrewHealth {
 			h.MovedTo = ""
 		}
 
+		if !plainSum.MatchString(h.Sum) {
+			h.Sum = ""
+		}
+
+		h.Held = plainRoles(h.Held)
+
 		out = append(out, h)
+	}
+
+	return out
+}
+
+// plainRoles keeps the role names of a told list that are plain words, each once, heldMax at most; a role name goes into a
+// dispatcher's note.
+func plainRoles(in []string) []string {
+	var out []string
+
+	for _, r := range in {
+		if len(out) == heldMax {
+			break
+		}
+
+		if plainRole.MatchString(r) && !slices.Contains(out, r) {
+			out = append(out, r)
+		}
 	}
 
 	return out
