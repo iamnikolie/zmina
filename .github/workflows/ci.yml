@@ -80,8 +80,9 @@ jobs:
       - name: go build
         run: go build ./...
 
+      # The command tests alone take more than go test's default ten minutes on the macOS runner: the same limit make test sets.
       - name: go test
-        run: go test -race -count=1 ./...
+        run: go test -race -count=1 -timeout 40m ./...
 
   # The cockpit's browser fixtures (internal/ui/testdata) in headless Chrome, which the runner has; a page that
   # fails or never reports fails the job.
