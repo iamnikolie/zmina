@@ -27,10 +27,13 @@ type WatchRun struct {
 
 // WatchView is what is known of one watch, for watch ls.
 type WatchView struct {
-	Name      string    `json:"name"`
-	Kind      string    `json:"kind"`
-	Every     string    `json:"every"`
-	Enabled   bool      `json:"enabled"`
+	Name    string `json:"name"`
+	Kind    string `json:"kind"`
+	Every   string `json:"every"`
+	Enabled bool   `json:"enabled"`
+	// Place is the node that runs the watch in a crew over nodes; Away says it is not this one.
+	Place     string    `json:"place,omitempty"`
+	Away      bool      `json:"away,omitempty"`
 	LastRun   time.Time `json:"last_run,omitzero"`
 	LastOK    bool      `json:"last_ok"`
 	LastError string    `json:"last_error,omitempty"`
@@ -71,7 +74,7 @@ func (s *Shift) DueWatches() []WatchRun {
 
 	for _, name := range s.Crew.WatchNames() {
 		w := s.Crew.Watches[name]
-		if !w.On() {
+		if !w.On() || !s.Crew.WatchHere(w) {
 			continue
 		}
 
@@ -95,6 +98,11 @@ func (s *Shift) BeginWatch(name string) (WatchRun, error) {
 		return WatchRun{}, err
 	}
 
+	// By hand too: a run here would take the keys into this node's state and note them to this node's dispatcher.
+	if !s.Crew.WatchHere(w) {
+		return WatchRun{}, s.watchAway(w)
+	}
+
 	now := s.Now()
 	st := s.watchState(name)
 
@@ -108,6 +116,19 @@ func (s *Shift) BeginWatch(name string) (WatchRun, error) {
 	st.Running = &watch.Running{PID: run.PID, Since: now, Token: run.Token}
 
 	return run, nil
+}
+
+// watchAway is the refusal of a run of a watch that another node runs.
+func (s *Shift) watchAway(w *crew.Watch) error {
+	if s.Crew.Here == "" || !s.Crew.HasNode(s.Crew.Here) {
+		return fmt.Errorf("watch %s: this machine is no node of the crew file, and a crew over nodes runs nothing here", w.Name)
+	}
+
+	if node := s.Crew.WatchPlace(w); s.Crew.HasNode(node) {
+		return fmt.Errorf("watch %s is placed on %s, not on this node (%s): run it there", w.Name, node, s.Crew.Here)
+	}
+
+	return fmt.Errorf("watch %s: place %q is no node of the crew file: it runs on no node", w.Name, w.Place)
 }
 
 // PeekWatch reads what a dry run needs, marking nothing.
@@ -293,7 +314,8 @@ func (s *Shift) WatchViews() []WatchView {
 
 	for _, name := range s.Crew.WatchNames() {
 		w := s.Crew.Watches[name]
-		v := WatchView{Name: name, Kind: w.Kind, Every: w.Every, Enabled: w.On()}
+		v := WatchView{Name: name, Kind: w.Kind, Every: w.Every, Enabled: w.On(), Place: s.Crew.WatchPlace(w),
+			Away: !s.Crew.WatchHere(w)}
 
 		if st := s.State.Watch[name]; st != nil {
 			v.LastRun, v.LastOK, v.LastError, v.Failures = st.LastRun, st.LastOK, st.LastError, st.Failures
@@ -303,7 +325,7 @@ func (s *Shift) WatchViews() []WatchView {
 			v.Running = st.Running.Live(now, w.TimeoutD())
 		}
 
-		if v.Enabled {
+		if v.Enabled && !v.Away {
 			v.NextRun = now
 			if !v.LastRun.IsZero() && v.LastRun.Add(w.EveryD()).After(now) {
 				v.NextRun = v.LastRun.Add(w.EveryD())

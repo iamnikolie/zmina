@@ -184,6 +184,11 @@ func (s *Shift) WaitingKeys() []WaitingKey {
 	var out []WaitingKey
 
 	for _, name := range s.Crew.WatchNames() {
+		// Keys a watch left here before it was placed on another node wait on nobody here: that node notes them anew.
+		if !s.Crew.WatchHere(s.Crew.Watches[name]) {
+			continue
+		}
+
 		out = append(out, waitingKeys(s.Crew.Watches[name], s.State.Watch[name], tasks)...)
 	}
 

@@ -141,6 +141,25 @@ func (c *Crew) PlacedHere(r *Role) bool {
 	return c.PlacementOf(r) == c.Here
 }
 
+// WatchPlace is the node that runs the watch: its place, else the crew's home. Empty for a crew that is not spread.
+func (c *Crew) WatchPlace(w *Watch) string {
+	if !c.Spread() || w == nil {
+		return ""
+	}
+
+	return or(w.Place, c.Home)
+}
+
+// WatchHere reports whether this node runs the watch. A crew that is not spread runs every watch, as before; one that
+// is runs each watch on one node only, and on a machine whose node name is not known on none.
+func (c *Crew) WatchHere(w *Watch) bool {
+	if !c.Spread() || w == nil {
+		return true
+	}
+
+	return c.Here != "" && c.WatchPlace(w) == c.Here
+}
+
 // WhereIs says where the role runs, for a line that refuses to start it here: the node it is placed on, or for the
 // dispatcher home and the nodes that hold a role.
 func (c *Crew) WhereIs(r *Role) string {
@@ -228,6 +247,12 @@ func (c *Crew) placement(here, why string, warn func(string)) error {
 			}
 		}
 
+		for _, name := range c.WatchNames() {
+			if c.Watches[name] != nil && c.Watches[name].Place != "" {
+				warn(fmt.Sprintf("watch %s: place: has no meaning without nodes:, ignored", name))
+			}
+		}
+
 		return nil
 	}
 
@@ -273,6 +298,13 @@ func (c *Crew) placement(here, why string, warn func(string)) error {
 				"place is ignored", name, c.Home))
 		case !c.HasNode(r.Place):
 			warn(fmt.Sprintf("role %s: place %q is not one of nodes: (%s); the role runs on no node", name, r.Place,
+				strings.Join(names, ", ")))
+		}
+	}
+
+	for _, name := range c.WatchNames() {
+		if w := c.Watches[name]; w != nil && w.Place != "" && !c.HasNode(w.Place) {
+			warn(fmt.Sprintf("watch %s: place %q is not one of nodes: (%s); the watch runs on no node", name, w.Place,
 				strings.Join(names, ", ")))
 		}
 	}

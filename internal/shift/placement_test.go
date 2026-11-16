@@ -624,3 +624,61 @@ func TestRestartOfARolePlacedElsewhereIsRefusedUpFrontAndDownWorks(t *testing.T)
 	require.NoError(t, f.s.Down("dev", DownOptions{Force: true}))
 	assert.False(t, f.tm.Has("dev"))
 }
+
+// A detector runs on one node of a crew over nodes: the beat begins it on home (or the node it names) and on no other, a
+// run by hand elsewhere is refused with the node's name, and the other node neither shows its next run nor reminds of
+// keys it once held.
+func TestAWatchRunsOnTheNodeItIsPlacedOn(t *testing.T) {
+	body := spreadYAML + "watch:\n  ci-red:\n    kind: exec\n    every: 1m\n    run: [detector]\n" +
+		"  cards:\n    kind: exec\n    every: 1m\n    run: [detector]\n    place: beta\n"
+
+	a, _ := placedFixture(t, body, "alpha")
+	b, _ := placedFixture(t, body, "beta")
+
+	due := func(f fix) []string {
+		var names []string
+		for _, r := range f.s.DueWatches() {
+			names = append(names, r.Watch.Name)
+		}
+
+		return names
+	}
+
+	assert.Equal(t, []string{"ci-red"}, due(a))
+	assert.Equal(t, []string{"cards"}, due(b))
+
+	_, err := a.s.BeginWatch("cards")
+	require.EqualError(t, err, "watch cards is placed on beta, not on this node (alpha): run it there")
+
+	_, err = b.s.BeginWatch("ci-red")
+	require.EqualError(t, err, "watch ci-red is placed on alpha, not on this node (beta): run it there")
+	assert.Nil(t, b.s.State.Watch["ci-red"], "a refused run leaves no state")
+
+	views := map[string]WatchView{}
+	for _, v := range b.s.WatchViews() {
+		views[v.Name] = v
+	}
+
+	assert.True(t, views["ci-red"].Away)
+	assert.Equal(t, "alpha", views["ci-red"].Place)
+	assert.True(t, views["ci-red"].NextRun.IsZero())
+	assert.False(t, views["cards"].Away)
+	assert.Equal(t, "beta", views["cards"].Place)
+
+	// A machine that is no node of the file runs none, by hand either.
+	g, _ := placedFixture(t, body, "gamma")
+	_, err = g.s.BeginWatch("ci-red")
+	require.ErrorContains(t, err, "this machine is no node of the crew file")
+}
+
+// A crew that is not spread runs its watches as before, and its views say nothing of nodes.
+func TestAWatchOfACrewThatIsNotSpreadIsUnchanged(t *testing.T) {
+	f := fixtureWith(t, watchYAML)
+
+	require.Len(t, f.s.DueWatches(), 1)
+
+	for _, v := range f.s.WatchViews() {
+		assert.False(t, v.Away)
+		assert.Empty(t, v.Place)
+	}
+}
