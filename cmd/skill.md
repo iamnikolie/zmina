@@ -876,7 +876,7 @@ network under it is a transport and an address: today ssh, or any command line t
 | `zmina node revoke <n>` | on the owner's node: put the key of the certificate this node holds for `<n>` on the revocation list (the next version, signed). The list rides in every hello, so a node that meets it refuses that key's sessions and envelopes and does not keep it in a told node; a node of an older zmina ignores it. Revoking cannot be undone from the command line. `zmina node peer rm <n>` stops this node calling it. |
 | `zmina node peer add <n> --ssh … \| --cmd …` / `peer rm <n>` | the address book by hand. |
 | `zmina node peer add <n> [--ssh … \| --cmd …] --relay[=false]` | let that peer carry for the nodes it says it reaches (`--relay=false` takes it back; with no address it marks a peer that calls in). Only a relay may: an envelope for a node this one cannot reach goes to a relay that says it reaches it, and a terminal tunnel to such a node runs through one. A peer's own claim never makes it a relay, so a certified node cannot draw other nodes' envelopes (signed, not encrypted) or tunnels to itself. Default off: direct addresses need nothing. |
-| `zmina node ls [--json]` | this node and its crews, each with its dispatcher's session name (`ops (ops-dispatcher)`; `--json`: `dispatchers`) and, when not running, why (`[stopped 2d ago]`; `--json`: `health`); each peer: how known (`hand`, `called` — it called in, `told` — another node told of it), `relay` when the owner made it one, its addresses or the relays that reach it (`through`), last good session, `terminal_v2` or `no terminal_v2` and `crew_sync` or `no crew_sync` (it takes the owner's push of a crew file and moves: Placement) as of that session, its certificate's expiry when it is near or past and `key revoked`, last failure, its crews as of that session (`crews: ops, site [retired, moved to box-ops/site]`); what waits to leave. Under the node's line: its own certificate (`certificate: expires 2028-03-01 (in 364 days)`, `[warn]` 30 days before, `[fail]` once expired, `[warn] no expiry` for one issued before expiries) and the revocation list it holds (`revoked (list version 2): box (key 3fa9c1d2e4b5…)`); `--json`: `cert`, `peer_certs`, `revoked`. A crew whose file declares `nodes:` also tells its file's `sum` and the roles it has up (`held`; `--json`: `health`), and `node ls` adds a line for it: `ops: in sync with beta`, `ops: differs from beta`, a role up on two nodes, a role held by no node (Placement). |
+| `zmina node ls [--json]` | this node and its crews, each with its dispatcher's session name (`ops (ops-dispatcher)`; `--json`: `dispatchers`) and, when not running, why (`[stopped 2d ago]`; `--json`: `health`); each peer: how known (`hand`, `called` — it called in, `told` — another node told of it), `relay` when the owner made it one, its addresses or the relays that reach it (`through`), last good session, `terminal_v2` or `no terminal_v2` and `crew_sync` or `no crew_sync` (it takes the owner's push of a crew file and moves: Placement, Move) as of that session, its certificate's expiry when it is near or past and `key revoked`, last failure, its crews as of that session (`crews: ops, site [retired, moved to box-ops/site]`); what waits to leave. Under the node's line: its own certificate (`certificate: expires 2028-03-01 (in 364 days)`, `[warn]` 30 days before, `[fail]` once expired, `[warn] no expiry` for one issued before expiries) and the revocation list it holds (`revoked (list version 2): box (key 3fa9c1d2e4b5…)`); `--json`: `cert`, `peer_certs`, `revoked`. A crew whose file declares `nodes:` also tells its file's `sum` and the roles it has up (`held`; `--json`: `health`), and `node ls` adds a line for it: `ops: in sync with beta`, `ops: differs from beta`, a role up on two nodes, a role held by no node (Placement). |
 | `zmina node strict [on\|off]` | whether this node refuses owner requests in the old form, the ones that name no node (off by default; no word prints the setting). Turn it on node by node once every node runs a zmina that binds its requests: `zmina node ls` shows `terminal_v2` on each peer that says so. Until then a node takes both forms and logs an event `terminal-unbound` (at most one a day per caller) when it takes an old one. |
 | `zmina node sync [--peer <n>]` | one round now. Exit 1 when a peer failed. |
 | `zmina tell [--queue] <node>[/<crew>] <text>` | one line for that crew's dispatcher (no crew: the node's default crew, or its only one). On this node it is queued at once; for another it is signed, queued in `outbox/`, and handed over now if that peer answers, else by the next round. A long line is stored whole on the far side (below). Receipts follow as the far dispatcher takes it (queued, submitted, read): `zmina message ls`. A crew known not to be running is refused before anything is queued (below); `--queue` queues on purpose. |
@@ -1058,7 +1058,7 @@ them is another crew):
 | `in sync with beta` | beta holds the same file, byte for byte. |
 | `differs from beta` | the files differ (an edit on one node, a `retire`, a file not copied yet): copy one file to every node. |
 | `beta tells no sum for this crew` | an older zmina that reads no `nodes:` (it runs **every** role: do not leave it so), or a file that declares none. |
-| `dev is up on this node and on beta` | one role on two nodes: `zmina down dev` on the one the file does not place it on. Nothing is taken down by zmina. The ticker of each node also logs it, event `role-twice`, and tells its dispatcher once a day for each such role, while the other node's word is under 10 min old. |
+| `dev is up on this node and on beta` | one role on two nodes: `zmina down dev` on the one the file does not place it on. Nothing is taken down by zmina. The ticker of each node also logs it, event `role-twice`, and tells its dispatcher once a day for each such role and set of nodes, while the other node's word is under 10 min old. Only nodes the file lists are believed (a peer that is none says what it likes), and a node that tells no roles cannot be seen at all. |
 | `dev is up on this node, but the crew file places it on beta` | the same, seen from the state here. |
 | `qa is held by no node` | its `place` is no node of `nodes:`. |
 | `no word from gamma` | a node the file lists that this node has never met; or `no word from gamma about this crew`: met, and it tells nothing of a crew of this name (not pushed there yet). |
@@ -1069,32 +1069,49 @@ What a peer told may be a minute old (the ticker syncs every minute), and a peer
 
 | Command | Does |
 |---|---|
-| `zmina crew push <node> [--create] [--base <sum>]` | on the owner's node: send this crew's file to `<node>` (a node of `nodes:`, not this one), in place of its own. The file goes as it is on disk, with the crew's key (`~/.zmina/<key>/`; `default` for the default crew). Refused, nothing sent, when that node did not say `crew_sync` in its last session. |
+| `zmina crew push <node> [--create] [--base <sum>]` | on the owner's node, by the owner's hand (a command with `$ZMINA_ROLE` is refused): send this crew's file to `<node>` (a node of `nodes:`, not this one), in place of its own. The file goes as it is on disk, with the crew's key (`~/.zmina/<key>/`; `default` for the default crew). Refused, nothing sent, when that node did not say `crew_sync` in its last session. |
 
-- **It replaces one file, the one the node last told.** The request carries the hash the node told for the crew in its last
-  hello (`--base <sum>` says another). The node compares it with its file under the lock of its history and writes only on
-  a match; an edit made there meanwhile is never overwritten unseen. Already this file: `beta already holds this file`,
-  nothing written. Another file: nothing is written, and the push prints which file the node holds against this node's,
-  the difference (`-` there, `+` here) and the way on, `zmina crew push beta --base <its hash>`, for once you have
-  looked. A node that told no sum (the crew is a plain one there, or not there) is refused the same way.
-- **A crew that is not there** is refused unless `--create`, which makes `~/.zmina/<key>/crew.yaml` on that node, under a
-  name of lower-case words joined by dashes that is no directory zmina keeps there (`tasks`, `later`, `mesh`, …) and in a
-  directory that is not there yet. Its ticker is installed there by hand (`zmina ticker install`). `--create` and `--base`
-  are not both.
-- **The file must load on that node** (read for it, so its overlay is merged and a key that is not per node is an error) and
-  declare `nodes:`, or it is refused and the old file stays. It is kept in the node's crew file history (`zmina crew
-  history` there: by `mesh <owner node>`, how `crew push`) with an event `crew-changed`, and a ticker that reads it next
+- **It replaces one file: the one this node last sent to that node, or last confirmed there.** The owner's node keeps, for each node and
+  crew, the hash of the file it last pushed (written, or found in place) or left on both nodes with a move that ended `crew files equal`,
+  in `~/.zmina/mesh/pushed.json` (never in `state.json`); the request carries it as its base. The node compares it with its file under
+  the lock of its history and writes only on a match, so an edit made there since (a `seat` edit, a role editing `crew.yaml`) is never
+  overwritten unseen, however lately the node told it in a hello: what a node tells is not what a push is based on. Another file: nothing
+  is written, and the push prints which file the node holds against this node's, the difference (`-` there, `+` here) and the way on,
+  `zmina crew push beta --base <its hash>`, for once you have looked. **A node this one has no record of** (never pushed to, or the
+  record is gone) is based on no file, so one that has a file is refused the same way: the first push to a node is always looked at, and
+  `--base` is how it goes on (there is no `--first`). Already this file: `beta already holds this file`, nothing written, recorded.
+- **A crew that is not there** is refused unless `--create`, which makes `~/.zmina/<key>/crew.yaml` on that node, under a name of
+  lower-case words joined by dashes that is none of the names zmina keeps in a crew's directory or under `~/.zmina` (every path of
+  the crew's layout, `tasks`, `later`, `moves`, `lock`, `watch`, the stores beside it, `mesh`, `agents`, …) and in a directory that is not there
+  yet. A push that fails after the directory was made takes away all it made. The line it prints says that **no ticker is installed there**
+  and how (`zmina --config <key> ticker install`, on that node): a crew with no ticker runs nothing there. `--create` and `--base` are not both.
+- **The file must load for every node it lists** (`nodes:`; each reads it for itself, so its overlay is merged and a key that is not per
+  node, a time zone, quiet hours or a prefix that is of no use is an error) and declare `nodes:`, or it is refused and the old file stays: the
+  owner's node checks it before it sends, and the node checks it again before it replaces. It is kept in the node's crew file history
+  (`zmina crew history` there: by `mesh <owner node>`, how `crew push`) with an event `crew-changed`, and a ticker that reads it next
   beat acts on the new placement as above; nothing is restarted.
-- **This is remote command execution by design:** the crew file names `claude`, `notify`, `plugins` and the roles' boot
-  lines, which that node then runs. It is the owner's authority, like `node enroll --cmd`. So the node takes a push only
-  as a request signed by the owner key, bound to that node's key and to the session's own challenge (the form
-  `terminal_v2` brought: an old-form request is refused for a push even with `strict_requests` off, and one signed for
-  another node or session is refused), so a relay that carries it can neither alter it (the file and the base are in what
-  is signed) nor send it again. The file is at most 256 KiB; the crew's name is a plain name that is looked up among the
-  node's own crews, never a path. A node of an older zmina does not know `crew/put` (or `role/move` and `role/take`, below) and refuses
-  it as an unknown op; the owner's node does not send it one: `crew_sync` is a word in the hello, signed over the other side's nonce like
-  `terminal_v2`, one word for all three ops, and `zmina node ls` shows `crew_sync` or `no crew_sync` for each peer. Crew files must hold no secrets:
-  a relay sees what it carries.
+- **Nothing is written through a link out of the home**: the node resolves the crew's directory, its file and its history, and refuses
+  a push to one that is, or lies below, a link that leaves `~/.zmina` (a crew file kept in a dotfiles repository is such a link; one that stays
+  inside the home is a file like another).
+- **A local edit and a push exclude each other.** `zmina seat` and `zmina retire` read the file, change it and save it through the same
+  compare and swap under the history's lock a push takes, so a save of an edit that read the file before a push replaced it fails with
+  `the crew file changed meanwhile, run it again` instead of winning. For a crew with no `nodes:` nothing else changes.
+- **This is remote command execution by design:** the crew file names `claude`, `notify`, `plugins` and the roles' boot lines, which that
+  node then runs. It is the owner's authority, like `node enroll --cmd`. So the node takes a push (and a step of a move, Move) only as a
+  request signed by the owner key and bound to that node's key and the session's challenge (the form `terminal_v2` brought: an old-form request is refused
+  even with `strict_requests` off, and one signed for another node or session is refused), and also to **the node that sends it and the time**:
+  the request carries the key of the owner's node and a `not_after` two minutes ahead, and the target refuses it unless that key is the one
+  its session proved in the hello and the time is not past (a minute of clock skew is taken; one more than ten minutes ahead is refused).
+  A challenge is signed by no one, so a certified relay could show the owner another session's and keep what the owner signs over it; it
+  cannot send it on its own session (the key is the relay's), nor later. A tunnel through a relay carries the owner's own hello with the
+  target, so a push and a move work through one. The node **signs its answer** (the session's challenge, the op, the status and a hash of
+  what it carries) and the owner's node refuses one that does not verify, so a relay cannot make up a `put` or a conflict; whatever a node
+  says that is printed (the difference, warnings, names, sums, an error) loses its control characters first. The file is at most 256 KiB;
+  the crew's name is a plain name that is looked up among the node's own crews, never a path. A frame is read at most 4 MiB before the
+  peer proved its key, 16 MiB after (a chat file is the largest): a longer line ends the session. A node of an older zmina does not know `crew/put` (or `role/move` and `role/take`,
+  Move) and refuses it as an unknown op; the owner's node does not send it one: `crew_sync` is a word in the hello, signed over the other
+  side's nonce like `terminal_v2`, one word for all three ops, and `zmina node ls` shows `crew_sync` or `no crew_sync` for each peer. Crew
+  files must hold no secrets: a relay sees what it carries.
 
 ### Setting it up
 
@@ -1105,7 +1122,9 @@ keys (warnings), ignores them and runs every role: that is the double running ab
 the ticker on each (`zmina ticker install`), and start the node you want first. Roles then run only where they are placed;
 a node with no role placed on it and not `home` runs nothing.
 
-### Moving a role: `zmina move`
+## Move — a role goes to another node
+
+A role of a crew over nodes (Placement) goes to another node with its tasks. The file, `nodes:` and `place:` are Placement's; what is here is the command, its steps and what each node does.
 
 | Command | Does |
 |---|---|
@@ -1147,11 +1166,17 @@ role leaves, the one it goes to, or neither: it asks both over the mesh (`role/m
   pushed). `--wait` bounds how long the command waits; the move stays open past it. A lost answer: `--resume` takes again and gets the same answer.
 - **Abort.** The tasks are open again, the items closed as done with a note, the uncommitted-work commit undone unless it is on `origin` already, the
   role started on its work. It never runs once the target holds a receipt.
-- **Security** is that of `crew/put`: the ops are served only to the owner's request bound to that node, its key and the session's challenge (an
-  old-form request is refused even with `strict_requests` off, one for another node or session is refused, a relay can neither alter nor replay
-  it), only to a peer that said `crew_sync`, and the size of what a step carries is checked before its signature is. The bundle is data from another node: the move
+- **Security** is that of `crew/put` (Placement): the ops are served only to the owner's request bound to that node, its key and the session's
+  challenge, and to the key of the owner's node that sends it and a `not_after` two minutes ahead (an old-form request is refused even with
+  `strict_requests` off, one for another node or session is refused, a relay that holds a step cannot send it on its own session or later),
+  only to a peer that said `crew_sync`, and the size of what a step carries is checked before its signature is. Each answer is signed by the
+  node for the session, so a relay cannot make up a `ready` or a `taken`, and what a node says that is printed loses its control characters.
+  The one thing a relay can still do is not answer, or answer an error: the move stays open, and `--resume` goes on. The bundle is data from another node: the move
   id, role, node names, branch (`git check-ref-format`), commit ids and repository are checked, and the repository must be one of the crew's (its
-  directory, a role's, one under it, or one a task here works in); nothing in it is a path the target writes to or a command it runs.
+  directory, a role's, one under it, or one a task here works in); nothing in it is a path the target writes to or a command it runs. The place
+  edit on each node is held to what a push is: the result must load for every node the file lists, and it replaces only the file the move was made
+  from (the same compare and swap as a push and a `seat` edit, so none of the three overwrites another); a move that ended with both files equal is recorded as
+  the file each node holds, which the next `crew push` to it is based on.
 - **Limits.** A repository needs an `origin`. A role moved back to a node whose earlier task still has the branch checked out in a worktree
   is refused until that worktree is removed (the branch is then moved forward). Ledgers stay per node: ids are each node's own, and a task's `origin`
   is a field only this zmina reads (an older one that rewrites the task file drops it, which loses only where the task came from).
@@ -2418,8 +2443,8 @@ nothing, so the ticker's every beat costs one small read.
 | `zmina crew history [--json]` | the versions, newest first: number (0 is the file as it is now), when, who, what changed and how. |
 | `zmina crew history --diff <n>` | what changed between version `n` and the file as it is now (unified diff). |
 | `zmina crew history --restore <n>` | put version `n` back. It must load; what it replaces is kept as a version, so a restore can be undone. Works when the file now does not load. |
-| `zmina crew push <node> [--create] [--base <sum>]` | send this crew's file to another node of its `nodes:`, in place of that node's (owner's node only; compare and swap on the file it last told, so an edit there is never overwritten unseen). The node keeps what it replaces as a version: by `mesh <owner node>`, how `crew push`. See Placement. |
-| `zmina move <role> <node> [--wait 10m] [--resume <id> \| --abort <id>] [--force]` | move a role with its tasks to another node of the crew (owner's node, owner's hand): it parks and goes down, its branch goes by `origin`, it is placed and started there, and the two crew files are one file again. See Placement. |
+| `zmina crew push <node> [--create] [--base <sum>]` | send this crew's file to another node of its `nodes:`, in place of that node's (owner's node only; compare and swap on the file last sent or confirmed there, so an edit there is never overwritten unseen). The node keeps what it replaces as a version: by `mesh <owner node>`, how `crew push`. See Placement. |
+| `zmina move <role> <node> [--wait 10m] [--resume <id> \| --abort <id>] [--force]` | move a role with its tasks to another node of the crew (owner's node, owner's hand): it parks and goes down, its branch goes by `origin`, it is placed and started there, and the two crew files are one file again. See Move. |
 
 ## Usage
 

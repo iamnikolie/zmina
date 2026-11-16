@@ -16,6 +16,7 @@ import (
 
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/mesh"
+	"github.com/iamnikolie/zmina/internal/shift"
 )
 
 // pushWorld is the owner node alpha (this test's HOME) with a crew over alpha and beta, and beta, a node of its own that takes
@@ -96,10 +97,11 @@ func newPushWorld(t *testing.T) *pushWorld {
 
 	w := &pushWorld{t: t, file: file, key: "ops", beta: beta, dir: t.TempDir(), cert: beta.Cert}
 
-	// beta already has the crew, as a file it was last pushed, and has told its sum.
+	// beta already has the crew, as a file this node last pushed there (and recorded), and has told its sum.
 	require.NoError(t, os.MkdirAll(filepath.Join(w.dir, w.key), 0o700))
 	w.setBeta(pushCrewBody + "roles:\n  dispatcher: {}\n")
 	w.meet(me, true, w.betaSum())
+	require.NoError(t, me.MarkPushed("beta", w.key, w.betaSum()))
 
 	return w
 }
@@ -153,7 +155,7 @@ func (w *pushWorld) push(args ...string) (string, string, error) {
 	return out.String(), errb.String(), err
 }
 
-func TestCrewPushSendsTheFileBasedOnWhatTheNodeTold(t *testing.T) {
+func TestCrewPushSendsTheFileBasedOnWhatWasLastSentThere(t *testing.T) {
 	w := newPushWorld(t)
 	before := w.betaSum()
 
@@ -213,19 +215,42 @@ func TestCrewPushRefusedWhenTheNodeHoldsAnotherFileAndShowsTheDifference(t *test
 	assert.NotContains(t, string(there), "hand-edited")
 }
 
-// A node that told no sum (the crew is a plain one there, or not there at all) has nothing for the push to be based on: the
-// refusal says what it holds, and --create is the way to make a crew that is not there.
-func TestCrewPushToANodeThatToldNoSum(t *testing.T) {
+// forget drops this node's record of what it last sent to beta, as for a node that was never pushed to.
+func (w *pushWorld) forget() {
+	w.t.Helper()
+	require.NoError(w.t, os.Remove(filepath.Join(meshDir(), "pushed.json")))
+}
+
+// A node this one has no record of pushing to (never pushed to, or the record is gone) has no file the push is based on: the refusal
+// says what it holds, shows the difference, and names --base, whatever sum the node told. --create is the way to make a crew that is
+// not there.
+func TestCrewPushToANodeWithNoRecordNeedsBase(t *testing.T) {
 	w := newPushWorld(t)
+	w.forget()
+
+	for _, told := range []string{w.betaSum(), ""} {
+		me, err := mesh.Open(meshDir())
+		require.NoError(t, err)
+		w.meet(me, true, told)
+
+		out, _, err := w.push("beta")
+		require.Error(t, err, "told %q", told)
+		assert.Contains(t, err.Error(), "--base "+w.betaSum())
+		assert.Contains(t, err.Error(), "no record of sending to or confirming a file there")
+		assert.Contains(t, out, "beta holds file "+w.betaSum()[:12])
+		assert.Contains(t, out, "the push was based on none")
+	}
+
+	// Having looked: --base replaces the file there, and the push is recorded.
+	_, errOut, err := w.push("beta", "--base", w.betaSum())
+	require.NoError(t, err, errOut)
 
 	me, err := mesh.Open(meshDir())
 	require.NoError(t, err)
-	w.meet(me, true, "")
 
-	out, _, err := w.push("beta")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--base "+w.betaSum())
-	assert.Contains(t, out, "beta holds file "+w.betaSum()[:12])
+	local, err := os.ReadFile(w.file)
+	require.NoError(t, err)
+	assert.Equal(t, crew.SumOf(local), me.PushedSum("beta", w.key))
 
 	// No crew there at all: refused, and --create makes it.
 	require.NoError(t, os.RemoveAll(filepath.Join(w.dir, w.key)))
@@ -243,6 +268,81 @@ func TestCrewPushToANodeThatToldNoSum(t *testing.T) {
 	// And --create with --base is neither: one makes, the other replaces.
 	_, _, err = w.push("beta", "--create", "--base", w.betaSum())
 	require.ErrorContains(t, err, "not both")
+}
+
+// The review's finding: what the node tells is not what the push is based on. A file edited on beta (a seat edit there, a role editing
+// crew.yaml), told in the next hello, is refused with the difference, not overwritten because it was the sum last told.
+func TestCrewPushDoesNotOverwriteAnEditTheNodeAlreadyTold(t *testing.T) {
+	w := newPushWorld(t)
+
+	w.setBeta(pushCrewBody + "roles:\n  dispatcher: {}\n  hand-edited: {}\n")
+
+	me, err := mesh.Open(meshDir())
+	require.NoError(t, err)
+	w.meet(me, true, w.betaSum()) // the hello after the edit
+
+	out, _, err := w.push("beta")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "an edit there since this node last sent or confirmed its file")
+	assert.Contains(t, out, "-  hand-edited: {}")
+
+	there, _ := os.ReadFile(w.betaFile())
+	assert.Contains(t, string(there), "hand-edited", "nothing was written")
+}
+
+// A push that was written, and one that found the file in place, are recorded: the next is based on it. A file edited there after is refused.
+func TestCrewPushRecordsWhatItSentAndWhatItFoundThere(t *testing.T) {
+	w := newPushWorld(t)
+
+	me, err := mesh.Open(meshDir())
+	require.NoError(t, err)
+
+	local, err := os.ReadFile(w.file)
+	require.NoError(t, err)
+
+	_, errOut, err := w.push("beta")
+	require.NoError(t, err, errOut)
+	assert.Equal(t, crew.SumOf(local), me.PushedSum("beta", w.key))
+
+	// Again with nothing changed: already there, still recorded.
+	out, _, err := w.push("beta")
+	require.NoError(t, err)
+	assert.Contains(t, out, "already holds this file")
+	assert.Equal(t, crew.SumOf(local), me.PushedSum("beta", w.key))
+
+	// A new edit here goes over what was sent last.
+	require.NoError(t, os.WriteFile(w.file, append(local, []byte("x-more: 1\n")...), 0o600))
+
+	_, errOut, err = w.push("beta")
+	require.NoError(t, err, errOut)
+
+	// An edit there after that is refused.
+	w.setBeta("home: alpha\nnodes: {alpha: {}, beta: {}}\nroles: {dispatcher: {}, there: {}}\n")
+
+	_, _, err = w.push("beta")
+	require.ErrorContains(t, err, "nothing was written")
+
+	// A refused push records nothing: the record is the file sent before.
+	updated, err := os.ReadFile(w.file)
+	require.NoError(t, err)
+	assert.Equal(t, crew.SumOf(updated), me.PushedSum("beta", w.key))
+}
+
+// A node that answers that it wrote another file than the one sent is not believed, and nothing is recorded.
+func TestCrewPushDoesNotRecordAnAnswerThatIsNotTheFileSent(t *testing.T) {
+	w := newPushWorld(t)
+	before := w.betaSum()
+
+	w.answer = func(string, []byte, string, bool, string) (mesh.CrewPutResult, error) {
+		return mesh.CrewPutResult{Status: mesh.PutDone, Sum: strings.Repeat("e", 64), Was: before}, nil
+	}
+
+	_, _, err := w.push("beta")
+	require.ErrorContains(t, err, "which is not the file sent")
+
+	me, err := mesh.Open(meshDir())
+	require.NoError(t, err)
+	assert.Equal(t, before, me.PushedSum("beta", w.key))
 }
 
 // A node that did not say crew_sync in its last session is not sent a push at all: it would not know the op.
@@ -450,4 +550,190 @@ func TestNodeLsSaysCrewSync(t *testing.T) {
 	out, _, err = zm(t, w.file, "node", "ls")
 	require.NoError(t, err)
 	assert.Contains(t, out, "terminal_v2 · no crew_sync")
+}
+
+// What a node sends back that goes to the owner's terminal is made plain: the difference of a conflict (its file is the node's), the
+// warnings it says loading the file gave.
+func TestCrewPushPrintsNothingAPeerCouldDriveTheTerminalWith(t *testing.T) {
+	w := newPushWorld(t)
+
+	// The file there has an escape sequence in it, and the node answers a conflict with it.
+	w.setBeta(pushCrewBody + "roles:\n  dispatcher: {}\n  \x1b[2J\x1b]0;pwned\x07evil: {}\n")
+
+	out, errOut, err := w.push("beta")
+	require.Error(t, err)
+	assert.NotContains(t, out+errOut+err.Error(), "\x1b")
+	assert.NotContains(t, out+errOut+err.Error(), "\x07")
+	assert.Contains(t, out, "evil: {}", "the text is shown, with the control characters taken out")
+
+	// The warnings of a push that was taken.
+	w.setBeta(pushCrewBody + "roles:\n  dispatcher: {}\n")
+	me, err := mesh.Open(meshDir())
+	require.NoError(t, err)
+	require.NoError(t, me.MarkPushed("beta", w.key, w.betaSum()))
+
+	local, err := os.ReadFile(w.file)
+	require.NoError(t, err)
+
+	w.answer = func(string, []byte, string, bool, string) (mesh.CrewPutResult, error) {
+		return mesh.CrewPutResult{Status: mesh.PutDone, Sum: crew.SumOf(local), Warnings: []string{"line 3\x1b[31m red \x1b[2Jgone"}}, nil
+	}
+
+	_, errOut, err = w.push("beta")
+	require.NoError(t, err)
+	assert.NotContains(t, errOut, "\x1b")
+	assert.Contains(t, errOut, "line 3[31m red [2Jgone")
+}
+
+// A file that would not load on one of the nodes it lists is not sent, whichever node it goes to.
+func TestCrewPushChecksTheFileForEveryNodeItListsBeforeSending(t *testing.T) {
+	w := newPushWorld(t)
+
+	body, err := os.ReadFile(w.file)
+	require.NoError(t, err)
+
+	body = []byte(strings.Replace(string(body), "  beta: {}\n", "  beta: {}\n  gamma: {quiet_hours: nonsense}\n", 1))
+	require.NoError(t, os.WriteFile(w.file, body, 0o600))
+
+	_, _, err = w.push("beta")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not sent")
+	assert.Contains(t, err.Error(), "gamma")
+	assert.Empty(t, w.puts, "nothing left this node")
+}
+
+// --create says that the crew has no ticker there and how to install one.
+func TestCrewPushCreateSaysThereIsNoTickerThere(t *testing.T) {
+	w := newPushWorld(t)
+	require.NoError(t, os.RemoveAll(filepath.Join(w.dir, w.key)))
+
+	out, errOut, err := w.push("beta", "--create")
+	require.NoError(t, err, errOut)
+	assert.Contains(t, out, "crew made")
+	assert.Contains(t, out, "no ticker is installed on beta for "+w.key)
+	assert.Contains(t, out, "zmina --config "+w.key+" ticker install")
+
+	// A replacement says no such thing.
+	out, _, err = w.push("beta")
+	require.NoError(t, err)
+	assert.NotContains(t, out, "no ticker")
+}
+
+// A push that cannot finish a crew it made leaves nothing, and the name is free again.
+func TestLocalCrewPutThatFailsAfterMakingTheCrewLeavesNothing(t *testing.T) {
+	home := uiHome(t)
+
+	_, _, err := zm(t, crewPathOf(t, "default"), "node", "init", "--name", "beta", "--owner")
+	require.NoError(t, err)
+
+	a := &app{out: io.Discard, err: io.Discard}
+	body := []byte("name: acme\nnamespace: /ns\nhome: alpha\nnodes:\n  alpha: {}\n  beta: {}\nroles:\n  dispatcher: {}\n")
+
+	// A file that loads on beta and not on gamma: refused after the directory was made, so that is taken away again.
+	bad := []byte(strings.Replace(string(body), "  beta: {}\n", "  beta: {}\n  gamma: {timezone: Mars/Olympus}\n", 1))
+
+	_, err = a.localCrewPut("acme", bad, "", true, "mesh alpha")
+	require.ErrorContains(t, err, "would not load on gamma")
+	assert.NoDirExists(t, filepath.Join(home, ".zmina", "acme"))
+
+	res, err := a.localCrewPut("acme", body, "", true, "mesh alpha")
+	require.NoError(t, err)
+	assert.Equal(t, mesh.PutDone, res.Status)
+}
+
+// A push and a crew made by a push write nothing through a link that leaves the zmina home.
+func TestLocalCrewPutRefusesALinkOutOfTheHome(t *testing.T) {
+	home := uiHome(t)
+
+	_, _, err := zm(t, crewPathOf(t, "default"), "node", "init", "--name", "beta", "--owner")
+	require.NoError(t, err)
+
+	a := &app{out: io.Discard, err: io.Discard}
+	body := []byte("name: acme\nnamespace: /ns\nhome: alpha\nnodes:\n  alpha: {}\n  beta: {}\nroles:\n  dispatcher: {}\n")
+	there := []byte("name: acme\nnamespace: /ns\nroles:\n  dispatcher: {}\n")
+
+	outside := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "crew.yaml"), there, 0o600))
+	require.NoError(t, os.Symlink(outside, filepath.Join(home, ".zmina", "acme")))
+
+	// A crew whose directory is a link to somewhere else: found as one of the node's crews, and refused.
+	_, err = a.localCrewPut("acme", body, crew.SumOf(there), false, "mesh alpha")
+	require.ErrorContains(t, err, "leaves")
+	assert.Equal(t, string(there), readString(t, filepath.Join(outside, "crew.yaml")))
+
+	entries, err := os.ReadDir(outside)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1, "nothing was made there: no history, no temp file")
+
+	// A new crew under a name that is a link is not made through it.
+	linked := t.TempDir()
+	require.NoError(t, os.Symlink(linked, filepath.Join(home, ".zmina", "newcrew")))
+
+	_, err = a.localCrewPut("newcrew", body, "", true, "mesh alpha")
+	require.Error(t, err)
+
+	entries, err = os.ReadDir(linked)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+
+	// A crew file that is a link to a file elsewhere (kept in a dotfiles repository, say) is refused too.
+	other := filepath.Join(home, ".zmina", "dots")
+	require.NoError(t, os.MkdirAll(other, 0o700))
+
+	target := filepath.Join(t.TempDir(), "dots-crew.yaml")
+	require.NoError(t, os.WriteFile(target, there, 0o600))
+	require.NoError(t, os.Symlink(target, filepath.Join(other, "crew.yaml")))
+
+	_, err = a.localCrewPut("dots", body, crew.SumOf(there), false, "mesh alpha")
+	require.ErrorContains(t, err, "leaves")
+	assert.Equal(t, string(there), readString(t, target))
+}
+
+// zmina seat on a crew over nodes says the edit is made here only, and what it says is true: the node it edited is the owner's, and a push
+// goes over what was last sent to each node, so a node edited there meanwhile is refused with the difference.
+func TestSeatEditOfACrewOverNodesWarnsAndTheWarningIsTrue(t *testing.T) {
+	w := newPushWorld(t)
+
+	_, errOut, err := zm(t, w.file, "seat", "set", "dev", "about=builds the form")
+	require.NoError(t, err, errOut)
+	assert.Contains(t, errOut, "this edit changed it here only")
+	assert.Contains(t, errOut, "a node whose file was edited there since is refused, with the difference shown")
+
+	// The same edit made on beta by hand: the push of the file with this node's edit does not overwrite it unseen.
+	w.setBeta(pushCrewBody + "roles:\n  dispatcher: {}\n  dev:\n    about: beta's own words\n")
+
+	me, err := mesh.Open(meshDir())
+	require.NoError(t, err)
+	w.meet(me, true, w.betaSum())
+
+	out, _, err := w.push("beta")
+	require.Error(t, err)
+	assert.Contains(t, out, "beta's own words")
+	assert.Contains(t, err.Error(), "nothing was written")
+}
+
+// A seat edit that read the file before a push replaced it fails and says to run it again: the push is not written over.
+func TestSeatEditThatLostARaceToAPushFailsInsteadOfWinning(t *testing.T) {
+	w := newPushWorld(t)
+
+	a := &app{out: io.Discard, err: io.Discard, crew: w.file}
+
+	before, err := os.ReadFile(w.file)
+	require.NoError(t, err)
+
+	err = a.editSeat("dev", "", func(s *shift.Shift, e *crew.Edit) (string, error) {
+		// What a push on this node does between the read of the file and the write of the edit (the target side of a push).
+		pushed := append(append([]byte(nil), before...), []byte("x-pushed: 1\n")...)
+		_, perr := crew.Put(w.file, pushed, crew.PutOptions{Node: "alpha", Base: crew.SumOf(before), By: "mesh owner", How: "crew push"})
+		require.NoError(t, perr)
+
+		return "set about", e.Set("dev", map[string]string{"about": "stale"})
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "the crew file changed meanwhile, run it again")
+
+	got, err := os.ReadFile(w.file)
+	require.NoError(t, err)
+	assert.Contains(t, string(got), "x-pushed: 1", "the push stays")
+	assert.NotContains(t, string(got), "stale")
 }

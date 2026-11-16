@@ -131,6 +131,9 @@ func (r *moveRun) facts(ctx context.Context, end moveEnd, body *move.CheckBody) 
 		return f, fmt.Errorf("%s: its answer to the check does not read: %w", end.node, err)
 	}
 
+	// What a node says of itself is printed in a refusal: no control character of it reaches the terminal.
+	mesh.PlainAll(&f)
+
 	return f, nil
 }
 
@@ -239,7 +242,9 @@ func (a *app) moveCommand() *cobra.Command {
 }
 
 // moveLine says a line of a move: to the terminal for the command, to the log of the beat for the ticker.
-func (a *app) moveLine(format string, args ...any) { fmt.Fprintf(a.out, format+"\n", args...) }
+func (a *app) moveLine(format string, args ...any) {
+	fmt.Fprintln(a.out, mesh.Plain(fmt.Sprintf(format, args...)))
+}
 
 func (a *app) runMove(ctx context.Context, role, target string, wait time.Duration, resume, abort string, force bool) error {
 	cr, err := a.loadCrew()
@@ -362,6 +367,8 @@ func (r *moveRun) start(ctx context.Context, wait time.Duration, force bool) err
 		return fmt.Errorf("%s: its answer to the beginning does not read: %w", r.src.node, err)
 	}
 
+	mesh.PlainAll(&ans)
+
 	if ans.Why != "" {
 		r.out("  %s: %s", r.src.node, ans.Why)
 	}
@@ -428,6 +435,8 @@ func (r *moveRun) once(ctx context.Context) (bool, error) {
 		return false, fmt.Errorf("%s: its answer does not read: %w", r.src.node, err)
 	}
 
+	mesh.PlainAll(&ans)
+
 	switch ans.State {
 	case move.StatePending:
 		r.say(r.src.node + ": " + ans.Why)
@@ -451,9 +460,9 @@ func (r *moveRun) finish(ctx context.Context, bundle []byte) error {
 	}
 
 	for _, t := range b.Tasks {
-		line := "  " + t.ID + " handed over"
+		line := "  " + mesh.Plain(t.ID) + " handed over"
 		if t.Branch != "" {
-			line += ": branch " + t.Branch + " at " + t.Tip[:12]
+			line += ": branch " + mesh.Plain(t.Branch) + " at " + mesh.Plain(t.Tip[:12])
 			if t.WIP {
 				line += ", with its uncommitted work as one commit"
 			}
@@ -486,6 +495,8 @@ func (r *moveRun) finish(ctx context.Context, bundle []byte) error {
 	if err := json.Unmarshal(raw, &ta); err != nil {
 		return fmt.Errorf("%s: its answer to the take does not read: %w", r.target, err)
 	}
+
+	mesh.PlainAll(&ta)
 
 	for _, t := range ta.Tasks {
 		r.out("  %s took %s as %s", r.target, t.From, t.To)
@@ -535,6 +546,13 @@ func (r *moveRun) verify(ctx context.Context) {
 		r.out("  could not read the crew files back to compare them (%v %v): zmina node ls shows whether they are in sync", serr, derr)
 	case sf.Sum == df.Sum:
 		r.out("crew files equal on %s and %s (%s)", r.src.node, r.target, short12(sf.Sum))
+
+		// Both nodes told, signed, the same file: it is the file this node last confirmed on each, which the next push to either is based on.
+		for _, n := range []string{r.src.node, r.target} {
+			if n != r.me.Name {
+				_ = r.me.MarkPushed(n, r.key, sf.Sum)
+			}
+		}
 	default:
 		r.out("WARNING: the crew files differ after the move: %s holds %s, %s holds %s: zmina crew push %s sends one file to the other",
 			r.src.node, short12(sf.Sum), r.target, short12(df.Sum), r.target)
@@ -634,6 +652,8 @@ func (r *moveRun) abort(ctx context.Context, force bool) error {
 		return fmt.Errorf("%s: its answer does not read: %w", r.src.node, err)
 	}
 
+	mesh.PlainAll(&ans)
+
 	_ = move.CloseDrive(r.cr.Layout(), r.role)
 
 	r.out("%s: move %s called off on %s: %s", r.role, r.id, r.src.node, ans.Why)
@@ -710,7 +730,7 @@ func (a *app) driveOnce(me *mesh.Node, cr *crew.Crew, key string, d move.Drive) 
 
 	r := &moveRun{a: a, cr: cr, me: me, key: key, role: d.Role, id: d.ID, target: d.To, quiet: true,
 		out: func(format string, args ...any) {
-			lines = append(lines, fmt.Sprintf("move %s: "+format, append([]any{d.ID}, args...)...))
+			lines = append(lines, mesh.Plain(fmt.Sprintf("move %s: "+format, append([]any{d.ID}, args...)...)))
 		}}
 
 	var err error

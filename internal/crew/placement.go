@@ -349,18 +349,32 @@ func (c *Crew) overlay(v yaml.Node, node string) error {
 	return nil
 }
 
-// ReservedKeys are the names a crew made by a push (zmina crew push --create) may not take: directories of the node and of
-// a crew's own state that sit directly under ~/.zmina, where the default crew keeps its files.
+// ownDirs are the names zmina keeps under a crew's directory, and under ~/.zmina where the default crew keeps its files, that no
+// method of Layout names: the stores that live beside the layout (the codex adapter's registry, the report store, the tells' receipts,
+// chat files, lessons, a tick's pruned log, the recovery context, the records of results and checkpoints, the packets of a handoff, a
+// release and a restart, the retention archive), the agents' boot documents, the mesh's directory and the node's own. A test walks
+// Layout and says that none of its names is missing from ReservedKeys; this list is for the rest, and a name added to it is a name a crew
+// made by a push can no longer take.
+var ownDirs = []string{"mesh", "mesh-ui", "agents", "archive", "bin", "codex", "messages", "tells", "chat-files", "lessons", "pruned",
+	"context", "results", "checkpoints", "handoffs", "releases", "restarts"}
+
+// ReservedKeys are the names a crew made by a push (zmina crew push --create) may not take: every name zmina keeps in a crew's directory
+// or under ~/.zmina, where the default crew keeps its files and the other crews' directories sit beside them. They are those of
+// Layout (the first part of each of its paths, as a crew's directory holds them) and ownDirs.
 func ReservedKeys() []string {
 	l := Layout{Dir: "x"}
-	keys := []string{"mesh", "mesh-ui", "agents", "archive", "bin"}
+	keys := slices.Clone(ownDirs)
 
-	for _, p := range []string{l.Tasks(), l.Later(), l.Alarms(), l.Asks(), l.Inbox(), l.Limits(), l.Screens(), l.Hooks(),
-		l.Delivery(), l.RotationsDir(), l.Worktrees(), l.Plugins(), l.History(), l.Moves()} {
+	for _, p := range []string{l.State(), l.History(), l.Lock(), l.CourierLock(), l.LockHolder(), l.Tasks(), l.Later(), l.Moves(), l.Alarms(),
+		l.Asks(), l.Inbox(), l.Events(), l.Reads(), l.ReadsRate(), l.Limits(), l.Screens(), l.ScreenRules(), l.ScreenRulesTold(),
+		l.LaterSweep(), l.Hooks(), l.Delivery(), l.RotationsDir(), l.RotationsFailed(), l.Worktrees(), l.Watch("x"), l.CourierLog(),
+		l.TickLog(), l.Plugins()} {
 		keys = append(keys, strings.Split(filepath.ToSlash(strings.TrimPrefix(p, "x"+string(filepath.Separator))), "/")[0])
 	}
 
-	return keys
+	slices.Sort(keys)
+
+	return slices.Compact(keys)
 }
 
 // NewCrewKey says whether a name may be the key of a crew made by a push: lower-case words joined by dashes, as a crew's

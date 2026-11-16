@@ -50,6 +50,8 @@ type moveWorld struct {
 	fired   bool
 	// reach makes the peer unreachable while set.
 	reach bool
+	// tamper, when set, changes what the peer's steps answer before the node signs it: a node that is certified and lies.
+	tamper func(c mesh.MoveCall, data []byte) []byte
 }
 
 var errCrash = errors.New("the process died here")
@@ -278,6 +280,10 @@ func (w *moveWorld) Dial(ctx context.Context, a mesh.Addr) (io.ReadWriteCloser, 
 			&mesh.TerminalServices{
 				RoleMove: func(c mesh.MoveCall) (data []byte, err error) {
 					w.as(w.peer, func() { data, err = pa.localRoleMove(c) })
+
+					if err == nil && w.tamper != nil {
+						data = w.tamper(c, data)
+					}
 
 					return
 				},
@@ -1342,4 +1348,48 @@ func readJournalID(t *testing.T, w *moveWorld) string {
 	t.Fatal("no open move")
 
 	return ""
+}
+
+// A move that ended with the two files one leaves the owner's node knowing which file each of the other nodes holds: the next push to
+// either is based on it.
+func TestMoveRecordsTheFileItLeftTheNodeWith(t *testing.T) {
+	w := newMoveWorld(t, "alpha")
+
+	assert.Empty(t, w.nodes["alpha"].PushedSum("beta", "ops"), "nothing recorded yet")
+
+	out, errOut, err := w.move("dev", "beta")
+	require.NoError(t, err, out+errOut)
+	require.Contains(t, out, "crew files equal on alpha and beta")
+
+	a, b := w.sums()
+	require.Equal(t, a, b)
+	assert.Equal(t, b, w.nodes["alpha"].PushedSum("beta", "ops"))
+	assert.Empty(t, w.nodes["alpha"].PushedSum("alpha", "ops"), "the owner's own node is no node it pushes to")
+}
+
+// What a node tells of itself goes to the owner's terminal made plain: a placement with an escape sequence in it is a refusal that says
+// the text, and not the sequence.
+func TestMovePrintsNothingANodeCouldDriveTheTerminalWith(t *testing.T) {
+	w := newMoveWorld(t, "alpha")
+	w.tamper = func(c mesh.MoveCall, data []byte) []byte {
+		if c.Action != "check" {
+			return data
+		}
+
+		var f move.Facts
+		require.NoError(t, json.Unmarshal(data, &f))
+
+		f.Placed = "\x1b[2J\x1b]0;pwned\x07gamma"
+		out, err := json.Marshal(f)
+		require.NoError(t, err)
+
+		return out
+	}
+
+	out, errOut, err := w.move("dev", "beta")
+	require.Error(t, err)
+	assert.NotContains(t, out+errOut+err.Error(), "\x1b")
+	assert.NotContains(t, out+errOut+err.Error(), "\x07")
+	assert.Contains(t, err.Error(), "places dev on [2J]0;pwnedgamma")
+	assert.False(t, w.journal("alpha", "dev"), "nothing was begun")
 }

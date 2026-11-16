@@ -3,6 +3,7 @@ package crew
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -95,4 +96,23 @@ func TestMovePlaceReplacesOnlyTheFileItWasBasedOn(t *testing.T) {
 	// A move to a node the file does not list does not load, so it is not written.
 	_, _, _, err = MovePlace(path, "dev", "gamma", sum, "mesh alpha", "zmina move")
 	require.NoError(t, err, "an unknown place is a warning, as in any file: the role runs nowhere")
+}
+
+// The result of a move is held to what a push is: it must load for every node the file lists, or it is not written, and no temp file of
+// the check is left. A file one node cannot read is not made the file of two.
+func TestMovePlaceRefusesAFileThatWouldNotLoadForAListedNode(t *testing.T) {
+	body := strings.Replace(handWritten, "  beta: {prefix: be-}\n", "  beta: {prefix: be-}\n  gamma: {timezone: Mars/Olympus}\n", 1)
+	path := putDir(t, body)
+
+	_, _, wrote, err := MovePlace(path, "dev", "beta", SumOf([]byte(body)), "mesh alpha", "zmina move")
+	require.Error(t, err)
+	assert.False(t, wrote)
+	assert.ErrorContains(t, err, "gamma")
+
+	raw, _ := os.ReadFile(path)
+	assert.Equal(t, body, string(raw), "nothing was written")
+
+	left, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".crew.yaml.*"))
+	require.NoError(t, err)
+	assert.Empty(t, left)
 }

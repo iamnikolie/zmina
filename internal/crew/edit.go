@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -28,6 +29,9 @@ type Edit struct {
 
 	by, how string
 
+	// sum is the hash of the file as Open read it, "" for an edit that is not of a file on disk: Save replaces only that file.
+	sum string
+
 	// Saved is what the last Save kept in the crew file's history; the command that saved logs it.
 	Saved Saved
 }
@@ -42,7 +46,7 @@ func Open(path string) (*Edit, error) {
 		return nil, fmt.Errorf("crew: %w", err)
 	}
 
-	e := &Edit{path: path}
+	e := &Edit{path: path, sum: sumOf(raw)}
 	if err := yaml.Unmarshal(raw, &e.doc); err != nil {
 		return nil, fmt.Errorf("crew: %s: %w", path, err)
 	}
@@ -271,11 +275,20 @@ func (e *Edit) save(check func(string) (*Crew, error)) error {
 		how = "zmina"
 	}
 
-	saved, err := commit(e.path, buf.Bytes(), check, e.by, how)
+	saved, err := commitIf(e.path, buf.Bytes(), check, e.sum, e.by, how)
 	e.Saved = saved
+
+	// The file is now what this edit wrote: a second save of the same edit goes on from it.
+	if err == nil {
+		e.sum = sumOf(buf.Bytes())
+	}
 
 	return err
 }
+
+// ErrChangedMeanwhile is the refusal of a save of an edit whose file is no longer the one it read: a push, another command or a hand
+// edit replaced it meanwhile, and writing over it would lose it.
+var ErrChangedMeanwhile = errors.New("the crew file changed meanwhile, run it again")
 
 // Restore puts raw back as the crew file at path, as a change of its own: it must load (Load), what is there now is
 // kept, and raw becomes the newest version.
@@ -286,21 +299,64 @@ func Restore(path string, raw []byte, by, how string) (Saved, error) {
 // commit is the end of every change of the crew file: raw has to load, then the history keeps the file as it is and
 // writes raw over it.
 func commit(path string, raw []byte, check func(string) (*Crew, error), by, how string) (Saved, error) {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		return Saved{}, fmt.Errorf("crew: %w", err)
+	return commitIf(path, raw, check, "", by, how)
+}
+
+// commitIf is commit for a change made to the file whose hash is base ("" for a change that takes whatever file is there): the
+// history's lock is held over the compare and the write, the same lock a push takes, so an edit and a push never both write, and
+// the one that read a file that is gone is refused (ErrChangedMeanwhile) and writes nothing.
+func commitIf(path string, raw []byte, check func(string) (*Crew, error), base, by, how string) (Saved, error) {
+	if err := loads(path, raw, check); err != nil {
+		return Saved{}, err
 	}
 
-	// Loading the temp file checks it, with dir defaults resolved as for the real one.
-	if _, err := check(tmp); err != nil {
-		_ = os.Remove(tmp)
-
-		return Saved{}, fmt.Errorf("not saved, the crew would not load: %w", err)
+	if base == "" {
+		return HistoryOf(path).Commit(path, raw, by, how)
 	}
 
-	_ = os.Remove(tmp)
+	saved, _, err := HistoryOf(path).CommitIf(path, raw, base, by, how)
 
-	return HistoryOf(path).Commit(path, raw, by, how)
+	var be *BaseError
+	if errors.As(err, &be) {
+		return Saved{}, ErrChangedMeanwhile
+	}
+
+	return saved, err
+}
+
+// loads checks that raw would load as the crew file at path, in a temp file beside it (so its dir defaults are resolved as for
+// the real one) that is gone when it returns. It is a file of its own: two edits at once check theirs apart.
+func loads(path string, raw []byte, check func(string) (*Crew, error)) error {
+	return withTemp(path, raw, func(tmp string) error {
+		if _, err := check(tmp); err != nil {
+			return fmt.Errorf("not saved, the crew would not load: %w", err)
+		}
+
+		return nil
+	})
+}
+
+// withTemp runs fn on a temp file holding raw, beside the crew file at path, and removes it.
+func withTemp(path string, raw []byte, fn func(tmp string) error) error {
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("crew: %w", err)
+	}
+
+	tmp := f.Name()
+
+	defer func() { _ = os.Remove(tmp) }()
+
+	_, err = f.Write(raw)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+
+	if err != nil {
+		return fmt.Errorf("crew: %w", err)
+	}
+
+	return fn(tmp)
 }
 
 func (e *Edit) roles(create bool) *yaml.Node {
@@ -517,15 +573,22 @@ func MovePlace(path, role, node, base, by, how string) (saved Saved, sum string,
 		return saved, sumOf(after), false, nil
 	}
 
-	// The result is held to what Load asks (a role's dir is a thing of the node it runs on, and its own take checks it).
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, after, 0o600); err != nil {
-		return saved, "", false, fmt.Errorf("crew: %w", err)
-	}
+	// The result is held to what Load asks (a role's dir is a thing of the node it runs on, and its own take checks it), for this node
+	// and for every node the file lists: it is the file of each of them, and a node that could not read it would stop.
+	lerr := withTemp(path, after, func(tmp string) error {
+		c, err := Load(tmp)
+		if err != nil {
+			return err
+		}
 
-	_, lerr := Load(tmp)
-	_ = os.Remove(tmp)
+		for _, n := range c.NodeNames() {
+			if _, err := LoadFor(tmp, n); err != nil {
+				return fmt.Errorf("on %s: %w", n, err)
+			}
+		}
 
+		return nil
+	})
 	if lerr != nil {
 		return saved, "", false, fmt.Errorf("not saved, the crew would not load: %w", lerr)
 	}

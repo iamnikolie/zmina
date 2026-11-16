@@ -29,18 +29,6 @@ func crewSyncRefusal(p mesh.Peer) string {
 	return ""
 }
 
-// toldBase is the hash of the file a peer last told for the crew (crew health's sum): what a push is based on unless --base says
-// otherwise. "" when it told none: the crew is not there, or it runs a file that declares no nodes.
-func toldBase(p mesh.Peer, key string) string {
-	for _, h := range p.Crews {
-		if h.Crew == key {
-			return h.Sum
-		}
-	}
-
-	return ""
-}
-
 func (a *app) crewPushCommand() *cobra.Command {
 	var (
 		create bool
@@ -49,7 +37,7 @@ func (a *app) crewPushCommand() *cobra.Command {
 
 	c := &cobra.Command{
 		Use:   "push <node> [--create] [--base <sum>]",
-		Short: "Send this crew's file to another node, in place of its own (owner node only): refused when that node holds another file than the one it last told, and the difference is shown",
+		Short: "Send this crew's file to another node, in place of its own (owner node only): refused when that node holds another file than the one last sent or confirmed there, and the difference is shown",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// A push changes what another node runs, signed with the owner's key: the owner's hand, never a role's (the role of a session
@@ -104,8 +92,24 @@ func (a *app) crewPushCommand() *cobra.Command {
 				return err
 			}
 
+			// The file goes to every node in the end: one that does not load for a node of the file is not sent to the first.
+			if _, err := crew.CheckPushed(filepath.Dir(cr.Path), raw, target); err != nil {
+				return fmt.Errorf("this crew's file is not sent: %w", err)
+			}
+
+			// What the push replaces is the file this node last sent there, or last saw there and confirmed (a push that was written or
+			// found in place, a move that left two nodes on one file): never what the node says it holds now, which is what an edit made
+			// there would be taken for. A node with no such record is based on no file, and one that has a file is refused, with the
+			// difference: --base <its sum> once it has been looked at.
+			basis := "the file there is not the one --base named"
+
 			if !create && base == "" {
-				base = toldBase(p, key)
+				base = me.PushedSum(target, key)
+				basis = "this node has no record of sending to or confirming a file there"
+
+				if base != "" {
+					basis = "an edit there since this node last sent or confirmed its file"
+				}
 			}
 
 			ctx, cancel := context.WithTimeout(cmd.Context(), peerActTimeout)
@@ -120,18 +124,34 @@ func (a *app) crewPushCommand() *cobra.Command {
 
 			var conflict *mesh.CrewConflict
 			if errors.As(err, &conflict) {
-				return a.pushConflict(conflict, raw, key)
+				return a.pushConflict(conflict, raw, key, basis)
 			}
 
 			if err != nil {
 				return fmt.Errorf("%s: %w", target, err)
 			}
 
+			// A node that says it wrote the file holds it: the sum it tells is the file sent, or it is not believed.
+			if mine := crew.SumOf(raw); res.Sum != mine {
+				return fmt.Errorf("%s answers that it holds %s after the push, which is not the file sent (%s): it is not recorded as held there; "+
+					"zmina node ls shows what it tells", target, short12(res.Sum), short12(mine))
+			}
+
 			for _, w := range res.Warnings {
-				fmt.Fprintf(a.err, "zmina: warning: %s: %s\n", target, w)
+				fmt.Fprintf(a.err, "zmina: warning: %s: %s\n", target, mesh.Plain(w))
+			}
+
+			// What was sent is what is there now: the next push to it is based on this file.
+			if err := me.MarkPushed(target, key, res.Sum); err != nil {
+				fmt.Fprintf(a.err, "zmina: warning: the sum of the file now on %s could not be kept (%v): the next push to it asks for --base\n", target, err)
 			}
 
 			fmt.Fprintln(a.out, pushedLine(target, key, res))
+
+			if create {
+				fmt.Fprintf(a.out, "no ticker is installed on %s for %s: there, run %s (a crew with no ticker runs nothing there until it is)\n", target, key,
+					tickerInstallLine(key))
+			}
 
 			return nil
 		},
@@ -161,6 +181,15 @@ func (a *app) pushKey() (string, error) {
 		"of the same name on the other node", path)
 }
 
+// tickerInstallLine is the command that installs the ticker of the crew with this key on the node it was made on.
+func tickerInstallLine(key string) string {
+	if key == "default" {
+		return "zmina ticker install"
+	}
+
+	return "zmina --config " + key + " ticker install"
+}
+
 // pushedLine says what the node did.
 func pushedLine(target, key string, res mesh.CrewPutResult) string {
 	switch {
@@ -183,8 +212,9 @@ func short12(sum string) string {
 }
 
 // pushConflict is what a refused push shows: which file the node holds against which this node sent, and the difference. The
-// error carries the way on, never a flag to overrule it blindly.
-func (a *app) pushConflict(c *mesh.CrewConflict, local []byte, key string) error {
+// error carries the way on, never a flag to overrule it blindly. What the node sent (its file, so the diff) is text of a peer and goes
+// to the terminal made plain; basis says in words why the file there is not the one the push was based on.
+func (a *app) pushConflict(c *mesh.CrewConflict, local []byte, key, basis string) error {
 	mine := crew.SumOf(local)
 
 	fmt.Fprintf(a.out, "%s holds file %s; this node's is %s; the push was based on %s\n", c.Node, short12(orNone(c.Have)), short12(mine),
@@ -196,15 +226,15 @@ func (a *app) pushConflict(c *mesh.CrewConflict, local []byte, key string) error
 	case c.Current == nil:
 		fmt.Fprintf(a.out, "its file is too big to show (over %d bytes): compare the two by hand\n", mesh.CrewFileMax)
 	default:
-		fmt.Fprint(a.out, crew.UnifiedDiff(c.Current, local, c.Node+"/"+key+" crew.yaml", "this node's "+filepath.Base(a.crewPath())))
+		fmt.Fprint(a.out, mesh.PlainText(crew.UnifiedDiff(c.Current, local, c.Node+"/"+key+" crew.yaml", "this node's "+filepath.Base(a.crewPath()))))
 	}
 
 	if c.Have == "" {
 		return fmt.Errorf("nothing was written: %s has no such crew; zmina crew push %s --create makes it", c.Node, c.Node)
 	}
 
-	return fmt.Errorf("nothing was written: %s's file is not the one this push was based on (an edit there, or a node that told no sum); "+
-		"once you have looked at the difference: zmina crew push %s --base %s", c.Node, c.Node, c.Have)
+	return fmt.Errorf("nothing was written: %s's file is not the one this push was based on (%s); "+
+		"once you have looked at the difference: zmina crew push %s --base %s", c.Node, basis, c.Node, c.Have)
 }
 
 func orNone(s string) string {
@@ -248,7 +278,9 @@ func (a *app) localCrewPut(key string, payload []byte, base string, create bool,
 		}
 	}
 
-	res, err := crew.Put(path, payload, crew.PutOptions{Node: me.Name, Base: base, Create: create, By: by, How: "crew push"})
+	// Nothing is written through a link that leaves the home: the crew's directory, its file and its history are resolved first.
+	res, err := crew.Put(path, payload, crew.PutOptions{Node: me.Name, Base: base, Create: create, By: by, How: "crew push",
+		Home: crew.ExpandHome("~/.zmina")})
 	if err == nil {
 		if c, err := crew.Load(path); err == nil {
 			logCrewVersions(eventLog(c), res.Saved.Versions)

@@ -3,6 +3,7 @@ package shift
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -195,8 +196,23 @@ func (s *Shift) awayWork(name string, r *crew.Role) []string {
 	return nil
 }
 
+// listedNodes is the nodes among names that the crew file lists and that are not this node, sorted, each once.
+func (s *Shift) listedNodes(names []string) []string {
+	var out []string
+
+	for _, n := range names {
+		if s.Crew.HasNode(n) && n != s.Crew.Here {
+			out = append(out, n)
+		}
+	}
+
+	slices.Sort(out)
+
+	return slices.Compact(out)
+}
+
 // twicePrefix opens the RecordNotified key of the daily note that a role is up on this node and on another: twicePrefix +
-// role + "/" + the day.
+// role + "/" + the nodes it is up on, sorted and joined by commas + "/" + the day.
 const twicePrefix = "role-twice/"
 
 // sweepAway drops the keys of the daily notes of past days (a role placed elsewhere that is up here, a role up on two nodes).
@@ -218,8 +234,10 @@ func (s *Shift) sweepAway(now time.Time) {
 
 // roleTwice is the backstop of the placement: a role up on this node that another node lately told up too is one role on two
 // nodes, whatever the file says (a hand start, a file not yet copied, a node of an older zmina that runs every role). Each
-// such role is an event (role-twice) and one note to the dispatcher, once a day; nothing is taken down: which of the two
-// goes is the owner's to say. It asks tmux only for the roles a peer says it holds.
+// such role is an event (role-twice) and one note to the dispatcher, once a day for each set of nodes it is up on; nothing is taken down:
+// which of the two goes is the owner's to say. It asks tmux only for the roles a peer says it holds. Only the nodes the crew file lists
+// are witnesses: a peer of the mesh that is no node of it is not believed, so that what it claims neither makes a note nor uses up the
+// day's key for a real duplicate. A node that says nothing (it is down, or runs a zmina that tells no roles) cannot be seen at all.
 func (s *Shift) roleTwice(now time.Time) (did []string) {
 	if s.PeerHeld == nil || !s.Crew.Spread() {
 		return nil
@@ -233,7 +251,7 @@ func (s *Shift) roleTwice(now time.Time) (did []string) {
 	day := now.In(s.Crew.Location()).Format(time.DateOnly)
 
 	for _, name := range s.Crew.Names() {
-		nodes := held[name]
+		nodes := s.listedNodes(held[name])
 		if name == s.Crew.Dispatcher || len(nodes) == 0 {
 			continue
 		}
@@ -245,7 +263,7 @@ func (s *Shift) roleTwice(now time.Time) (did []string) {
 		text := fmt.Sprintf("%s is up on this node (%s) and on %s: one role on two nodes; zmina down %s on the one the crew file "+
 			"does not place it on (it places it on %s)", name, s.Crew.Here, strings.Join(nodes, ", "), name, s.Crew.WhereIs(s.Crew.Roles[name]))
 
-		if told, _ := s.NoteOnce(twicePrefix+name+"/"+day, "zmina", text, false); told {
+		if told, _ := s.NoteOnce(twicePrefix+name+"/"+strings.Join(nodes, ",")+"/"+day, "zmina", text, false); told {
 			s.log(name, "role-twice", strings.Join(nodes, ","), text)
 
 			did = append(did, name+": up here and on "+strings.Join(nodes, ", "))

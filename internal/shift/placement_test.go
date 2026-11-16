@@ -404,7 +404,7 @@ func TestARoleUpOnTwoNodesIsAnEventAndOneNoteADay(t *testing.T) {
 	assert.Equal(t, "ops is up on this node (alpha) and on beta: one role on two nodes; zmina down ops on the one the crew file does not place it on (it places it on alpha)",
 		eventDetails(f, "role-twice"))
 	assert.True(t, f.tm.Has("ops"), "nothing is taken down")
-	assert.True(t, f.s.State.RecordNotified[twicePrefix+"ops/"+f.now.Format(time.DateOnly)])
+	assert.True(t, f.s.State.RecordNotified[twicePrefix+"ops/beta/"+f.now.Format(time.DateOnly)])
 	assert.Zero(t, eventsOf(f, "orphan-down"))
 
 	// Past the day it is told again, and the old day's key goes.
@@ -427,6 +427,85 @@ func TestARoleUpOnTwoNodesIsAnEventAndOneNoteADay(t *testing.T) {
 	*f.now = f.now.Add(24 * time.Hour)
 	f.s.Tick()
 	assert.Equal(t, 2, eventsOf(f, "role-twice"))
+}
+
+// Only a node the crew file lists is a witness of a role up there: a peer of the mesh that is none of nodes: may say what it likes, and
+// what it says neither makes a note nor uses up the day's key for a real duplicate later on.
+func TestRoleTwiceCountsOnlyNodesTheFileLists(t *testing.T) {
+	f, _ := placedFixture(t, spreadYAML, "alpha")
+	f.s.Tick()
+
+	f.tm.up["ops"] = 4002
+	f.rg.byPID[4002] = &registry.Session{PID: 4002, Status: "idle", StatusUpdatedAt: f.now.Add(-time.Hour).UnixMilli(), SessionID: "sid-ops"}
+
+	// A peer that lists every role as up, and is no node of the crew.
+	f.s.PeerHeld = func() map[string][]string {
+		return map[string][]string{"ops": {"mallory"}, "docs": {"mallory"}, "dev": {"mallory"}}
+	}
+
+	*f.now = f.now.Add(10 * time.Minute)
+	f.s.Tick()
+	assert.Zero(t, eventsOf(f, "role-twice"), "a peer that is no node of the crew is no evidence")
+
+	for key := range f.s.State.RecordNotified {
+		assert.False(t, strings.HasPrefix(key, twicePrefix), "no key was made: %s", key)
+	}
+
+	// The same day, the liar still saying it, a real duplicate on beta: it is told.
+	f.s.PeerHeld = func() map[string][]string { return map[string][]string{"ops": {"mallory", "beta"}} }
+
+	*f.now = f.now.Add(10 * time.Minute)
+	f.s.Tick()
+	assert.Equal(t, 1, eventsOf(f, "role-twice"))
+	assert.Contains(t, eventDetails(f, "role-twice"), "and on beta:", "only the node the file lists is named")
+	assert.NotContains(t, eventDetails(f, "role-twice"), "mallory")
+
+	// And this node itself is no other node.
+	f.s.PeerHeld = func() map[string][]string { return map[string][]string{"docs": {"alpha"}} }
+
+	f.tm.up["docs"] = 4005
+	f.rg.byPID[4005] = &registry.Session{PID: 4005, Status: "idle", SessionID: "sid-docs"}
+
+	*f.now = f.now.Add(10 * time.Minute)
+	f.s.Tick()
+	assert.Equal(t, 1, eventsOf(f, "role-twice"))
+}
+
+// The note is made once a day for a role and the nodes it is up on: another set of nodes is another duplicate, and is told, the order in
+// which the peers are listed is none.
+func TestRoleTwiceNoteIsKeyedByTheNodeSet(t *testing.T) {
+	body := strings.Replace(spreadYAML, "  beta: {}\n", "  beta: {}\n  gamma: {}\n", 1)
+	f, _ := placedFixture(t, body, "alpha")
+	f.s.Tick()
+
+	f.tm.up["ops"] = 4002
+	f.rg.byPID[4002] = &registry.Session{PID: 4002, Status: "idle", StatusUpdatedAt: f.now.Add(-time.Hour).UnixMilli(), SessionID: "sid-ops"}
+
+	held := map[string][]string{"ops": {"beta"}}
+	f.s.PeerHeld = func() map[string][]string { return held }
+
+	*f.now = f.now.Add(10 * time.Minute)
+	f.s.Tick()
+	assert.Equal(t, 1, eventsOf(f, "role-twice"))
+
+	// Gamma too: a different set, told.
+	held = map[string][]string{"ops": {"gamma", "beta"}}
+
+	*f.now = f.now.Add(10 * time.Minute)
+	f.s.Tick()
+	assert.Equal(t, 2, eventsOf(f, "role-twice"))
+	assert.Contains(t, eventDetails(f, "role-twice"), "and on beta, gamma")
+
+	// The same set in another order is not a new duplicate, and neither is a peer listed twice.
+	held = map[string][]string{"ops": {"beta", "gamma", "beta"}}
+
+	*f.now = f.now.Add(10 * time.Minute)
+	f.s.Tick()
+	assert.Equal(t, 2, eventsOf(f, "role-twice"))
+
+	day := f.now.Format(time.DateOnly)
+	assert.True(t, f.s.State.RecordNotified[twicePrefix+"ops/beta,gamma/"+day])
+	assert.True(t, f.s.State.RecordNotified[twicePrefix+"ops/beta/"+day])
 }
 
 func TestRoleTwiceIsQuietWithoutPeersOrNodes(t *testing.T) {
