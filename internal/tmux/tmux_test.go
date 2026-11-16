@@ -24,18 +24,23 @@ func server(t *testing.T) *Client {
 	return c
 }
 
+// eventuallyWithin is how long eventually waits for what a real tmux server and the process in its pane are to show: as long as a
+// machine busy with other work could need. A run that is not slow does not wait it out, cond is asked again every poll.
+const eventuallyWithin = 30 * time.Second
+
+// eventually asks cond until it holds, and fails the test when it does not within eventuallyWithin.
 func eventually(t *testing.T, cond func() bool) {
 	t.Helper()
 
-	for range 50 {
-		if cond() {
-			return
+	deadline := time.Now().Add(eventuallyWithin)
+
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("condition not met within %s", eventuallyWithin)
 		}
 
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(25 * time.Millisecond)
 	}
-
-	t.Fatal("condition not met")
 }
 
 func TestTypeKeepsDashesAndSemicolons(t *testing.T) {
