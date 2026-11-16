@@ -1028,8 +1028,9 @@ and is warned of. The node that runs a watch needs what its source needs (the `g
   first run is recorded, not noted.
 - **The node it left** drops what it kept of the watch, except the keys whose notes still wait on an ack: its dispatcher
   heard of them and the new node will not say them, so they stay in `zmina watch ls`, the recovery pack and the
-  reminders there until acked (`zmina watch ack` works there), and the rest goes with the last of them. A watch that
-  comes back before that finds those keys as it left them.
+  reminders there until acked (`zmina watch ack` works there), and the rest goes with the last of them. A key whose note
+  a task carries is acked already: the node records that at its next command, so the state goes once nothing else
+  waits. A watch that comes back before that finds those keys as it left them.
 
 ### What a node does with a role placed elsewhere
 

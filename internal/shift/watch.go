@@ -362,9 +362,12 @@ func (s *Shift) WatchViews() []WatchView {
 
 // PruneWatches drops the state of watches no longer in the crew.
 // What a node kept of a watch that the file now places on another node goes too, but for the keys whose notes still
-// wait on an ack: those were said to this node's dispatcher, the other node's first run records them without a word,
-// and so they stay, reminded of and ackable here, until the last is acked. Nothing is dropped on a machine that is
-// no node of the file: a node name that cannot be read for a moment must not cost a watch what it knows.
+// wait on an ack: those were said to this node's dispatcher, and so they stay, listed and ackable here, until the last is
+// acked (the other node's first run records them without a word with baseline, and notes them again without it). The
+// renotify of a key is said only inside a run of its watch, which is another node's now. A key whose note a task carries
+// is acked already and is recorded as acked here (ackByTasks), so the state goes once nothing is left that waits.
+// Nothing is dropped on a machine that is no node of the file: a node name that cannot be read for a moment must not
+// cost a watch what it knows.
 func (s *Shift) PruneWatches() {
 	for name, st := range s.State.Watch {
 		w, ok := s.Crew.Watches[name]
@@ -376,6 +379,15 @@ func (s *Shift) PruneWatches() {
 
 		if st == nil || !s.Crew.WatchAway(w) {
 			continue
+		}
+
+		// A key whose note the dispatcher turned into a task is acked, as the run that would have said it again acks it
+		// (FinishWatch): that run is another node's now, so nothing else here would ever record it, and the state would be kept
+		// for a wait that is over. What is left waiting is judged after that, and the acks stay in the state that is kept.
+		if len(st.Waiting()) > 0 {
+			for _, a := range ackByTasks(name, st, s.allTasks(), s.Now()) {
+				s.log("watch:"+name, "watch-ack", "", "key="+a)
+			}
 		}
 
 		if len(st.Waiting()) == 0 {

@@ -787,6 +787,81 @@ func TestTheNodeAWatchLeftKeepsOnlyWhatWaitsOnAnAck(t *testing.T) {
 	assert.NotNil(t, g.s.State.Watch["quiet"])
 }
 
+// A key whose note a task carries is acked, and the node a watch left records that when it prunes: the run that would have recorded
+// it is another node's now. So the state goes once nothing waits, though a key a task carries is still waiting in the raw state, and
+// what is not carried stays.
+func TestTheNodeAWatchLeftRecordsTheAckOfATaskAndDropsItsState(t *testing.T) {
+	here := "watch:\n  ci-red:\n    kind: exec\n    every: 1m\n    run: [detector]\n    baseline: false\n"
+	away := here + "    place: beta\n"
+
+	f, _ := placedFixture(t, spreadYAML+here, "alpha")
+
+	run, err := f.s.BeginWatch("ci-red")
+	require.NoError(t, err)
+	f.s.FinishWatch(run, watch.Result{Events: []watch.Event{
+		{Key: "ci-red/k1", Fingerprint: "a", Text: "red"}, {Key: "ci-red/k2", Fingerprint: "a", Text: "red again"},
+	}}, false)
+	require.Len(t, f.s.WaitingKeys(), 2)
+
+	// The dispatcher turned the first note into a task, which acks it; nothing has run since to record that.
+	f.tk.list = []task.Task{{ID: "T-1", Role: "dev", State: task.Open, Created: f.now.Add(time.Minute),
+		Asked: "the red build (watch key ci-red/ci-red/k1)"}}
+	require.Len(t, f.s.WaitingKeys(), 1, "a key a task carries is not waiting for the dispatcher")
+	require.Len(t, f.s.State.Watch["ci-red"].Waiting(), 2, "though the state still says it waits")
+
+	c, err := crew.LoadFor(rewrite(t, f, spreadYAML+away), "alpha")
+	require.NoError(t, err)
+
+	f.s.Crew = c
+	f.s.PruneWatches()
+
+	st := f.s.State.Watch["ci-red"]
+	require.NotNil(t, st, "k2 still waits: its state stays")
+	assert.Equal(t, []string{"ci-red/k2"}, st.Waiting())
+	assert.Equal(t, "task T-1", st.Keys["ci-red/k1"].AckedBy, "the ack of the task is kept")
+	assert.True(t, f.ev.has("watch:ci-red", "watch-ack"))
+
+	// The last that waited is acked by hand: the state goes.
+	_, err = f.s.AckWatch("ci-red", nil, true, "dispatcher")
+	require.NoError(t, err)
+
+	f.s.PruneWatches()
+	assert.Empty(t, f.s.State.Watch)
+
+	// Nothing waits but a key a task carries: the state goes at the first prune, with nobody to ack anything.
+	g, _ := placedFixture(t, spreadYAML+here, "alpha")
+
+	run, err = g.s.BeginWatch("ci-red")
+	require.NoError(t, err)
+	g.s.FinishWatch(run, watch.Result{Events: []watch.Event{{Key: "ci-red/k1", Fingerprint: "a", Text: "red"}}}, false)
+	g.tk.list = []task.Task{{ID: "T-1", Role: "dev", State: task.Open, Created: g.now.Add(time.Minute),
+		Asked: "the red build (watch key ci-red/ci-red/k1)"}}
+
+	c, err = crew.LoadFor(rewrite(t, g, spreadYAML+away), "alpha")
+	require.NoError(t, err)
+
+	g.s.Crew = c
+	g.s.PruneWatches()
+	assert.NotContains(t, g.s.State.Watch, "ci-red", "a watch that returns later starts from nothing, not from a wait that was over")
+
+	// A machine that is no node of the file drops and acks nothing.
+	h, _ := placedFixture(t, spreadYAML+here, "alpha")
+
+	run, err = h.s.BeginWatch("ci-red")
+	require.NoError(t, err)
+	h.s.FinishWatch(run, watch.Result{Events: []watch.Event{{Key: "ci-red/k1", Fingerprint: "a", Text: "red"}}}, false)
+	h.tk.list = []task.Task{{ID: "T-1", Role: "dev", State: task.Open, Created: h.now.Add(time.Minute),
+		Asked: "the red build (watch key ci-red/ci-red/k1)"}}
+
+	c, err = crew.LoadFor(rewrite(t, h, spreadYAML+away), "")
+	require.NoError(t, err)
+
+	h.s.Crew = c
+	h.s.PruneWatches()
+	require.Contains(t, h.s.State.Watch, "ci-red")
+	assert.Equal(t, []string{"ci-red/k1"}, h.s.State.Watch["ci-red"].Waiting())
+}
+
 // A crew that is not spread runs its watches as before, and its views say nothing of nodes.
 func TestAWatchOfACrewThatIsNotSpreadIsUnchanged(t *testing.T) {
 	f := fixtureWith(t, watchYAML)
