@@ -78,7 +78,7 @@ context_action: compact                  # every role's, unless it sets its own 
 restart_at: 250k                         # a role holding a task this full restarts fresh from its note (default 250k; off)
 restart_idle: 1h                         # ... and one idle this long over 100k (default 1h, 20m at least; off)
 restart_done: 150k                       # a role whose task is done, holding none, this full restarts fresh (default 150k; off)
-notify: [push-cli, send, --title, zmina] # a push to you goes through this (text last; a string: sh -c, $1); off: none wanted, doctor stops warning
+notify: [push-cli, send, --title, zmina] # a push to you goes through this (text last; a string: sh -c, $1; a leading ~/ in a list is your home); off: none wanted, doctor stops warning
 notify_on: [reminder, blocking]          # what is pushed: reminder, blocking (an item that holds a role up), ask (every new ask); default reminder, blocking
 quiet_hours: 23:00-08:00                 # in timezone:; blocking and ask pushes wait until it is over (default none)
 notify_again: 24h                        # an item that still blocks is pushed again this often (default 24h, 1h at least; off)
@@ -1527,7 +1527,7 @@ watch:
   ci-red:
     kind: exec
     every: 5m
-    run: [my-detector, --json]   # argv, no shell; a string runs with /bin/sh -c
+    run: [my-detector, --json]   # argv, no shell (a leading ~/ is the home, see below); a string runs with /bin/sh -c
     dir: ~/somewhere             # default: the crew's dir
 ```
 
@@ -1564,6 +1564,12 @@ Rules, every kind:
 blank lines are skipped; exit 0 means "this is the whole current set". Env: `ZMINA_WATCH`,
 `ZMINA_CREW`, `ZMINA_WATCH_SEEN` (a JSON file `{key: fingerprint}` of the stored keys),
 `ZMINA_WATCH_DIR` (a cache dir it may write). PATH is the ticker's.
+**`~` in a command given as a list.** A list runs with no shell, so zmina itself turns a leading `~/` (and a bare `~`) into the
+home directory of the user running zmina, in the command and in every argument after it: `run: ["~/bin/check", "~/data"]` runs
+`/home/<user>/bin/check /home/<user>/data`. Only that: `~user/x` stays as written, and so does a `~` that is not first
+(`a~/b`, `--dir=~/x`). It is done each time the command starts, never when the file is read, and the file is not rewritten, so one crew
+file serves two machines with different homes. A string goes through `/bin/sh -c`, which expands `~` itself. The same holds for
+`notify:` as a list (its text, the last argument, is data and is never expanded).
 Ready source: `contrib/disk-free.sh` (filesystems under a free-space threshold, `df -P`; the
 fingerprint moves only when a breach starts or worsens by a step; its header has the watch entry
 and the flags).
