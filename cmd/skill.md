@@ -1027,10 +1027,18 @@ and is warned of. The node that runs a watch needs what its source needs (the `g
   `baseline: true` for the first run after a change of node. What happened between the old node's last run and that
   first run is recorded, not noted.
 - **The node it left** drops what it kept of the watch, except the keys whose notes still wait on an ack: its dispatcher
-  heard of them and the new node will not say them, so they stay in `zmina watch ls`, the recovery pack and the
-  reminders there until acked (`zmina watch ack` works there), and the rest goes with the last of them. A key whose note
-  a task carries is acked already: the node records that at its next command, so the state goes once nothing else
-  waits. A watch that comes back before that finds those keys as it left them.
+  heard of them, so they stay in that node's state until acked (`zmina watch ack` works there), and the rest goes with
+  the last of them. They show in `zmina watch ls`, in the dispatcher's pending brief and in its recovery pack
+  (`watch_keys`), and nowhere else: nothing says them again, because a key's renotify is said only inside a run of its
+  watch, and the watch no longer runs on this node. A key whose note a task carries is acked already: the node records
+  that at its next command, so the state goes once nothing else waits. A watch that comes back before that finds
+  those keys as it left them.
+- **A key still waiting on the node a watch left is noted again on the new node with `baseline: false`.** The new node
+  starts with nothing and does not know the old node's waiting keys: with `baseline: true` (the default) its first run
+  records them and says nothing, so they wait on the old node's dispatcher alone; with `baseline: false` it notes
+  every key its source reports, those too, and one key can then wait on two dispatchers, who may give one merge
+  request to two seats. Ack such keys on the old node first (`zmina watch ack`), or use `baseline: true` for the first
+  run after a change of node.
 
 ### What a node does with a role placed elsewhere
 
