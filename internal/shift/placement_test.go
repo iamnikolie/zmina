@@ -683,17 +683,35 @@ func TestAWatchRunsOnTheNodeItIsPlacedOn(t *testing.T) {
 	assert.Empty(t, g.s.DueWatches())
 }
 
-// A watch placed on a node that holds no role has no dispatcher to hear it: it runs on no node, and both say why.
+// A watch placed on a node that holds no role has no dispatcher to hear it: it runs on no node, and both say why. The reason is that
+// node's, not the file's: a watch on home and one on a node that holds a role are heard, are not warned of, and run there.
 func TestAWatchOnANodeWithNoDispatcherRunsNowhere(t *testing.T) {
-	body := "namespace: /ns\nclaude: claude\nhome: alpha\nnodes:\n  alpha: {}\n  beta: {}\nroles:\n  dispatcher:\n    boot: b\n  ops: {}\n" +
-		"watch:\n  cards:\n    kind: exec\n    every: 1m\n    run: [detector]\n    place: beta\n"
+	body := "namespace: /ns\nclaude: claude\nhome: alpha\nnodes:\n  alpha: {}\n  beta: {}\n  gamma: {}\nroles:\n  dispatcher:\n    boot: b\n" +
+		"  ops: {}\n  dev:\n    place: gamma\n" +
+		"watch:\n  cards:\n    kind: exec\n    every: 1m\n    run: [detector]\n    place: beta\n" +
+		"  mrs:\n    kind: exec\n    every: 1m\n    run: [detector]\n    place: gamma\n" +
+		"  ci-red:\n    kind: exec\n    every: 1m\n    run: [detector]\n"
 
-	for _, node := range []string{"alpha", "beta"} {
+	due := func(f fix) []string {
+		var names []string
+		for _, r := range f.s.DueWatches() {
+			names = append(names, r.Watch.Name)
+		}
+
+		return names
+	}
+
+	for node, want := range map[string][]string{"alpha": {"ci-red"}, "beta": nil, "gamma": {"mrs"}} {
 		f, _ := placedFixture(t, body, node)
+		warnings := strings.Join(f.s.Crew.Warnings, "\n")
 
-		assert.Empty(t, f.s.DueWatches(), node)
-		assert.Contains(t, strings.Join(f.s.Crew.Warnings, "\n"),
-			"watch cards: place beta holds no role of the crew, so no dispatcher runs there to hear it; the watch runs on no node")
+		assert.False(t, f.s.Crew.Holds("beta"), "beta holds no role: ops is on home, dev on gamma")
+		assert.True(t, f.s.Crew.Holds("gamma"), node)
+		assert.Equal(t, want, due(f), node)
+
+		assert.Contains(t, warnings,
+			"watch cards: place beta holds no role of the crew, so no dispatcher runs there to hear it; the watch runs on no node", node)
+		assert.Equal(t, 1, strings.Count(warnings, "holds no role"), "only the watch on beta is warned of: %s", warnings)
 
 		_, err := f.s.BeginWatch("cards")
 		require.ErrorContains(t, err, "no dispatcher runs there: it runs on no node", node)

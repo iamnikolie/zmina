@@ -301,7 +301,19 @@ func (c *Crew) placement(here, why string, warn func(string)) error {
 		return fmt.Errorf("home %q is not one of nodes: (%s)", c.Home, strings.Join(names, ", "))
 	}
 
-	dispatcher := or(c.Dispatcher, defaultDispatcher)
+	// What follows asks which node holds which role, and the answer reads the dispatcher's name and each role's own, which are not there
+	// before the defaults are completed (a file with no dispatcher: has none, and a role has no name yet). A dispatcher left as "" is
+	// the name of every role then, so no node would hold any and a watch on a node with roles would be warned of as unheard. They are put
+	// in here as complete puts them in, with the same value.
+	c.Dispatcher = or(c.Dispatcher, defaultDispatcher)
+
+	for name, r := range c.Roles {
+		if r != nil {
+			r.Name = name
+		}
+	}
+
+	dispatcher := c.Dispatcher
 
 	for _, name := range c.roleNames() {
 		r := c.Roles[name]

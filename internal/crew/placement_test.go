@@ -530,6 +530,52 @@ func TestAWatchRunsOnOneNode(t *testing.T) {
 	assert.Contains(t, strings.Join(flat.Warnings, "\n"), "watch mrs: place: has no meaning without nodes:, ignored")
 }
 
+// A watch placed on a node that holds a role is heard there, so loading the file says nothing of it, whether or not the file names its
+// dispatcher: the load asks which node holds which role before the defaults are completed, and must give the answer complete's do. A node
+// that holds no role is still warned of, with the reason, and a role placed on it silences that.
+func TestAValidWatchPlaceIsNotWarnedOfAtLoad(t *testing.T) {
+	const watches = "watch:\n  cards: {kind: exec, every: 1m, run: [x], place: beta}\n"
+
+	for name, c := range map[string]struct{ head, roles string }{
+		"no dispatcher key":      {"", "  dispatcher: {}\n  dev: {place: beta}\n"},
+		"the default's own name": {"dispatcher: dispatcher\n", "  dispatcher: {}\n  dev: {place: beta}\n"},
+		"another dispatcher":     {"dispatcher: lead\n", "  lead: {}\n  dev: {place: beta}\n"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			body := c.head + "home: alpha\nnodes: {alpha: {}, beta: {}}\nroles:\n" + c.roles + watches
+
+			for _, node := range []string{"alpha", "beta", ""} {
+				got := loadFor(t, body, node)
+
+				assert.NotContains(t, strings.Join(got.Warnings, "\n"), "holds no role", node)
+				assert.NotContains(t, strings.Join(got.Warnings, "\n"), "runs on no node", node)
+				assert.True(t, got.WatchHeard(got.Watches["cards"]), node)
+			}
+		})
+	}
+
+	// The same watch with no role on beta is warned of, for that reason: beta holds nothing, while home holds the role.
+	body := "home: alpha\nnodes: {alpha: {}, beta: {}}\nroles:\n  dispatcher: {}\n  dev: {}\n" + watches
+	got := loadFor(t, body, "alpha")
+
+	assert.Contains(t, strings.Join(got.Warnings, "\n"), "watch cards: place beta holds no role of the crew, so no dispatcher runs there to hear it")
+	assert.False(t, got.Holds("beta"))
+	assert.True(t, got.Holds("alpha"))
+	assert.False(t, got.WatchHeard(got.Watches["cards"]))
+
+	// The dispatcher's own place is ignored, so it does not make beta hold a role, with the dispatcher's name left to the default or not.
+	for _, head := range []string{"", "dispatcher: dispatcher\n"} {
+		body = head + "home: alpha\nnodes: {alpha: {}, beta: {}}\nroles:\n  dispatcher: {place: beta}\n  dev: {}\n" + watches
+		got = loadFor(t, body, "alpha")
+
+		assert.Contains(t, strings.Join(got.Warnings, "\n"), "watch cards: place beta holds no role of the crew", head)
+		assert.Contains(t, strings.Join(got.Warnings, "\n"), "role dispatcher is the dispatcher: it runs on home (alpha)", head)
+	}
+
+	home := loadFor(t, "home: alpha\nnodes: {alpha: {}, beta: {}}\nroles:\n  dispatcher: {}\n  dev: {}\nwatch:\n  mrs: {kind: exec, every: 1m, run: [x]}\n", "alpha")
+	assert.NotContains(t, strings.Join(home.Warnings, "\n"), "holds no role", "a watch on home is heard there")
+}
+
 // A place on a watch that has none keeps the watch's fingerprint: an upgrade does not look like a changed watch.
 func TestAWatchWithoutPlaceKeepsItsFingerprint(t *testing.T) {
 	c := loadFor(t, "roles:\n  dispatcher: {}\nwatch:\n  mrs: {kind: exec, every: 1m, run: [x]}\n", "")
