@@ -19,6 +19,7 @@ import (
 
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/fsx"
+	"github.com/iamnikolie/zmina/internal/mesh"
 	"github.com/iamnikolie/zmina/internal/record"
 	"github.com/iamnikolie/zmina/internal/worktree"
 )
@@ -52,6 +53,8 @@ const (
 	StateReady = "ready"
 	// StateTaken: the node holds a receipt of a take of the move: it took the work.
 	StateTaken = "taken"
+	// StateTaking: the node the role goes to has begun a take of the move and has no receipt yet: it runs, or it was cut short.
+	StateTaking = "taking"
 	// StateNone: the node knows no open move of that id.
 	StateNone = "none"
 	// StateCommitted and StateAborted answer the end of a move at the node the role left: closed as taken, or called off.
@@ -90,18 +93,34 @@ func ValidSum(s string) bool { return sumRe.MatchString(s) }
 // ValidTask reports whether s is a task id (T-<n>).
 func ValidTask(s string) bool { return taskRe.MatchString(s) }
 
+// TaskNumber is the n of a task id T-<n>, 0 for anything else: the part of a private ref's name that tells which task it is of.
+func TaskNumber(id string) int {
+	if !ValidTask(id) {
+		return 0
+	}
+
+	n := 0
+	for _, c := range id[2:] {
+		n = n*10 + int(c-'0')
+	}
+
+	return n
+}
+
 // Task is what the journal keeps of one task the role held when the move began.
 type Task struct {
 	ID string `json:"id"`
 	// Item is the later item the task was parked as (L-<n>), closed as taken when the move commits.
 	Item string `json:"item,omitempty"`
-	// Repo is the task's repository; Branch its branch, Tip the commit of it that travels, WIP the commit the move made of the
-	// worktree's uncommitted work ("" when there was none), Pushed that Tip is on origin.
-	Repo   string `json:"repo,omitempty"`
-	Branch string `json:"branch,omitempty"`
-	Tip    string `json:"tip,omitempty"`
-	WIP    string `json:"wip,omitempty"`
-	Pushed bool   `json:"pushed,omitempty"`
+	// Repo is the task's repository; Branch its branch, Tip the commit of it that travels (the branch's tip, never a commit made of
+	// uncommitted work), WIP the commit the move made of the worktree's uncommitted work ("" when there was none; it is kept under a
+	// private ref, never on the branch), Pushed that Tip is on origin and WIPPushed that WIP is on origin under its private ref.
+	Repo      string `json:"repo,omitempty"`
+	Branch    string `json:"branch,omitempty"`
+	Tip       string `json:"tip,omitempty"`
+	WIP       string `json:"wip,omitempty"`
+	Pushed    bool   `json:"pushed,omitempty"`
+	WIPPushed bool   `json:"wip_pushed,omitempty"`
 }
 
 // Journal is the record of an open move of a role off this node, kept at moves/<role>.json for as long as it is open. While it is
@@ -204,6 +223,16 @@ type Drive struct {
 	To      string    `json:"to"`
 	Base    string    `json:"base"`
 	Started time.Time `json:"started"`
+	// Holds, Repos, Dir and Namespace are what the source said of itself before the move began (its check, its begin): the tasks it
+	// holds, the repositories compared on both nodes, the crew's directory and namespace. The bundle the source hands over is
+	// checked against them, and refused when it names anything else. Empty on a record that was made again after it was lost.
+	Holds     []string `json:"holds,omitempty"`
+	Repos     []string `json:"repos,omitempty"`
+	Dir       string   `json:"dir,omitempty"`
+	Namespace string   `json:"namespace,omitempty"`
+	// Recorded says Holds, Repos, Dir and Namespace are what the preflight found (an empty Holds is then a role that holds nothing);
+	// a record made again after it was lost says nothing of the sort, and the bundle is checked only for its move, role and nodes.
+	Recorded bool `json:"recorded,omitempty"`
 	// LastErr is what the last try of the ticker said, so that it is told when it changes and not every beat.
 	LastErr string `json:"last_err,omitempty"`
 }
@@ -288,19 +317,26 @@ type Facts struct {
 	Queued int      `json:"queued,omitempty"`
 	Up     bool     `json:"up,omitempty"`
 	// Dirty names the checkouts of the role that hold uncommitted work a move does not carry: its own directory, and the main
-	// checkout of a task that has no worktree.
+	// checkout of a task that has no worktree. Unfit names the worktrees whose work cannot travel at all (a merge, rebase or
+	// cherry-pick in progress, conflicts, a nested repository): no --force carries them.
 	Dirty []string `json:"dirty,omitempty"`
+	Unfit []string `json:"unfit,omitempty"`
+	// Taking is the id of a take of a move of the role that is running on this node or was cut short, "" when none.
+	Taking string `json:"taking,omitempty"`
 	// Repos are the repositories the move needs, each with its origin there (a check of the node the role goes to answers for the
 	// ones the other end named).
 	Repos []RepoFact `json:"repos,omitempty"`
 }
 
-// RepoFact is one repository: its top level, home-relative, and its origin URL; Found is false for a top level that is no
-// repository there (or is none at all), Origin "" for a repository with no origin.
+// RepoFact is one repository: its top level, home-relative, and its origin URL as git resolves it (a url.<base>.insteadOf rewrite
+// applied); Found is false for a top level that is no repository there (or is none at all), Origin "" for a repository with no origin.
+// Push is the URL pushes to origin use, as git resolves it (pushurl and pushInsteadOf applied): a repository whose pushes go elsewhere
+// than the two nodes fetch from is not the same repository on both.
 type RepoFact struct {
 	Top    string `json:"top"`
 	Found  bool   `json:"found"`
 	Origin string `json:"origin,omitempty"`
+	Push   string `json:"push,omitempty"`
 }
 
 // CheckBody is what a check of the node the role goes to carries: the repositories to look up there.
@@ -326,9 +362,11 @@ type PollAnswer struct {
 	State string `json:"state"`
 	Phase string `json:"phase,omitempty"`
 	Why   string `json:"why,omitempty"`
-	// Bundle is the work, once it is ready; Taken what the node the role goes to holds as the receipt of its take.
+	// Bundle is the work, once it is ready; Taken what the node the role goes to holds as the receipt of its take. Holds are the
+	// tasks the node the role leaves holds for the move, in its answer to the beginning.
 	Bundle json.RawMessage `json:"bundle,omitempty"`
 	Taken  *TakeAnswer     `json:"taken,omitempty"`
+	Holds  []string        `json:"holds,omitempty"`
 }
 
 // Taken is a task the move carried and the task it became.
@@ -410,13 +448,14 @@ type BTask struct {
 	// the repository up by the same top level and checks the origin; it takes no path.
 	Repo   string `json:"repo,omitempty"`
 	Origin string `json:"origin,omitempty"`
-	// Branch, Base and Fork are the task's own; Tip is the commit of the branch that was pushed, WIP says it is the commit a move made
-	// of uncommitted work, which the node that takes it undoes.
+	// Branch, Base and Fork are the task's own; Tip is the commit of the branch that was pushed; WIP is the commit a move made of the
+	// worktree's uncommitted work, one commit over Tip, which is on origin under the move's private ref and never on the branch: the
+	// node that takes the task restores it onto the branch's tip, as uncommitted files.
 	Branch string `json:"branch,omitempty"`
 	Base   string `json:"base,omitempty"`
 	Fork   string `json:"fork,omitempty"`
 	Tip    string `json:"tip,omitempty"`
-	WIP    bool   `json:"wip,omitempty"`
+	WIP    string `json:"wip,omitempty"`
 	// Incomplete is that the checkpoint was not current when the task was parked.
 	Incomplete bool `json:"incomplete,omitempty"`
 	// Checkpoint and Result are the task's latest ones, as documents; the node that takes the task saves them again under the new
@@ -470,7 +509,47 @@ func ParseBundle(raw []byte) (Bundle, error) {
 		return Bundle{}, fmt.Errorf("the bundle does not read: %w", err)
 	}
 
+	b.Sanitize()
+
 	return b, b.Validate()
+}
+
+// Sanitize strips the control characters from every text field of the bundle, before it is stored or printed: what another node says
+// is data, never a sequence the owner's terminal, or a role's, should act on. The task's asked text, its note and the values of its
+// records are text of several lines: a line break and a tab stay, every other control character, and every format character that hides
+// or reorders text, goes. The other fields are one line each: a line break is a space there. The ids, names, paths, branches and URLs
+// are not touched, only checked (Validate): they are never text to be shown as it came.
+func (b *Bundle) Sanitize() {
+	for i := range b.Tasks {
+		t := &b.Tasks[i]
+
+		t.Asked, t.Note = mesh.PlainText(t.Asked), mesh.PlainText(t.Note)
+		t.Title, t.Project, t.URL = mesh.Plain(t.Title), mesh.Plain(t.Project), mesh.Plain(t.URL)
+
+		for j, c := range t.Criteria {
+			t.Criteria[j] = mesh.Plain(c)
+		}
+
+		for _, d := range []*record.Document{t.Checkpoint, t.Result} {
+			sanitizeDocument(d)
+		}
+	}
+}
+
+func sanitizeDocument(d *record.Document) {
+	if d == nil {
+		return
+	}
+
+	d.By = mesh.Plain(d.By)
+	mesh.PlainAll(&d.Shape)
+
+	values := make(map[string]string, len(d.Values))
+	for k, v := range d.Values {
+		values[mesh.Plain(k)] = mesh.PlainText(v)
+	}
+
+	d.Values = values
 }
 
 const (
@@ -554,7 +633,7 @@ func (t BTask) validate() error {
 	}
 
 	if t.Repo == "" {
-		if t.Branch != "" || t.Origin != "" || t.Tip != "" || t.Base != "" || t.Fork != "" || t.WIP {
+		if t.Branch != "" || t.Origin != "" || t.Tip != "" || t.Base != "" || t.Fork != "" || t.WIP != "" {
 			return errors.New("a branch without a repository")
 		}
 	} else {
@@ -585,7 +664,11 @@ func (t BTask) validate() error {
 		if t.Fork != "" && !worktree.IsSHA(t.Fork) {
 			return fmt.Errorf("fork %q is no commit id", t.Fork)
 		}
-	} else if t.Tip != "" || t.WIP {
+
+		if t.WIP != "" && !worktree.IsSHA(t.WIP) {
+			return fmt.Errorf("wip %q is no commit id", t.WIP)
+		}
+	} else if t.Tip != "" || t.WIP != "" {
 		return errors.New("a tip without a branch")
 	}
 

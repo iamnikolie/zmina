@@ -167,6 +167,16 @@ func spreadLine(c *crew.Crew) string {
 // checkPlacement is doctor's look at a crew whose file declares nodes:.
 func (a *app) checkPlacement(c *crew.Crew, st *shift.State, add func(name, level, format string, args ...any)) {
 	if !c.Spread() {
+		// A move journal left in a crew that declares no nodes holds its role down, and only --abort ends it.
+		for _, name := range c.Names() {
+			if j, ok, err := move.Open(c.Layout(), name); err != nil {
+				add("placement", "fail", "the move journal of %s does not read, so the role is not started: %v", name, err)
+			} else if ok {
+				add("placement", "fail", "%s has a move journal (%s to %s) but this crew's file declares no nodes:, so it cannot go on and the role is held down: zmina move %s %s --abort %s",
+					name, j.ID, j.To, name, j.To, j.ID)
+			}
+		}
+
 		return
 	}
 
@@ -205,6 +215,16 @@ func (a *app) checkPlacement(c *crew.Crew, st *shift.State, add func(name, level
 		} else if ok {
 			add("placement", "warn", "%s has a move to %s open (%s, %s): zmina move %s %s --resume %s finishes it, --abort %s calls it off",
 				name, j.To, j.ID, j.Phase, name, j.To, j.ID, j.ID)
+		}
+	}
+
+	// A take of a move that was cut short on this node: the next take of it, or the abort, takes away what it made.
+	for _, name := range c.Names() {
+		if m, ok, err := move.OpenTaking(c.Layout(), name); err != nil {
+			add("placement", "fail", "the marker of a take of %s does not read: %v", name, err)
+		} else if ok {
+			add("placement", "warn", "a take of %s from %s (%s) is running or was cut short on this node: zmina move %s %s --resume %s takes it again, --abort %s takes away what it made",
+				name, m.From, m.ID, name, c.Here, m.ID, m.ID)
 		}
 	}
 

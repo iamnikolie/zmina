@@ -584,40 +584,43 @@ func readFile(t *testing.T, path string) string {
 	return string(raw)
 }
 
-// Uncommitted work: a worktree with changes, a new file and an ignored file. The changes travel as one commit with the move's trailer,
-// which beta undoes (the work is uncommitted again there, on the branch at its parent); the ignored file does not travel; alpha's branch has
-// the commit, and alpha's worktree reads clean at it.
-func TestMoveCarriesUncommittedWorkAsOneCommitThatTheOtherNodeUndoes(t *testing.T) {
+// Uncommitted work: a worktree with changes, a new file and an ignored file. The changes travel as one commit that is on origin under a
+// private ref of the move and never on the branch: alpha's branch, index and files stay as they were, origin's branch is the tip it was,
+// and beta has the branch at that tip with the work restored onto it as uncommitted files (the ignored file did not travel). No ref of the
+// move is left anywhere.
+func TestMoveCarriesUncommittedWorkByAPrivateRefAndNotOnTheBranch(t *testing.T) {
 	w := newMoveWorld(t, "alpha")
 	_, wt, branch := w.work(true)
 
 	before := gitIn(t, wt, "rev-parse", "HEAD")
+	statusBefore := gitIn(t, wt, "status", "--porcelain")
 
 	out, errOut, err := w.move("dev", "beta")
 	require.NoError(t, err, out+errOut)
-	assert.Contains(t, out, "with its uncommitted work as one commit")
+	assert.Contains(t, out, "with its uncommitted work (not staged) restored there")
 
 	moved := w.assertMoved(branch)
-	id := w.idOf(out)
 
-	// alpha: the branch moved on by one commit that carries the trailer; its worktree is clean at it.
-	tip := gitIn(t, wt, "rev-parse", "HEAD")
-	assert.NotEqual(t, before, tip)
-	assert.Equal(t, before, gitIn(t, wt, "rev-parse", "HEAD~1"))
-	assert.Contains(t, gitIn(t, wt, "log", "-1", "--format=%B"), "Zmina-Move: "+id)
-	assert.Empty(t, gitIn(t, wt, "status", "--short"))
-	assert.Equal(t, tip, gitIn(t, w.remote, "rev-parse", "refs/heads/"+branch), "the commit is on origin")
+	// alpha: nothing was committed, staged or touched.
+	assert.Equal(t, before, gitIn(t, wt, "rev-parse", "HEAD"), "alpha's branch did not move")
+	assert.Equal(t, statusBefore, gitIn(t, wt, "status", "--porcelain"), "alpha's worktree is as it was")
+	assert.Equal(t, "form v2, not committed\n", readFile(t, filepath.Join(wt, "form.txt")))
 
-	// beta: at the parent, the work in the files, uncommitted; the ignored file did not come.
-	assert.Equal(t, before, gitIn(t, moved.Worktree, "rev-parse", "HEAD"), "the commit that carried the uncommitted work is undone")
+	// origin: the branch at the tip it was, no commit of the move on it, no private ref left.
+	assert.Equal(t, before, gitIn(t, w.remote, "rev-parse", "refs/heads/"+branch), "the branch on origin never carried the commit")
+	assert.NotContains(t, gitIn(t, w.remote, "log", "--format=%B", "refs/heads/"+branch), "Zmina-Move")
+	assert.Empty(t, gitIn(t, w.remote, "for-each-ref", "refs/zmina-move"), "the private ref is gone from origin")
+	assert.Empty(t, gitIn(t, w.repo("alpha"), "for-each-ref", "refs/zmina-move"))
+	assert.Empty(t, gitIn(t, w.repo("beta"), "for-each-ref", "refs/zmina-move"))
+
+	// beta: the branch is origin's, the work is in the files, uncommitted, and git status says what it said on alpha.
+	assert.Equal(t, before, gitIn(t, moved.Worktree, "rev-parse", "HEAD"))
+	assert.Equal(t, gitIn(t, w.remote, "rev-parse", "refs/heads/"+branch), gitIn(t, w.repo("beta"), "rev-parse", "refs/heads/"+branch),
+		"the local branch equals origin's: the role's next push is a fast-forward")
 	assert.Equal(t, "form v2, not committed\n", readFile(t, filepath.Join(moved.Worktree, "form.txt")))
 	assert.Equal(t, "new file\n", readFile(t, filepath.Join(moved.Worktree, "extra.txt")))
 	assert.NoFileExists(t, filepath.Join(moved.Worktree, "debug.log"))
-
-	status := gitIn(t, moved.Worktree, "status", "--short")
-	assert.Contains(t, status, "form.txt")
-	assert.Contains(t, status, "extra.txt")
-	assert.NotContains(t, status, "debug.log")
+	assert.Equal(t, statusBefore, gitIn(t, moved.Worktree, "status", "--porcelain"))
 }
 
 // The owner's node can be the one the role goes to: its own steps are the target's, and the other node is asked for the source's.
@@ -653,7 +656,7 @@ func TestMoveOfARoleThatHoldsNothingOnlyPlacesIt(t *testing.T) {
 // The crash tests: the process dies at a phase (the step ends there with what was written left as it is), and --resume goes on from
 // where the move stood, to the same end as an uninterrupted one.
 func TestMoveCrashAtEachPhaseThenResume(t *testing.T) {
-	for _, phase := range []string{"begun", "asked", "released", "ready", "owner-before-take", "taken-git", "taken-import", "taken-flip", "taken",
+	for _, phase := range []string{"begun", "asked", "released", "ready", "owner-before-take", "taking", "taken-git", "taken-import", "taken-flip", "taken",
 		"owner-after-take", "commit-items", "commit-flip"} {
 		t.Run(phase, func(t *testing.T) {
 			w := newMoveWorld(t, "alpha")
@@ -691,6 +694,7 @@ func TestMoveAbortAtEachPhaseRestartsTheRoleHere(t *testing.T) {
 			_, wt, branch := w.work(true)
 
 			alphaBefore, betaBefore := w.sums()
+			tipBefore, statusBefore := gitIn(t, wt, "rev-parse", "HEAD"), gitIn(t, wt, "status", "--porcelain")
 
 			w.crash(phase)
 
@@ -727,17 +731,16 @@ func TestMoveAbortAtEachPhaseRestartsTheRoleHere(t *testing.T) {
 			assert.Equal(t, alphaBefore, a, "the file did not change")
 			assert.Equal(t, betaBefore, b)
 
-			// The uncommitted work is where it was: in the files, uncommitted, unless it was pushed (then the commit stays).
+			// The uncommitted work is where it was: in the files, uncommitted, whatever phase the move stopped at. The move never commits it
+			// on the branch, so there is nothing to undo, and the private refs it made (a pushed one included) are gone.
 			assert.Equal(t, "form v2, not committed\n", readFile(t, filepath.Join(wt, "form.txt")))
+			assert.NotContains(t, gitIn(t, wt, "log", "-1", "--format=%B"), "Zmina-Move")
+			assert.Equal(t, tipBefore, gitIn(t, wt, "rev-parse", "HEAD"), "the branch is where it was")
+			assert.Equal(t, statusBefore, gitIn(t, wt, "status", "--porcelain"))
+			assert.Empty(t, gitIn(t, w.repo("alpha"), "for-each-ref", "refs/zmina-move"))
+			assert.Empty(t, gitIn(t, w.remote, "for-each-ref", "refs/zmina-move"), "nothing of the move is left on origin")
 
-			if phase == "ready" {
-				assert.Contains(t, gitIn(t, wt, "log", "-1", "--format=%B"), "Zmina-Move: "+id, "a commit that is on origin stays")
-			} else {
-				assert.NotContains(t, gitIn(t, wt, "log", "-1", "--format=%B"), "Zmina-Move", "a commit that was not pushed is undone")
-				assert.Contains(t, gitIn(t, wt, "status", "--short"), "form.txt")
-			}
-
-			_ = branch
+			_, _ = branch, id
 		})
 	}
 }
@@ -972,6 +975,13 @@ func TestMovePreflightRefusalsNameTheField(t *testing.T) {
 		"the role is not in the target": {func(s, d *move.Facts) { d.Known = false }, false, `no role "dev" in the crew file on beta`},
 		"a queue":                       {func(s, d *move.Facts) { s.Queued = 2 }, false, "dev has 2 queued lines that a move does not carry"},
 		"a dirty directory":             {func(s, d *move.Facts) { s.Dirty = []string{"~/work/acme (the role's directory)"} }, false, "holds uncommitted work that a move does not carry: ~/work/acme (the role's directory)"},
+		"a worktree that cannot travel": {func(s, d *move.Facts) { s.Unfit = []string{"T-2: the worktree has a merge in progress"} }, false, "dev holds work a move cannot carry: T-2: the worktree has a merge in progress"},
+		"the same, with --force":        {func(s, d *move.Facts) { s.Unfit = []string{"T-2: conflicts"} }, true, "holds work a move cannot carry: T-2: conflicts"},
+		"an unfinished take there":      {func(s, d *move.Facts) { d.Taking = "mv-0123456789ab" }, false, "beta holds a take of dev (mv-0123456789ab) that was not finished: zmina move dev alpha --abort mv-0123456789ab"},
+		"the push URL differs": {func(s, d *move.Facts) {
+			s.Repos[0].Push, d.Repos[0].Push = "git@example.com:acme/app.git", "git@example.com:fork/app.git"
+		}, false,
+			"the URL pushes to origin go to differs (a pushurl, or a url rewrite): git@example.com:acme/app.git on alpha, git@example.com:fork/app.git on beta"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s, d := src, dst

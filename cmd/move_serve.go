@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,6 +32,9 @@ var (
 	moveGrace = shift.MoveGrace
 	// movePollEvery is how often the owner's node asks the node the role leaves how far the move is; tests shorten it.
 	movePollEvery = 2 * time.Second
+	// moveLockWait is how long a commit or an abort waits for a step of the same move that is running at the node (a poll that is in
+	// a push to origin) before it says so and leaves it to a next try; tests shorten it.
+	moveLockWait = 30 * time.Second
 )
 
 // fault is where a test makes a node's process "die": the hook returns an error for the phase it names, and the step ends there, with
@@ -40,7 +44,24 @@ func (a *app) fault(phase string) error {
 		return nil
 	}
 
-	return a.moveFault(phase)
+	if err := a.moveFault(phase); err != nil {
+		return &diedError{err}
+	}
+
+	return nil
+}
+
+// diedError is a fault of a test: the process "died" there, so what it did is left as it is, with no clean-up of its own (a dead process
+// cleans nothing; the next step, or the abort, does).
+type diedError struct{ err error }
+
+func (e *diedError) Error() string { return e.err.Error() }
+func (e *diedError) Unwrap() error { return e.err }
+
+func died(err error) bool {
+	var d *diedError
+
+	return errors.As(err, &d)
 }
 
 // moveApp is the app a step of a move runs on, aimed at one of this node's crews by its key (never a path), and silent: the node's
@@ -59,6 +80,12 @@ func (a *app) moveApp(key string) (*app, error) {
 
 // localRoleMove is a step of a move asked of this node (role/move).
 func (a *app) localRoleMove(call mesh.MoveCall) ([]byte, error) {
+	return a.localRoleMoveCtx(context.Background(), call)
+}
+
+// localRoleMoveCtx is localRoleMove that gives up its slow steps (the push to origin) when ctx ends: the ticker's beat has a time of its
+// own, and a step it cannot finish in it goes on at the next beat.
+func (a *app) localRoleMoveCtx(ctx context.Context, call mesh.MoveCall) ([]byte, error) {
 	if err := mesh.CheckMoveCall("role/move", call); err != nil {
 		return nil, err
 	}
@@ -76,11 +103,13 @@ func (a *app) localRoleMove(call mesh.MoveCall) ([]byte, error) {
 	case "begin":
 		out, err = c.moveBegin(call)
 	case "poll":
-		out, err = c.movePoll(call)
+		out, err = c.movePoll(ctx, call)
 	case "commit":
-		out, err = c.moveCommit(call)
+		out, err = c.moveCommit(ctx, call)
 	case "abort":
-		out, err = c.moveAbort(call)
+		out, err = c.moveAbort(ctx, call)
+	case "cancel":
+		out, err = c.moveCancel(call)
 	}
 
 	if err != nil {
@@ -114,6 +143,7 @@ func repoFact(top string) move.RepoFact {
 
 	f.Found = true
 	f.Origin, _ = worktree.Origin(got)
+	f.Push, _ = worktree.PushOrigin(got)
 
 	return f
 }
@@ -151,6 +181,26 @@ func dirtyOf(r *crew.Role, tasks []task.Task) []string {
 	return out
 }
 
+// unfitOf names the worktrees of the tasks whose uncommitted work cannot travel: a merge, rebase, cherry-pick or revert in progress,
+// conflicts, a nested repository, a worktree that is not on the task's branch. No --force carries them, so the owner is told before the
+// role is touched. Each is "T-n: <what>".
+func unfitOf(tasks []task.Task) []string {
+	var out []string
+
+	for _, t := range tasks {
+		if t.Repo == "" || t.Branch == "" || !dirExists(t.Worktree) {
+			continue
+		}
+
+		tree := &worktree.Tree{Repo: t.Repo, Path: t.Worktree, Branch: t.Branch, Base: t.Base}
+		if err := tree.CheckCarry(); err != nil {
+			out = append(out, t.ID+": "+err.Error())
+		}
+	}
+
+	return out
+}
+
 // moveCheck is what this node says of itself for a move of the role: its crew file, its crew's place, where the file puts the role,
 // and, for the node the role leaves, what the role holds. A check that names repositories (the node the role goes to) answers for those.
 func (a *app) moveCheck(call mesh.MoveCall) (move.Facts, error) {
@@ -178,6 +228,12 @@ func (a *app) moveCheck(call mesh.MoveCall) (move.Facts, error) {
 
 	f := move.Facts{Node: me.Name, Sum: cr.Sum(), Dir: move.Portable(cr.Dir), Namespace: move.Portable(cr.Namespace), Spread: cr.Spread(),
 		Listed: cr.HasNode(me.Name), Moving: move.OpenID(cr.Layout(), call.Role)}
+
+	if m, ok, err := move.OpenTaking(cr.Layout(), call.Role); err != nil {
+		f.Taking = "unreadable"
+	} else if ok {
+		f.Taking = m.ID
+	}
 
 	r := cr.Roles[call.Role]
 	if r == nil {
@@ -211,6 +267,7 @@ func (a *app) moveCheck(call mesh.MoveCall) (move.Facts, error) {
 		}
 
 		f.Dirty = dirtyOf(r, held)
+		f.Unfit = unfitOf(held)
 		f.Repos = repoFactsOf(r, held)
 
 		return nil
@@ -267,6 +324,12 @@ func (a *app) moveBegin(call mesh.MoveCall) (move.PollAnswer, error) {
 		return move.PollAnswer{}, errors.New("begin: the body names the node the role goes to")
 	}
 
+	// What cannot travel at all is found before the lock is taken, and before the role is touched: git reads the worktrees, which is not
+	// work for the state lock. A move that is open already is not asked again.
+	if err := a.refuseUnfit(call.Role); err != nil {
+		return move.PollAnswer{}, err
+	}
+
 	var out move.PollAnswer
 
 	err := a.withState(func(s *shift.Shift) error {
@@ -278,6 +341,7 @@ func (a *app) moveBegin(call mesh.MoveCall) (move.PollAnswer, error) {
 		} else if open {
 			if j.ID == call.Move {
 				out = answerOf(j, "the move is open already")
+				out.Holds = journalHolds(j)
 
 				return nil
 			}
@@ -367,6 +431,7 @@ func (a *app) moveBegin(call mesh.MoveCall) (move.PollAnswer, error) {
 		}
 
 		out = answerOf(j, why)
+		out.Holds = journalHolds(j)
 
 		return a.fault("asked")
 	})
@@ -374,9 +439,44 @@ func (a *app) moveBegin(call mesh.MoveCall) (move.PollAnswer, error) {
 	return out, err
 }
 
+// refuseUnfit is the refusal of a begin of a move of the role while a worktree of its tasks holds work that cannot travel, naming it
+// (unfitOf); a role with no such worktree, and a role whose move is open already, pass.
+func (a *app) refuseUnfit(role string) error {
+	var unfit []string
+
+	err := a.readState(func(s *shift.Shift) error {
+		if _, open, _ := move.Open(s.Crew.Layout(), role); open {
+			return nil
+		}
+
+		unfit = unfitOf(s.MoveHeld(role))
+
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	if len(unfit) > 0 {
+		return fmt.Errorf("%s holds work a move cannot carry: %s", role, strings.Join(unfit, "; "))
+	}
+
+	return nil
+}
+
+// journalHolds are the ids of the tasks a journal carries.
+func journalHolds(j move.Journal) []string {
+	ids := make([]string, 0, len(j.Tasks))
+	for _, t := range j.Tasks {
+		ids = append(ids, t.ID)
+	}
+
+	return ids
+}
+
 // movePoll moves the move on at the node the role leaves, as far as it will go now, and says how far it is; at the node the role went to
-// it says whether that node took the work.
-func (a *app) movePoll(call mesh.MoveCall) (move.PollAnswer, error) {
+// it says whether that node took the work, is taking it, or the move was called off there.
+func (a *app) movePoll(ctx context.Context, call mesh.MoveCall) (move.PollAnswer, error) {
 	cr, err := crew.Load(a.crewPath())
 	if err != nil {
 		return move.PollAnswer{}, err
@@ -390,7 +490,7 @@ func (a *app) movePoll(call mesh.MoveCall) (move.PollAnswer, error) {
 	case err != nil:
 		return move.PollAnswer{}, err
 	case open && j.ID == call.Move:
-		return a.moveAdvance(call.Role, call.Move)
+		return a.moveAdvance(ctx, call.Role, call.Move)
 	case open:
 		return move.PollAnswer{State: move.StateNone, Why: "another move of " + call.Role + " is open here: " + j.ID}, nil
 	}
@@ -401,14 +501,66 @@ func (a *app) movePoll(call mesh.MoveCall) (move.PollAnswer, error) {
 		return move.PollAnswer{State: move.StateTaken, Taken: &rec}, nil
 	}
 
+	if m, ok, err := move.OpenTaking(layout, call.Role); err != nil {
+		return move.PollAnswer{}, err
+	} else if ok && m.ID == call.Move {
+		return move.PollAnswer{State: move.StateTaking, Why: takingWhy(layout, call.Role, m)}, nil
+	}
+
+	if gone, err := move.Aborted(layout, call.Move); err != nil {
+		return move.PollAnswer{}, err
+	} else if gone {
+		return move.PollAnswer{State: move.StateAborted, Why: "the move was called off here: a take of it is refused"}, nil
+	}
+
 	return move.PollAnswer{State: move.StateNone}, nil
+}
+
+// takingWhy says what a marker of a take means: whether the take is running (its lock is held) or was cut short.
+func takingWhy(layout crew.Layout, role string, m move.Taking) string {
+	release, err := move.Lock(layout, role, 0)
+	if errors.Is(err, move.ErrBusy) {
+		return "a take of " + m.ID + " is running here"
+	}
+
+	if err == nil {
+		release()
+	}
+
+	return "a take of " + m.ID + " was cut short here: zmina move " + role + " <node> --resume " + m.ID + " takes it again, --abort " + m.ID + " takes away what it made and calls the move off"
 }
 
 // moveAdvance does what the move at this node waits for, one step after another until one has to wait: the role is asked to park
 // (again, if the asking did not land), what it did not park in its grace is parked for it, it is put down and kept down, each task's
-// branch is pushed to origin (a worktree with uncommitted work is committed first, with the move's trailer), and the bundle is built
-// and kept in the journal. Each step is the state as it finds it, so a move that was cut short anywhere goes on from there.
-func (a *app) moveAdvance(role, id string) (move.PollAnswer, error) {
+// branch is pushed to origin (a worktree with uncommitted work is committed first, with the move's trailer, under a private ref), and
+// the bundle is built and kept in the journal. Each step is the state as it finds it, so a move that was cut short anywhere goes on
+// from there. One advance of a role's move runs at a node at a time (the move's lock): a second, from another beat, a command or the
+// other node's ticker, is told what the first is doing and touches nothing.
+func (a *app) moveAdvance(ctx context.Context, role, id string) (move.PollAnswer, error) {
+	cr, err := crew.Load(a.crewPath())
+	if err != nil {
+		return move.PollAnswer{}, err
+	}
+
+	layout := cr.Layout()
+
+	release, err := move.Lock(layout, role, 0)
+	if errors.Is(err, move.ErrBusy) {
+		j, _, _ := move.Open(layout, role)
+
+		return answerOf(j, "another step of this move is running on this node (a push to origin, most likely): the next poll sees how far it got"), nil
+	}
+
+	if err != nil {
+		return move.PollAnswer{}, err
+	}
+
+	defer release()
+
+	return a.moveAdvanceLocked(ctx, role, id)
+}
+
+func (a *app) moveAdvanceLocked(ctx context.Context, role, id string) (move.PollAnswer, error) {
 	var (
 		j       move.Journal
 		pending string
@@ -469,18 +621,28 @@ func (a *app) moveAdvance(role, id string) (move.PollAnswer, error) {
 			}
 		}
 
-		for i := range j.Tasks {
-			t, err := s.Tasks.Get(j.Tasks[i].ID)
+		// A task the role closed during its grace (done, dropped) is no work to carry: it leaves the journal. One that is neither parked
+		// nor closed was changed by hand, which is the owner's to look at.
+		kept := make([]move.Task, 0, len(j.Tasks))
+
+		for _, jt := range j.Tasks {
+			t, err := s.Tasks.Get(jt.ID)
 			if err != nil {
 				return err
 			}
 
-			if t.State != task.Parked {
+			switch {
+			case t.State == task.Parked:
+				jt.Item = t.Later
+				kept = append(kept, jt)
+			case !t.State.Active():
+				s.Log(role, "move", t.ID, t.ID+" is "+string(t.State)+": left out of move "+j.ID)
+			default:
 				return fmt.Errorf("%s is %s: a move carries a task parked, and this one was changed by hand", t.ID, t.Status())
 			}
-
-			j.Tasks[i].Item = t.Later
 		}
+
+		j.Tasks = kept
 
 		if wait, err = s.MoveBeginDown(role, j.Force); err != nil {
 			pending = "waiting to put " + role + " down: " + err.Error()
@@ -530,13 +692,14 @@ func (a *app) moveAdvance(role, id string) (move.PollAnswer, error) {
 		return answerOf(j, ""), nil
 	}
 
-	return a.moveHandoff(j)
+	return a.moveHandoff(ctx, j)
 }
 
-// moveHandoff is the git of a move and the bundle: each task's branch goes to origin (the uncommitted work of its worktree as one commit
-// with the move's trailer, the files left as they were), and the work that travels is put in the journal. It holds no state lock: git
-// talks to a remote, and the role is down and kept down by the journal, so nothing else changes what it works on.
-func (a *app) moveHandoff(j move.Journal) (move.PollAnswer, error) {
+// moveHandoff is the git of a move and the bundle: each task's branch goes to origin as it is, and the uncommitted work of its worktree,
+// made one commit with the move's trailer, goes there too, under a private ref and never on the branch; the work that travels is put in
+// the journal. It holds no state lock: git talks to a remote, and the role is down and kept down by the journal, so nothing else
+// changes what it works on. It runs under the move's lock, so nothing else writes the journal meanwhile either.
+func (a *app) moveHandoff(ctx context.Context, j move.Journal) (move.PollAnswer, error) {
 	cr, err := crew.Load(a.crewPath())
 	if err != nil {
 		return move.PollAnswer{}, err
@@ -556,10 +719,15 @@ func (a *app) moveHandoff(j move.Journal) (move.PollAnswer, error) {
 			return move.PollAnswer{}, err
 		}
 
-		bt, err := a.moveHandTask(cr, j, jt, t)
+		bt, err := a.moveHandTask(ctx, cr, j, jt, t)
 		if err != nil {
 			// What is wrong is told on every poll, and git is tried again: a remote that was down, a branch that moved.
-			return answerOf(j, "handing over "+t.ID+": "+err.Error()), nil
+			why := "handing over " + t.ID + ": " + err.Error()
+			if ctx.Err() != nil {
+				why += fmt.Sprintf(" (the ticker's beat gives a step %s; zmina move %s %s --resume has no such limit)", moveBeatBudget, j.Role, j.To)
+			}
+
+			return answerOf(j, why), nil
 		}
 
 		b.Tasks = append(b.Tasks, bt)
@@ -586,8 +754,10 @@ func (a *app) moveHandoff(j move.Journal) (move.PollAnswer, error) {
 	return answerOf(j, ""), nil
 }
 
-// moveHandTask is the task's part of the bundle, after its branch is on origin.
-func (a *app) moveHandTask(cr *crew.Crew, j move.Journal, jt *move.Task, t task.Task) (move.BTask, error) {
+// moveHandTask is the task's part of the bundle, after its branch is on origin: the branch as it is, and the commit of the worktree's
+// uncommitted work on the private ref of the move there. The journal is saved as soon as that commit is made, before anything is pushed:
+// an abort that finds the journal finds the ref.
+func (a *app) moveHandTask(ctx context.Context, cr *crew.Crew, j move.Journal, jt *move.Task, t task.Task) (move.BTask, error) {
 	bt := move.BTask{ID: t.ID, Asked: t.Asked, Title: t.Title, Criteria: t.Criteria, Project: t.Project, URL: t.URL, Budget: t.Budget,
 		Note: t.Note, Incomplete: t.HandoffIncomplete}
 
@@ -607,15 +777,20 @@ func (a *app) moveHandTask(cr *crew.Crew, j move.Journal, jt *move.Task, t task.
 
 	if t.Branch != "" {
 		tree := &worktree.Tree{Repo: t.Repo, Path: t.Worktree, Branch: t.Branch, Base: t.Base}
+		n := move.TaskNumber(t.ID)
 
 		if jt.WIP == "" && dirExists(t.Worktree) {
-			commit, made, err := tree.CommitWIP(j.ID)
+			commit, made, err := tree.CommitWIP(j.ID, n)
 			if err != nil {
 				return bt, err
 			}
 
 			if made {
 				jt.WIP = commit
+
+				if err := move.Save(cr.Layout(), j); err != nil {
+					return bt, err
+				}
 			}
 		}
 
@@ -628,21 +803,30 @@ func (a *app) moveHandTask(cr *crew.Crew, j move.Journal, jt *move.Task, t task.
 			return bt, fmt.Errorf("the branch %s is gone from %s", t.Branch, t.Repo)
 		}
 
-		// A commit an earlier try of this step made, whose answer was lost.
-		if jt.WIP == "" {
-			if carries, _ := worktree.CarriesMove(t.Repo, tip, j.ID); carries {
-				jt.WIP = tip
+		if jt.WIP != "" {
+			if parent, err := worktree.RevParse(t.Repo, jt.WIP+"^"); err != nil || parent != tip {
+				return bt, fmt.Errorf("the branch %s moved since the uncommitted work was committed (it is at %s, the work is over %s)", t.Branch,
+					tip[:12], strings.TrimSpace(parent))
 			}
 		}
 
 		if !jt.Pushed || jt.Tip != tip {
-			if err := worktree.Push(t.Repo, t.Branch); err != nil {
+			if err := worktree.PushContext(ctx, t.Repo, t.Branch); err != nil {
 				return bt, err
 			}
 		}
 
 		jt.Branch, jt.Tip, jt.Pushed = t.Branch, tip, true
-		bt.Branch, bt.Base, bt.Fork, bt.Tip, bt.WIP = t.Branch, t.Base, t.Fork, tip, jt.WIP != "" && jt.WIP == tip
+
+		if jt.WIP != "" && !jt.WIPPushed {
+			if err := worktree.PushWIP(ctx, t.Repo, jt.WIP, j.ID, n); err != nil {
+				return bt, err
+			}
+
+			jt.WIPPushed = true
+		}
+
+		bt.Branch, bt.Base, bt.Fork, bt.Tip, bt.WIP = t.Branch, t.Base, t.Fork, tip, jt.WIP
 	}
 
 	for kind, ref := range map[string]*record.Ref{"checkpoint": t.Checkpoint, "result": t.Result} {
@@ -679,10 +863,88 @@ func dirExists(p string) bool {
 	return err == nil && st.IsDir()
 }
 
+// moveRefAt is a private ref of a move in a repository of this node.
+type moveRefAt struct {
+	repo, ref string
+}
+
+// moveRefsOf are the private refs of the journal's move in the repositories of its tasks: the local ones that are there, found by
+// listing (so that a ref a crash left before the journal was saved is found as well), and the ones of the tasks that carried uncommitted
+// work, which are on origin too.
+func moveRefsOf(s *shift.Shift, j move.Journal) []moveRefAt {
+	var out []moveRefAt
+
+	seen := map[string]bool{}
+
+	add := func(repo, ref string) {
+		if key := repo + "\x00" + ref; !seen[key] {
+			seen[key] = true
+			out = append(out, moveRefAt{repo, ref})
+		}
+	}
+
+	for _, jt := range j.Tasks {
+		t, err := s.Tasks.Get(jt.ID)
+		if err != nil || t.Repo == "" {
+			continue
+		}
+
+		if refs, err := worktree.MoveRefs(t.Repo, j.ID); err == nil {
+			for _, r := range refs {
+				add(t.Repo, r)
+			}
+		}
+
+		if jt.WIP != "" {
+			add(t.Repo, worktree.MoveRef(j.ID, move.TaskNumber(jt.ID)))
+		}
+	}
+
+	return out
+}
+
+// dropMoveRefs takes the private refs of a move away: the local ones now, and origin's as far as origin answers in the time given (a
+// ref that stays there is clutter, not work: nothing is lost by it).
+func dropMoveRefs(ctx context.Context, refs []moveRefAt) (left []string) {
+	for _, r := range refs {
+		_ = worktree.DropRef(r.repo, r.ref)
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, moveRefTimeout)
+	defer cancel()
+
+	done := map[string]bool{}
+
+	for _, r := range refs {
+		if key := r.repo + "\x00" + r.ref; !done[key] {
+			done[key] = true
+
+			if err := worktree.DeleteRemoteRef(ctx, r.repo, r.ref); err != nil {
+				left = append(left, r.ref+" ("+err.Error()+")")
+			}
+		}
+	}
+
+	return left
+}
+
+// moveRefTimeout is how long taking the private refs of a move off origin may take after the move is over or called off.
+const moveRefTimeout = 10 * time.Second
+
+// lockMove takes the move's lock for a step that must not run beside another: it waits for it up to moveLockWait.
+func lockMove(layout crew.Layout, role string) (func(), error) {
+	release, err := move.Lock(layout, role, moveLockWait)
+	if errors.Is(err, move.ErrBusy) {
+		return nil, fmt.Errorf("a step of the move of %s is still running on this node (a push to origin, most likely): try again in a minute", role)
+	}
+
+	return release, err
+}
+
 // moveCommit ends the move at the node the role left: each parked item is closed as taken by the task it became there, the role's place
 // is flipped in this node's file (the same edit the other end made, so the two files are one file again), and the journal is closed.
 // A commit made again, once the journal is gone and the file places the role where the body says, is the same commit.
-func (a *app) moveCommit(call mesh.MoveCall) (move.PollAnswer, error) {
+func (a *app) moveCommit(ctx context.Context, call mesh.MoveCall) (move.PollAnswer, error) {
 	var body move.CommitBody
 
 	if err := json.Unmarshal(call.Payload, &body); err != nil || !move.ValidNode(body.To) {
@@ -695,9 +957,25 @@ func (a *app) moveCommit(call mesh.MoveCall) (move.PollAnswer, error) {
 		}
 	}
 
-	var out move.PollAnswer
+	cr, err := crew.Load(a.crewPath())
+	if err != nil {
+		return move.PollAnswer{}, err
+	}
 
-	err := a.withState(func(s *shift.Shift) error {
+	// A poll that is in a push is let finish: it would write the journal after this closed it.
+	release, err := lockMove(cr.Layout(), call.Role)
+	if err != nil {
+		return move.PollAnswer{}, err
+	}
+
+	defer release()
+
+	var (
+		out  move.PollAnswer
+		refs []moveRefAt
+	)
+
+	err = a.withState(func(s *shift.Shift) error {
 		cr, role := s.Crew, call.Role
 		layout := cr.Layout()
 
@@ -736,7 +1014,7 @@ func (a *app) moveCommit(call mesh.MoveCall) (move.PollAnswer, error) {
 			return err
 		}
 
-		if err := a.placeRole(cr, role, j.To, j.Base, j.After, call.By); err != nil {
+		if _, err := a.placeRole(cr, role, j.To, j.Base, j.After, call.By); err != nil {
 			return err
 		}
 
@@ -745,48 +1023,109 @@ func (a *app) moveCommit(call mesh.MoveCall) (move.PollAnswer, error) {
 		}
 
 		out = move.PollAnswer{State: move.StateCommitted, Why: "closed"}
+		refs = moveRefsOf(s, j)
 
 		return move.Close(layout, role)
 	})
+	if err != nil {
+		return out, err
+	}
 
-	return out, err
+	// The move is over: its private refs have done their work (the other node took the work, or it could not have said so).
+	if left := dropMoveRefs(ctx, refs); len(left) > 0 {
+		out.Why += "; left on origin: " + strings.Join(left, ", ")
+	}
+
+	return out, nil
 }
 
-// placeRole writes the move into this node's crew file: place: <node> for the role, the same edit on both nodes. The file is the one the
-// move was made from (base), or already the one it makes (after).
-func (a *app) placeRole(cr *crew.Crew, role, node, base, after, by string) error {
+// placeCheck is what placeRole asks before it writes anything, and what a take asks before it keeps its receipt: the file here is the one
+// the move was made from (base) or already the one it makes (after), and the place edit this node makes of it is the one the move says
+// (after): a node whose zmina writes the edit differently would otherwise leave the two files two files and say they were one. changed
+// says the file has still to be written.
+func placeCheck(cr *crew.Crew, role, node, base, after string) (raw []byte, changed bool, err error) {
 	cur := cr.Sum()
 
-	if raw, err := os.ReadFile(cr.Path); err == nil {
+	raw, rerr := os.ReadFile(cr.Path)
+	if rerr == nil {
 		cur = crew.SumOf(raw)
 	}
 
 	switch cur {
 	case after:
-		return nil
+		return raw, false, nil
 	case base:
 	default:
-		return fmt.Errorf("the crew file here is %s, not the one the move was made from (%s): it was changed meanwhile; "+
+		return nil, false, fmt.Errorf("the crew file here is %s, not the one the move was made from (%s): it was changed meanwhile; "+
 			"zmina crew push, then zmina move again", cur[:12], base[:12])
 	}
 
-	saved, _, _, err := crew.MovePlace(cr.Path, role, node, base, by, "zmina move")
+	if rerr != nil {
+		return nil, false, fmt.Errorf("crew: %w", rerr)
+	}
+
+	edited, err := crew.PlaceAfter(raw, role, node)
 	if err != nil {
-		return err
+		return nil, false, err
+	}
+
+	if got := crew.SumOf(edited); got != after {
+		return nil, false, fmt.Errorf("the place edit makes a crew file of %s here, not %s that the move was made for: the two nodes' zmina write the "+
+			"file differently (update the older one); nothing was written", got[:12], after[:12])
+	}
+
+	return raw, true, nil
+}
+
+// placeRole writes the move into this node's crew file: place: <node> for the role, the same edit on both nodes (placeCheck says it is the
+// edit the move means). It returns the sum of the file there.
+func (a *app) placeRole(cr *crew.Crew, role, node, base, after, by string) (string, error) {
+	_, changed, err := placeCheck(cr, role, node, base, after)
+	if err != nil {
+		return "", err
+	}
+
+	if !changed {
+		return after, nil
+	}
+
+	saved, sum, _, err := crew.MovePlace(cr.Path, role, node, base, by, "zmina move")
+	if err != nil {
+		return "", err
+	}
+
+	if sum != after {
+		return "", fmt.Errorf("the crew file written here is %s, not %s that the move was made for", sum[:12], after[:12])
 	}
 
 	logCrewVersions(eventLog(cr), saved.Versions)
 
-	return nil
+	return sum, nil
 }
 
-// moveAbort calls the move off at the node the role left: the parked tasks are open again, the uncommitted work that a commit of the move
-// made and that was not pushed is given back to its worktree, the items are closed, the journal is gone, and the role is started on its
-// work again.
-func (a *app) moveAbort(call mesh.MoveCall) (move.PollAnswer, error) {
-	var out move.PollAnswer
+// moveAbort calls the move off at the node the role left: the parked tasks are open again, the private refs the move made (of the
+// uncommitted work: the worktrees themselves were never touched) are taken away, the items are closed, the journal is gone, and the role
+// is started on its work again. It does not wait for a step of the move that is running at the node: it waits for it up to a time, then
+// says so.
+func (a *app) moveAbort(ctx context.Context, call mesh.MoveCall) (move.PollAnswer, error) {
+	cr, err := crew.Load(a.crewPath())
+	if err != nil {
+		return move.PollAnswer{}, err
+	}
 
-	err := a.withState(func(s *shift.Shift) error {
+	release, err := lockMove(cr.Layout(), call.Role)
+	if err != nil {
+		return move.PollAnswer{}, err
+	}
+
+	defer release()
+
+	var (
+		out  move.PollAnswer
+		refs []moveRefAt
+	)
+
+	err = a.withState(func(s *shift.Shift) error {
 		role := call.Role
 		layout := s.Crew.Layout()
 
@@ -801,19 +1140,7 @@ func (a *app) moveAbort(call mesh.MoveCall) (move.PollAnswer, error) {
 			return fmt.Errorf("the move open here is %s, not %s", j.ID, call.Move)
 		}
 
-		// A commit the move made of a worktree's work, not on origin yet, is undone; one that is on origin stays: the branch there has it.
-		for _, jt := range j.Tasks {
-			if jt.WIP == "" || jt.Pushed {
-				continue
-			}
-
-			if t, err := s.Tasks.Get(jt.ID); err == nil && t.Worktree != "" {
-				tree := &worktree.Tree{Repo: t.Repo, Path: t.Worktree, Branch: t.Branch}
-				if _, err := tree.UndoWIP(j.ID); err != nil {
-					return fmt.Errorf("%s: the commit the move made of %s could not be undone: %w", t.ID, t.Worktree, err)
-				}
-			}
-		}
+		refs = moveRefsOf(s, j)
 
 		back, err := s.MoveUnpark(j)
 		if err != nil {
@@ -842,8 +1169,131 @@ func (a *app) moveAbort(call mesh.MoveCall) (move.PollAnswer, error) {
 
 		return nil
 	})
+	if err != nil {
+		return out, err
+	}
+
+	if left := dropMoveRefs(ctx, refs); len(left) > 0 {
+		out.Why += "; left on origin: " + strings.Join(left, ", ")
+	}
+
+	return out, nil
+}
+
+// moveCancel is the abort's step at the node the role would go to: a take that runs, or is done (its receipt is there), is no move to
+// call off, and it says so; what a take that was cut short made is taken away; and the tombstone of the move is left, so that no take of
+// it runs afterwards (a stale owner process that still holds the bundle is refused). The answer says which.
+func (a *app) moveCancel(call mesh.MoveCall) (move.PollAnswer, error) {
+	cr, err := crew.Load(a.crewPath())
+	if err != nil {
+		return move.PollAnswer{}, err
+	}
+
+	layout := cr.Layout()
+
+	if rec, ok, err := move.Receipt(layout, call.Move); err != nil {
+		return move.PollAnswer{}, err
+	} else if ok {
+		return move.PollAnswer{State: move.StateTaken, Taken: &rec}, nil
+	}
+
+	// The take holds this lock from its first side effect to its end: a cancel never meets one half-way.
+	release, err := move.Lock(layout, call.Role, 0)
+	if errors.Is(err, move.ErrBusy) {
+		return move.PollAnswer{State: move.StateTaking, Why: "a take of " + call.Move + " is running here"}, nil
+	}
+
+	if err != nil {
+		return move.PollAnswer{}, err
+	}
+
+	defer release()
+
+	var out move.PollAnswer
+
+	err = a.withState(func(s *shift.Shift) error {
+		layout := s.Crew.Layout()
+
+		// A take that ended while this waited for the lock.
+		if rec, ok, err := move.Receipt(layout, call.Move); err != nil {
+			return err
+		} else if ok {
+			out = move.PollAnswer{State: move.StateTaken, Taken: &rec}
+
+			return nil
+		}
+
+		why := "a tombstone of the move is left: a take of it is refused here"
+
+		if m, ok, err := move.OpenTaking(layout, call.Role); err != nil {
+			return err
+		} else if ok && m.ID == call.Move {
+			if err := a.cleanupTake(s, m); err != nil {
+				return err
+			}
+
+			why = "what a take that was cut short made is taken away, and " + why
+		}
+
+		if err := move.SaveAborted(layout, move.Tombstone{ID: call.Move, Role: call.Role, At: s.Now()}); err != nil {
+			return err
+		}
+
+		s.Log(call.Role, "move-cancelled", call.Move, "no take of it runs here")
+
+		out = move.PollAnswer{State: move.StateAborted, Why: why}
+
+		return nil
+	})
 
 	return out, err
+}
+
+// cleanupTake takes away what a take that did not get its receipt made: the tasks it imported (found by their origin, the role, the
+// move's id in their note and an active state) are dropped with their worktrees, its private refs go, and so does its marker. It runs
+// under the state lock, and under the move's lock, so no take is running; it is the first thing the next take of the move does, and the
+// abort's.
+func (a *app) cleanupTake(s *shift.Shift, m move.Taking) error {
+	all, err := s.Tasks.All()
+	if err != nil {
+		return err
+	}
+
+	now := s.Now()
+	worktrees := s.Crew.Layout().Worktrees() + string(filepath.Separator)
+
+	for _, t := range all {
+		if t.Role != m.Role || !t.State.Active() || !slices.Contains(m.Origins, t.Origin) || !strings.Contains(t.Note, "(move "+m.ID+")") {
+			continue
+		}
+
+		// The worktree the take made, never one of the role's own: it is under the crew's worktrees, by the task's id, on the task's branch.
+		if t.Worktree != "" && strings.HasPrefix(t.Worktree, worktrees) && worktree.IsWorktreeOf(t.Repo, t.Worktree, t.Branch) {
+			if err := worktree.RemoveWorktree(t.Repo, t.Worktree); err != nil {
+				return fmt.Errorf("%s: the worktree %s the take made could not be removed: %w", t.ID, t.Worktree, err)
+			}
+		}
+
+		note := "a take of move " + m.ID + " was cut short and taken away: the work is still where it came from"
+		t.State, t.Updated, t.Note = task.Dropped, now, strings.TrimSpace(t.Note+" · "+note)
+		t.Closed = &task.Closure{By: "zmina move", At: now, State: task.Dropped, Note: note}
+
+		if err := s.Tasks.Put(t); err != nil {
+			return fmt.Errorf("%s: %w", t.ID, err)
+		}
+
+		s.Log(m.Role, "move", t.ID, "dropped: "+note)
+	}
+
+	for _, repo := range m.Repos {
+		if refs, err := worktree.MoveRefs(repo, m.ID); err == nil {
+			for _, r := range refs {
+				_ = worktree.DropRef(repo, r)
+			}
+		}
+	}
+
+	return move.CloseTaking(s.Crew.Layout(), m.Role)
 }
 
 func taskIDsOf(ts []task.Task) string {

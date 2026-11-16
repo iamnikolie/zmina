@@ -305,8 +305,8 @@ func TestRoleOpsBadRequestsNeverReachTheService(t *testing.T) {
 		"a copy of a role":              {"role/move", func(r *TerminalRequest) { r.Role = "dev#2" }, "a copy, dev#2, does not move"},
 		"no role":                       {"role/take", func(r *TerminalRequest) { r.Role = "" }, "a role's name"},
 		"an upper-case role":            {"role/move", func(r *TerminalRequest) { r.Role = "Dev" }, "a role's name"},
-		"an action that is none":        {"role/move", func(r *TerminalRequest) { r.Action = "restart" }, "check, begin, poll, commit or abort"},
-		"no action":                     {"role/move", func(r *TerminalRequest) { r.Action = "" }, "check, begin, poll, commit or abort"},
+		"an action that is none":        {"role/move", func(r *TerminalRequest) { r.Action = "restart" }, "check, begin, poll, commit, abort or cancel"},
+		"no action":                     {"role/move", func(r *TerminalRequest) { r.Action = "" }, "check, begin, poll, commit, abort or cancel"},
 		"an action on a take":           {"role/take", func(r *TerminalRequest) { r.Action = "begin" }, "a take has no action"},
 		"a move id that is a path":      {"role/move", func(r *TerminalRequest) { r.Move = "../../etc/passwd" }, "the id of a move"},
 		"a move id with a command":      {"role/take", func(r *TerminalRequest) { r.Move = "mv-$(id)" }, "the id of a move"},
@@ -485,4 +485,20 @@ func TestRoleOpsFromACallerThatDidNotSayCrewSyncAreRefusedByTheNode(t *testing.T
 			assert.Empty(t, takes)
 		})
 	}
+}
+
+// Each step of a move is a step the mesh serves, the abort's cancel at the node the role would go to included: nothing else is.
+func TestCheckMoveCallKnowsEachStepOfAMove(t *testing.T) {
+	for _, action := range []string{"check", "begin", "poll", "commit", "abort", "cancel"} {
+		call := MoveCall{Crew: "ops", Role: "dev", Action: action, Move: "mv-0123456789ab"}
+		assert.NoError(t, CheckMoveCall("role/move", call), action)
+	}
+
+	for _, action := range []string{"", "restart", "Cancel", "cancel "} {
+		err := CheckMoveCall("role/move", MoveCall{Crew: "ops", Role: "dev", Action: action, Move: "mv-0123456789ab"})
+		require.Error(t, err, action)
+		assert.Contains(t, err.Error(), "check, begin, poll, commit, abort or cancel", action)
+	}
+
+	require.Error(t, CheckMoveCall("role/move", MoveCall{Crew: "ops", Role: "dev", Action: "cancel", Move: "../x"}), "a cancel names a move by its id")
 }

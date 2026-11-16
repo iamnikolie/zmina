@@ -306,6 +306,10 @@ func commit(path string, raw []byte, check func(string) (*Crew, error), by, how 
 // history's lock is held over the compare and the write, the same lock a push takes, so an edit and a push never both write, and
 // the one that read a file that is gone is refused (ErrChangedMeanwhile) and writes nothing.
 func commitIf(path string, raw []byte, check func(string) (*Crew, error), base, by, how string) (Saved, error) {
+	if err := RefuseWhileMoving(path); err != nil {
+		return Saved{}, err
+	}
+
 	if err := loads(path, raw, check); err != nil {
 		return Saved{}, err
 	}

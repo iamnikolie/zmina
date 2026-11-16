@@ -77,6 +77,8 @@ func TestBundleFieldsAreCheckedAsUntrusted(t *testing.T) {
 		"a branch with no repository":  func(b *Bundle) { b.Tasks[0].Repo, b.Tasks[0].Origin = "", "" },
 		"a tip with no branch":         func(b *Bundle) { b.Tasks[0].Branch = "" },
 		"a criterion of two lines":     func(b *Bundle) { b.Tasks[0].Criteria = []string{"a\nb"} },
+		"a wip that is no commit":      func(b *Bundle) { b.Tasks[0].WIP = "abc" },
+		"a wip that is a ref":          func(b *Bundle) { b.Tasks[0].WIP = "refs/heads/main" },
 		"a negative budget":            func(b *Bundle) { b.Tasks[0].Budget = -1 },
 		"the same task twice":          func(b *Bundle) { b.Tasks = append(b.Tasks, b.Tasks[0]) },
 		"a checkpoint of another kind": func(b *Bundle) { b.Tasks[0].Checkpoint = &record.Document{Kind: "result"} },
@@ -179,4 +181,127 @@ func TestPortablePathsAreHomeRelative(t *testing.T) {
 	assert.Equal(t, "", Portable(""))
 	assert.Equal(t, "/homework", Portable("/homework"), "a sibling that starts with the same letters is no part of home")
 	assert.Equal(t, filepath.Join(home, "x"), Expand("~/x"))
+}
+
+// Every text field of a bundle that is shown or stored loses its control characters: the escape sequences, the bell, the format
+// characters that reorder text. A text of several lines keeps its line breaks, a line of one does not.
+func TestParseBundleStripsControlCharactersFromEveryTextField(t *testing.T) {
+	b := goodBundle()
+	b.Tasks[0].ID = "T-9"
+	esc := "\x1b[2J\x1b]0;pwned\x07"
+
+	b.Tasks[0].Asked = "fix" + esc + "\nthe form\u202e"
+	b.Tasks[0].Note = "note" + esc + "\n\tindented"
+	b.Tasks[0].Title = "Form" + esc + "\nsecond line"
+	b.Tasks[0].Project = "acme" + esc
+	b.Tasks[0].URL = "https://example.com/" + esc
+	b.Tasks[0].Criteria = []string{"it saves" + esc + "\r\nand more"}
+
+	shape := crew.HandoffShape{Sections: []crew.Section{{Name: "summary", Guidance: "what" + esc}}}
+	doc := &record.Document{Kind: "checkpoint", Task: "T-9", Role: "dev", By: "dev" + esc, Shape: shape,
+		Values: map[string]string{"summary": "section" + esc + "\nline two"}}
+	b.Tasks[0].Checkpoint = doc
+
+	raw, err := json.Marshal(b)
+	require.NoError(t, err)
+
+	got, err := ParseBundle(raw)
+	require.NoError(t, err)
+
+	task := got.Tasks[0]
+	assert.Equal(t, "fix[2J]0;pwned\nthe form", task.Asked, "a line break stays in a text of lines; the escape, the bell and the reordering mark go")
+	assert.Equal(t, "note[2J]0;pwned\n\tindented", task.Note)
+	assert.Equal(t, "Form[2J]0;pwned second line", task.Title, "a line break is a space in a line")
+	assert.Equal(t, "acme[2J]0;pwned", task.Project)
+	assert.Equal(t, "https://example.com/[2J]0;pwned", task.URL)
+	assert.Equal(t, []string{"it saves[2J]0;pwned  and more"}, task.Criteria)
+
+	require.NotNil(t, task.Checkpoint)
+	assert.Equal(t, "dev[2J]0;pwned", task.Checkpoint.By)
+	assert.Equal(t, "section[2J]0;pwned\nline two", task.Checkpoint.Values["summary"])
+	assert.Equal(t, "what[2J]0;pwned", task.Checkpoint.Shape.Sections[0].Guidance)
+
+	for _, v := range append([]string{task.Asked, task.Note, task.Title, task.Project, task.URL, task.Checkpoint.By}, task.Criteria...) {
+		assert.NotContains(t, v, "\x1b")
+		assert.NotContains(t, v, "\x07")
+		assert.NotContains(t, v, "\u202e")
+	}
+}
+
+// One step of a role's move runs at a node at a time: a second one is told it is busy, or waits for the first, and the lock is free again
+// when it is given back.
+func TestLockExcludesAndYieldsWhenGivenBack(t *testing.T) {
+	l := crew.Layout{Dir: t.TempDir()}
+
+	release, err := Lock(l, "dev", 0)
+	require.NoError(t, err)
+
+	_, err = Lock(l, "dev", 0)
+	require.ErrorIs(t, err, ErrBusy)
+
+	start := time.Now()
+	_, err = Lock(l, "dev", 150*time.Millisecond)
+	require.ErrorIs(t, err, ErrBusy)
+	assert.GreaterOrEqual(t, time.Since(start), 140*time.Millisecond, "it waited")
+
+	other, err := Lock(l, "ops", 0)
+	require.NoError(t, err, "another role's move is another lock")
+	other()
+
+	go func() {
+		time.Sleep(80 * time.Millisecond)
+		release()
+	}()
+
+	again, err := Lock(l, "dev", 5*time.Second)
+	require.NoError(t, err, "a waiting step gets the lock when the first gives it back")
+	again()
+
+	third, err := Lock(l, "dev", 0)
+	require.NoError(t, err)
+	third()
+}
+
+func TestTakingMarkerAndTombstone(t *testing.T) {
+	l := crew.Layout{Dir: t.TempDir()}
+
+	_, ok, err := OpenTaking(l, "dev")
+	require.NoError(t, err)
+	assert.False(t, ok)
+
+	want := Taking{ID: "mv-0123456789ab", Role: "dev", From: "alpha", Started: time.Now().UTC().Truncate(time.Second), Origins: []string{"alpha/T-2"},
+		Repos: []string{"/home/alex/work/acme"}}
+	require.NoError(t, SaveTaking(l, want))
+
+	got, ok, err := OpenTaking(l, "dev")
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Equal(t, want, got)
+
+	require.NoError(t, CloseTaking(l, "dev"))
+	require.NoError(t, CloseTaking(l, "dev"), "closed twice is closed")
+
+	require.NoError(t, os.MkdirAll(l.Moves(), 0o700))
+	require.NoError(t, os.WriteFile(l.MoveTaking("dev"), []byte("{"), 0o600))
+
+	_, _, err = OpenTaking(l, "dev")
+	require.ErrorContains(t, err, "does not read")
+
+	gone, err := Aborted(l, "mv-0123456789ab")
+	require.NoError(t, err)
+	assert.False(t, gone)
+
+	require.NoError(t, SaveAborted(l, Tombstone{ID: "mv-0123456789ab", Role: "dev", At: time.Now()}))
+
+	gone, err = Aborted(l, "mv-0123456789ab")
+	require.NoError(t, err)
+	assert.True(t, gone)
+
+	gone, err = Aborted(l, "mv-aaaaaaaaaaaa")
+	require.NoError(t, err)
+	assert.False(t, gone, "by id")
+
+	_, err = Aborted(l, "../x")
+	require.Error(t, err)
+	require.Error(t, SaveAborted(l, Tombstone{ID: "../../x"}))
 }

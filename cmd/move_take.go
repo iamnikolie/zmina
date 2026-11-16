@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,11 @@ import (
 
 // localRoleTake is the work of a move handed to this node (role/take): the node the role goes to takes it, or says why it cannot.
 func (a *app) localRoleTake(call mesh.MoveCall) ([]byte, error) {
+	return a.localRoleTakeCtx(context.Background(), call)
+}
+
+// localRoleTakeCtx is localRoleTake that gives up its fetch from origin when ctx ends, as the owner's own steps do in a beat.
+func (a *app) localRoleTakeCtx(ctx context.Context, call mesh.MoveCall) ([]byte, error) {
 	if err := mesh.CheckMoveCall("role/take", call); err != nil {
 		return nil, err
 	}
@@ -29,7 +35,7 @@ func (a *app) localRoleTake(call mesh.MoveCall) ([]byte, error) {
 		return nil, noCrewForMove(call.Crew, err)
 	}
 
-	ans, err := c.moveTake(call)
+	ans, err := c.moveTake(ctx, call)
 	if err != nil {
 		return nil, err
 	}
@@ -64,11 +70,15 @@ func crewRepo(cr *crew.Crew, known []task.Task, abs string) bool {
 
 // moveTake takes the work of a move. It checks the bundle against this node (the file is the one the move was made from, the role is
 // placed where the bundle says, the crew's directory and namespace are the same, every repository is one of the crew's with the same
-// origin), fetches each branch from origin and checks the tip is the commit the bundle names, makes the tasks here under new ids with
-// their origin, gives each a worktree on its branch (the commit a move made of uncommitted work undone), saves the checkpoint and the
-// result again under the new id, puts the role in place in the file, keeps a receipt, and starts the role fresh on its work. Taken again
-// with the same move id it is the same answer.
-func (a *app) moveTake(call mesh.MoveCall) (move.TakeAnswer, error) {
+// origin), and then, under the role's move lock and with a marker of its own kept from before its first side effect until it has its
+// receipt: fetches each branch from origin and checks the tip is the commit the bundle names, makes the tasks here under new ids with
+// their origin, gives each a worktree on its branch with the uncommitted work of the other node restored onto it (from the private ref
+// the move kept it under on origin), saves the checkpoint and the result again under the new id, keeps the receipt, puts the role in
+// place in the file, and starts the role fresh on its work. The receipt is the point of no return: before it the take is all or nothing
+// (a take that fails takes away what it made; one whose process died is taken away by the next take of the move, or by the abort), after
+// it the take is only finished (the placing and the start are made again until they are). A take refused a tombstone of the move
+// (called off), and a take of a move whose marker is another's, make nothing. Taken again with the same move id it is the same answer.
+func (a *app) moveTake(ctx context.Context, call mesh.MoveCall) (move.TakeAnswer, error) {
 	me, err := openNode()
 	if err != nil {
 		return move.TakeAnswer{}, err
@@ -84,11 +94,11 @@ func (a *app) moveTake(call mesh.MoveCall) (move.TakeAnswer, error) {
 	if rec, ok, err := move.Receipt(layout, call.Move); err != nil {
 		return move.TakeAnswer{}, err
 	} else if ok {
-		if !rec.Started && len(rec.Tasks) > 0 {
-			rec = a.moveStart(layout, rec)
-		}
+		return a.moveTaken(ctx, cr, call, rec)
+	}
 
-		return rec, nil
+	if err := refuseCancelled(layout, call.Move); err != nil {
+		return move.TakeAnswer{}, err
 	}
 
 	b, err := move.ParseBundle(call.Payload)
@@ -169,62 +179,152 @@ func (a *app) moveTake(call mesh.MoveCall) (move.TakeAnswer, error) {
 		repos[i] = abs
 	}
 
+	// One take of a role at a time. A take that is running here answers the one that asks again to try later; its own receipt is the answer
+	// then.
+	release, err := move.Lock(layout, role, 0)
+	if errors.Is(err, move.ErrBusy) {
+		return move.TakeAnswer{}, fmt.Errorf("a take of %s is running here already: ask again in a minute (zmina move %s %s --resume %s)", b.Move, role, me.Name, b.Move)
+	}
+
+	if err != nil {
+		return move.TakeAnswer{}, err
+	}
+
+	defer release()
+
+	// What may have happened while the lock was not held: a take that ended, a move called off.
+	if rec, ok, err := move.Receipt(layout, call.Move); err != nil {
+		return move.TakeAnswer{}, err
+	} else if ok {
+		return a.moveTaken(ctx, cr, call, rec)
+	}
+
+	if err := refuseCancelled(layout, call.Move); err != nil {
+		return move.TakeAnswer{}, err
+	}
+
+	marker := move.Taking{ID: b.Move, Role: role, From: b.From, Started: time.Now().UTC()}
+
+	for i, bt := range b.Tasks {
+		marker.Origins = append(marker.Origins, b.From+"/"+bt.ID)
+
+		if repos[i] != "" && !slices.Contains(marker.Repos, repos[i]) {
+			marker.Repos = append(marker.Repos, repos[i])
+		}
+	}
+
+	// The marker is written under the state lock before the first side effect, after the last look at the tombstone: a cancel that comes
+	// next finds it, and a cancel that came before it is found.
+	err = a.withState(func(s *shift.Shift) error {
+		if err := refuseCancelled(layout, b.Move); err != nil {
+			return err
+		}
+
+		if m, ok, err := move.OpenTaking(layout, role); err != nil {
+			return err
+		} else if ok {
+			if m.ID != b.Move {
+				return fmt.Errorf("a take of another move of %s (%s) was cut short here: zmina move %s %s --abort %s takes away what it made", role, m.ID,
+					role, m.From, m.ID)
+			}
+
+			// A take of this move that was cut short: what it made goes before this one makes anything.
+			if err := a.cleanupTake(s, m); err != nil {
+				return err
+			}
+		}
+
+		return move.SaveTaking(layout, marker)
+	})
+	if err != nil {
+		return move.TakeAnswer{}, err
+	}
+
+	if err := a.fault("taking"); err != nil {
+		return move.TakeAnswer{}, err
+	}
+
+	var (
+		ans       = move.TakeAnswer{Move: b.Move, Node: me.Name, Role: role, Sum: b.After, At: time.Now().UTC()}
+		receipted bool
+	)
+
+	err = a.takeWork(ctx, b, call.By, repos, &ans, &receipted)
+	if err != nil {
+		// A process that died cleans nothing; a take that failed before its receipt takes away what it made, so that the work is on the
+		// other node alone and the abort finds nothing here. After the receipt there is nothing to take away: the take is finished by
+		// the next one.
+		if !died(err) && !receipted {
+			if cerr := a.withState(func(s *shift.Shift) error { return a.cleanupTake(s, marker) }); cerr != nil {
+				err = fmt.Errorf("%w (and what the take made could not be taken away: %v; zmina move %s %s --abort %s does)", err, cerr, role, me.Name, b.Move)
+			}
+		}
+
+		return move.TakeAnswer{}, err
+	}
+
+	a.dropTakeRefs(ctx, b, repos)
+
+	return a.moveStart(layout, ans), nil
+}
+
+// refuseCancelled is the refusal of a take of a move that was called off at this node.
+func refuseCancelled(layout crew.Layout, id string) error {
+	gone, err := move.Aborted(layout, id)
+
+	switch {
+	case err != nil:
+		return err
+	case gone:
+		return fmt.Errorf("the move %s was called off at this node: no take of it runs (it was aborted; zmina move <role> <node> --abort %s makes the other node say so too)", id, id)
+	}
+
+	return nil
+}
+
+// takeWork is the take's work, once it holds the lock and has written its marker: the git, then the tasks, the receipt and the place in
+// one section of the state lock. receipted says the receipt was kept, which is the take's point of no return.
+func (a *app) takeWork(ctx context.Context, b move.Bundle, by string, repos []string, ans *move.TakeAnswer, receipted *bool) error {
 	// Git: each branch comes from origin, and its tip is the commit the bundle names; the branch is made here at it, unless it is there
-	// (an earlier try of this take got that far).
+	// (an earlier take of the same branch, or a task that went away and came back); the uncommitted work comes from its private ref.
 	for i, bt := range b.Tasks {
 		if bt.Branch == "" {
 			continue
 		}
 
-		if err := a.takeBranch(repos[i], b.Move, i, bt); err != nil {
-			return move.TakeAnswer{}, fmt.Errorf("%s: %w", bt.ID, err)
+		if err := a.takeBranch(ctx, repos[i], b.Move, bt); err != nil {
+			return fmt.Errorf("%s: %w", bt.ID, err)
 		}
 	}
 
 	if err := a.fault("taken-git"); err != nil {
-		return move.TakeAnswer{}, err
+		return err
 	}
 
-	var (
-		ans   = move.TakeAnswer{Move: b.Move, Node: me.Name, Role: role, Sum: b.After, At: time.Now().UTC()}
-		taken []string
-	)
+	return a.withState(func(s *shift.Shift) error {
+		layout := s.Crew.Layout()
 
-	err = a.withState(func(s *shift.Shift) error {
-		all, err := s.Tasks.All()
-		if err != nil {
+		if err := refuseCancelled(layout, b.Move); err != nil {
 			return err
 		}
 
+		var taken []string
+
 		for i, bt := range b.Tasks {
-			origin := b.From + "/" + bt.ID
-
-			t, found := task.Task{}, false
-
-			for _, old := range all {
-				if old.Origin == origin && old.Role == role && old.State != task.Dropped {
-					t, found = old, true
-
-					break
-				}
-			}
-
-			if !found {
-				if t, err = importTask(s, b, bt, repos[i], call.By); err != nil {
-					return fmt.Errorf("%s: %w", bt.ID, err)
-				}
+			t, err := importTask(s, b, bt, repos[i], by)
+			if err != nil {
+				return fmt.Errorf("%s: %w", bt.ID, err)
 			}
 
 			if t.Branch != "" {
-				if !worktree.IsWorktreeOf(t.Repo, t.Worktree, t.Branch) {
-					if _, err := worktree.AddExisting(t.Repo, t.Worktree, t.Branch); err != nil {
-						return fmt.Errorf("%s: the worktree of %s: %w", t.ID, bt.Branch, err)
-					}
+				tree, err := worktree.AddExisting(t.Repo, t.Worktree, t.Branch)
+				if err != nil {
+					return fmt.Errorf("%s: the worktree of %s: %w", t.ID, bt.Branch, err)
 				}
 
-				if bt.WIP {
-					if _, err := (&worktree.Tree{Repo: t.Repo, Path: t.Worktree, Branch: t.Branch}).UndoWIP(b.Move); err != nil {
-						return fmt.Errorf("%s: undoing the commit that carried the uncommitted work: %w", t.ID, err)
+				if bt.WIP != "" {
+					if err := tree.RestoreWIP(bt.WIP, b.Move); err != nil {
+						return fmt.Errorf("%s: restoring the uncommitted work: %w", t.ID, err)
 					}
 				}
 			}
@@ -237,24 +337,48 @@ func (a *app) moveTake(call mesh.MoveCall) (move.TakeAnswer, error) {
 			return err
 		}
 
-		if err := a.placeRole(s.Crew, role, me.Name, b.Base, b.After, call.By); err != nil {
+		// Once more, before the receipt and the place: the move may have been called off while the tasks were made (a cancel holds the
+		// lock this take holds, so it cannot; the tombstone is looked at all the same).
+		if err := refuseCancelled(layout, b.Move); err != nil {
 			return err
 		}
+
+		// What can be refused about the place is refused before the receipt: after it only a race with another writer of the file is left.
+		if _, _, err := placeCheck(s.Crew, b.Role, ans.Node, b.Base, b.After); err != nil {
+			return err
+		}
+
+		if err := move.SaveReceipt(layout, *ans); err != nil {
+			return err
+		}
+
+		*receipted = true
 
 		if err := a.fault("taken-flip"); err != nil {
 			return err
 		}
 
-		if err := move.SaveReceipt(layout, ans); err != nil {
+		sum, err := a.placeRole(s.Crew, b.Role, ans.Node, b.Base, b.After, by)
+		if err != nil {
 			return err
 		}
 
-		text := fmt.Sprintf("%s moved here from %s (move %s)", role, b.From, b.Move)
+		ans.Sum = sum
+
+		if err := move.SaveReceipt(layout, *ans); err != nil {
+			return err
+		}
+
+		if err := move.CloseTaking(layout, b.Role); err != nil {
+			return err
+		}
+
+		text := fmt.Sprintf("%s moved here from %s (move %s)", b.Role, b.From, b.Move)
 		if len(taken) > 0 {
 			text += ": " + strings.Join(taken, ", ")
 		}
 
-		s.Log(role, "move-taken", b.Move, text)
+		s.Log(b.Role, "move-taken", b.Move, text)
 
 		if _, err := s.NoteOnce("move-in/"+b.Move, "zmina", text, true); err != nil {
 			s.Warn(fmt.Errorf("the dispatcher was not told of the move: %w", err))
@@ -262,32 +386,127 @@ func (a *app) moveTake(call mesh.MoveCall) (move.TakeAnswer, error) {
 
 		return a.fault("taken")
 	})
+}
+
+// moveTaken answers a take of a move that has its receipt: the same answer. It also finishes what the first take may have left (the
+// place in the file, the marker, the start of the role), and takes the move's private refs off origin again if the first could not.
+func (a *app) moveTaken(ctx context.Context, cr *crew.Crew, call mesh.MoveCall, rec move.TakeAnswer) (move.TakeAnswer, error) {
+	layout := cr.Layout()
+
+	release, err := move.Lock(layout, call.Role, 0)
+	if errors.Is(err, move.ErrBusy) {
+		return move.TakeAnswer{}, fmt.Errorf("a take of %s is finishing here: ask again in a minute", call.Move)
+	}
+
 	if err != nil {
 		return move.TakeAnswer{}, err
 	}
 
-	// The branches' private refs have done their work.
+	defer release()
+
+	if b, err := move.ParseBundle(call.Payload); err == nil && b.Move == call.Move && b.Role == call.Role {
+		err := a.withState(func(s *shift.Shift) error {
+			sum, err := a.placeRole(s.Crew, b.Role, rec.Node, b.Base, b.After, call.By)
+			if err != nil {
+				return err
+			}
+
+			if sum != rec.Sum {
+				rec.Sum = sum
+
+				if err := move.SaveReceipt(layout, rec); err != nil {
+					return err
+				}
+			}
+
+			return move.CloseTaking(layout, b.Role)
+		})
+		if err != nil {
+			return move.TakeAnswer{}, err
+		}
+
+		repos := make([]string, len(b.Tasks))
+		for i, bt := range b.Tasks {
+			if bt.Repo != "" {
+				repos[i] = move.Expand(bt.Repo)
+			}
+		}
+
+		a.dropTakeRefs(ctx, b, repos)
+	}
+
+	if !rec.Started && len(rec.Tasks) > 0 {
+		rec = a.moveStart(layout, rec)
+	}
+
+	return rec, nil
+}
+
+// dropTakeRefs takes the refs the take kept away: the local ones, and the private ref of each task's uncommitted work on origin. A ref
+// that stays on origin is clutter, not work: the receipt is what the move stands on.
+func (a *app) dropTakeRefs(ctx context.Context, b move.Bundle, repos []string) {
+	var refs []moveRefAt
+
 	for i, bt := range b.Tasks {
-		if bt.Branch != "" {
-			_ = worktree.DropRef(repos[i], fmt.Sprintf("refs/zmina-move/%s/%d", b.Move, i))
+		if repos[i] == "" || bt.Branch == "" {
+			continue
+		}
+
+		if local, err := worktree.MoveRefs(repos[i], b.Move); err == nil {
+			for _, r := range local {
+				refs = append(refs, moveRefAt{repos[i], r})
+			}
+		}
+
+		if bt.WIP != "" {
+			refs = append(refs, moveRefAt{repos[i], worktree.MoveRef(b.Move, move.TaskNumber(bt.ID))})
 		}
 	}
 
-	return a.moveStart(layout, ans), nil
+	if ctx.Err() != nil {
+		ctx = context.Background()
+	}
+
+	dropMoveRefs(ctx, refs)
 }
 
 // takeBranch fetches the branch of origin into a private ref of the move, checks that it is the commit the bundle names, and makes the
-// local branch at it.
-func (a *app) takeBranch(repo, id string, i int, bt move.BTask) error {
-	ref := fmt.Sprintf("refs/zmina-move/%s/%d", id, i)
+// local branch at it, so that the local branch equals origin's and the role's next push is a plain one. The uncommitted work, when the
+// task carries some, is fetched from its own private ref and must be one commit over that tip.
+func (a *app) takeBranch(ctx context.Context, repo, id string, bt move.BTask) error {
+	n := move.TaskNumber(bt.ID)
 
-	sha, err := worktree.Fetch(repo, bt.Branch, ref)
+	sha, err := worktree.FetchContext(ctx, repo, bt.Branch, fmt.Sprintf("refs/zmina-move/%s/b%d", id, n))
 	if err != nil {
 		return err
 	}
 
 	if sha != bt.Tip {
 		return fmt.Errorf("origin has %s at %s, not at %s that the move pushed: the branch moved since", bt.Branch, sha[:12], bt.Tip[:12])
+	}
+
+	if bt.WIP != "" {
+		wip, err := worktree.FetchWIP(ctx, repo, id, n, fmt.Sprintf("refs/zmina-move/%s/w%d", id, n))
+		if err != nil {
+			return fmt.Errorf("the uncommitted work: %w", err)
+		}
+
+		if wip != bt.WIP {
+			return fmt.Errorf("origin has the uncommitted work of the move at %s, not at %s that the bundle names", wip[:12], bt.WIP[:12])
+		}
+
+		if parent, err := worktree.RevParse(repo, wip+"^"); err != nil || parent != sha {
+			return fmt.Errorf("the uncommitted work %s is not one commit over the tip %s", wip[:12], sha[:12])
+		}
+	}
+
+	// A worktree that has the branch checked out is an earlier task's (this role was here before, or an earlier try of this take left a
+	// task that was closed): the new task's worktree cannot have it too, and the branch is not moved under that one.
+	if where, err := worktree.CheckedOutAt(repo, bt.Branch); err != nil {
+		return err
+	} else if where != "" {
+		return fmt.Errorf("the branch %s is checked out in %s, an earlier task's worktree of this role here: remove it (git worktree remove, "+
+			"zmina task gc), then --resume", bt.Branch, where)
 	}
 
 	have, err := worktree.Branch(repo, bt.Branch)
@@ -302,23 +521,8 @@ func (a *app) takeBranch(repo, id string, i int, bt move.BTask) error {
 		return nil
 	}
 
-	// A take that got as far as undoing the commit of the uncommitted work left the branch at its parent.
-	if bt.WIP {
-		if parent, err := worktree.RevParse(repo, sha+"^"); err == nil && parent == have {
-			return nil
-		}
-	}
-
 	// A branch this node had of its own (the task came here before, and went away, and comes back): it goes forward to the commit the
-	// move carries when that is a descendant of it and no worktree has it checked out. A worktree that has it is an earlier task's, and
-	// is not moved under.
-	if where, err := worktree.CheckedOutAt(repo, bt.Branch); err != nil {
-		return err
-	} else if where != "" {
-		return fmt.Errorf("the branch %s is checked out in %s, an earlier task's worktree of this role here: remove it (git worktree remove, "+
-			"zmina task gc), then --resume", bt.Branch, where)
-	}
-
+	// move carries when that is a descendant of it.
 	if ahead, err := worktree.IsAncestor(repo, have, sha); err == nil && ahead {
 		return worktree.FastForward(repo, bt.Branch, have, sha)
 	}

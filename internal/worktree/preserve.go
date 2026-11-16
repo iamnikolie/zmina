@@ -243,29 +243,7 @@ func (t *Tree) capture(ctx context.Context, id, head string) ([]*snapshot, error
 
 	defer func() { _ = os.RemoveAll(dir) }()
 
-	// The index git writes is this file's, never the worktree's own.
-	index := []string{"GIT_INDEX_FILE=" + filepath.Join(dir, "index")}
-
-	if head != "" {
-		if _, err := gitEnv(ctx, t.Path, index, "read-tree", head); err != nil {
-			return nil, err
-		}
-	}
-
-	if _, err := gitEnv(ctx, t.Path, index, "add", "-A"); err != nil {
-		return nil, err
-	}
-
-	if err := t.refuseNested(ctx, index, head); err != nil {
-		return nil, err
-	}
-
-	filesTree, err := t.writeTree(ctx, index)
-	if err != nil {
-		return nil, err
-	}
-
-	headTree, err := t.treeOf(ctx, dir, head)
+	filesTree, headTree, err := t.filesTrees(ctx, dir, head)
 	if err != nil {
 		return nil, err
 	}
@@ -300,6 +278,38 @@ func (t *Tree) capture(ctx context.Context, id, head string) ([]*snapshot, error
 	}
 
 	return snaps, nil
+}
+
+// filesTrees are the tree of everything the worktree holds that is not ignored, tracked or not, found with a temporary index in
+// dir (never the worktree's own), and the tree of head: the work is the difference. It refuses what a tree cannot hold
+// (refuseNested).
+func (t *Tree) filesTrees(ctx context.Context, dir, head string) (filesTree, headTree string, err error) {
+	// The index git writes is this file's, never the worktree's own.
+	index := []string{"GIT_INDEX_FILE=" + filepath.Join(dir, "index")}
+
+	if head != "" {
+		if _, err := gitEnv(ctx, t.Path, index, "read-tree", head); err != nil {
+			return "", "", err
+		}
+	}
+
+	if _, err := gitEnv(ctx, t.Path, index, "add", "-A"); err != nil {
+		return "", "", err
+	}
+
+	if err := t.refuseNested(ctx, index, head); err != nil {
+		return "", "", err
+	}
+
+	if filesTree, err = t.writeTree(ctx, index); err != nil {
+		return "", "", err
+	}
+
+	if headTree, err = t.treeOf(ctx, dir, head); err != nil {
+		return "", "", err
+	}
+
+	return filesTree, headTree, nil
 }
 
 // writeTree is the tree of the index the env names, written to the object store.

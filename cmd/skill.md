@@ -1095,7 +1095,8 @@ What a peer told may be a minute old (the ticker syncs every minute), and a peer
   inside the home is a file like another).
 - **A local edit and a push exclude each other.** `zmina seat` and `zmina retire` read the file, change it and save it through the same
   compare and swap under the history's lock a push takes, so a save of an edit that read the file before a push replaced it fails with
-  `the crew file changed meanwhile, run it again` instead of winning. For a crew with no `nodes:` nothing else changes.
+  `the crew file changed meanwhile, run it again` instead of winning. While a move is open on a node (its journal, or the owner's record
+  of it) a push to it and a seat edit there are refused, naming the move and the way out (Move). For a crew with no `nodes:` nothing else changes.
 - **This is remote command execution by design:** the crew file names `claude`, `notify`, `plugins` and the roles' boot lines, which that
   node then runs. It is the owner's authority, like `node enroll --cmd`. So the node takes a push (and a step of a move, Move) only as a
   request signed by the owner key and bound to that node's key and the session's challenge (the form `terminal_v2` brought: an old-form request is refused
@@ -1129,43 +1130,69 @@ A role of a crew over nodes (Placement) goes to another node with its tasks. The
 | Command | Does |
 |---|---|
 | `zmina move <role> <node> [--wait 10m] [--force]` | on the owner's node, by the owner's hand (a command with `$ZMINA_ROLE` is refused, as is `zmina crew push`): the role parks its tasks and goes down, its branch goes to `<node>` by `origin`, it is placed there and started there on the same tasks. |
-| `zmina move <role> <node> --resume <id>` | go on with an open move (a failure, a wait that ran out, a node that was away). |
-| `zmina move <role> <node> --abort <id>` | call it off: the tasks are open again on their own ids and the role is started on them where it was. Refused when `<node>` took the work (it runs there: `--resume` ends the move), and when `<node>` cannot be asked, unless `--force`. |
+| `zmina move <role> <node> --resume <id>` | go on with an open move (a failure, a wait that ran out, a node that was away). It has no time limit of the ticker's beat. |
+| `zmina move <role> <node> --abort <id>` | call it off: the tasks are open again on their own ids and the role is started on them where it was. Refused while `<node>` takes the work and when it took it (it runs there: `--resume` ends the move), and when `<node>` cannot be asked or its answer does not read, unless `--force`. In a crew whose file declares no `nodes:` it ends a journal that was left there, with no node to ask. |
 
 The role must be placed by the file on the node it leaves, and be neither the dispatcher nor a copy. The owner's node may be the node the
 role leaves, the one it goes to, or neither: it asks both over the mesh (`role/move`, `role/take`; its own steps are the same functions).
 
 1. **Preflight on both nodes**, nothing begun: the two files are the same file (equal sums); both nodes said `crew_sync` in their last
-   session; the target lists itself in `nodes:`; the crew's `dir` and `namespace` are the same place and so are the top level and `origin`
-   of each repository the role's tasks and its own `dir` are in (paths are compared home-relative, `~/work/acme`, so `/Users/alex` and
-   `/home/alex` are the same place); the role's queue is empty and its own directory holds no uncommitted work, unless `--force` (it drops the
-   queued lines and tells the source's dispatcher which, leaves the directory's work where it is, and clears a draft in the role's input line when it is put down). Each mismatch is a refusal naming the field.
+   session; the target lists itself in `nodes:` and holds no take of the role that was cut short; the crew's `dir` and `namespace` are the
+   same place and so are the top level and `origin` of each repository the role's tasks and its own `dir` are in, **as git resolves them** (a
+   `url.<base>.insteadOf` rewrite applied; the URL pushes go to, `pushurl` or `pushInsteadOf`, compared too; paths are home-relative,
+   `~/work/acme`, so `/Users/alex` and `/home/alex` are the same place); the role's queue is empty and its own directory holds no uncommitted
+   work, unless `--force` (it drops the queued lines and tells the source's dispatcher which, leaves the directory's work where it is, and
+   clears a draft in the role's input line when it is put down). **A task's worktree that cannot give its files back is refused here, before
+   the role is touched, whatever `--force` says**: a merge, rebase, cherry-pick, revert or bisect in progress, conflicts, a HEAD that is not
+   the task's branch, a nested repository or a submodule with work of its own; the refusal names the task and the state. Each mismatch is a refusal naming the field.
 2. **`begin`** on the source opens the journal `moves/<role>.json`. While it is open the ticker and every start refuse the role (`zmina
-   up`, a restart, a wake, a start for a task) and `zmina task new`, `send` and `later take` refuse it work. The role is asked, as an idle release asks,
-   to write its checkpoints and park its tasks; what it has not parked in 3 minutes zmina parks for it (the handoff is marked incomplete), and it
-   is put down and held down. A second `begin` with another id is refused naming the open one; the same id is the same move.
-3. **Git**: each task's branch is pushed to `origin` under its own name (a carried branch keeps it). A worktree with uncommitted work first gets
-   one commit made of it (the dirty snapshot a task's removal keeps: tracked and untracked files, never ignored ones, which do not travel) with
-   the trailer `Zmina-Move: <id>`; the target undoes that one commit, so the work is uncommitted again there. A push `origin` refuses stops the
-   move, with git's words, and is tried again by `--resume`.
+   up`, a restart, a wake, a start for a task), `zmina task new`, `send` and `later take` refuse it work, and **no push of the crew file and no
+   seat edit changes the file on that node** (the message names the move and `--resume`/`--abort`; the owner's node refuses the same while it
+   drives one). The role is asked, as an idle release asks, to write its checkpoints and park its tasks; what it has not parked in 3 minutes
+   zmina parks for it (the handoff is marked incomplete), and it is put down and held down. A task the role closes meanwhile leaves the journal.
+   A second `begin` with another id is refused naming the open one; the same id is the same move.
+3. **Git**: each task's branch is pushed to `origin` under its own name, as it is (a normal push, never forced; a carried branch keeps its
+   name). The work in a worktree that nobody committed is **never put on the branch**: its files (tracked changes and deletions, and
+   untracked files that are not ignored, **whatever the index holds**: staging does not travel, a staged file is unstaged there; ignored
+   files do not travel) become one commit over the tip with the trailer `Zmina-Move: <id>`, kept under the private ref
+   `refs/zmina-move/<id>/<n>` (`<n>` the task's number) in the repository and on `origin`. The source's worktree, index and branch are not touched.
+   The target fetches the branch (its local branch equals origin's, so the role's next push is a plain fast-forward) and the private ref, makes
+   the worktree on the tip and restores the files onto it as uncommitted changes (`git status` says there what it said at the source, but for
+   what was staged). The private ref goes from `origin` and from both repositories when the take has its receipt, and on `--abort`
+   (one that could not be removed is clutter, not work: `git push origin --delete refs/zmina-move/<id>/<n>`). A push `origin` refuses stops the move, with git's words, and is tried again.
 4. **The bundle** is what travels, at most 1 MiB: for each task its asked text, title, criteria, project, url, budget, note, repo (home-relative),
-   branch, base, fork and tip, and its latest checkpoint and result. Not a path of this node's, not `Delivery`, `Late`, `Conversations` or
-   `CheckEnv`, not the queue, and **no Claude transcript**: the role starts on a fresh conversation from its handoff packet and checkpoint.
-5. **`role/take`** on the target: it checks the bundle against itself (the file is the one the move was made from, the role is placed where the
-   bundle says, `dir`, `namespace`, each repository one of the crew's with the same `origin`), fetches each branch, checks its tip is the commit
-   named, makes the worktree, makes each task under a **new local id** with `Task.Origin = <node>/T-<n>` (`zmina task show`: `moved from`),
-   saves the checkpoint and result again under the new id, places the role in its file, keeps a receipt (`moves/taken/<id>.json`) and starts
-   the role fresh on the tasks (a hold from an earlier departure is lifted). A take with the same id again is the same answer.
+   branch, base, fork and tip, the uncommitted work's commit id, and its latest checkpoint and result. Not a path of this node's, not `Delivery`, `Late`, `Conversations` or
+   `CheckEnv`, not the queue, and **no Claude transcript**: the role starts on a fresh conversation from its handoff packet and checkpoint. Every text
+   of it loses its control characters before it is stored or printed (a line break stays in a text of lines). **A move trusts the source node for the content
+   of the work**: its texts, its checkpoint, the commits it pushed. The owner checks only which things the bundle speaks of, against what its own preflight
+   recorded of that node (`moves/<role>.drive.json`): the move, role and nodes, the file it was made from, the tasks the source said it holds, the repositories
+   that were compared on both nodes; anything else is refused and the target is asked to take nothing.
+5. **`role/take`** on the target checks the bundle against itself (the file is the one the move was made from, the role is placed where the
+   bundle says, `dir`, `namespace`, each repository one of the crew's with the same `origin`) and then, one take of a role at a time (`moves/<role>.lock`), writes its
+   marker `moves/<role>.taking.json` under the state lock **before its first side effect**, fetches, makes each task under a **new local id** with
+   `Task.Origin = <node>/T-<n>` (`zmina task show`: `moved from`) and its worktree, saves the checkpoint and result again under the new id, keeps a
+   receipt (`moves/taken/<id>.json`), places the role in its file (the edit it makes must be the one the move names: a node that would write another file refuses before the
+   receipt) and starts the role fresh (a hold from an earlier departure is lifted). **The receipt is the point of no return. Before it a take is all or nothing**: one that
+   fails takes away what it made in the same call (its tasks are dropped, their worktrees and refs removed), one whose process died is taken away by the next take of the move
+   or by `--abort` before either does anything else, and a take never reuses a task an earlier try made. After the receipt a take is only finished (the placing and the start
+   are made again until they are). A take of a move that was called off is refused (the tombstone below); a take with the same id again is the same answer.
 6. **`commit`** on the source: the same edit to its file, the parked items closed as `taken beta/T-9`, the journal closed. The source task stays
    `parked`: no new task state. The owner's node then reads both files back and says `crew files equal on alpha and beta`, or `WARNING … differ`.
    A third node of the crew still holds the old placement: `zmina crew push <node>`.
 
+- **One step at a time.** The steps of a move at a node (a poll, a commit, an abort, a take) run one at a time under `moves/<role>.lock`: a poll that finds
+  another running says so and changes nothing, a commit or an abort waits for it (30 s), so a slow beat cannot write a journal a commit closed.
+  The ticker's beat gives the moves of a crew **20 seconds** together (a push or a fetch that is slower is stopped and goes on at the next beat, which is no error;
+  the rest of the beat is not held longer, except for the wait for a role to end after `/exit`); `--resume` has no such limit, and is the way for a push that needs more.
 - **Failure.** The target unreachable or refusing: the role is down and its tasks are parked on the source (durable), the journal stays open, and
   nothing is placed. The owner's node keeps a record of the move (`moves/<role>.drive.json`) and its ticker tries the take again each beat (an
   error is told when it changes, not every beat); each node's ticker also moves an open move of its own on (the role parks, goes down, the branch is
   pushed). `--wait` bounds how long the command waits; the move stays open past it. A lost answer: `--resume` takes again and gets the same answer.
-- **Abort.** The tasks are open again, the items closed as done with a note, the uncommitted-work commit undone unless it is on `origin` already, the
-  role started on its work. It never runs once the target holds a receipt.
+- **Abort.** The node the role would go to is asked first (`cancel`, signed like the other steps), and answers for good: while a take runs (`taking`, also in `poll` and
+  `check`) or when it holds the receipt the abort is refused; otherwise it takes away what a cut-short take made and **leaves a tombstone of the move id** (`moves/aborted/<id>.json`),
+  which every take checks before it does anything and again before the receipt, so a stale process of the owner's that still holds the bundle cannot place the role there
+  after. Then the source puts its tasks back (open again, the items closed as done with a note, the private refs removed; its worktrees were never touched) and starts the role.
+  `--abort --force` with a node that cannot be asked leaves no tombstone there: a take that arrives later is not refused, so look at `zmina ls`.
 - **Security** is that of `crew/put` (Placement): the ops are served only to the owner's request bound to that node, its key and the session's
   challenge, and to the key of the owner's node that sends it and a `not_after` two minutes ahead (an old-form request is refused even with
   `strict_requests` off, one for another node or session is refused, a relay that holds a step cannot send it on its own session or later),
@@ -1178,8 +1205,8 @@ role leaves, the one it goes to, or neither: it asks both over the mesh (`role/m
   from (the same compare and swap as a push and a `seat` edit, so none of the three overwrites another); a move that ended with both files equal is recorded as
   the file each node holds, which the next `crew push` to it is based on.
 - **Limits.** A repository needs an `origin`. A role moved back to a node whose earlier task still has the branch checked out in a worktree
-  is refused until that worktree is removed (the branch is then moved forward). Ledgers stay per node: ids are each node's own, and a task's `origin`
-  is a field only this zmina reads (an older one that rewrites the task file drops it, which loses only where the task came from).
+  is refused until that worktree is removed (the branch is then moved forward); that worktree still holds what it held when the role left. Ledgers stay per node: ids are each node's own, and a task's `origin`
+  is a field only this zmina reads (an older one that rewrites the task file drops it, which loses where the task came from and lets a take that was cut short leave its task for `zmina task drop`).
 
 ## Browser chat
 

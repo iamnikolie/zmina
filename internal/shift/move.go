@@ -42,6 +42,12 @@ func (s *Shift) movingShort(name string) string {
 		return ""
 	}
 
+	// A journal in a crew whose file declares no nodes cannot go on (nothing to move to): only --abort ends it.
+	if !s.Crew.Spread() {
+		return fmt.Sprintf("a move journal to %s is open (%s, %s) in a crew whose file declares no nodes:, so it cannot go on: zmina move %s %s --abort %s "+
+			"puts it back and restarts it here", j.To, j.ID, j.Phase, name, j.To, j.ID)
+	}
+
 	return fmt.Sprintf("its move to %s is open (%s, %s): zmina move %s %s --resume %s finishes it, --abort %s puts it back and restarts it here",
 		j.To, j.ID, j.Phase, name, j.To, j.ID, j.ID)
 }

@@ -19,8 +19,10 @@ const (
 
 // roleMoveActions are the steps of role/move. check asks what the node holds, for the owner to compare the two ends before anything
 // is done; begin opens the move at the node the role leaves; poll moves it on there and asks how far it is (the node the role goes to
-// answers a poll with whether it took the work); commit ends it there; abort calls it off.
-var roleMoveActions = map[string]bool{"check": true, "begin": true, "poll": true, "commit": true, "abort": true}
+// answers a poll with whether it took the work, is taking it, or the move was called off); commit ends it there; abort calls it off
+// there; cancel is the abort's step at the node the role would go to: it refuses while a take runs or is done, takes away what a take
+// that was cut short made, and leaves a tombstone for the move so that no take of it runs after.
+var roleMoveActions = map[string]bool{"check": true, "begin": true, "poll": true, "commit": true, "abort": true, "cancel": true}
 
 // plainMove is the id of a move: what zmina makes (mv- and twelve hex digits), never a path.
 var plainMove = regexp.MustCompile(`^mv-[0-9a-f]{12}$`)
@@ -66,7 +68,7 @@ func CheckMoveCall(op string, c MoveCall) error {
 	case c.Base != "" && !plainSum.MatchString(c.Base):
 		return errors.New("base: the hash of the crew file, 64 hex digits, or nothing")
 	case op == "role/move" && !roleMoveActions[c.Action]:
-		return fmt.Errorf("action %q: check, begin, poll, commit or abort", c.Action)
+		return fmt.Errorf("action %q: check, begin, poll, commit, abort or cancel", c.Action)
 	case op == "role/take" && c.Action != "":
 		return fmt.Errorf("a take has no action, not %q", c.Action)
 	case (op == "role/take" || c.Action != "check") && !plainMove.MatchString(c.Move):

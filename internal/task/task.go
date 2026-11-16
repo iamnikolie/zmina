@@ -155,7 +155,9 @@ type Task struct {
 	// of each and what was refused. They change nothing else of the task, and its handoff packet does not carry them.
 	Late []Late `json:"late,omitempty"`
 	// Origin is where the task came from when it was moved with its role from another node (zmina move): <node>/T-<n>, the
-	// task there. A task made here has none; an older zmina that rewrites the file drops it, which loses only the provenance.
+	// task there. A task made here has none. It is more than provenance: a take that was cut short finds the tasks it made by it
+	// (with the role, the move's id in the note and an active state) to take them away again, so an older zmina that rewrites the
+	// file and drops it leaves such a task where it is (zmina task drop closes it).
 	Origin string `json:"origin,omitempty"`
 }
 

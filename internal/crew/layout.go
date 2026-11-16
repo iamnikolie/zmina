@@ -47,6 +47,16 @@ func (l Layout) MoveDrive(role string) string { return filepath.Join(l.Moves(), 
 // MoveTaken is the receipt of a take of the move with this id, which makes a repeated take the same answer.
 func (l Layout) MoveTaken(id string) string { return filepath.Join(l.Moves(), "taken", id+".json") }
 
+// MoveTaking is the marker a node keeps of a take of a role's move from before the take's first side effect until it has the receipt:
+// while it is there the take is running or was cut short, and the move is not called off.
+func (l Layout) MoveTaking(role string) string { return filepath.Join(l.Moves(), role+".taking.json") }
+
+// MoveAborted is the tombstone of the move with this id that was called off: a take of it is refused from then on.
+func (l Layout) MoveAborted(id string) string { return filepath.Join(l.Moves(), "aborted", id+".json") }
+
+// MoveLock is the lock file of a role's move on this node: one step of it runs at a time (a poll, a commit, an abort, a take).
+func (l Layout) MoveLock(role string) string { return filepath.Join(l.Moves(), role+".lock") }
+
 // Alarms is the directory of reminders and wake-ups (R-<n>.json).
 func (l Layout) Alarms() string { return filepath.Join(l.Dir, "alarms") }
 

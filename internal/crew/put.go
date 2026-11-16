@@ -43,6 +43,10 @@ type PutResult struct {
 func Put(path string, raw []byte, o PutOptions) (PutResult, error) {
 	var out PutResult
 
+	if err := RefuseWhileMoving(path); err != nil {
+		return out, err
+	}
+
 	dir := filepath.Dir(path)
 
 	if o.Home != "" {
