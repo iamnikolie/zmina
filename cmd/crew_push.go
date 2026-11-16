@@ -52,6 +52,12 @@ func (a *app) crewPushCommand() *cobra.Command {
 		Short: "Send this crew's file to another node, in place of its own (owner node only): refused when that node holds another file than the one it last told, and the difference is shown",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// A push changes what another node runs, signed with the owner's key: the owner's hand, never a role's (the role of a session
+			// on the owner's node has the key's file within reach, and the command in its environment).
+			if who := a.actor(); who != "hand" {
+				return fmt.Errorf("zmina crew push is the owner's; a role (%s) does not run it%s", who, codexThreadWords(who))
+			}
+
 			cr, err := a.loadCrew()
 			if err != nil {
 				return err

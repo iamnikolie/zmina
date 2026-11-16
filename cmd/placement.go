@@ -8,6 +8,7 @@ import (
 
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/mesh"
+	"github.com/iamnikolie/zmina/internal/move"
 	"github.com/iamnikolie/zmina/internal/shift"
 )
 
@@ -195,6 +196,21 @@ func (a *app) checkPlacement(c *crew.Crew, st *shift.State, add func(name, level
 
 	for _, n := range placementNotes(c, local, peers, up) {
 		add("placement", n.Level, "%s", n.Text)
+	}
+
+	// A move that is open: its role is held down on this node until it ends, so it is said where the owner looks.
+	for _, name := range c.Names() {
+		if j, ok, err := move.Open(c.Layout(), name); err != nil {
+			add("placement", "fail", "the move journal of %s does not read, so the role is not started: %v", name, err)
+		} else if ok {
+			add("placement", "warn", "%s has a move to %s open (%s, %s): zmina move %s %s --resume %s finishes it, --abort %s calls it off",
+				name, j.To, j.ID, j.Phase, name, j.To, j.ID, j.ID)
+		}
+	}
+
+	for _, d := range move.Drives(c.Layout()) {
+		add("placement", "warn", "this node drives the move %s of %s from %s to %s: its ticker takes it on each beat; zmina move %s %s --resume %s",
+			d.ID, d.Role, d.From, d.To, d.Role, d.To, d.ID)
 	}
 }
 

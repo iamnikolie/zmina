@@ -302,6 +302,32 @@ func TestCrewPushRefusals(t *testing.T) {
 	assert.Empty(t, w.puts)
 }
 
+// A push is the owner's hand, never a role's: a command with $ZMINA_ROLE (or a Codex session no seat owns) is refused before anything is
+// read or sent, though it runs on the owner's node where owner.key is within reach.
+func TestCrewPushIsNotARolesCommand(t *testing.T) {
+	w := newPushWorld(t)
+
+	t.Setenv("ZMINA_ROLE", "dev")
+
+	_, _, err := w.push("beta")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "zmina crew push is the owner's; a role (dev) does not run it")
+	assert.Empty(t, w.puts)
+
+	t.Setenv("ZMINA_ROLE", "dispatcher")
+
+	_, _, err = w.push("beta")
+	require.ErrorContains(t, err, "a role (dispatcher) does not run it")
+	assert.Empty(t, w.puts)
+
+	// The owner's hand (no role in the environment) pushes as before.
+	t.Setenv("ZMINA_ROLE", "")
+
+	_, errOut, err := w.push("beta")
+	require.NoError(t, err, errOut)
+	assert.NotEmpty(t, w.puts)
+}
+
 // Only the owner's node can push: the request is signed with owner.key, which no other node holds.
 func TestCrewPushIsTheOwnersNodeOnly(t *testing.T) {
 	w := newPushWorld(t)

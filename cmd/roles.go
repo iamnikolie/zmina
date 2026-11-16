@@ -1098,6 +1098,11 @@ func (a *app) sendCommand() *cobra.Command {
 					return errors.New(line)
 				}
 
+				// Nor to one whose move is open: it is going down, and a line queued for it would be left behind.
+				if line := s.MovingLine(args[0]); line != "" {
+					return errors.New(line)
+				}
+
 				// The task a line is about is what its sender says here, never read from its words: it is kept on the line's
 				// card, and a line that crossed a newer line of its reader's on that task is delivered with a mark that says so.
 				facts := shift.Facts{}
@@ -1406,6 +1411,11 @@ func (a *app) tickCommand() *cobra.Command {
 			a.meshTick()
 
 			runs := a.crewRuns()
+
+			// A move of a role to another node goes on: on the node the role leaves, and on the owner's node, which drives it.
+			if runs {
+				a.moveBeat()
+			}
 
 			// The crew's own jobs run on a node that runs the crew: a crew over nodes does none on a machine whose node name cannot be
 			// read, or that the file does not list. On a listed node each runs on that node's own ledger (Placement).

@@ -63,8 +63,12 @@ type app struct {
 	// shiftSeams replaces what a new shift talks to (its tmux, session registry, inbox socket) once it is built
 	// (nil: the real ones; tests set fakes).
 	shiftSeams func(s *shift.Shift)
-	// pushTransport reaches the node a crew file is pushed to (nil: mesh.Exec, the address book's ssh or command; tests set pipes).
+	// pushTransport reaches the node a crew file is pushed to, or a move is made to (nil: mesh.Exec, the address book's ssh or command;
+	// tests set pipes).
 	pushTransport mesh.Transport
+	// moveFault is where a test makes a node's process die in the middle of a move: it names a phase and returns the error that ends the
+	// step there (nil: never).
+	moveFault func(phase string) error
 }
 
 // NewRoot builds the whole command tree writing to out and errw.
@@ -114,7 +118,7 @@ Run 'zmina skill' for the agent reference: its topics and the dispatcher's part;
 		a.launchdCommand(), a.doctorCommand(), a.usageCommand(), a.limitsCommand(), a.routeCommand(), a.skillCommand(), a.versionCommand(), a.uiCommand(),
 		a.messageCommand(), a.contextCommand(), a.reportCommand(), a.nodeCommand(), a.tellCommand(), a.codexCommand(), a.terminalCommand(),
 		a.ackCommand(), a.pendingCommand(), a.turnEndCommand(), a.permissionRequestCommand(), a.stopFailureCommand(), a.limitsTapCommand(), a.readCommand(), a.grepCommand(), a.readGuardCommand(),
-		a.lockCommand(), a.courierCommand(), a.explainCommand(), a.pluginCommand(), a.chooseCommand())
+		a.lockCommand(), a.courierCommand(), a.explainCommand(), a.pluginCommand(), a.chooseCommand(), a.moveCommand())
 	root.AddCommand(a.crewCommand())
 	groupCommands(root)
 
@@ -127,7 +131,7 @@ var commandGroups = []struct {
 	names     []string
 }{
 	{"owner", "For the owner: what waits, who works, what it costs:", []string{"ui", "todo", "later", "remind", "ls", "show",
-		"peek", "choose", "explain", "attach", "log", "usage", "limits"}},
+		"peek", "choose", "explain", "attach", "log", "usage", "limits", "move"}},
 	{"dispatcher", "For the dispatcher: tasks, seats, lines:", []string{"task", "route", "up", "down", "restart", "sleep", "stop",
 		"start", "retire", "seat", "send", "tell", "note", "queue", "rotation"}},
 	{"plumbing", "Plumbing (roles, hooks and the ticker run these):", []string{"ack", "pending", "inbox", "report",

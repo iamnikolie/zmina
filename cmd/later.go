@@ -236,6 +236,10 @@ func (a *app) laterTakeCommand() *cobra.Command {
 					return errors.New(line)
 				}
 
+				if line := s.MovingLine(role); line != "" {
+					return errors.New(line)
+				}
+
 				store := laterStore(s.Crew)
 
 				it, err := store.Get(args[0])

@@ -162,6 +162,11 @@ func (a *app) openTask(s *shift.Shift, pick rolePick, n ledger.NewTask) (task.Ta
 		return task.Task{}, tmux.Pane{}, errors.New(line)
 	}
 
+	// Nor to one that is being moved: what is given to a role that is going down would be left behind.
+	if line := s.MovingLine(pick.role); line != "" {
+		return task.Task{}, tmux.Pane{}, errors.New(line)
+	}
+
 	pane, err := s.Tmux.Probe(pick.role)
 	if err != nil {
 		return task.Task{}, pane, err
@@ -458,6 +463,10 @@ func (a *app) taskShowCommand() *cobra.Command {
 
 				if t.Repo != "" {
 					fmt.Fprintln(a.out, "repo:", t.Repo)
+				}
+
+				if t.Origin != "" {
+					fmt.Fprintln(a.out, "moved from:", t.Origin)
 				}
 
 				if t.Route != nil {
