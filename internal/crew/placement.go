@@ -141,6 +141,10 @@ func (c *Crew) PlacedHere(r *Role) bool {
 	return c.PlacementOf(r) == c.Here
 }
 
+// placedElsewhere reports whether the role is another node's to run: this machine is a node of the file, and the role is not placed on
+// it. A crew that is not spread says no, and so does a machine that is no node of the file, which can tell nothing of where a role runs.
+func (c *Crew) placedElsewhere(r *Role) bool { return c.Spread() && c.Runs() && !c.PlacedHere(r) }
+
 // WatchPlace is the node that runs the watch: its place, else the crew's home. Empty for a crew that is not spread.
 func (c *Crew) WatchPlace(w *Watch) string {
 	if !c.Spread() || w == nil {

@@ -1060,6 +1060,9 @@ and is warned of. The node that runs a watch needs what its source needs (the `g
   dispatcher is told once: nothing here works on them. Park what it holds (`zmina task park <id>`) and give the work to
   the node it is placed on (`zmina tell <node>/<crew> "<what remains>"`): a role moved with `zmina move` takes its work along, but
   that runs while the file still places the role where its work is. The note is made again only after the role held nothing.
+- **Its `dir` is not checked here.** A role's directory may exist only on the node that runs it, so `zmina doctor` and `zmina ls` do not say
+  `dir … is not a directory` (`bad dir`) of a role placed on another node, and the check of a seat edit leaves it alone; a role placed
+  on this node is held to its directory as ever, and so is every role of a crew that declares no `nodes:`, and of a machine that is no node of the file.
 - `zmina ls` shows it as `dev (placed: beta)` (`--json`: `place`, set for every role but the dispatcher of a crew that declares nodes, and `away: true` when the role is
   not this node's). `zmina route` answers `tell <node>/<crew>` for a rule that names
   such a seat, and the pool never picks one (it says `placed on beta/acme, not on this node` among the alternatives). A first

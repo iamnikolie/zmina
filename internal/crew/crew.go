@@ -1188,8 +1188,10 @@ func (c *Crew) resolve(strict bool) error {
 	for _, name := range c.Names() {
 		r := c.Roles[name]
 
+		// A role the file places on another node starts there and never here, so its directory is that node's to have: it
+		// may exist only there. A crew on one node, and a role placed here, are held to theirs.
 		r.dirErr = nil
-		if st, err := os.Stat(r.Dir); err != nil || !st.IsDir() {
+		if st, err := os.Stat(r.Dir); (err != nil || !st.IsDir()) && !c.placedElsewhere(r) {
 			r.dirErr = fmt.Errorf("role %s: dir %s is not a directory", name, r.Dir)
 			if strict {
 				return r.dirErr

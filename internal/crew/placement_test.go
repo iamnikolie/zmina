@@ -576,6 +576,35 @@ func TestAValidWatchPlaceIsNotWarnedOfAtLoad(t *testing.T) {
 	assert.NotContains(t, strings.Join(home.Warnings, "\n"), "holds no role", "a watch on home is heard there")
 }
 
+// A role placed on another node starts there and never here: a directory it names that is not there is that node's to have, so this node
+// does not call it a problem (the check of a seat edit leaves it alone too). A role placed here, and any role of a crew on one node, are
+// held to theirs. A machine that is no node of the file can tell nothing of where a role runs, and holds every role to its directory.
+func TestADirOfARolePlacedElsewhereIsNotAProblemOfThisNode(t *testing.T) {
+	root := t.TempDir()
+	devDir, opsDir := filepath.Join(root, "only-on-beta"), filepath.Join(root, "only-on-alpha")
+
+	body := "home: alpha\nnodes: {alpha: {}, beta: {}}\nroles:\n  dispatcher: {}\n  dev: {place: beta, dir: " + devDir + "}\n  ops: {dir: " + opsDir + "}\n"
+
+	problem := func(c *Crew, role string) bool { return c.Roles[role].DirErr() != nil }
+
+	alpha, beta, none := loadFor(t, body, "alpha"), loadFor(t, body, "beta"), loadFor(t, body, "")
+
+	assert.False(t, problem(alpha, "dev"), "dev is beta's")
+	assert.True(t, problem(alpha, "ops"), "ops is placed here")
+	assert.True(t, problem(beta, "dev"))
+	assert.False(t, problem(beta, "ops"), "ops is alpha's")
+	assert.True(t, problem(none, "dev"), "a machine that is no node holds every role to its directory")
+	assert.True(t, problem(none, "ops"))
+	assert.ErrorContains(t, alpha.Roles["ops"].DirErr(), "role ops: dir "+opsDir+" is not a directory")
+
+	flat := loadFor(t, "roles:\n  dispatcher: {}\n  dev: {dir: "+devDir+"}\n", "alpha")
+	assert.True(t, problem(flat, "dev"), "a crew on one node")
+
+	// The directory made, the role's problem is gone where it was one.
+	require.NoError(t, os.Mkdir(opsDir, 0o700))
+	assert.False(t, problem(loadFor(t, body, "alpha"), "ops"))
+}
+
 // A place on a watch that has none keeps the watch's fingerprint: an upgrade does not look like a changed watch.
 func TestAWatchWithoutPlaceKeepsItsFingerprint(t *testing.T) {
 	c := loadFor(t, "roles:\n  dispatcher: {}\nwatch:\n  mrs: {kind: exec, every: 1m, run: [x]}\n", "")
