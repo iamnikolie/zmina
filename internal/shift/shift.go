@@ -980,6 +980,12 @@ func (s *Shift) start(name string, o UpOptions) error {
 		return err
 	}
 
+	// A role whose move to another node is open is never started here (the node it goes to may be taking its work), and says so before
+	// where the file places it: the file may already say beta, with the move not closed yet.
+	if err := s.errMoving(name); err != nil {
+		return err
+	}
+
 	// A role the crew file places on another node is never started here: every start of every kind passes this line.
 	if err := s.errPlacedAway(name); err != nil {
 		return err

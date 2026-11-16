@@ -120,6 +120,14 @@ func (s *Shift) Tick() []string {
 			continue
 		}
 
+		// A role whose move to another node is open is left alone: the move parks it, puts it down and keeps it down, and nothing
+		// here starts, restarts, releases or puts it down meanwhile (the file may already place it on the other node).
+		if s.MoveOpen(name) != "" {
+			s.moveUp(name)
+
+			continue
+		}
+
 		// A role the crew file places on another node is that node's: this beat does nothing for it (its state is kept, it
 		// is no orphan) and puts nothing down. Up here, it is told to the dispatcher once a day.
 		if !s.Crew.PlacedHere(r) {

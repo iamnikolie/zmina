@@ -54,8 +54,8 @@ func Open(path string) (*Edit, error) {
 	return e, nil
 }
 
-// refusePlace turns away a seat edit that names place: where a role runs is part of the declaration every node holds,
-// so it is edited in the file on every node (zmina move will change it on both ends); it is no seat key.
+// refusePlace turns away a seat edit that names place: where a role runs is part of the declaration every node holds, and
+// zmina move changes it on both ends; it is no seat key.
 func (e *Edit) refusePlace(set map[string]string) error {
 	if _, ok := set["place"]; !ok {
 		return nil
@@ -66,7 +66,7 @@ func (e *Edit) refusePlace(set map[string]string) error {
 	}
 
 	return errors.New("place: this crew runs on more than one node, and where a role runs is one declaration for every node: " +
-		"edit the file on every node until zmina move exists")
+		"use zmina move <role> <node>, which changes it on both nodes")
 }
 
 // Add appends a role with the given keys (in SeatKeys order). It refuses a role that exists.
@@ -445,3 +445,92 @@ func scalar(v string) *yaml.Node {
 }
 
 func known(key string) bool { return slices.Contains(SeatKeys, key) }
+
+// SetPlace is the edit zmina move makes to where a role runs: place: <node> in the role's mapping, written even when the node is
+// home, so that the same edit on two files that are one file leaves them one file. It is no seat key: Set and Add refuse it.
+func (e *Edit) SetPlace(role, node string) error {
+	roles := e.roles(false)
+
+	body := lookup(roles, role)
+	if body == nil {
+		return fmt.Errorf("no role %q in %s", role, e.path)
+	}
+
+	if body.Kind != yaml.MappingNode {
+		// "dev:" with nothing under it.
+		*body = yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	}
+
+	return setPlain(body, "place", scalar(node))
+}
+
+// Bytes is the file as Save would write it.
+func (e *Edit) Bytes() ([]byte, error) {
+	var buf bytes.Buffer
+
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+
+	if err := enc.Encode(&e.doc); err != nil {
+		return nil, fmt.Errorf("crew: %w", err)
+	}
+
+	return buf.Bytes(), nil
+}
+
+// PlaceAfter is the crew file raw as it is after a move of role to node: the bytes the move writes, made in memory, so that the
+// two ends of a move can say beforehand which sum they will both hold afterwards.
+func PlaceAfter(raw []byte, role, node string) ([]byte, error) {
+	e := &Edit{path: "crew.yaml"}
+
+	if err := yaml.Unmarshal(raw, &e.doc); err != nil {
+		return nil, fmt.Errorf("crew: %w", err)
+	}
+
+	if e.doc.Kind != yaml.DocumentNode || len(e.doc.Content) == 0 || e.doc.Content[0].Kind != yaml.MappingNode {
+		return nil, errors.New("crew: the file is not a mapping")
+	}
+
+	if err := e.SetPlace(role, node); err != nil {
+		return nil, err
+	}
+
+	return e.Bytes()
+}
+
+// MovePlace writes the move of role to node into the crew file at path (place: <node> in the role's mapping, PlaceAfter), keeping the
+// old file in its history by by and how. It replaces only the file whose hash is base (compare and swap under the history's
+// lock; a *BaseError says otherwise), and the result must load. A file that is the result already is left alone (wrote is false):
+// the same move made twice. sum is the hash of the file there afterwards.
+func MovePlace(path, role, node, base, by, how string) (saved Saved, sum string, wrote bool, err error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return saved, "", false, fmt.Errorf("crew: %w", err)
+	}
+
+	after, err := PlaceAfter(raw, role, node)
+	if err != nil {
+		return saved, "", false, err
+	}
+
+	if sumOf(raw) == sumOf(after) {
+		return saved, sumOf(after), false, nil
+	}
+
+	// The result is held to what Load asks (a role's dir is a thing of the node it runs on, and its own take checks it).
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, after, 0o600); err != nil {
+		return saved, "", false, fmt.Errorf("crew: %w", err)
+	}
+
+	_, lerr := Load(tmp)
+	_ = os.Remove(tmp)
+
+	if lerr != nil {
+		return saved, "", false, fmt.Errorf("not saved, the crew would not load: %w", lerr)
+	}
+
+	saved, wrote, err = HistoryOf(path).CommitIf(path, after, base, by, how)
+
+	return saved, sumOf(after), wrote, err
+}

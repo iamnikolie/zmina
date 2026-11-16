@@ -179,7 +179,7 @@ func TestSeatSetPlaceIsRefusedOnASpreadCrew(t *testing.T) {
 	file := spreadCrew(t, "alpha")
 
 	_, _, err := zm(t, file, "seat", "set", "dev", "place=alpha")
-	require.ErrorContains(t, err, "edit the file on every node until zmina move exists")
+	require.ErrorContains(t, err, "use zmina move")
 	assert.Contains(t, readString(t, file), "place: beta", "the file is as it was")
 
 	_, _, err = zm(t, file, "seat", "set", "dev", "about=builds")

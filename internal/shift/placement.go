@@ -143,8 +143,9 @@ func (s *Shift) awayUp(name string, r *crew.Role, now time.Time) (did []string) 
 }
 
 // awayWork tells the dispatcher once that a role the crew file places on another node still holds work on this node's ledger
-// or lines in its queue: the beat does nothing for it here, so they would sit. The way on is by hand: park what it holds and
-// give the work to the node it is placed on. The note is made again only after the role has held nothing.
+// or lines in its queue: the beat does nothing for it here, so they would sit. A role moved with zmina move takes its work along;
+// this one was placed by an edit of the file, so the way on is to park what it holds and give the work to the node it is placed
+// on. The note is made again only after the role has held nothing.
 func (s *Shift) awayWork(name string, r *crew.Role) []string {
 	key := workPrefix + name
 
@@ -181,7 +182,8 @@ func (s *Shift) awayWork(name string, r *crew.Role) []string {
 	}
 
 	text := fmt.Sprintf("%s holds %s on this node (%s), but the crew file places it on %s, so nothing here works on it: park what it "+
-		"holds (zmina task park <id>) and give the work to %s by hand (zmina tell %s \"<what remains>\")", name, strings.Join(what, " and "),
+		"holds (zmina task park <id>) and give the work to %s (zmina tell %s \"<what remains>\"). A role moved with zmina move takes its "+
+		"work along; that runs while the file still places the role on the node that holds it", name, strings.Join(what, " and "),
 		s.Crew.Here, s.Crew.WhereIs(r), s.Crew.WhereIs(r), s.Crew.RoleTell(r))
 
 	if told, _ := s.NoteOnce(key, "zmina", text, false); told {

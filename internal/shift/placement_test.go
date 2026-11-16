@@ -483,7 +483,7 @@ func TestUpOfARolePlacedElsewhereFollowsTheProbeBothWays(t *testing.T) {
 }
 
 // A role placed elsewhere that still holds open work or queued lines on this node's ledger is told once: the beat does nothing
-// for it here. The note does not name a command that moves it. It is made again only after the role has held nothing.
+// for it here. The note names zmina move for the next time. It is made again only after the role has held nothing.
 func TestARolePlacedElsewhereThatHoldsWorkIsNotedOnce(t *testing.T) {
 	f, _ := placedFixture(t, spreadYAML, "alpha")
 	f.tk.list = []task.Task{openTask("T-14", "dev"), openTask("T-15", "docs")}
@@ -500,9 +500,9 @@ func TestARolePlacedElsewhereThatHoldsWorkIsNotedOnce(t *testing.T) {
 
 	text := eventDetails(f, "placed-elsewhere-work")
 	assert.Contains(t, text, "dev holds T-14 and 1 queued line on this node (alpha), but the crew file places it on beta, so nothing here works on it: "+
-		"park what it holds (zmina task park <id>) and give the work to beta by hand (zmina tell beta")
+		"park what it holds (zmina task park <id>) and give the work to beta (zmina tell beta")
 	assert.Contains(t, text, "qa holds 2 queued lines on this node (alpha)")
-	assert.NotContains(t, text, "zmina move", "naming the command that moves it waits for the command")
+	assert.Contains(t, text, "A role moved with zmina move takes its work along")
 	assert.NotContains(t, text, "docs holds")
 
 	// It held something and holds nothing now: the key goes, and holding again is told again.

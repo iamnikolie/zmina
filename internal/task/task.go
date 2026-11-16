@@ -154,6 +154,9 @@ type Task struct {
 	// Late is the reports that sessions made on the task after it was handed to another, newest last: what was kept
 	// of each and what was refused. They change nothing else of the task, and its handoff packet does not carry them.
 	Late []Late `json:"late,omitempty"`
+	// Origin is where the task came from when it was moved with its role from another node (zmina move): <node>/T-<n>, the
+	// task there. A task made here has none; an older zmina that rewrites the file drops it, which loses only the provenance.
+	Origin string `json:"origin,omitempty"`
 }
 
 // CheckEnvToldMax is how many causes of an environment fault a task remembers having told.

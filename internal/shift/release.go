@@ -124,23 +124,31 @@ func (s *Shift) release(name string, r *crew.Role, now time.Time) (did, note str
 	}
 
 	for _, t := range mine {
-		text := t.Headline()
-		if t.Checkpoint != nil {
-			text += "; checkpoint " + t.Checkpoint.Revision + " (worker-reported)"
-		}
-		if !s.checkpointCurrent(t) {
-			text += "; handoff incomplete: checkpoint missing, stale or unavailable"
-		}
-		if rs.Now != "" {
-			text += "; last observed status: " + rs.Now
-		}
-
-		if _, err := s.Park(t, text); err != nil {
+		if _, err := s.Park(t, s.parkText(t, rs)); err != nil {
 			return name + ": release: " + err.Error(), ""
 		}
 	}
 
 	return s.putDown(name)
+}
+
+// parkText is what a task the role did not park itself is parked with: its headline, its checkpoint, whether that is current, and
+// the last status zmina saw of the role.
+func (s *Shift) parkText(t task.Task, rs *RoleState) string {
+	text := t.Headline()
+	if t.Checkpoint != nil {
+		text += "; checkpoint " + t.Checkpoint.Revision + " (worker-reported)"
+	}
+
+	if !s.checkpointCurrent(t) {
+		text += "; handoff incomplete: checkpoint missing, stale or unavailable"
+	}
+
+	if rs.Now != "" {
+		text += "; last observed status: " + rs.Now
+	}
+
+	return text
 }
 
 // callOff ends a release the role is no longer free for; it is released again after another idle stretch.
@@ -230,6 +238,12 @@ func idleFor(d time.Duration) string {
 // task, its role and the role's conversation, so zmina later take --resume continues it. The task closes as parked
 // with the item's id; a worktree stays as it is.
 func (s *Shift) Park(t task.Task, text string) (later.Item, error) {
+	return s.park(t, text, !s.State.Role(t.Role).Releasing.IsZero())
+}
+
+// park is Park; releasing says the role is being released (or moved), so that a checkpoint that is not current marks the handoff
+// incomplete.
+func (s *Shift) park(t task.Task, text string, releasing bool) (later.Item, error) {
 	if s.Later == nil || s.Tasks == nil {
 		return later.Item{}, errors.New("no later list")
 	}
@@ -250,7 +264,7 @@ func (s *Shift) Park(t task.Task, text string) (later.Item, error) {
 		return later.Item{}, err
 	}
 	t = current
-	if !s.State.Role(t.Role).Releasing.IsZero() {
+	if releasing {
 		t.HandoffIncomplete = !s.checkpointCurrent(t)
 	}
 	it, err := s.Later.Add(later.Item{Checkpoint: t.Checkpoint, Incomplete: t.HandoffIncomplete, Conversations: t.Conversations, Text: text, Note: "from " + t.ID + " (" + t.Role + ")", From: t.ID,

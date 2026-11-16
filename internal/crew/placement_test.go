@@ -482,8 +482,8 @@ func TestSeatSetPlaceIsRefused(t *testing.T) {
 	e, err := Open(spread)
 	require.NoError(t, err)
 	assert.ErrorContains(t, e.Set("dev", map[string]string{"place": "alpha"}),
-		"edit the file on every node until zmina move exists")
-	assert.ErrorContains(t, e.Add("qa", map[string]string{"place": "alpha"}), "until zmina move exists")
+		"use zmina move <role> <node>")
+	assert.ErrorContains(t, e.Add("qa", map[string]string{"place": "alpha"}), "use zmina move <role> <node>")
 
 	// Not a seat key either on a crew that declares no nodes: say what to do.
 	plain := write(t, "roles:\n  dispatcher: {}\n  dev: {}\n")

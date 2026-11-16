@@ -356,7 +356,7 @@ func ReservedKeys() []string {
 	keys := []string{"mesh", "mesh-ui", "agents", "archive", "bin"}
 
 	for _, p := range []string{l.Tasks(), l.Later(), l.Alarms(), l.Asks(), l.Inbox(), l.Limits(), l.Screens(), l.Hooks(),
-		l.Delivery(), l.RotationsDir(), l.Worktrees(), l.Plugins(), l.History()} {
+		l.Delivery(), l.RotationsDir(), l.Worktrees(), l.Plugins(), l.History(), l.Moves()} {
 		keys = append(keys, strings.Split(filepath.ToSlash(strings.TrimPrefix(p, "x"+string(filepath.Separator))), "/")[0])
 	}
 
