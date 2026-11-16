@@ -204,7 +204,9 @@ func (a *app) restoreCrewVersion(path string, now []byte, h *crew.History, pick 
 	}
 	defer l.Release()
 
-	saved, err := crew.Restore(abs, raw, who, fmt.Sprintf("zmina crew history --restore %d", n))
+	// The version replaces the file this command read, and that one only: an edit, a push or a hand edit that landed since is refused
+	// (crew.ErrChangedMeanwhile) with nothing written, as for a seat edit, and the owner looks at the file and runs it again.
+	saved, err := crew.Restore(abs, raw, crew.SumOf(now), who, fmt.Sprintf("zmina crew history --restore %d", n))
 	if err != nil {
 		return err
 	}

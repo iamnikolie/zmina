@@ -2496,7 +2496,7 @@ nothing, so the ticker's every beat costs one small read.
 |---|---|
 | `zmina crew history [--json]` | the versions, newest first: number (0 is the file as it is now), when, who, what changed and how. |
 | `zmina crew history --diff <n>` | what changed between version `n` and the file as it is now (unified diff). |
-| `zmina crew history --restore <n>` | put version `n` back. It must load; what it replaces is kept as a version, so a restore can be undone. Works when the file now does not load. |
+| `zmina crew history --restore <n>` | put version `n` back. It must load; what it replaces is kept as a version, so a restore can be undone. Works when the file now does not load. It replaces the file it read and no other, as a seat edit does: an edit, a push or a hand edit that landed between its read and its write is refused (`the crew file changed meanwhile, run it again`), nothing is written, and the newer file stays. |
 | `zmina crew push <node> [--create] [--base <sum>]` | send this crew's file to another node of its `nodes:`, in place of that node's (owner's node only; compare and swap on the file last sent or confirmed there, so an edit there is never overwritten unseen). The node keeps what it replaces as a version: by `mesh <owner node>`, how `crew push`. See Placement. |
 | `zmina move <role> <node> [--wait 10m] [--resume <id> \| --abort <id>] [--force]` | move a role with its tasks to another node of the crew (owner's node, owner's hand): it parks and goes down, its branch goes by `origin`, it is placed and started there, and the two crew files are one file again. See Move. |
 

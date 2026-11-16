@@ -44,7 +44,7 @@ func TestCrewFileIsNotChangedWhileAMoveIsOpen(t *testing.T) {
 			return e.Save()
 		},
 		"a restore": func() error {
-			_, err := Restore(path, []byte(old), "me", "crew history")
+			_, err := Restore(path, []byte(old), "", "me", "crew history")
 
 			return err
 		},

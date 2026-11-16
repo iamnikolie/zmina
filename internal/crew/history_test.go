@@ -294,7 +294,10 @@ func TestRestorePutsAVersionBackAsAChange(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, string(v1), string(old))
 
-	saved, err := Restore(path, old, "hand", "zmina crew history --restore 1")
+	now, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	saved, err := Restore(path, old, SumOf(now), "hand", "zmina crew history --restore 1")
 	require.NoError(t, err)
 	require.Len(t, saved.Versions, 1)
 	assert.Equal(t, "removed dev", saved.Versions[0].What)
@@ -305,13 +308,66 @@ func TestRestorePutsAVersionBackAsAChange(t *testing.T) {
 		"the restore is a version too, so it can be undone")
 
 	before, _ := os.ReadFile(path)
-	_, err = Restore(path, []byte("roles: [not, a, mapping]\n"), "hand", "zmina crew history --restore 9")
+	_, err = Restore(path, []byte("roles: [not, a, mapping]\n"), "", "hand", "zmina crew history --restore 9")
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "would not load")
 
 	after, _ := os.ReadFile(path)
 	assert.Equal(t, string(before), string(after), "a file that does not load is not written")
 	assert.Len(t, versionNames(t, h), 3)
+}
+
+// A restore is a compare and swap on the file its caller read: a push, a seat edit or a hand edit that landed since is not written
+// over, whatever it was, and nothing of the restore is kept. The file the restore replaces need not load: that is what it mends.
+func TestRestoreRefusesAFileThatChangedMeanwhile(t *testing.T) {
+	path, h := historyFixture(t)
+	v1, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	e, err := Open(path)
+	require.NoError(t, err)
+	require.NoError(t, e.Add("dev", map[string]string{"model": "opus"}))
+	e.Note("hand", "zmina seat add")
+	require.NoError(t, e.Save())
+
+	read, err := os.ReadFile(path)
+	require.NoError(t, err)
+
+	// What the caller decided on is the file as it read it; then another change lands.
+	newer := string(read) + "# a newer edit\n"
+	require.NoError(t, os.WriteFile(path, []byte(newer), 0o600))
+
+	kept := len(versionNames(t, h))
+
+	_, err = Restore(path, v1, SumOf(read), "hand", "zmina crew history --restore 1")
+	require.ErrorIs(t, err, ErrChangedMeanwhile)
+
+	got, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, newer, string(got), "the newer file stays")
+	assert.Len(t, versionNames(t, h), kept, "no version of the refused restore")
+
+	// A file that is gone is not the one that was read either.
+	require.NoError(t, os.Remove(path))
+
+	_, err = Restore(path, v1, SumOf(read), "hand", "zmina crew history --restore 1")
+	require.ErrorIs(t, err, ErrChangedMeanwhile)
+	assert.NoFileExists(t, path)
+
+	// The file as read, even one that no longer loads, is replaced.
+	broken := []byte("roles:\n  dev:\n    keep: sometimes\n")
+	require.NoError(t, os.WriteFile(path, broken, 0o600))
+
+	_, err = Load(path)
+	require.Error(t, err, "it does not load")
+
+	saved, err := Restore(path, v1, SumOf(broken), "hand", "zmina crew history --restore 1")
+	require.NoError(t, err)
+	require.NotEmpty(t, saved.Versions)
+
+	got, err = os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, string(v1), string(got))
 }
 
 // A seat edit goes through the history, and the old single .bak is gone.

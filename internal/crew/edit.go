@@ -291,20 +291,17 @@ func (e *Edit) save(check func(string) (*Crew, error)) error {
 var ErrChangedMeanwhile = errors.New("the crew file changed meanwhile, run it again")
 
 // Restore puts raw back as the crew file at path, as a change of its own: it must load (Load), what is there now is
-// kept, and raw becomes the newest version.
-func Restore(path string, raw []byte, by, how string) (Saved, error) {
-	return commit(path, raw, Load, by, how)
+// kept, and raw becomes the newest version. base is the hash (SumOf) of the file the caller read when it decided on this: a file
+// that is another by the time of the write is refused with ErrChangedMeanwhile and nothing is written, as for a seat edit. The
+// file that is there is never loaded, so a crew file that no longer loads is what a restore mends; "" takes whatever file is there.
+func Restore(path string, raw []byte, base, by, how string) (Saved, error) {
+	return commitIf(path, raw, Load, base, by, how)
 }
 
-// commit is the end of every change of the crew file: raw has to load, then the history keeps the file as it is and
-// writes raw over it.
-func commit(path string, raw []byte, check func(string) (*Crew, error), by, how string) (Saved, error) {
-	return commitIf(path, raw, check, "", by, how)
-}
-
-// commitIf is commit for a change made to the file whose hash is base ("" for a change that takes whatever file is there): the
-// history's lock is held over the compare and the write, the same lock a push takes, so an edit and a push never both write, and
-// the one that read a file that is gone is refused (ErrChangedMeanwhile) and writes nothing.
+// commitIf is the end of every change of the crew file: raw has to load, then the history keeps the file as it is and writes raw
+// over it. It is made to the file whose hash is base ("" for a change that takes whatever file is there): the history's lock is
+// held over the compare and the write, the same lock a push takes, so an edit and a push never both write, and the one that read
+// a file that is gone is refused (ErrChangedMeanwhile) and writes nothing.
 func commitIf(path string, raw []byte, check func(string) (*Crew, error), base, by, how string) (Saved, error) {
 	if err := RefuseWhileMoving(path); err != nil {
 		return Saved{}, err
