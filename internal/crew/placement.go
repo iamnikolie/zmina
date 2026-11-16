@@ -141,6 +141,10 @@ func (c *Crew) PlacedHere(r *Role) bool {
 	return c.PlacementOf(r) == c.Here
 }
 
+// placedElsewhere reports whether the role is another node's to run: this machine is a node of the file, and the role is not placed on
+// it. A crew that is not spread says no, and so does a machine that is no node of the file, which can tell nothing of where a role runs.
+func (c *Crew) placedElsewhere(r *Role) bool { return c.Spread() && c.Runs() && !c.PlacedHere(r) }
+
 // WatchPlace is the node that runs the watch: its place, else the crew's home. Empty for a crew that is not spread.
 func (c *Crew) WatchPlace(w *Watch) string {
 	if !c.Spread() || w == nil {
@@ -301,7 +305,19 @@ func (c *Crew) placement(here, why string, warn func(string)) error {
 		return fmt.Errorf("home %q is not one of nodes: (%s)", c.Home, strings.Join(names, ", "))
 	}
 
-	dispatcher := or(c.Dispatcher, defaultDispatcher)
+	// What follows asks which node holds which role, and the answer reads the dispatcher's name and each role's own, which are not there
+	// before the defaults are completed (a file with no dispatcher: has none, and a role has no name yet). A dispatcher left as "" is
+	// the name of every role then, so no node would hold any and a watch on a node with roles would be warned of as unheard. They are put
+	// in here as complete puts them in, with the same value.
+	c.Dispatcher = or(c.Dispatcher, defaultDispatcher)
+
+	for name, r := range c.Roles {
+		if r != nil {
+			r.Name = name
+		}
+	}
+
+	dispatcher := c.Dispatcher
 
 	for _, name := range c.roleNames() {
 		r := c.Roles[name]

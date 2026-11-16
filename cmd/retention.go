@@ -780,7 +780,7 @@ func (a *app) retentionCommand() *cobra.Command {
 				return err
 			}
 
-			lines, err := a.retentionRun(c, time.Now(), by(), true, dry)
+			lines, err := a.retentionRun(c, time.Now(), a.actor(), true, dry)
 			for _, l := range lines {
 				fmt.Fprintln(a.out, l)
 			}

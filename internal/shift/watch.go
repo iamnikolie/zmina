@@ -169,29 +169,46 @@ func (s *Shift) FinishWatch(run WatchRun, res watch.Result, baseline bool) []str
 	w := run.Watch
 	name := w.Name
 	now := s.Now()
-	st := s.watchState(name)
 	role := "watch:" + name
+	st := s.State.Watch[name]
+	cur, curErr := s.Crew.Watch(name)
+
+	// A result that is not applied leaves the state as it is and makes none: the state of a watch that went to another node, or left
+	// the file, is the prune's to drop (it runs before a command does, so it may be gone already), and an empty one made here would
+	// be saved and kept. Only the reservation this run took is given back.
+	discard := func(why string) []string {
+		if st != nil && st.Running != nil && st.Running.Token == run.Token {
+			st.Running = nil
+		}
+
+		s.log(role, "watch-stale", "", why)
+
+		return []string{name + ": " + why}
+	}
+
+	// The file placed the watch on another node while it ran: this node's run is over, whatever the state says (a prune that ran
+	// first has cleared the reservation or dropped the state).
+	if curErr == nil && s.Crew.WatchAway(cur) {
+		return discard("the watch was placed on another node while it ran; result discarded")
+	}
 
 	// A run that is no longer the current reservation (it outlived its timeout and another took over), or whose
 	// watch was changed or removed while it ran, is not applied: its keys would overwrite newer ones.
-	if st.Running == nil || st.Running.Token != run.Token {
-		s.log(role, "watch-stale", "", "result of a superseded run discarded")
-
-		return []string{name + ": result of a superseded run discarded"}
+	if st == nil || st.Running == nil || st.Running.Token != run.Token {
+		return discard("result of a superseded run discarded")
 	}
 
 	st.Running = nil
 
-	if cur, err := s.Crew.Watch(name); err == nil && !s.Crew.WatchHere(cur) {
-		s.log(role, "watch-stale", "", "the watch was placed on another node while it ran; result discarded")
-
-		return []string{name + ": the watch was placed on another node while it ran; result discarded"}
+	// Neither this node's watch nor another node's: its place is no node of the file or one no dispatcher hears, or this machine's
+	// node name could not be read while it ran.
+	if curErr == nil && !s.Crew.WatchHere(cur) {
+		return discard("the watch is no longer one this node can run (its place is no node, or a node with no dispatcher to hear it, " +
+			"or this machine's node name could not be read); result discarded")
 	}
 
-	if cur, err := s.Crew.Watch(name); err != nil || cur.Fingerprint() != run.Config {
-		s.log(role, "watch-stale", "", "the watch changed while it ran; result discarded")
-
-		return []string{name + ": the watch changed while it ran; result discarded"}
+	if curErr != nil || cur.Fingerprint() != run.Config {
+		return discard("the watch changed while it ran; result discarded")
 	}
 
 	// How the run before this one ended, for what the log keeps of a run that found nothing new.
@@ -362,9 +379,12 @@ func (s *Shift) WatchViews() []WatchView {
 
 // PruneWatches drops the state of watches no longer in the crew.
 // What a node kept of a watch that the file now places on another node goes too, but for the keys whose notes still
-// wait on an ack: those were said to this node's dispatcher, the other node's first run records them without a word,
-// and so they stay, reminded of and ackable here, until the last is acked. Nothing is dropped on a machine that is
-// no node of the file: a node name that cannot be read for a moment must not cost a watch what it knows.
+// wait on an ack: those were said to this node's dispatcher, and so they stay, listed and ackable here, until the last is
+// acked (the other node's first run records them without a word with baseline, and notes them again without it). The
+// renotify of a key is said only inside a run of its watch, which is another node's now. A key whose note a task carries
+// is acked already and is recorded as acked here (ackByTasks), so the state goes once nothing is left that waits.
+// Nothing is dropped on a machine that is no node of the file: a node name that cannot be read for a moment must not
+// cost a watch what it knows.
 func (s *Shift) PruneWatches() {
 	for name, st := range s.State.Watch {
 		w, ok := s.Crew.Watches[name]
@@ -376,6 +396,15 @@ func (s *Shift) PruneWatches() {
 
 		if st == nil || !s.Crew.WatchAway(w) {
 			continue
+		}
+
+		// A key whose note the dispatcher turned into a task is acked, as the run that would have said it again acks it
+		// (FinishWatch): that run is another node's now, so nothing else here would ever record it, and the state would be kept
+		// for a wait that is over. What is left waiting is judged after that, and the acks stay in the state that is kept.
+		if len(st.Waiting()) > 0 {
+			for _, a := range ackByTasks(name, st, s.allTasks(), s.Now()) {
+				s.log("watch:"+name, "watch-ack", "", "key="+a)
+			}
 		}
 
 		if len(st.Waiting()) == 0 {

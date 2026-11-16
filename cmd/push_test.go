@@ -148,6 +148,24 @@ func TestTickPushesBlockingAsk(t *testing.T) {
 	assert.Contains(t, out, "waits on you: A-1 log in (blocks dev)")
 }
 
+// A notify command given as an argv starts with no shell, so a ~ in it is the home of whoever runs zmina; the text it
+// is sent, its last argument, is data and is never expanded.
+func TestNotifyArgvExpandsHome(t *testing.T) {
+	crewFile := testCrew(t, "notify: [\"~/bin/push\", \"~/title\"]\n")
+	home := os.Getenv("HOME") // testCrew gave this test a home of its own
+
+	pushed := filepath.Join(home, "pushed")
+	require.NoError(t, os.MkdirAll(filepath.Join(home, "bin"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(home, "bin", "push"), []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" >> "+
+		pushed+"\n"), 0o700))
+
+	c, err := crew.Load(crewFile)
+	require.NoError(t, err)
+
+	require.NoError(t, notify(c, crew.NotifyReminder, "R-1", "~/not-a-path"))
+	assert.Equal(t, filepath.Join(home, "title")+" ~/not-a-path\n", string(mustRead(t, pushed)))
+}
+
 // A send that fails leaves the item due: it is tried again after pushRetry, not every beat, and goes once it works.
 func TestPushFailedSendStaysDue(t *testing.T) {
 	dir := t.TempDir()

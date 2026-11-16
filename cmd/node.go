@@ -201,7 +201,7 @@ func (a *app) nodeEnroll() *cobra.Command {
 
 	c := &cobra.Command{
 		Use:   "enroll <node> (--ssh <host> | --cmd <command>) [--days <n>]",
-		Short: "On the owner's node: make a node at that address, certify it, and add it as a peer",
+		Short: "On the owner's node: make a node at that address, certify it, add it as a peer, and hold the first session with it",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
@@ -258,7 +258,9 @@ func (a *app) nodeEnroll() *cobra.Command {
 				return err
 			}
 
-			fmt.Fprintf(a.out, "node %s · certified, a peer at %s; it meets the rest on the next sync\n", name, addr)
+			fmt.Fprintf(a.out, "node %s · certified, a peer at %s\n", name, addr)
+
+			a.firstSession(cmd.Context(), me, name)
 
 			return nil
 		},
@@ -268,6 +270,30 @@ func (a *app) nodeEnroll() *cobra.Command {
 	daysFlag(c, &days)
 
 	return c
+}
+
+// firstSession is the one exchange with a node just enrolled that zmina node sync --peer would run: both sides prove
+// their keys and tell what they take, so a crew push to it works at once. Enroll has succeeded before this: a session
+// that does not come off is a warning, and the owner runs zmina node sync when the node can be reached.
+func (a *app) firstSession(ctx context.Context, me *mesh.Node, name string) {
+	ss, err := a.syncRound(ctx, me, name)
+	if err == nil {
+		switch len(ss) {
+		case 1:
+			err = ss[0].Err
+		default:
+			err = errors.New("no peer with an address")
+		}
+	}
+
+	if err != nil {
+		fmt.Fprintf(a.err, "zmina: warning: no first session with %s yet (%s): run zmina node sync before zmina crew push\n",
+			name, mesh.Plain(err.Error()))
+
+		return
+	}
+
+	fmt.Fprintln(a.out, sessionLine(ss[0]))
 }
 
 // runPeer runs the peer's zmina with args and stdin, and returns what it printed.
@@ -631,19 +657,11 @@ func (a *app) nodeSync() *cobra.Command {
 				return err
 			}
 
-			release, ok := me.TrySync()
-			if !ok {
-				return errors.New("another zmina is syncing this node right now")
-			}
-			defer release()
-
-			if err := a.pumpLocalReports(); err != nil {
+			ss, err := a.syncRound(cmd.Context(), me, only)
+			if err != nil {
 				return err
 			}
-			me.MarkSync()
 
-			ss := me.Sync(cmd.Context(), mesh.Exec{}, []mesh.Discovery{mesh.Book{Node: me}}, a.deliverFrom(), only,
-				peerTimeout, 0, time.Now)
 			if len(ss) == 0 {
 				fmt.Fprintln(a.out, "no peer with an address")
 			}
@@ -669,6 +687,25 @@ func (a *app) nodeSync() *cobra.Command {
 	c.Flags().StringVar(&only, "peer", "", "only this peer")
 
 	return c
+}
+
+// syncRound is one round by hand, what zmina node sync does: under the sync lock, this node's own typed reports go
+// to its crews, then one session runs with every peer that has an address, or with only that one when it is set.
+func (a *app) syncRound(ctx context.Context, me *mesh.Node, only string) ([]mesh.Session, error) {
+	release, ok := me.TrySync()
+	if !ok {
+		return nil, errors.New("another zmina is syncing this node right now")
+	}
+	defer release()
+
+	if err := a.pumpLocalReports(); err != nil {
+		return nil, err
+	}
+
+	me.MarkSync()
+
+	return me.Sync(ctx, mesh.Exec{}, []mesh.Discovery{mesh.Book{Node: me}}, a.deliverFrom(), only,
+		peerTimeout, 0, time.Now), nil
 }
 
 func sessionLine(s mesh.Session) string {

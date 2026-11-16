@@ -166,6 +166,59 @@ func TestNodeSignDays(t *testing.T) {
 	require.ErrorContains(t, err, "--days is 0 or more")
 }
 
+// enroll ends with the first session with the new node, so the node has said crew_sync and a crew push is not refused
+// for want of a session. A session that cannot be held is a warning, not a failure: the node is certified and in the
+// book, and the owner is told to run zmina node sync.
+func TestNodeEnrollMeetsTheNode(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		serve string // what the far node's shell does when asked to serve a session
+		ok    bool
+	}{
+		{"reachable", ":", true},
+		{"serving fails", "echo 'no session today' >&2; exit 1", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			def, _ := nodeHome(t)
+
+			homeB := t.TempDir()
+			script := filepath.Join(t.TempDir(), "far-zmina")
+			require.NoError(t, os.WriteFile(script, []byte("#!/bin/sh\n"+
+				"if [ \"$1 $2\" = 'node serve' ]; then "+c.serve+"; fi\n"+
+				"HOME='"+homeB+"' ZMINA_TELL_RECEIPTS_PROCESS=1 exec '"+os.Args[0]+
+				"' -test.run='^TestTellReceiptsHelperProcess$' -- \"$@\"\n"), 0o700))
+
+			out, errOut, err := zm(t, def, "node", "enroll", "box", "--cmd", script)
+			require.NoError(t, err, "enroll has succeeded whatever the first session did")
+			assert.Contains(t, out, "node box · certified, a peer at ")
+
+			me, err := mesh.Open(meshDir())
+			require.NoError(t, err)
+
+			book, err := me.Peers()
+			require.NoError(t, err)
+			require.Len(t, book, 1)
+			require.Equal(t, "box", book[0].Name)
+
+			if c.ok {
+				assert.Contains(t, out, "box: ok · ")
+				assert.Empty(t, errOut)
+				assert.False(t, book[0].OK.IsZero(), "the session is in the book")
+				assert.Empty(t, crewSyncRefusal(book[0]), "a push to it is not refused")
+
+				return
+			}
+
+			assert.NotContains(t, out, "box: ok")
+			assert.Equal(t, 1, strings.Count(errOut, "\n"), "one line: %q", errOut)
+			assert.Contains(t, errOut, "zmina: warning: no first session with box yet (")
+			assert.Contains(t, errOut, "no session today")
+			assert.Contains(t, errOut, "run zmina node sync")
+			assert.NotEmpty(t, crewSyncRefusal(book[0]))
+		})
+	}
+}
+
 // renew for another node goes the way enroll went: its zmina is asked for its request through the book's address, the
 // owner signs, the far side accepts. It keeps the key; an address that reaches another key is refused and nothing is
 // signed; a node without the owner key says to renew from the owner's.

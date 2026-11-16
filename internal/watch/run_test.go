@@ -68,6 +68,28 @@ func TestExecFailures(t *testing.T) {
 	assert.ErrorContains(t, Run(context.Background(), w, env).Err, "no such host", "the first stderr line names the failure")
 }
 
+// A detector given as an argv runs with no shell, so a ~ in it is turned into the home of the user running zmina when it
+// starts: the command, and the arguments it is given.
+func TestExecArgvExpandsHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(home, "bin"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(home, "bin", "detector"), []byte(
+		"#!/bin/sh\nprintf '{\"key\":\"k\",\"fingerprint\":\"%s\",\"text\":\"t\"}\\n' \"$1\"\n"), 0o700))
+
+	dir := t.TempDir()
+	w := &crew.Watch{Name: "x", Kind: crew.WatchExec, Every: "1m",
+		Run: crew.Command{Argv: []string{"~/bin/detector", "~/data"}}}
+	require.NoError(t, w.Check(&crew.Crew{Dir: dir}))
+
+	res := Run(context.Background(), w, Env{Dir: Dir(dir, "x")})
+	require.NoError(t, res.Err)
+	require.Len(t, res.Events, 1)
+	assert.Equal(t, filepath.Join(home, "data"), res.Events[0].Fingerprint, "the argument too")
+	assert.Equal(t, []string{"~/bin/detector", "~/data"}, w.Run.Argv, "the crew's own argv is as written")
+}
+
 func TestExecShellString(t *testing.T) {
 	dir := t.TempDir()
 	w := &crew.Watch{Name: "x", Kind: crew.WatchExec, Every: "1m", Run: crew.Command{Shell: `printf '{"key":"k","fingerprint":"%s","text":"t"}\n' "$ZMINA_WATCH"`}}

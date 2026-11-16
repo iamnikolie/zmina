@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -186,4 +187,48 @@ func TestCrewHistoryRestoreRefusesAFileThatDoesNotLoad(t *testing.T) {
 	got, err := os.ReadFile(crewFile)
 	require.NoError(t, err)
 	assert.NotContains(t, string(got), "sometimes")
+}
+
+// --restore puts a version over the file it read and over no other: an edit, a push or a hand edit that landed between its read and its
+// write is refused, as a seat edit is, and the newer file stays as it is, with no version or event of the refused restore. The same restore
+// run again, on the file as it is now, goes through.
+func TestCrewHistoryRestoreRefusesAFileThatChangedMeanwhile(t *testing.T) {
+	crewFile := testCrew(t, "  dev: {}\n")
+	before, err := os.ReadFile(crewFile)
+	require.NoError(t, err)
+
+	_, _, err = zm(t, crewFile, "seat", "set", "dev", "model=sonnet")
+	require.NoError(t, err)
+
+	read, err := os.ReadFile(crewFile) // the file as the restore read it
+	require.NoError(t, err)
+
+	// Another change lands before it writes.
+	newer := string(read) + "# sent meanwhile\n"
+	require.NoError(t, os.WriteFile(crewFile, []byte(newer), 0o600))
+
+	h := crew.HistoryOf(crewFile)
+	vs, err := h.List()
+	require.NoError(t, err)
+	require.Len(t, vs, 2, "the file now, and the file as first seen")
+
+	changes := len(crewChanged(t, crewFile))
+
+	a := &app{out: io.Discard, err: io.Discard, crew: crewFile}
+	err = a.restoreCrewVersion(crewFile, read, h, func(n int) (crew.Version, error) { return vs[n], nil }, 1)
+	require.ErrorIs(t, err, crew.ErrChangedMeanwhile)
+
+	got, err := os.ReadFile(crewFile)
+	require.NoError(t, err)
+	assert.Equal(t, newer, string(got), "the newer file keeps its content")
+	assert.Len(t, crewChanged(t, crewFile), changes, "nothing of the refused restore is logged")
+
+	// Run again, it reads the file as it is now: the newest version, then the seat edit, then the file as first seen.
+	out, _, err := zm(t, crewFile, "crew", "history", "--restore", "2")
+	require.NoError(t, err)
+	assert.Contains(t, out, "restored version 2")
+
+	got, err = os.ReadFile(crewFile)
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(got))
 }

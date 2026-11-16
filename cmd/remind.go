@@ -457,7 +457,7 @@ func notify(c *crew.Crew, event, id, text string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), notifyWait)
 	defer cancel()
 
-	line := c.Notify.Line()
+	line := c.Notify.ExecLine()
 	if c.Notify.Argv != nil {
 		line = append(append([]string{}, line...), text)
 	} else {

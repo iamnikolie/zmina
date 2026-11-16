@@ -74,7 +74,7 @@ func (a *app) tellRefusedScreenRules(c *crew.Crew, o screenrules.Overrides) {
 		return
 	}
 
-	_ = eventLog(c).Add(events.Event{TS: now, Event: screenRulesEvent, By: by(), Detail: reason})
+	_ = eventLog(c).Add(events.Event{TS: now, Event: screenRulesEvent, By: a.actorOver(c), Detail: reason})
 }
 
 // screenRulesKey names a refusal in the marker: a hash of the file and the reason, so that the marker keeps no words of it.

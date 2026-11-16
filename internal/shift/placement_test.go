@@ -683,17 +683,35 @@ func TestAWatchRunsOnTheNodeItIsPlacedOn(t *testing.T) {
 	assert.Empty(t, g.s.DueWatches())
 }
 
-// A watch placed on a node that holds no role has no dispatcher to hear it: it runs on no node, and both say why.
+// A watch placed on a node that holds no role has no dispatcher to hear it: it runs on no node, and both say why. The reason is that
+// node's, not the file's: a watch on home and one on a node that holds a role are heard, are not warned of, and run there.
 func TestAWatchOnANodeWithNoDispatcherRunsNowhere(t *testing.T) {
-	body := "namespace: /ns\nclaude: claude\nhome: alpha\nnodes:\n  alpha: {}\n  beta: {}\nroles:\n  dispatcher:\n    boot: b\n  ops: {}\n" +
-		"watch:\n  cards:\n    kind: exec\n    every: 1m\n    run: [detector]\n    place: beta\n"
+	body := "namespace: /ns\nclaude: claude\nhome: alpha\nnodes:\n  alpha: {}\n  beta: {}\n  gamma: {}\nroles:\n  dispatcher:\n    boot: b\n" +
+		"  ops: {}\n  dev:\n    place: gamma\n" +
+		"watch:\n  cards:\n    kind: exec\n    every: 1m\n    run: [detector]\n    place: beta\n" +
+		"  mrs:\n    kind: exec\n    every: 1m\n    run: [detector]\n    place: gamma\n" +
+		"  ci-red:\n    kind: exec\n    every: 1m\n    run: [detector]\n"
 
-	for _, node := range []string{"alpha", "beta"} {
+	due := func(f fix) []string {
+		var names []string
+		for _, r := range f.s.DueWatches() {
+			names = append(names, r.Watch.Name)
+		}
+
+		return names
+	}
+
+	for node, want := range map[string][]string{"alpha": {"ci-red"}, "beta": nil, "gamma": {"mrs"}} {
 		f, _ := placedFixture(t, body, node)
+		warnings := strings.Join(f.s.Crew.Warnings, "\n")
 
-		assert.Empty(t, f.s.DueWatches(), node)
-		assert.Contains(t, strings.Join(f.s.Crew.Warnings, "\n"),
-			"watch cards: place beta holds no role of the crew, so no dispatcher runs there to hear it; the watch runs on no node")
+		assert.False(t, f.s.Crew.Holds("beta"), "beta holds no role: ops is on home, dev on gamma")
+		assert.True(t, f.s.Crew.Holds("gamma"), node)
+		assert.Equal(t, want, due(f), node)
+
+		assert.Contains(t, warnings,
+			"watch cards: place beta holds no role of the crew, so no dispatcher runs there to hear it; the watch runs on no node", node)
+		assert.Equal(t, 1, strings.Count(warnings, "holds no role"), "only the watch on beta is warned of: %s", warnings)
 
 		_, err := f.s.BeginWatch("cards")
 		require.ErrorContains(t, err, "no dispatcher runs there: it runs on no node", node)
@@ -701,8 +719,9 @@ func TestAWatchOnANodeWithNoDispatcherRunsNowhere(t *testing.T) {
 }
 
 // What a node kept of a watch goes when the file places the watch on another node, but for the keys that still wait on
-// an ack: those stay, reminded of and ackable here, and the rest goes with the last of them. A result that comes in
-// after the watch was placed elsewhere is not applied.
+// an ack: those stay, listed and ackable here, and the rest goes with the last of them. A result that comes in
+// after the watch was placed elsewhere is not applied. A command prunes before it finishes a run (withState), so that is
+// the order here too.
 func TestTheNodeAWatchLeftKeepsOnlyWhatWaitsOnAnAck(t *testing.T) {
 	here := "watch:\n  ci-red:\n    kind: exec\n    every: 1m\n    run: [detector]\n    baseline: false\n" +
 		"  quiet:\n    kind: exec\n    every: 1m\n    run: [detector]\n    baseline: false\n"
@@ -732,16 +751,19 @@ func TestTheNodeAWatchLeftKeepsOnlyWhatWaitsOnAnAck(t *testing.T) {
 
 	f.s.Crew = c
 
-	did := f.s.FinishWatch(run, watch.Result{Events: []watch.Event{{Key: "k2", Fingerprint: "b", Text: "new"}}}, false)
-	require.Len(t, did, 1)
-	assert.Contains(t, did[0], "placed on another node while it ran; result discarded")
-
 	f.s.PruneWatches()
 
 	assert.Nil(t, f.s.State.Watch["quiet"], "nothing of it waited: all of it goes")
 	require.NotNil(t, f.s.State.Watch["ci-red"])
 	assert.Zero(t, f.s.State.Watch["ci-red"].Failures)
 	assert.Empty(t, f.s.State.Watch["ci-red"].LastError)
+	assert.Nil(t, f.s.State.Watch["ci-red"].Running, "the prune ended the reservation of a run that is not this node's now")
+
+	did := f.s.FinishWatch(run, watch.Result{Events: []watch.Event{{Key: "k2", Fingerprint: "b", Text: "new"}}}, false)
+	require.Len(t, did, 1)
+	assert.Contains(t, did[0], "placed on another node while it ran; result discarded")
+	assert.NotContains(t, f.s.State.Watch["ci-red"].Keys, "k2", "what the run saw is not applied")
+	assert.Nil(t, f.s.State.Watch["quiet"], "and nothing is made for the watch whose state went")
 
 	waits := f.s.WaitingKeys()
 	require.Len(t, waits, 1)
@@ -767,6 +789,178 @@ func TestTheNodeAWatchLeftKeepsOnlyWhatWaitsOnAnAck(t *testing.T) {
 	g.s.Crew = c
 	g.s.PruneWatches()
 	assert.NotNil(t, g.s.State.Watch["quiet"])
+}
+
+// A key whose note a task carries is acked, and the node a watch left records that when it prunes: the run that would have recorded
+// it is another node's now. So the state goes once nothing waits, though a key a task carries is still waiting in the raw state, and
+// what is not carried stays.
+func TestTheNodeAWatchLeftRecordsTheAckOfATaskAndDropsItsState(t *testing.T) {
+	here := "watch:\n  ci-red:\n    kind: exec\n    every: 1m\n    run: [detector]\n    baseline: false\n"
+	away := here + "    place: beta\n"
+
+	f, _ := placedFixture(t, spreadYAML+here, "alpha")
+
+	run, err := f.s.BeginWatch("ci-red")
+	require.NoError(t, err)
+	f.s.FinishWatch(run, watch.Result{Events: []watch.Event{
+		{Key: "ci-red/k1", Fingerprint: "a", Text: "red"}, {Key: "ci-red/k2", Fingerprint: "a", Text: "red again"},
+	}}, false)
+	require.Len(t, f.s.WaitingKeys(), 2)
+
+	// The dispatcher turned the first note into a task, which acks it; nothing has run since to record that.
+	f.tk.list = []task.Task{{ID: "T-1", Role: "dev", State: task.Open, Created: f.now.Add(time.Minute),
+		Asked: "the red build (watch key ci-red/ci-red/k1)"}}
+	require.Len(t, f.s.WaitingKeys(), 1, "a key a task carries is not waiting for the dispatcher")
+	require.Len(t, f.s.State.Watch["ci-red"].Waiting(), 2, "though the state still says it waits")
+
+	c, err := crew.LoadFor(rewrite(t, f, spreadYAML+away), "alpha")
+	require.NoError(t, err)
+
+	f.s.Crew = c
+	f.s.PruneWatches()
+
+	st := f.s.State.Watch["ci-red"]
+	require.NotNil(t, st, "k2 still waits: its state stays")
+	assert.Equal(t, []string{"ci-red/k2"}, st.Waiting())
+	assert.Equal(t, "task T-1", st.Keys["ci-red/k1"].AckedBy, "the ack of the task is kept")
+	assert.True(t, f.ev.has("watch:ci-red", "watch-ack"))
+
+	// The last that waited is acked by hand: the state goes.
+	_, err = f.s.AckWatch("ci-red", nil, true, "dispatcher")
+	require.NoError(t, err)
+
+	f.s.PruneWatches()
+	assert.Empty(t, f.s.State.Watch)
+
+	// Nothing waits but a key a task carries: the state goes at the first prune, with nobody to ack anything.
+	g, _ := placedFixture(t, spreadYAML+here, "alpha")
+
+	run, err = g.s.BeginWatch("ci-red")
+	require.NoError(t, err)
+	g.s.FinishWatch(run, watch.Result{Events: []watch.Event{{Key: "ci-red/k1", Fingerprint: "a", Text: "red"}}}, false)
+	g.tk.list = []task.Task{{ID: "T-1", Role: "dev", State: task.Open, Created: g.now.Add(time.Minute),
+		Asked: "the red build (watch key ci-red/ci-red/k1)"}}
+
+	c, err = crew.LoadFor(rewrite(t, g, spreadYAML+away), "alpha")
+	require.NoError(t, err)
+
+	g.s.Crew = c
+	g.s.PruneWatches()
+	assert.NotContains(t, g.s.State.Watch, "ci-red", "a watch that returns later starts from nothing, not from a wait that was over")
+
+	// A machine that is no node of the file drops and acks nothing.
+	h, _ := placedFixture(t, spreadYAML+here, "alpha")
+
+	run, err = h.s.BeginWatch("ci-red")
+	require.NoError(t, err)
+	h.s.FinishWatch(run, watch.Result{Events: []watch.Event{{Key: "ci-red/k1", Fingerprint: "a", Text: "red"}}}, false)
+	h.tk.list = []task.Task{{ID: "T-1", Role: "dev", State: task.Open, Created: h.now.Add(time.Minute),
+		Asked: "the red build (watch key ci-red/ci-red/k1)"}}
+
+	c, err = crew.LoadFor(rewrite(t, h, spreadYAML+away), "")
+	require.NoError(t, err)
+
+	h.s.Crew = c
+	h.s.PruneWatches()
+	require.Contains(t, h.s.State.Watch, "ci-red")
+	assert.Equal(t, []string{"ci-red/k1"}, h.s.State.Watch["ci-red"].Waiting())
+}
+
+// A command prunes before it finishes a run (withState), so a run that ends after its watch went to another node finds the state
+// dropped, or its reservation cleared: the result is discarded for that, with no state made in its place, and one that ends after
+// the watch left the file finds none either. A watch that is neither here nor away (its node name cannot be read) says so.
+func TestAResultThatEndsAfterItsWatchWentAwayMakesNoState(t *testing.T) {
+	here := "watch:\n  ci-red:\n    kind: exec\n    every: 1m\n    run: [detector]\n    baseline: false\n"
+	away := here + "    place: beta\n"
+	events := watch.Result{Events: []watch.Event{{Key: "k1", Fingerprint: "a", Text: "red"}}}
+
+	begin := func(t *testing.T) (fix, WatchRun) {
+		t.Helper()
+
+		f, _ := placedFixture(t, spreadYAML+here, "alpha")
+
+		run, err := f.s.BeginWatch("ci-red")
+		require.NoError(t, err)
+
+		return f, run
+	}
+
+	load := func(t *testing.T, f fix, body, node string) {
+		t.Helper()
+
+		c, err := crew.LoadFor(rewrite(t, f, body), node)
+		require.NoError(t, err)
+
+		f.s.Crew = c
+	}
+
+	t.Run("nothing waits: the prune dropped the state", func(t *testing.T) {
+		f, run := begin(t)
+		load(t, f, spreadYAML+away, "alpha")
+
+		f.s.PruneWatches()
+		require.NotContains(t, f.s.State.Watch, "ci-red")
+
+		did := f.s.FinishWatch(run, events, false)
+		assert.Equal(t, []string{"ci-red: the watch was placed on another node while it ran; result discarded"}, did)
+		assert.NotContains(t, f.s.State.Watch, "ci-red", "no empty state is made to be saved")
+		assert.True(t, f.ev.has("watch:ci-red", "watch-stale"))
+		assert.Empty(t, f.s.State.Signals)
+	})
+
+	t.Run("what waits stays, its reservation cleared", func(t *testing.T) {
+		f, _ := begin(t)
+		f.s.State.Watch["ci-red"].Running = nil
+
+		run, err := f.s.BeginWatch("ci-red")
+		require.NoError(t, err)
+		f.s.FinishWatch(run, watch.Result{Events: []watch.Event{{Key: "k0", Fingerprint: "a", Text: "old"}}}, false)
+
+		run, err = f.s.BeginWatch("ci-red")
+		require.NoError(t, err)
+		load(t, f, spreadYAML+away, "alpha")
+
+		f.s.PruneWatches()
+		require.NotNil(t, f.s.State.Watch["ci-red"])
+
+		did := f.s.FinishWatch(run, events, false)
+		assert.Equal(t, []string{"ci-red: the watch was placed on another node while it ran; result discarded"}, did)
+		assert.Equal(t, []string{"k0"}, f.s.State.Watch["ci-red"].Waiting(), "only what waited before")
+		assert.NotContains(t, f.s.State.Watch["ci-red"].Keys, "k1")
+	})
+
+	t.Run("the watch left the file", func(t *testing.T) {
+		f, run := begin(t)
+		load(t, f, spreadYAML, "alpha")
+
+		f.s.PruneWatches()
+		require.NotContains(t, f.s.State.Watch, "ci-red")
+
+		did := f.s.FinishWatch(run, events, false)
+		require.Len(t, did, 1)
+		assert.Contains(t, did[0], "discarded")
+		assert.NotContains(t, f.s.State.Watch, "ci-red")
+	})
+
+	t.Run("neither here nor away", func(t *testing.T) {
+		for name, c := range map[string]struct{ body, node string }{
+			"the node name could not be read": {spreadYAML + here, ""},
+			"the place is no node":            {spreadYAML + here + "    place: gamma\n", "alpha"},
+		} {
+			f, run := begin(t)
+			load(t, f, c.body, c.node)
+
+			f.s.PruneWatches()
+			require.Contains(t, f.s.State.Watch, "ci-red", name+": nothing is dropped")
+
+			did := f.s.FinishWatch(run, events, false)
+			require.Len(t, did, 1, name)
+			assert.Contains(t, did[0], "no longer one this node can run", name)
+			assert.NotContains(t, did[0], "placed on another node", name)
+			assert.Nil(t, f.s.State.Watch["ci-red"].Running, name)
+			assert.Empty(t, f.s.State.Watch["ci-red"].Keys, name)
+		}
+	})
 }
 
 // A crew that is not spread runs its watches as before, and its views say nothing of nodes.

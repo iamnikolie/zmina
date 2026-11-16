@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -10,6 +11,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// answerWait is how long a call to a scripted tmux that always answers is given: a shell may take seconds to start on a machine
+// that is busy with other work, and what is under test there is the answer, not the clock.
+const answerWait = time.Minute
+
+// hangWait is how long a call is given in the modes that leave one call without an answer. list-hangs has no call but that one, so
+// it may be short whatever the machine does. first-hangs has a list-panes that must answer before the send-keys that does not, so
+// it is long enough for a start of a shell that was started before, and the hang (a sleep of a minute) outlasts it by far.
+var hangWait = map[string]time.Duration{"list-hangs": time.Second, "first-hangs": 5 * time.Second}
+
 // scriptedTmux is a tmux binary that answers list-panes with one live pane and send-keys by mode, one of:
 // "ok", "list-hangs" (list-panes gets no answer), "first-refused" (the first send-keys exits 1), "first-hangs" (the
 // first send-keys gets no answer), "second-refused" (the second send-keys exits 1).
@@ -17,16 +27,17 @@ func scriptedTmux(t *testing.T, mode string) *Client {
 	t.Helper()
 
 	dir := t.TempDir()
-	// Shell builtins only, so that a start costs little and the Timeout below can be short; a hang is an exec of sleep, so
-	// that the call's kill ends it and its output pipe closes.
+	// Shell builtins only, so that a start costs little; a hang is an exec of sleep, so that the call's kill ends it and its
+	// output pipe closes.
 	script := `#!/bin/sh
+[ "$1" = warm ] && exit 0
 dir=${0%/*}
 read mode < "$dir/mode"
 for a in "$@"; do
   case "$a" in list-panes|send-keys) sub=$a ;; esac
 done
 if [ "$sub" = list-panes ]; then
-  [ "$mode" = list-hangs ] && exec sleep 5
+  [ "$mode" = list-hangs ] && exec sleep 60
   printf '%%1\t@zmina\t0\t4242\n'
   exit 0
 fi
@@ -36,7 +47,7 @@ n=$((n + 1))
 echo $n > "$dir/n"
 case "$mode:$n" in
   first-refused:1|second-refused:2) echo "can't find pane: %1" >&2; exit 1 ;;
-  first-hangs:1) exec sleep 5 ;;
+  first-hangs:1) exec sleep 60 ;;
 esac
 exit 0
 `
@@ -44,8 +55,17 @@ exit 0
 	require.NoError(t, os.WriteFile(bin, []byte(script), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "mode"), []byte(mode), 0o600))
 
+	// A file written a moment ago takes much longer to start the first time (the system looks it over) than after: start it once
+	// here, before any call is timed, so that the first call under a Timeout is not the one that pays for it.
+	require.NoError(t, exec.Command(bin, "warm").Run())
+
+	wait, hangs := hangWait[mode]
+	if !hangs {
+		wait = answerWait
+	}
+
 	old := Timeout
-	Timeout = time.Second
+	Timeout = wait
 	t.Cleanup(func() { Timeout = old })
 
 	return &Client{Bin: bin, Socket: "scripted"}

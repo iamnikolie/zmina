@@ -64,7 +64,7 @@ func runExec(ctx context.Context, w *crew.Watch, env Env) Result {
 		return Result{Err: err}
 	}
 
-	line := w.Run.Line()
+	line := w.Run.ExecLine()
 	cmd := exec.CommandContext(ctx, line[0], line[1:]...)
 	cmd.Dir = w.Dir
 	cmd.Env = append(os.Environ(), "ZMINA_WATCH="+w.Name, "ZMINA_CREW="+env.CrewPath, "ZMINA_WATCH_SEEN="+seen,

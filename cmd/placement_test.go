@@ -594,3 +594,46 @@ func TestAutoReviewWithOnlyAnAwaySeatSaysWhichCrewToTell(t *testing.T) {
 	assert.Empty(t, reviewBeatOutput(t, file))
 	assert.Len(t, dispatcherLines(t, file), 1)
 }
+
+// A role the file places on another node starts there and never here, so a directory that exists only there is no problem of this node:
+// doctor and ls say nothing of it, while the same missing directory of a role placed here is told, and on the other node the two swap.
+func TestDirOfARolePlacedElsewhereIsNoProblemHere(t *testing.T) {
+	gone := func(name string) string { return filepath.Join(t.TempDir(), name) }
+	devDir, opsDir := gone("only-on-beta"), gone("only-on-alpha")
+
+	file := testCrew(t, "  dev:\n    place: beta\n    dir: "+devDir+"\n  ops:\n    dir: "+opsDir+"\n"+spreadDecl)
+
+	problems := func() map[string]string {
+		out, _, err := zm(t, file, "ls", "--json")
+		require.NoError(t, err)
+
+		var rows []shift.View
+		require.NoError(t, json.Unmarshal([]byte(out), &rows))
+
+		got := map[string]string{}
+		for _, v := range rows {
+			got[v.Role] = v.Problem
+		}
+
+		return got
+	}
+
+	asNode(t, "alpha")
+
+	out, _, _ := zm(t, file, "doctor") // a machine of a test has no claude: doctor fails on that, and says the rest
+	assert.Contains(t, out, "role ops: dir "+opsDir+" is not a directory — it does not start")
+	assert.NotContains(t, out, "role dev: dir", "dev is beta's: its directory is there")
+	assert.Equal(t, map[string]string{"dispatcher": "", "dev": "", "ops": "role ops: dir " + opsDir + " is not a directory"}, problems())
+
+	asNode(t, "beta")
+
+	out, _, _ = zm(t, file, "doctor")
+	assert.Contains(t, out, "role dev: dir "+devDir+" is not a directory — it does not start")
+	assert.NotContains(t, out, "role ops: dir")
+	assert.Equal(t, map[string]string{"dispatcher": "", "dev": "role dev: dir " + devDir + " is not a directory", "ops": ""}, problems())
+
+	// A crew on one node is held to every directory, as ever.
+	flat := testCrew(t, "  dev:\n    dir: "+devDir+"\n")
+	out, _, _ = zm(t, flat, "doctor")
+	assert.Contains(t, out, "role dev: dir "+devDir+" is not a directory — it does not start")
+}
