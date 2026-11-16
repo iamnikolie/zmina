@@ -105,8 +105,10 @@ type moveRun struct {
 	said  string
 	quiet bool
 	// step is the step of the move a call of once is at: the poll of the node the role leaves, then the take, so that a beat that stops one
-	// for want of time can say which (driveBeat).
-	step string
+	// for want of time can say which (countDriveBeat). fresh says the step began with most of the beat's time still left (freshBudget): one
+	// that began with little was stopped for the time the moves before it used, and says nothing of how long it takes.
+	step  string
+	fresh bool
 }
 
 func (r *moveRun) req(action string, payload any) (mesh.TerminalRequest, error) {
@@ -505,7 +507,7 @@ func (r *moveRun) say(text string) {
 
 // once asks the node the role leaves how far the move is and does what follows: the work is ready, so it is taken and the move ended.
 func (r *moveRun) once(ctx context.Context) (bool, error) {
-	r.step = stepPoll
+	r.step, r.fresh = stepPoll, freshBudget(ctx)
 
 	q, err := r.req("poll", nil)
 	if err != nil {
@@ -530,7 +532,7 @@ func (r *moveRun) once(ctx context.Context) (bool, error) {
 
 		return false, nil
 	case move.StateReady:
-		r.step = stepTake
+		r.step, r.fresh = stepTake, freshBudget(ctx)
 
 		return true, r.finish(ctx, ans.Bundle)
 	}
@@ -893,11 +895,16 @@ func (a *app) moveBeat() {
 
 		first = false
 
+		fresh := freshBudget(ctx)
+
 		_, aerr := a.moveAdvance(ctx, role, j.ID)
 
 		// A beat that ran out of time in the middle of this step is no error of the move, but a step that never fits is told (CutLimit beats
-		// in a row), and one that fit is counted as such.
-		a.countMoveBeat(layout, role, j, ctx.Err() != nil)
+		// in a row), and one that fit is counted as such. A step stopped on the time the moves before it left over says nothing of its own
+		// length: that beat is neither a cut nor a reset.
+		if cut := ctx.Err() != nil; !cut || fresh {
+			a.countMoveBeat(layout, role, j, cut)
+		}
 
 		if aerr != nil && ctx.Err() != nil {
 			continue
@@ -938,12 +945,35 @@ func rotate[T any](list []T, turn int) []T {
 	return append(append([]T(nil), list[i:]...), list[:i]...)
 }
 
+// freshBudget reports whether a step that begins now has at least half of the beat's time (moveBeatBudget) before the deadline of ctx, and
+// does with no deadline. The moves of a crew share that time and the journals run before the drives, so a step that is stopped with less
+// than that left was stopped on the time left over, which says nothing of how long it takes.
+func freshBudget(ctx context.Context) bool {
+	deadline, ok := ctx.Deadline()
+
+	return !ok || time.Until(deadline) >= moveBeatBudget/2
+}
+
 // countMoveBeat keeps in the journal of the move the beat has just advanced whether the beat stopped its step for want of time, and says so,
 // once for each phase, when it has stopped the same step CutLimit beats in a row: a push to origin that needs longer than the beat gives it
 // is started again from the beginning at every beat, so nothing else would ever tell that it cannot end that way. Only the handing over
 // (phase released) is given a time that ends with the beat's; a beat that stopped no step starts the count again. cut says the beat's time
 // ran out during the advance.
+//
+// It writes the journal, which only a step under the move's lock may do, so it takes that lock (without waiting) and reads the journal
+// again under it: a step that holds it (a zmina move --resume, a push that runs) is somebody's work on the move, and this beat counts
+// neither a cut nor a reset; a journal that was closed is not made again.
 func (a *app) countMoveBeat(layout crew.Layout, role string, j move.Journal, cut bool) {
+	if _, ok, _ := move.Open(layout, role); !ok {
+		return
+	}
+
+	release, err := move.Lock(layout, role, 0)
+	if err != nil {
+		return
+	}
+	defer release()
+
 	cur, ok, _ := move.Open(layout, role)
 	if !ok || cur.ID != j.ID {
 		return
@@ -968,8 +998,19 @@ func (a *app) countMoveBeat(layout crew.Layout, role string, j move.Journal, cut
 }
 
 // countDriveBeat is countMoveBeat for the owner's record of a move it drives, whose steps are the poll of the node the role leaves and
-// the take; it returns the line to say, if any.
+// the take; it returns the line to say, if any. The record has no lock of its own, so the role's move lock is taken, as for the journal, and
+// a record that is gone is not made again.
 func (a *app) countDriveBeat(layout crew.Layout, d move.Drive, step string, cut bool) []string {
+	if _, ok, _ := move.OpenDrive(layout, d.Role); !ok {
+		return nil
+	}
+
+	release, err := move.Lock(layout, d.Role, 0)
+	if err != nil {
+		return nil
+	}
+	defer release()
+
 	cur, ok, _ := move.OpenDrive(layout, d.Role)
 	if !ok || cur.ID != d.ID {
 		return nil
@@ -1052,9 +1093,12 @@ func (a *app) driveOnce(ctx context.Context, me *mesh.Node, cr *crew.Crew, key s
 	}
 
 	// The beat's time ran out in the middle of a step: that is no error of the move, and the next beat goes on. It is counted, though: a step
-	// that never fits is told (CutLimit beats in a row), and a beat that stopped none starts the count again.
+	// that never fits is told (CutLimit beats in a row), and a beat that stopped none starts the count again. A step that began with little
+	// of the time left was stopped for what the moves before it used, not for its own length: that beat is neither a cut nor a reset.
 	cut := err != nil && ctx.Err() != nil
-	lines = append(lines, a.countDriveBeat(layout, d, r.step, cut)...)
+	if !cut || r.fresh {
+		lines = append(lines, a.countDriveBeat(layout, d, r.step, cut)...)
+	}
 
 	if cut {
 		a.printTick(lines)

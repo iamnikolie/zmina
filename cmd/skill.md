@@ -1221,7 +1221,10 @@ role leaves, the one it goes to, or neither: it asks both over the mesh (`role/m
   owner's record of the move (`moves/<role>.drive.json`, the same keys, for the poll of the node the role leaves and for the take) count the beats **in a row** that
   stopped the same step, and the count starts again when a beat gets a piece of the hand-over further or stops none. At the **third** the beat says, once for each
   phase (the tick's output), that move `<id>` of `<role>` has a step that takes longer than the beat gives it, and that
-  `zmina move <role> <node> --resume <id>` on the owner's node finishes it. The budget and what runs in a beat are not changed by this.
+  `zmina move <role> <node> --resume <id>` on the owner's node finishes it. The count is written under the move's lock, taken without waiting: while
+  another step holds it (a `--resume`, a push that runs) the beat counts nothing, neither a cut nor a reset, and a record that was closed is not made
+  again. A step that began with less than half of the beat's time left was stopped on time the moves before it used, so it is neither a cut nor a reset
+  either. The budget and what runs in a beat are not changed by this.
 - **Failure.** The target unreachable or refusing: the role is down and its tasks are parked on the source (durable), the journal stays open, and
   nothing is placed. The owner's node keeps a record of the move (`moves/<role>.drive.json`) and its ticker tries the take again each beat (an
   error is told when it changes, not every beat); each node's ticker also moves an open move of its own on (the role parks, goes down, the branch is

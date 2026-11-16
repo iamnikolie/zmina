@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"os"
@@ -897,7 +898,7 @@ func TestMoveBeatTellsOnceThatTheTakeNeverFitsTheBeat(t *testing.T) {
 	id, _ := w.readyBundle()
 
 	keep := moveBeatBudget
-	moveBeatBudget = 600 * time.Millisecond
+	moveBeatBudget = 1500 * time.Millisecond
 
 	t.Cleanup(func() { moveBeatBudget = keep })
 
@@ -913,7 +914,7 @@ func TestMoveBeatTellsOnceThatTheTakeNeverFitsTheBeat(t *testing.T) {
 			// The owner is slow before it asks beta to take the work: the beat's time is gone by then, and the take is stopped.
 			a.moveFault = func(phase string) error {
 				if phase == "owner-before-take" && slow {
-					time.Sleep(900 * time.Millisecond)
+					time.Sleep(1800 * time.Millisecond)
 				}
 
 				return w.hook(phase)
@@ -957,6 +958,222 @@ func TestMoveBeatTellsOnceThatTheTakeNeverFitsTheBeat(t *testing.T) {
 
 	beat()
 	w.assertMoved(branch)
+}
+
+// The count of cut beats writes the journal and the owner's record, which only a step under the move's lock may do: while another step
+// holds the lock (a zmina move --resume, a push that runs) it reads and writes nothing, counting neither a cut nor a reset, so what that step
+// saved is not overwritten with an older copy; and a journal or a record that was closed meanwhile is not made again.
+func TestTheCountOfCutBeatsWritesNothingWhileAnotherStepHoldsTheMove(t *testing.T) {
+	w := newMoveWorld(t, "alpha")
+	w.work(false)
+
+	w.crash("released")
+
+	_, _, err := w.move("dev", "beta")
+	require.ErrorContains(t, err, "the process died here")
+
+	layout := w.layout("alpha")
+
+	var j move.Journal
+
+	w.as("alpha", func() {
+		var jerr error
+
+		j, _, jerr = move.Open(layout, "dev")
+		require.NoError(t, jerr)
+	})
+
+	require.Equal(t, move.PhaseReleased, j.Phase)
+
+	d, ok, err := move.OpenDrive(layout, "dev")
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	var said bytes.Buffer
+
+	a := w.ownerApp(&said, io.Discard)
+	read := func(path string) string { return string(mustRead(t, path)) }
+
+	// Another step holds the move, and has saved what it did since the beat read the journal.
+	release, err := move.Lock(layout, "dev", 0)
+	require.NoError(t, err)
+
+	held, heldDrive := j, d
+	held.LastErr, heldDrive.LastErr = "saved by the step that holds the lock", "saved by the step that holds the lock"
+
+	save := func() {
+		require.NoError(t, move.Save(layout, held))
+		require.NoError(t, move.SaveDrive(layout, heldDrive))
+	}
+
+	var journalAt, driveAt string
+
+	unchanged := func(what string) {
+		t.Helper()
+
+		assert.Equal(t, journalAt, read(layout.Move("dev")), what+": the journal is as the step that holds the lock left it")
+		assert.Equal(t, driveAt, read(layout.MoveDrive("dev")), what+": so is the owner's record")
+		assert.Empty(t, said.String(), what+": and nothing is said")
+	}
+
+	// A beat that stopped no step would reset a count the step has begun: it does not.
+	held.Cuts, heldDrive.Cuts = move.Cuts{Cut: 2, CutAt: held.Step()}, move.Cuts{Cut: 2, CutAt: stepTake}
+	save()
+
+	journalAt, driveAt = read(layout.Move("dev")), read(layout.MoveDrive("dev"))
+
+	for range 2 {
+		a.countMoveBeat(layout, "dev", j, false)
+		assert.Empty(t, a.countDriveBeat(layout, d, stepTake, false))
+	}
+
+	unchanged("no cut")
+
+	// A beat that stopped the step would count one, and tell at the third.
+	held.Cuts, heldDrive.Cuts = move.Cuts{}, move.Cuts{}
+	save()
+
+	journalAt, driveAt = read(layout.Move("dev")), read(layout.MoveDrive("dev"))
+
+	for range 2 * move.CutLimit {
+		a.countMoveBeat(layout, "dev", j, true)
+		assert.Empty(t, a.countDriveBeat(layout, d, stepTake, true))
+	}
+
+	unchanged("a cut")
+
+	// The lock is free: the count goes on from the record as it is, and tells at the third.
+	release()
+
+	for i := 1; i <= move.CutLimit; i++ {
+		a.countMoveBeat(layout, "dev", j, true)
+
+		got, _, jerr := move.Open(layout, "dev")
+		require.NoError(t, jerr)
+		assert.Equal(t, i, got.Cut)
+		assert.Equal(t, held.LastErr, got.LastErr, "what the other step saved is kept")
+
+		lines := a.countDriveBeat(layout, d, stepTake, true)
+		if i < move.CutLimit {
+			assert.Empty(t, lines)
+		} else {
+			assert.Len(t, lines, 1)
+		}
+	}
+
+	assert.Contains(t, said.String(), "takes longer than the ticker's beat gives a step")
+
+	// Closed after the step, before the count: nothing is made again, which would block the crew file and the role until an abort.
+	require.NoError(t, move.Close(layout, "dev"))
+	require.NoError(t, move.CloseDrive(layout, "dev"))
+
+	a.countMoveBeat(layout, "dev", j, true)
+	assert.Empty(t, a.countDriveBeat(layout, d, stepTake, true))
+	assert.Empty(t, move.OpenID(layout, "dev"), "no journal is made again")
+	assert.Empty(t, move.Drives(layout), "no owner's record is made again")
+	assert.NoFileExists(t, layout.Move("dev"))
+	assert.NoFileExists(t, layout.MoveDrive("dev"))
+}
+
+// A step that begins with little of the beat's time left is stopped for the time the moves before it used, not for its own length: the
+// count takes it for neither a cut nor a reset. One that begins with at least half of the time is counted as before.
+func TestADriveStepStoppedOnTimeLeftOverIsNotCounted(t *testing.T) {
+	keepBudget := moveBeatBudget
+	moveBeatBudget = 10 * time.Minute
+
+	for name, c := range map[string]struct {
+		left time.Duration
+		want bool
+	}{
+		"all of it":      {10 * time.Minute, true},
+		"most of it":     {6 * time.Minute, true},
+		"less than half": {4 * time.Minute, false},
+		"a moment left":  {time.Second, false},
+	} {
+		ctx, cancel := context.WithTimeout(context.Background(), c.left)
+		assert.Equal(t, c.want, freshBudget(ctx), name)
+		cancel()
+	}
+
+	assert.True(t, freshBudget(context.Background()), "no deadline: a command, not a beat")
+
+	moveBeatBudget = keepBudget
+
+	w := newMoveWorld(t, "alpha")
+	_, _, branch := w.work(false)
+
+	id, _ := w.readyBundle()
+
+	keep := moveBeatBudget
+	moveBeatBudget = time.Second // a step is fresh with 500ms or more left
+
+	t.Cleanup(func() { moveBeatBudget = keep })
+
+	var (
+		lines bytes.Buffer
+		sleep time.Duration
+	)
+
+	// The owner is slow before it asks beta to take the work, for as long as sleep: the take is stopped when the beat's time is out.
+	beat := func(within time.Duration) {
+		w.as("alpha", func() {
+			a := w.ownerApp(&lines, io.Discard)
+			a.crew = w.file("alpha")
+			a.moveFault = func(phase string) error {
+				if phase == "owner-before-take" {
+					time.Sleep(sleep)
+				}
+
+				return w.hook(phase)
+			}
+
+			me, err := openNode()
+			require.NoError(t, err)
+
+			d, ok, err := move.OpenDrive(w.layout("alpha"), "dev")
+			require.NoError(t, err)
+			require.True(t, ok)
+
+			ctx, cancel := context.WithTimeout(context.Background(), within)
+			defer cancel()
+
+			a.driveOnce(ctx, me, mustCrew(t, w.file("alpha")), a.crewKey(), d)
+		})
+	}
+
+	cuts := func() int {
+		d, _, err := move.OpenDrive(w.layout("alpha"), "dev")
+		require.NoError(t, err)
+
+		return d.Cut
+	}
+
+	told := func() int { return strings.Count(lines.String(), "takes longer than the ticker's beat gives a step") }
+
+	// With a beat of its own length (1.5 s, 1 s of it left when the take begins) the take that needs 1.8 s is a cut.
+	sleep = 1800 * time.Millisecond
+
+	beat(1500 * time.Millisecond)
+	beat(1500 * time.Millisecond)
+	assert.Equal(t, 2, cuts())
+
+	// With 250 ms for the whole step, a stop says nothing: neither a cut, nor a reset.
+	sleep = 400 * time.Millisecond
+
+	for range 3 {
+		beat(250 * time.Millisecond)
+	}
+
+	assert.Equal(t, 2, cuts(), "the count is as it was")
+	assert.Zero(t, told())
+
+	sleep = 1800 * time.Millisecond
+
+	beat(1500 * time.Millisecond)
+	assert.Equal(t, 1, told(), "the third that was the step's own")
+	assert.Contains(t, lines.String(), "move "+id+" of dev: the take on beta takes longer")
+
+	_ = branch
 }
 
 // checkpoint gives dev's T-2 on alpha a checkpoint, which travels with the task.
