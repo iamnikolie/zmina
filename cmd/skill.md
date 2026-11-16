@@ -1013,12 +1013,23 @@ once a day), and `auto_review:` reviews with the seats of its own node. The cour
 
 **A detector (`watch:`) is the exception: it runs on one node only**, `home` unless it says `place: <node>`. It is a listener,
 and on two nodes it would note every event twice, to two dispatchers, who would give one merge request to two seats. The
-other nodes never run it, by the beat or by hand (`zmina watch run` there names the node), keep no state for it, and
-`zmina watch ls` shows it as `placed: <node>`. A `place` that is no node of the file is a load warning and the watch runs
-on no node; `place:` with no `nodes:` means nothing and is warned of. The node that runs a watch needs what its source
-needs (the `gl` profile, the script and its credentials). A watch that changes node starts there with no state: with
-`baseline: true` (the default) its first run records what is true and notes nothing; with `baseline: false` everything
-its source reports is news once more, so set `baseline: true` for the first run after a change of node.
+other nodes never run it, by the beat or by hand (`zmina watch run`, `--dry-run` too, `baseline` and `forget` there name
+the node), and `zmina watch ls` shows it as `placed: <node>` (`--json`: `place`, `away`). The node must run a dispatcher
+(home, or a node that holds a role), since a watch's notes go to its node's dispatcher: a `place` that is no node of the
+file, or a node with no role of the crew, is a load warning and the watch runs on **no** node (a `zmina move` that takes
+the last role off a watch's node leaves it so: move the watch's `place` with it). `place:` with no `nodes:` means nothing
+and is warned of. The node that runs a watch needs what its source needs (the `gl` profile, the script and its credentials).
+
+- **Every node on a zmina that knows `place`, and the file pushed, before a crew over nodes has a watch.** An older
+  zmina ignores the key and runs every watch; a node that holds the file from before a `place` changed runs by the old one.
+- **A watch that changes node starts there with nothing**: with `baseline: true` (the default) its first run records
+  what is true and notes nothing, with `baseline: false` everything its source reports is news once more — set
+  `baseline: true` for the first run after a change of node. What happened between the old node's last run and that
+  first run is recorded, not noted.
+- **The node it left** drops what it kept of the watch, except the keys whose notes still wait on an ack: its dispatcher
+  heard of them and the new node will not say them, so they stay in `zmina watch ls`, the recovery pack and the
+  reminders there until acked (`zmina watch ack` works there), and the rest goes with the last of them. A watch that
+  comes back before that finds those keys as it left them.
 
 ### What a node does with a role placed elsewhere
 

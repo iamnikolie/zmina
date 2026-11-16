@@ -151,13 +151,30 @@ func (c *Crew) WatchPlace(w *Watch) string {
 }
 
 // WatchHere reports whether this node runs the watch. A crew that is not spread runs every watch, as before; one that
-// is runs each watch on one node only, and on a machine whose node name is not known on none.
+// is runs each watch on one node only: a listed node that runs a dispatcher (a watch's notes go to its node's
+// dispatcher), and on a machine that is no node of the file on none.
 func (c *Crew) WatchHere(w *Watch) bool {
 	if !c.Spread() || w == nil {
 		return true
 	}
 
-	return c.Here != "" && c.WatchPlace(w) == c.Here
+	return c.Runs() && c.WatchPlace(w) == c.Here && c.WatchHeard(w)
+}
+
+// WatchHeard reports whether the node the watch is placed on runs a dispatcher: home, or a node that holds a role. A
+// watch on a node with none would queue its notes for nobody.
+func (c *Crew) WatchHeard(w *Watch) bool {
+	if !c.Spread() || w == nil {
+		return true
+	}
+
+	return slices.Contains(c.DispatcherNodes(), c.WatchPlace(w))
+}
+
+// WatchAway reports whether the watch is another node's to run: this machine is a node of the file, and the watch is
+// placed on a different one that can run it. Only then is what this node kept of the watch no longer its own.
+func (c *Crew) WatchAway(w *Watch) bool {
+	return c.Spread() && w != nil && c.Runs() && c.WatchPlace(w) != c.Here && c.WatchHeard(w)
 }
 
 // WhereIs says where the role runs, for a line that refuses to start it here: the node it is placed on, or for the
@@ -303,9 +320,18 @@ func (c *Crew) placement(here, why string, warn func(string)) error {
 	}
 
 	for _, name := range c.WatchNames() {
-		if w := c.Watches[name]; w != nil && w.Place != "" && !c.HasNode(w.Place) {
+		w := c.Watches[name]
+		if w == nil || w.Place == "" {
+			continue
+		}
+
+		switch {
+		case !c.HasNode(w.Place):
 			warn(fmt.Sprintf("watch %s: place %q is not one of nodes: (%s); the watch runs on no node", name, w.Place,
 				strings.Join(names, ", ")))
+		case !c.WatchHeard(w):
+			warn(fmt.Sprintf("watch %s: place %s holds no role of the crew, so no dispatcher runs there to hear it; "+
+				"the watch runs on no node", name, w.Place))
 		}
 	}
 

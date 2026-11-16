@@ -124,11 +124,17 @@ func (s *Shift) watchAway(w *crew.Watch) error {
 		return fmt.Errorf("watch %s: this machine is no node of the crew file, and a crew over nodes runs nothing here", w.Name)
 	}
 
-	if node := s.Crew.WatchPlace(w); s.Crew.HasNode(node) {
-		return fmt.Errorf("watch %s is placed on %s, not on this node (%s): run it there", w.Name, node, s.Crew.Here)
+	node := s.Crew.WatchPlace(w)
+
+	switch {
+	case !s.Crew.HasNode(node):
+		return fmt.Errorf("watch %s: place %q is no node of the crew file: it runs on no node", w.Name, w.Place)
+	case !s.Crew.WatchHeard(w):
+		return fmt.Errorf("watch %s: place %s holds no role of the crew, so no dispatcher runs there: it runs on no node",
+			w.Name, node)
 	}
 
-	return fmt.Errorf("watch %s: place %q is no node of the crew file: it runs on no node", w.Name, w.Place)
+	return fmt.Errorf("watch %s is placed on %s, not on this node (%s): run it there", w.Name, node, s.Crew.Here)
 }
 
 // PeekWatch reads what a dry run needs, marking nothing.
@@ -136,6 +142,11 @@ func (s *Shift) PeekWatch(name string) (WatchRun, error) {
 	w, err := s.Crew.Watch(name)
 	if err != nil {
 		return WatchRun{}, err
+	}
+
+	// A dry run runs the source too, and says fates against this node's state.
+	if !s.Crew.WatchHere(w) {
+		return WatchRun{}, s.watchAway(w)
 	}
 
 	return WatchRun{Watch: w, Started: s.Now(), Env: s.watchEnv(name, s.State.Watch[name])}, nil
@@ -170,6 +181,12 @@ func (s *Shift) FinishWatch(run WatchRun, res watch.Result, baseline bool) []str
 	}
 
 	st.Running = nil
+
+	if cur, err := s.Crew.Watch(name); err == nil && !s.Crew.WatchHere(cur) {
+		s.log(role, "watch-stale", "", "the watch was placed on another node while it ran; result discarded")
+
+		return []string{name + ": the watch was placed on another node while it ran; result discarded"}
+	}
 
 	if cur, err := s.Crew.Watch(name); err != nil || cur.Fingerprint() != run.Config {
 		s.log(role, "watch-stale", "", "the watch changed while it ran; result discarded")
@@ -294,6 +311,11 @@ func (s *Shift) ForgetWatch(name, key string) (int, error) {
 		return 0, err
 	}
 
+	// Forgetting here would change nothing on the node that runs the watch, and say that it did.
+	if w, err := s.Crew.Watch(name); err == nil && !s.Crew.WatchHere(w) {
+		return 0, s.watchAway(w)
+	}
+
 	st := s.State.Watch[name]
 	if st == nil {
 		return 0, nil
@@ -339,11 +361,32 @@ func (s *Shift) WatchViews() []WatchView {
 }
 
 // PruneWatches drops the state of watches no longer in the crew.
+// What a node kept of a watch that the file now places on another node goes too, but for the keys whose notes still
+// wait on an ack: those were said to this node's dispatcher, the other node's first run records them without a word,
+// and so they stay, reminded of and ackable here, until the last is acked. Nothing is dropped on a machine that is
+// no node of the file: a node name that cannot be read for a moment must not cost a watch what it knows.
 func (s *Shift) PruneWatches() {
-	for name := range s.State.Watch {
-		if _, ok := s.Crew.Watches[name]; !ok {
+	for name, st := range s.State.Watch {
+		w, ok := s.Crew.Watches[name]
+		if !ok {
 			delete(s.State.Watch, name)
+
+			continue
 		}
+
+		if st == nil || !s.Crew.WatchAway(w) {
+			continue
+		}
+
+		if len(st.Waiting()) == 0 {
+			delete(s.State.Watch, name)
+
+			continue
+		}
+
+		// Its runs are over here: no failure of them is news any more, and nothing held will be noted.
+		st.Pending, st.Running = nil, nil
+		st.Failures, st.FailNoted, st.LastError, st.LastOK = 0, false, "", true
 	}
 }
 
