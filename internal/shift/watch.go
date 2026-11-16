@@ -169,29 +169,46 @@ func (s *Shift) FinishWatch(run WatchRun, res watch.Result, baseline bool) []str
 	w := run.Watch
 	name := w.Name
 	now := s.Now()
-	st := s.watchState(name)
 	role := "watch:" + name
+	st := s.State.Watch[name]
+	cur, curErr := s.Crew.Watch(name)
+
+	// A result that is not applied leaves the state as it is and makes none: the state of a watch that went to another node, or left
+	// the file, is the prune's to drop (it runs before a command does, so it may be gone already), and an empty one made here would
+	// be saved and kept. Only the reservation this run took is given back.
+	discard := func(why string) []string {
+		if st != nil && st.Running != nil && st.Running.Token == run.Token {
+			st.Running = nil
+		}
+
+		s.log(role, "watch-stale", "", why)
+
+		return []string{name + ": " + why}
+	}
+
+	// The file placed the watch on another node while it ran: this node's run is over, whatever the state says (a prune that ran
+	// first has cleared the reservation or dropped the state).
+	if curErr == nil && s.Crew.WatchAway(cur) {
+		return discard("the watch was placed on another node while it ran; result discarded")
+	}
 
 	// A run that is no longer the current reservation (it outlived its timeout and another took over), or whose
 	// watch was changed or removed while it ran, is not applied: its keys would overwrite newer ones.
-	if st.Running == nil || st.Running.Token != run.Token {
-		s.log(role, "watch-stale", "", "result of a superseded run discarded")
-
-		return []string{name + ": result of a superseded run discarded"}
+	if st == nil || st.Running == nil || st.Running.Token != run.Token {
+		return discard("result of a superseded run discarded")
 	}
 
 	st.Running = nil
 
-	if cur, err := s.Crew.Watch(name); err == nil && !s.Crew.WatchHere(cur) {
-		s.log(role, "watch-stale", "", "the watch was placed on another node while it ran; result discarded")
-
-		return []string{name + ": the watch was placed on another node while it ran; result discarded"}
+	// Neither this node's watch nor another node's: its place is no node of the file or one no dispatcher hears, or this machine's
+	// node name could not be read while it ran.
+	if curErr == nil && !s.Crew.WatchHere(cur) {
+		return discard("the watch is no longer one this node can run (its place is no node, or a node with no dispatcher to hear it, " +
+			"or this machine's node name could not be read); result discarded")
 	}
 
-	if cur, err := s.Crew.Watch(name); err != nil || cur.Fingerprint() != run.Config {
-		s.log(role, "watch-stale", "", "the watch changed while it ran; result discarded")
-
-		return []string{name + ": the watch changed while it ran; result discarded"}
+	if curErr != nil || cur.Fingerprint() != run.Config {
+		return discard("the watch changed while it ran; result discarded")
 	}
 
 	// How the run before this one ended, for what the log keeps of a run that found nothing new.
