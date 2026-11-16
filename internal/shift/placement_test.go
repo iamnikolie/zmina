@@ -2,6 +2,7 @@ package shift
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/iamnikolie/zmina/internal/crew"
 	"github.com/iamnikolie/zmina/internal/registry"
 	"github.com/iamnikolie/zmina/internal/task"
+	"github.com/iamnikolie/zmina/internal/watch"
 )
 
 // spreadYAML is a crew over two nodes: dev and qa run on beta, the rest on home (alpha). ops and qa are kept up.
@@ -623,4 +625,166 @@ func TestRestartOfARolePlacedElsewhereIsRefusedUpFrontAndDownWorks(t *testing.T)
 	// The owner's way out of a double run is a plain down, and it works.
 	require.NoError(t, f.s.Down("dev", DownOptions{Force: true}))
 	assert.False(t, f.tm.Has("dev"))
+}
+
+// A detector runs on one node of a crew over nodes: the beat begins it on home (or the node it names) and on no other, a
+// run by hand elsewhere is refused with the node's name, and the other node does not show a next run for it.
+func TestAWatchRunsOnTheNodeItIsPlacedOn(t *testing.T) {
+	body := spreadYAML + "watch:\n  ci-red:\n    kind: exec\n    every: 1m\n    run: [detector]\n" +
+		"  cards:\n    kind: exec\n    every: 1m\n    run: [detector]\n    place: beta\n"
+
+	a, _ := placedFixture(t, body, "alpha")
+	b, _ := placedFixture(t, body, "beta")
+
+	due := func(f fix) []string {
+		var names []string
+		for _, r := range f.s.DueWatches() {
+			names = append(names, r.Watch.Name)
+		}
+
+		return names
+	}
+
+	assert.Equal(t, []string{"ci-red"}, due(a))
+	assert.Equal(t, []string{"cards"}, due(b))
+
+	_, err := a.s.BeginWatch("cards")
+	require.EqualError(t, err, "watch cards is placed on beta, not on this node (alpha): run it there")
+
+	_, err = b.s.BeginWatch("ci-red")
+	require.EqualError(t, err, "watch ci-red is placed on alpha, not on this node (beta): run it there")
+	assert.Nil(t, b.s.State.Watch["ci-red"], "a refused run leaves no state")
+
+	views := map[string]WatchView{}
+	for _, v := range b.s.WatchViews() {
+		views[v.Name] = v
+	}
+
+	assert.True(t, views["ci-red"].Away)
+	assert.Equal(t, "alpha", views["ci-red"].Place)
+	assert.True(t, views["ci-red"].NextRun.IsZero())
+	assert.False(t, views["cards"].Away)
+	assert.Equal(t, "beta", views["cards"].Place)
+
+	// A dry run runs the source too, and forgetting here would change nothing where the watch runs.
+	_, err = a.s.PeekWatch("cards")
+	require.EqualError(t, err, "watch cards is placed on beta, not on this node (alpha): run it there")
+
+	_, err = a.s.ForgetWatch("cards", "")
+	require.EqualError(t, err, "watch cards is placed on beta, not on this node (alpha): run it there")
+
+	// A machine that is no node of the file runs none, by hand either, even when a watch names it.
+	g, _ := placedFixture(t, body+"  lost:\n    kind: exec\n    every: 1m\n    run: [detector]\n    place: gamma\n", "gamma")
+	for _, name := range []string{"ci-red", "lost"} {
+		_, err = g.s.BeginWatch(name)
+		require.ErrorContains(t, err, "this machine is no node of the crew file", name)
+	}
+
+	assert.Empty(t, g.s.DueWatches())
+}
+
+// A watch placed on a node that holds no role has no dispatcher to hear it: it runs on no node, and both say why.
+func TestAWatchOnANodeWithNoDispatcherRunsNowhere(t *testing.T) {
+	body := "namespace: /ns\nclaude: claude\nhome: alpha\nnodes:\n  alpha: {}\n  beta: {}\nroles:\n  dispatcher:\n    boot: b\n  ops: {}\n" +
+		"watch:\n  cards:\n    kind: exec\n    every: 1m\n    run: [detector]\n    place: beta\n"
+
+	for _, node := range []string{"alpha", "beta"} {
+		f, _ := placedFixture(t, body, node)
+
+		assert.Empty(t, f.s.DueWatches(), node)
+		assert.Contains(t, strings.Join(f.s.Crew.Warnings, "\n"),
+			"watch cards: place beta holds no role of the crew, so no dispatcher runs there to hear it; the watch runs on no node")
+
+		_, err := f.s.BeginWatch("cards")
+		require.ErrorContains(t, err, "no dispatcher runs there: it runs on no node", node)
+	}
+}
+
+// What a node kept of a watch goes when the file places the watch on another node, but for the keys that still wait on
+// an ack: those stay, reminded of and ackable here, and the rest goes with the last of them. A result that comes in
+// after the watch was placed elsewhere is not applied.
+func TestTheNodeAWatchLeftKeepsOnlyWhatWaitsOnAnAck(t *testing.T) {
+	here := "watch:\n  ci-red:\n    kind: exec\n    every: 1m\n    run: [detector]\n    baseline: false\n" +
+		"  quiet:\n    kind: exec\n    every: 1m\n    run: [detector]\n    baseline: false\n"
+	away := "watch:\n  ci-red:\n    kind: exec\n    every: 1m\n    run: [detector]\n    baseline: false\n    place: beta\n" +
+		"  quiet:\n    kind: exec\n    every: 1m\n    run: [detector]\n    baseline: false\n    place: beta\n"
+
+	f, _ := placedFixture(t, spreadYAML+here, "alpha")
+
+	for _, name := range []string{"ci-red", "quiet"} {
+		run, err := f.s.BeginWatch(name)
+		require.NoError(t, err)
+		f.s.FinishWatch(run, watch.Result{Events: []watch.Event{{Key: "k1", Fingerprint: "a", Text: "red"}}}, false)
+	}
+
+	_, err := f.s.AckWatch("quiet", nil, true, "dispatcher")
+	require.NoError(t, err)
+	require.Len(t, f.s.WaitingKeys(), 1)
+
+	f.s.State.Watch["ci-red"].Failures, f.s.State.Watch["ci-red"].LastError = 4, "boom"
+
+	// A run begun before the file changed ends after it.
+	run, err := f.s.BeginWatch("ci-red")
+	require.NoError(t, err)
+
+	c, err := crew.LoadFor(rewrite(t, f, spreadYAML+away), "alpha")
+	require.NoError(t, err)
+
+	f.s.Crew = c
+
+	did := f.s.FinishWatch(run, watch.Result{Events: []watch.Event{{Key: "k2", Fingerprint: "b", Text: "new"}}}, false)
+	require.Len(t, did, 1)
+	assert.Contains(t, did[0], "placed on another node while it ran; result discarded")
+
+	f.s.PruneWatches()
+
+	assert.Nil(t, f.s.State.Watch["quiet"], "nothing of it waited: all of it goes")
+	require.NotNil(t, f.s.State.Watch["ci-red"])
+	assert.Zero(t, f.s.State.Watch["ci-red"].Failures)
+	assert.Empty(t, f.s.State.Watch["ci-red"].LastError)
+
+	waits := f.s.WaitingKeys()
+	require.Len(t, waits, 1)
+	assert.Equal(t, "k1", waits[0].Key)
+
+	_, err = f.s.AckWatch("ci-red", nil, true, "dispatcher")
+	require.NoError(t, err)
+
+	f.s.PruneWatches()
+	assert.Empty(t, f.s.State.Watch)
+
+	// A machine that is no node of the file drops nothing: its name may only be unreadable for a moment.
+	g, _ := placedFixture(t, spreadYAML+here, "alpha")
+	run, err = g.s.BeginWatch("quiet")
+	require.NoError(t, err)
+	g.s.FinishWatch(run, watch.Result{Events: []watch.Event{{Key: "k1", Fingerprint: "a", Text: "red"}}}, false)
+	_, err = g.s.AckWatch("quiet", nil, true, "dispatcher")
+	require.NoError(t, err)
+
+	c, err = crew.LoadFor(rewrite(t, g, spreadYAML+away), "")
+	require.NoError(t, err)
+
+	g.s.Crew = c
+	g.s.PruneWatches()
+	assert.NotNil(t, g.s.State.Watch["quiet"])
+}
+
+// A crew that is not spread runs its watches as before, and its views say nothing of nodes.
+func TestAWatchOfACrewThatIsNotSpreadIsUnchanged(t *testing.T) {
+	f := fixtureWith(t, watchYAML)
+
+	require.Len(t, f.s.DueWatches(), 1)
+
+	for _, v := range f.s.WatchViews() {
+		assert.False(t, v.Away)
+		assert.Empty(t, v.Place)
+	}
+}
+
+// rewrite puts body in place of the fixture's crew file and returns its path.
+func rewrite(t *testing.T, f fix, body string) string {
+	t.Helper()
+	require.NoError(t, os.WriteFile(f.s.Crew.Path, []byte(body), 0o600))
+
+	return f.s.Crew.Path
 }

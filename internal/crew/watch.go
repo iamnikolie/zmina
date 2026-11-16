@@ -57,6 +57,9 @@ type Watch struct {
 	Enabled *bool `yaml:"enabled"`
 	// Baseline (default true) records the first run's events without noting them.
 	Baseline *bool `yaml:"baseline"`
+	// Place is the one node that runs the watch when the crew file declares nodes: (default: home). A detector is a
+	// listener: run on two nodes it would note every event twice, to two dispatchers.
+	Place string `yaml:"place,omitempty"`
 
 	// Run is the exec kind's command: a list is argv, a string runs with /bin/sh -c.
 	Run Command `yaml:"run"`

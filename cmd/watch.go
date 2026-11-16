@@ -272,6 +272,10 @@ func nextRun(v shift.WatchView) string {
 		return "off"
 	}
 
+	if v.Away {
+		return "placed: " + v.Place
+	}
+
 	if !v.NextRun.After(time.Now()) {
 		return "next beat"
 	}

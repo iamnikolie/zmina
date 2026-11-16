@@ -184,6 +184,8 @@ func (s *Shift) WaitingKeys() []WaitingKey {
 	var out []WaitingKey
 
 	for _, name := range s.Crew.WatchNames() {
+		// The keys a watch left waiting here before it was placed on another node are among them: that node's first
+		// run records them without a note, so this node's dispatcher is the one who heard of them (PruneWatches).
 		out = append(out, waitingKeys(s.Crew.Watches[name], s.State.Watch[name], tasks)...)
 	}
 

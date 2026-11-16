@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 // spreadFile is a crew over two nodes: alex's dev runs on beta, everything else on home.
@@ -495,4 +496,45 @@ func TestSeatSetPlaceIsRefused(t *testing.T) {
 	e, err = Open(spread)
 	require.NoError(t, err)
 	require.NoError(t, e.Set("dev", map[string]string{"model": "opus"}))
+}
+
+// A detector is a listener: in a crew over nodes it runs on one node, home unless it names another, and on a machine
+// whose name is not known on none. A crew that is not spread runs every watch, and a place there is warned of.
+func TestAWatchRunsOnOneNode(t *testing.T) {
+	body := "home: alpha\nnodes: {alpha: {}, beta: {}}\nroles:\n  dispatcher: {}\n  dev: {place: beta}\n" +
+		"watch:\n  mrs: {kind: exec, every: 1m, run: [x]}\n  cards: {kind: exec, every: 1m, run: [x], place: beta}\n" +
+		"  lost: {kind: exec, every: 1m, run: [x], place: gamma}\n"
+
+	alpha, beta, none := loadFor(t, body, "alpha"), loadFor(t, body, "beta"), loadFor(t, body, "")
+
+	assert.True(t, alpha.WatchHere(alpha.Watches["mrs"]))
+	assert.False(t, alpha.WatchHere(alpha.Watches["cards"]))
+	assert.False(t, beta.WatchHere(beta.Watches["mrs"]))
+	assert.True(t, beta.WatchHere(beta.Watches["cards"]))
+	assert.Equal(t, "alpha", beta.WatchPlace(beta.Watches["mrs"]))
+	assert.Equal(t, "beta", alpha.WatchPlace(alpha.Watches["cards"]))
+
+	for _, c := range []*Crew{alpha, beta, none} {
+		assert.False(t, c.WatchHere(c.Watches["lost"]))
+		assert.Contains(t, strings.Join(c.Warnings, "\n"),
+			`watch lost: place "gamma" is not one of nodes: (alpha, beta); the watch runs on no node`)
+	}
+
+	for _, name := range none.WatchNames() {
+		assert.False(t, none.WatchHere(none.Watches[name]), name)
+	}
+
+	flat := loadFor(t, "roles:\n  dispatcher: {}\nwatch:\n  mrs: {kind: exec, every: 1m, run: [x], place: beta}\n", "alpha")
+	assert.True(t, flat.WatchHere(flat.Watches["mrs"]))
+	assert.Empty(t, flat.WatchPlace(flat.Watches["mrs"]))
+	assert.Contains(t, strings.Join(flat.Warnings, "\n"), "watch mrs: place: has no meaning without nodes:, ignored")
+}
+
+// A place on a watch that has none keeps the watch's fingerprint: an upgrade does not look like a changed watch.
+func TestAWatchWithoutPlaceKeepsItsFingerprint(t *testing.T) {
+	c := loadFor(t, "roles:\n  dispatcher: {}\nwatch:\n  mrs: {kind: exec, every: 1m, run: [x]}\n", "")
+
+	raw, err := yaml.Marshal(c.Watches["mrs"])
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "place")
 }
