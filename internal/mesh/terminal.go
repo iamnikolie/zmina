@@ -65,6 +65,11 @@ type TerminalServices struct {
 	// it for the history. The mesh has checked the request's form, its size and the names; the node checks that the file
 	// loads, that the file there is the one the owner meant to replace, and writes it.
 	CrewPut func(crew string, payload []byte, base string, create bool, by string) (CrewPutResult, error)
+	// RoleMove is a step of a move of a role off this node (role/move: check, begin, poll, commit, abort) and RoleTake the take of
+	// the work of a move on the node the role goes to (role/take). The mesh has checked the request's form, its size and its names;
+	// the node does the rest and answers in JSON the mesh does not read.
+	RoleMove func(MoveCall) ([]byte, error)
+	RoleTake func(MoveCall) ([]byte, error)
 }
 
 // TerminalRequest is signed against a fresh server challenge, so a certified peer cannot turn a
@@ -94,6 +99,10 @@ type TerminalRequest struct {
 	Payload []byte `json:"payload,omitempty"`
 	Base    string `json:"base,omitempty"`
 	Create  bool   `json:"create,omitempty"`
+	// Move is the id of the move a role/move or role/take request is of, Force that the owner chose to drop what a move does not
+	// carry (its queue, the dirty directory). Both inside what the owner signs.
+	Move  string `json:"move,omitempty"`
+	Force bool   `json:"force,omitempty"`
 }
 
 // terminalMessage is what an owner request in the old form signs: the operation, the challenge the serving node chose
@@ -181,14 +190,20 @@ func (n *Node) serveTerminal(ctx context.Context, c *conn, w wire, s *TerminalSe
 		return fail(errors.New("terminal access requires the owner's signature"))
 	}
 	req := w.Terminal
+
+	// The size of what a move carries is checked before the request's signature is, which reads all of it.
+	if roleOp(w.Op) && len(req.Payload) > rolePayloadMax(w.Op) {
+		return fail(fmt.Errorf("%s carries at most %d bytes: this one has %d", w.Op, rolePayloadMax(w.Op), len(req.Payload)))
+	}
+
 	form := n.requestForm(c, w.Op, *req)
 	switch {
 	case form == formNone:
 		return fail(errors.New("terminal access requires the owner's signature"))
-	case w.Op == "crew/put" && form != formBound:
-		// Whatever strict_requests says: a push changes what the node runs, and only a request bound to this node, to the key
-		// it proved and to this session's challenge may.
-		return fail(errors.New("crew/put takes only an owner request bound to this node: update zmina on the owner's node"))
+	case (w.Op == "crew/put" || roleOp(w.Op)) && form != formBound:
+		// Whatever strict_requests says: a push or a move changes what the node runs, and only a request bound to this node, to the
+		// key it proved and to this session's challenge may.
+		return fail(fmt.Errorf("%s takes only an owner request bound to this node: update zmina on the owner's node", w.Op))
 	case form == formLegacy && n.StrictRequests:
 		return fail(errors.New("this node takes only owner requests addressed to it (strict_requests is on): update zmina on the owner's node"))
 	case form == formLegacy:
@@ -204,6 +219,10 @@ func (n *Node) serveTerminal(ctx context.Context, c *conn, w wire, s *TerminalSe
 	}
 	if w.Op == "crew/put" {
 		return n.serveCrewPut(c, req, s)
+	}
+
+	if roleOp(w.Op) {
+		return n.serveRoleOp(c, w.Op, req, s)
 	}
 	if w.Op == "terminal/list" {
 		targets, err := s.List()
