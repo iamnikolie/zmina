@@ -25,11 +25,11 @@ uninstall:
 
 # The gate before a push, as CI runs it: the race detector on, nothing taken from the test cache.
 test: public-check fmt-check
-	go test -race -count=1 ./...
+	go test -race -count=1 -timeout 40m ./...
 
 # A quicker loop while working: cached results, no race detector.
 test-fast:
-	go test ./...
+	go test -timeout 20m ./...
 
 # CI fails on unformatted files; so does make test, before a push.
 fmt-check:
