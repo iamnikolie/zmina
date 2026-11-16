@@ -100,6 +100,9 @@ type Ledger struct {
 	// Crew is the crew's name, put in branch names so two crews never pick the same branch; empty for the default
 	// crew.
 	Crew string
+	// Node is the node the ledger is kept on when the crew file declares nodes:, put in branch names so two nodes that
+	// push to one remote never pick the same branch for tasks of the same number; empty: not put in.
+	Node string
 	Now  func() time.Time
 	// Log records an event (role, event, task id, detail); nil is quiet.
 	Log func(role, event, id, detail string)
@@ -234,13 +237,33 @@ func (l *Ledger) New(n NewTask) (task.Task, error) {
 	return t, nil
 }
 
-// branch is zmina/t-14 for the default crew and zmina/<crew>-t-14 for a named one.
+// branch is zmina/t-14 for the default crew and zmina/<crew>-t-14 for a named one; with a node (a crew file that
+// declares nodes:) zmina/<node>-t-14 and zmina/<node>-<crew>-t-14.
 func (l *Ledger) branch(id string) string {
-	if l.Crew == "" {
-		return "zmina/" + strings.ToLower(id)
+	name := strings.ToLower(id)
+
+	if l.Crew != "" {
+		name = l.Crew + "-" + name
 	}
 
-	return "zmina/" + l.Crew + "-" + strings.ToLower(id)
+	if l.Node != "" {
+		name = refSafe(l.Node) + "-" + name
+	}
+
+	return "zmina/" + name
+}
+
+// refSafe is a node's name as part of a git branch: a node's name may hold dots, and git refuses a name with two in a row, one at
+// its end or one ending .lock, so runs of dots become one and the ends are trimmed (a.b stays, a..b is a.b, x.lock is x).
+func refSafe(name string) string {
+	for strings.Contains(name, "..") {
+		name = strings.ReplaceAll(name, "..", ".")
+	}
+
+	name = strings.Trim(name, ".")
+	name = strings.TrimSuffix(name, ".lock")
+
+	return strings.Trim(name, ".")
 }
 
 // repo resolves a repo given by name (a directory under the crew's dir) or by path to its top level.

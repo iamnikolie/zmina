@@ -49,6 +49,10 @@ func (e *engine) pool(r Rule) outcome {
 			out = append(out, Alternative{To: name, Why: "not a seat of this crew"})
 
 			continue
+		case s.Away != "":
+			out = append(out, Alternative{To: name, Why: "placed on " + s.Away + ", not on this node"})
+
+			continue
 		case s.State == StateUnavailable:
 			out = append(out, Alternative{To: name, Why: s.why()})
 

@@ -177,6 +177,9 @@ type Seat struct {
 	Tasks []string
 	// Context is how many tokens its conversation fills, ContextBudget the tokens it may fill (0: not known).
 	Context, ContextBudget int
+	// Away is the <node>/<crew> that runs the seat when the crew file places it on another node, empty for a seat run
+	// here. Work for such a seat is told to that crew's dispatcher; the pool never picks it.
+	Away string
 }
 
 // Base is the role a copy is of: dev for dev#2, the name itself for a role.
@@ -264,6 +267,9 @@ type Decision struct {
 	Name string
 	// Why says why this seat, in a line.
 	Why string
+	// AwaySeat is, for an ActionTell, the seat that runs on another node when that is why the answer is a tell (To is that
+	// node's crew), empty when the work is another crew's.
+	AwaySeat string
 	// Alternatives are the other seats the rule looked at, with why each was not picked.
 	Alternatives []Alternative
 	// Limits are the plans' readings in percent, nil for one that is unknown; Stale is true when either is.

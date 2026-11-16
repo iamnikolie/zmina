@@ -60,6 +60,16 @@ type TerminalServices struct {
 	// Items resolves the ids a conversation names (crew, comma-separated ids) as the node's JSON: tasks, parked items
 	// and asks, each with its chain. Read-only.
 	Items func(crew, ids string) ([]byte, error)
+	// CrewPut puts the owner's crew file in place of this node's (crew/put): the crew's key as nodes address it, the file's
+	// bytes, the sum of the file the owner meant to replace ("" for none), whether the crew may be made, and who pushed
+	// it for the history. The mesh has checked the request's form, its size and the names; the node checks that the file
+	// loads, that the file there is the one the owner meant to replace, and writes it.
+	CrewPut func(crew string, payload []byte, base string, create bool, by string) (CrewPutResult, error)
+	// RoleMove is a step of a move of a role off this node (role/move: check, begin, poll, commit, abort) and RoleTake the take of
+	// the work of a move on the node the role goes to (role/take). The mesh has checked the request's form, its size and its names;
+	// the node does the rest and answers in JSON the mesh does not read.
+	RoleMove func(MoveCall) ([]byte, error)
+	RoleTake func(MoveCall) ([]byte, error)
 }
 
 // TerminalRequest is signed against a fresh server challenge, so a certified peer cannot turn a
@@ -84,7 +94,36 @@ type TerminalRequest struct {
 	// (terminalMessageV2) always names it and any operation is done only by that node; in the old form only a write
 	// (todo/act, alarm/act) names it. So a peer that got a request cannot pass it on to another node's session.
 	To string `json:"to,omitempty"`
+	// Payload is the crew file a push carries (crew/put), Base the sum of the file it replaces on the target ("" when it
+	// has none: a crew that is made), Create says the crew may be made there. All inside what the owner signs.
+	Payload []byte `json:"payload,omitempty"`
+	Base    string `json:"base,omitempty"`
+	Create  bool   `json:"create,omitempty"`
+	// Move is the id of the move a role/move or role/take request is of, Force that the owner chose to drop what a move does not
+	// carry (its queue, the dirty directory). Both inside what the owner signs.
+	Move  string `json:"move,omitempty"`
+	Force bool   `json:"force,omitempty"`
+	// From is the key of the node that sends the request and NotAfter the last second (Unix time) it may be done, both inside what
+	// the owner signs, for the ops that change what a node runs (crew/put, role/move, role/take; see boundCaller). The target
+	// refuses a request whose From is not the key its session proved in the hello, and one past its NotAfter. Ops that were on the
+	// wire before carry neither, so what they sign is what it was.
+	From     []byte `json:"from,omitempty"`
+	NotAfter int64  `json:"not_after,omitempty"`
 }
+
+// How long a request that changes what a node runs stays good: the owner signs it for requestLife, and the target takes it until
+// that time and requestSkew more (a target whose clock is ahead of the owner's by less than that), and refuses a NotAfter further
+// ahead than requestAheadMax, which no honest owner's node sends.
+const (
+	requestLife     = 2 * time.Minute
+	requestSkew     = time.Minute
+	requestAheadMax = 10 * time.Minute
+)
+
+// boundCaller reports an op whose request names the node that sends it and the time it is good until: a push of a crew file and the
+// steps of a move. They run code on the target, so a request for one is useless to anyone who got hold of it on the way: a relay
+// that kept it and sends it on a session of its own (where the key proved is the relay's) is refused, and so is one it sends late.
+func boundCaller(op string) bool { return op == "crew/put" || roleOp(op) }
 
 // terminalMessage is what an owner request in the old form signs: the operation, the challenge the serving node chose
 // and the request. It names no node, so it is accepted only while strict_requests is off.
@@ -114,6 +153,10 @@ func (n *Node) terminalRequest(c *conn, op string, req TerminalRequest) error {
 		if req.To == "" {
 			req.To = c.peer.Name
 		}
+
+		if boundCaller(op) {
+			req.From, req.NotAfter = n.Cert.Key, time.Now().Add(requestLife).Unix()
+		}
 		req.Sig = ed25519.Sign(key, terminalMessageV2(op, c.serverKey, c.challenge, req))
 	} else {
 		req.Sig = ed25519.Sign(key, terminalMessage(op, c.challenge, req))
@@ -139,6 +182,44 @@ func (n *Node) requestForm(c *conn, op string, req TerminalRequest) requestForm 
 		return formLegacy
 	}
 	return formNone
+}
+
+// clock is the serving side's time.
+func (c *conn) clock() time.Time {
+	if c.now != nil {
+		return c.now()
+	}
+
+	return time.Now()
+}
+
+// checkCaller is what the target asks of a request of an op of boundCaller once the owner's signature is checked: it was signed
+// by the owner's node for the session of the node that sent it (the key the hello proved), and it is not out of date. The
+// challenge of the target is no part of any signature of the hello, so a relay can show the owner another session's challenge and
+// have the owner sign a request over it; it is the caller's key inside the request that is not the relay's to change.
+func (c *conn) checkCaller(req *TerminalRequest) error {
+	if len(req.From) != ed25519.PublicKeySize || !ed25519.PublicKey(req.From).Equal(c.callerKey) {
+		return errors.New("this request was signed for a session of another node than the one that sent it: it is refused " +
+			"(a node that kept the owner's request cannot send it on its own session)")
+	}
+
+	if req.NotAfter == 0 {
+		return errors.New("this request names no time it is good until: update zmina on the owner's node")
+	}
+
+	now, until := c.clock(), time.Unix(req.NotAfter, 0)
+
+	switch {
+	case now.After(until.Add(requestSkew)):
+		return fmt.Errorf("this request is out of date: it was good until %s and it is %s here; it is signed for %s, so run the "+
+			"command again (and check that the two nodes' clocks are within a minute of each other)", until.UTC().Format(time.RFC3339),
+			now.UTC().Format(time.RFC3339), requestLife)
+	case until.After(now.Add(requestAheadMax)):
+		return fmt.Errorf("this request is good until %s, further ahead than the %s an owner's node signs for: the two nodes' clocks "+
+			"differ by more than that, or the request is not the owner's own", until.UTC().Format(time.RFC3339), requestLife)
+	}
+
+	return nil
 }
 
 // legacyNoticeEvery is how often a node says it took an old-form request from the same caller: the cockpit asks every
@@ -171,10 +252,20 @@ func (n *Node) serveTerminal(ctx context.Context, c *conn, w wire, s *TerminalSe
 		return fail(errors.New("terminal access requires the owner's signature"))
 	}
 	req := w.Terminal
+
+	// The size of what a move carries is checked before the request's signature is, which reads all of it.
+	if roleOp(w.Op) && len(req.Payload) > rolePayloadMax(w.Op) {
+		return fail(fmt.Errorf("%s carries at most %d bytes: this one has %d", w.Op, rolePayloadMax(w.Op), len(req.Payload)))
+	}
+
 	form := n.requestForm(c, w.Op, *req)
 	switch {
 	case form == formNone:
 		return fail(errors.New("terminal access requires the owner's signature"))
+	case (w.Op == "crew/put" || roleOp(w.Op)) && form != formBound:
+		// Whatever strict_requests says: a push or a move changes what the node runs, and only a request bound to this node, to the
+		// key it proved and to this session's challenge may.
+		return fail(fmt.Errorf("%s takes only an owner request bound to this node: update zmina on the owner's node", w.Op))
 	case form == formLegacy && n.StrictRequests:
 		return fail(errors.New("this node takes only owner requests addressed to it (strict_requests is on): update zmina on the owner's node"))
 	case form == formLegacy:
@@ -187,6 +278,18 @@ func (n *Node) serveTerminal(ctx context.Context, c *conn, w wire, s *TerminalSe
 	}
 	if s == nil {
 		return fail(errors.New("this node has no terminal service; update zmina"))
+	}
+	if boundCaller(w.Op) {
+		if err := c.checkCaller(req); err != nil {
+			return fail(err)
+		}
+	}
+	if w.Op == "crew/put" {
+		return n.serveCrewPut(c, req, s)
+	}
+
+	if roleOp(w.Op) {
+		return n.serveRoleOp(c, w.Op, req, s)
 	}
 	if w.Op == "terminal/list" {
 		targets, err := s.List()

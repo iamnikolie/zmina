@@ -328,6 +328,9 @@ type Peer struct {
 	// TerminalV2: the peer authenticated terminal_v2 in its last session with this node — it takes owner requests
 	// bound to the node they are for, and the owner's node sends them so.
 	TerminalV2 bool `json:"terminal_v2,omitempty"`
+	// CrewSync: the peer authenticated crew_sync in its last session with this node — it takes the owner's push of a
+	// crew file (zmina crew push).
+	CrewSync bool `json:"crew_sync,omitempty"`
 	// Crews is how the peer's crews stood in its last session with this node, CrewsAt when that was; none from an
 	// older zmina.
 	Crews   []CrewHealth `json:"crews,omitempty"`

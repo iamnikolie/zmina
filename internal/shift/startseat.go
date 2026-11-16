@@ -19,6 +19,16 @@ const startReasonMax = 300
 // it off it is the four reasons the review loop always had, so that a crew that never set the key sees no change: a stopped shift,
 // a seat asleep or broken, a plan held.
 func (s *Shift) StartBlock(name string, now time.Time) string {
+	// First, with the key on or off: a seat the crew file places on another node is never started here.
+	// A seat whose move to another node is open is not started by the ticker or by what gives it work.
+	if why := s.movingShort(name); why != "" {
+		return why
+	}
+
+	if why := s.placedAwayShort(name); why != "" {
+		return why
+	}
+
 	rs := s.State.Roles[name]
 	if rs == nil {
 		rs = &RoleState{}

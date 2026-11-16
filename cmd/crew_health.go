@@ -60,6 +60,19 @@ func healthOf(c uiCrew) (mesh.CrewHealth, bool) {
 		h.Stopped = max(int64(now.Sub(st.Stopped).Seconds()), 1)
 	}
 
+	// Only a crew whose file declares nodes: tells its file's sum and the roles it has up: for any other crew the hello is
+	// what it always was. The file is one for every node there, so a peer's sum that differs is drift, and a role up on two
+	// nodes is the split brain placement exists to prevent.
+	if cr.Spread() {
+		h.Sum = cr.Sum()
+
+		for _, name := range cr.Names() {
+			if rs := st.Roles[name]; name != cr.Dispatcher && rs != nil && rs.Up {
+				h.Held = append(h.Held, name)
+			}
+		}
+	}
+
 	return h, true
 }
 
@@ -203,4 +216,37 @@ func noCrewFile(none *crew.NoFileError) error {
 	}
 
 	return fmt.Errorf("crew: %s does not exist; the crews here: %s", none.Path, strings.Join(names, ", "))
+}
+
+// heldWithin is how old what a peer told of the roles it has up may be before it is no evidence of what runs there now: the
+// ticker syncs every minute, so a peer silent this long is not known to run anything.
+const heldWithin = 10 * time.Minute
+
+// peersHeld is which other nodes lately told the roles of the crew called key up, role -> node names, from the address book.
+func peersHeld(key string, now time.Time) map[string][]string {
+	me, err := mesh.Open(meshDir())
+	if err != nil {
+		return nil
+	}
+
+	book, _ := me.Peers()
+	out := map[string][]string{}
+
+	for _, p := range book {
+		if p.CrewsAt.IsZero() || now.Sub(p.CrewsAt) > heldWithin {
+			continue
+		}
+
+		for _, h := range p.Crews {
+			if h.Crew != key {
+				continue
+			}
+
+			for _, role := range h.Held {
+				out[role] = append(out[role], p.Name)
+			}
+		}
+	}
+
+	return out
 }

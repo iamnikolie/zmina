@@ -530,6 +530,10 @@ func (a *app) nodeLs() *cobra.Command {
 				fmt.Fprintf(a.out, "  %s%s\n", peerLine(p, now), peerCertNote(p, now, list))
 			}
 
+			for _, line := range nodeLsPlacement(v.CrewFiles, v.Health, v.Peers) {
+				fmt.Fprintln(a.out, line)
+			}
+
 			for _, e := range v.Outbox {
 				fmt.Fprintf(a.out, "  waits: %s → %s, since %s: %s\n", e.From, e.To, ago(e.At, now), clip(e.Body, 60))
 			}
@@ -574,6 +578,12 @@ func peerLine(p mesh.Peer, now time.Time) string {
 			parts = append(parts, "terminal_v2")
 		} else {
 			parts = append(parts, "no terminal_v2")
+		}
+
+		if p.CrewSync {
+			parts = append(parts, "crew_sync")
+		} else {
+			parts = append(parts, "no crew_sync")
 		}
 	}
 

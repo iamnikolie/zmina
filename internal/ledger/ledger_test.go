@@ -170,6 +170,55 @@ func TestNamedCrewBranches(t *testing.T) {
 	assert.Equal(t, "zmina/ops-t-1", tk.Branch, "two crews never pick the same branch")
 }
 
+// A crew that declares nodes: puts the node in the branch: two nodes that push to one remote never meet on a branch, and
+// a crew that declares none keeps the names it always had.
+func TestNodeIsInTheBranchOfACrewThatDeclaresNodes(t *testing.T) {
+	for name, c := range map[string]struct{ crew, node, want string }{
+		"a named crew":   {"ops", "alpha", "zmina/alpha-ops-t-1"},
+		"the default":    {"", "beta", "zmina/beta-t-1"},
+		"no nodes: ":     {"ops", "", "zmina/ops-t-1"},
+		"no nodes, none": {"", "", "zmina/t-1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			l, trees := fixture(t, c.crew)
+			l.Node = c.node
+
+			tk, err := l.New(NewTask{Role: "dev", Asked: "x", Repo: "api", Worktree: true})
+			require.NoError(t, err)
+			assert.Equal(t, c.want, tk.Branch)
+			assert.True(t, trees.branches[c.want])
+		})
+	}
+}
+
+// A node's name may hold dots that git would refuse in a branch name: two in a row, one at the end, a trailing .lock. The branch
+// is made safe and is a name git accepts (git check-ref-format says so when git is there).
+func TestNodeNameIsMadeSafeForAGitBranch(t *testing.T) {
+	for node, want := range map[string]string{
+		"a..b":      "zmina/a.b-t-1",
+		"a...b":     "zmina/a.b-t-1",
+		"box.":      "zmina/box-t-1",
+		"box..":     "zmina/box-t-1",
+		"x.lock":    "zmina/x-t-1",
+		"x.lock.":   "zmina/x-t-1",
+		"a.b.lock.": "zmina/a.b-t-1",
+		"box.local": "zmina/box.local-t-1",
+		"alpha":     "zmina/alpha-t-1",
+		"a-b_c":     "zmina/a-b_c-t-1",
+	} {
+		l, _ := fixture(t, "")
+		l.Node = node
+
+		got := l.branch("T-1")
+		assert.Equal(t, want, got, node)
+
+		if git, err := exec.LookPath("git"); err == nil {
+			out, err := exec.Command(git, "check-ref-format", "--branch", got).CombinedOutput()
+			assert.NoError(t, err, "%s: %s", got, out)
+		}
+	}
+}
+
 func TestFailedWorktreeLeavesADroppedRecord(t *testing.T) {
 	l, trees := fixture(t, "")
 	trees.addErr = errors.New("fatal: a branch named 'zmina/t-1' already exists")

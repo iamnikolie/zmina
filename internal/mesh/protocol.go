@@ -66,6 +66,13 @@ type wire struct {
 	// client's auth).
 	TerminalV2    bool   `json:"terminal_v2,omitempty"`
 	TerminalV2Sig []byte `json:"terminal_v2_sig,omitempty"`
+	// CrewSync, in a hello, says the node takes (and, for the owner, sends) the owner's push of a crew file (crew/put);
+	// its signature, over the other side's nonce, is CrewSyncSig (in the server's hello, in the client's auth).
+	CrewSync    bool   `json:"crew_sync,omitempty"`
+	CrewSyncSig []byte `json:"crew_sync_sig,omitempty"`
+	// ResultSig is the node's signature over its answer to an op of boundCaller (resultMessage): the session's challenge, the op, the
+	// status and a hash of what it carries, so that a relay cannot answer for the node or alter what it said.
+	ResultSig []byte `json:"result_sig,omitempty"`
 	// Revoked, in a hello, is the highest revocation list the sender holds: the owner's signature is on it, so it
 	// needs no capability word, and an older zmina ignores it.
 	Revoked *Revocations `json:"revoked,omitempty"`
@@ -78,6 +85,8 @@ type conn struct {
 	challenge []byte
 	// serverKey is, on the calling side, the key the far node proved in its hello: what a bound request is addressed to.
 	serverKey ed25519.PublicKey
+	// callerKey is, on the serving side, the key the caller proved in its hello and its auth: the node this session is with.
+	callerKey ed25519.PublicKey
 	// now is the serving side's clock.
 	now func() time.Time
 }
@@ -96,7 +105,8 @@ func (c *conn) expect(op string) (wire, error) {
 	}
 
 	if w.Op == "err" {
-		return w, fmt.Errorf("peer: %s", w.Err)
+		// What a peer says is no line for a terminal to act on.
+		return w, fmt.Errorf("peer: %s", Plain(w.Err))
 	}
 
 	if w.Op != op {
@@ -194,7 +204,8 @@ func (n *Node) ServeTerminals(ctx context.Context, rw io.ReadWriter, deliver Del
 		CrewsSig: ed25519.Sign(n.Key, crewsMessage("server", hi.Nonce, crews)),
 		Sig:      ed25519.Sign(n.Key, helloMessage("server", hi.Nonce)), Peers: told, BodyMax: BodyMax, ReportsV1: true, ReportsV2: true, PublicationsSig: ed25519.Sign(n.Key, publicationCapabilityMessage("server", hi.Nonce, BodyMax, true)), CapsSig: ed25519.Sign(n.Key, capabilityMessage("server", hi.Nonce, BodyMax, true)),
 		TellReceipts: true, TellReceiptsSig: ed25519.Sign(n.Key, tellReceiptCapabilityMessage("server", hi.Nonce, BodyMax)),
-		TerminalV2: true, TerminalV2Sig: ed25519.Sign(n.Key, terminalV2CapabilityMessage("server", hi.Nonce))})
+		TerminalV2: true, TerminalV2Sig: ed25519.Sign(n.Key, terminalV2CapabilityMessage("server", hi.Nonce)),
+		CrewSync: true, CrewSyncSig: ed25519.Sign(n.Key, crewSyncCapabilityMessage("server", hi.Nonce))})
 	if err != nil {
 		return err
 	}
@@ -225,11 +236,15 @@ func (n *Node) ServeTerminals(ctx context.Context, rw io.ReadWriter, deliver Del
 	if hi.TerminalV2 && !ed25519.Verify(hi.Cert.Key, terminalV2CapabilityMessage("client", mine), auth.TerminalV2Sig) {
 		return fail(errors.New("unauthenticated terminal_v2 capability"))
 	}
+	if hi.CrewSync && !ed25519.Verify(hi.Cert.Key, crewSyncCapabilityMessage("client", mine), auth.CrewSyncSig) {
+		return fail(errors.New("unauthenticated crew_sync capability"))
+	}
 	if len(hi.Crews) > 0 && !ed25519.Verify(hi.Cert.Key, crewsMessage("client", mine, hi.Crews), auth.CrewsSig) {
 		return fail(errors.New("unauthenticated crew health"))
 	}
+	c.callerKey = hi.Cert.Key
 	c.peer = Peer{Name: caller, BodyMax: hi.BodyMax, ReportsV1: hi.ReportsV1, ReportsV2: hi.ReportsV2, TellReceipts: hi.TellReceipts,
-		TerminalV2: hi.TerminalV2, Crews: readCrewHealth(hi.Crews)}
+		TerminalV2: hi.TerminalV2, CrewSync: hi.CrewSync, Crews: readCrewHealth(hi.Crews)}
 	if err := n.metPeer(*hi.Cert, hi.Peers, c.peer, now()); err != nil {
 		return fail(err)
 	}
@@ -237,6 +252,9 @@ func (n *Node) ServeTerminals(ctx context.Context, rw io.ReadWriter, deliver Del
 	if err := c.send(wire{Op: "ok"}); err != nil {
 		return err
 	}
+
+	// The caller proved its key: from here a frame may be as big as a certified node sends.
+	c.dec.raise()
 
 	for {
 		var w wire
@@ -250,7 +268,7 @@ func (n *Node) ServeTerminals(ctx context.Context, rw io.ReadWriter, deliver Del
 
 		switch w.Op {
 		case "terminal/list", "terminal/open", "terminal/history", "chat/read", "chat/send", "chat/action", "chat/upload", "chat/file", "chat/paths", "chat/rolefile", "chat/looked",
-			"crew/status", "todo/act", "alarm/act", "item/read":
+			"crew/status", "todo/act", "alarm/act", "item/read", "crew/put", "role/move", "role/take":
 			return n.serveTerminal(ctx, c, w, services)
 		case "terminal/tunnel":
 			return n.serveTunnel(ctx, rw, c, w, transport)
@@ -397,7 +415,7 @@ func (n *Node) open(c *conn, want string, now func() time.Time) (string, error) 
 	crews := n.crewData()
 
 	if err := c.send(wire{Op: "hello", V: protocolVersion, Cert: &n.Cert, Nonce: mine, Peers: told, Crews: crews, Revoked: revocationsIfAny(held),
-		BodyMax: BodyMax, ReportsV1: true, ReportsV2: true, TellReceipts: true, TerminalV2: true}); err != nil {
+		BodyMax: BodyMax, ReportsV1: true, ReportsV2: true, TellReceipts: true, TerminalV2: true, CrewSync: true}); err != nil {
 		return "", err
 	}
 
@@ -435,6 +453,9 @@ func (n *Node) open(c *conn, want string, now func() time.Time) (string, error) 
 	if hi.TerminalV2 && !ed25519.Verify(hi.Cert.Key, terminalV2CapabilityMessage("server", mine), hi.TerminalV2Sig) {
 		return "", errors.New("unauthenticated terminal_v2 capability")
 	}
+	if hi.CrewSync && !ed25519.Verify(hi.Cert.Key, crewSyncCapabilityMessage("server", mine), hi.CrewSyncSig) {
+		return "", errors.New("unauthenticated crew_sync capability")
+	}
 	if len(hi.Crews) > 0 && !ed25519.Verify(hi.Cert.Key, crewsMessage("server", mine, hi.Crews), hi.CrewsSig) {
 		return "", errors.New("unauthenticated crew health")
 	}
@@ -445,6 +466,7 @@ func (n *Node) open(c *conn, want string, now func() time.Time) (string, error) 
 	if err := c.send(wire{Op: "auth", Sig: ed25519.Sign(n.Key, helloMessage("client", hi.Nonce)), CapsSig: ed25519.Sign(n.Key, capabilityMessage("client", hi.Nonce, BodyMax, true)), PublicationsSig: ed25519.Sign(n.Key, publicationCapabilityMessage("client", hi.Nonce, BodyMax, true)),
 		TellReceiptsSig: ed25519.Sign(n.Key, tellReceiptCapabilityMessage("client", hi.Nonce, BodyMax)),
 		TerminalV2Sig:   ed25519.Sign(n.Key, terminalV2CapabilityMessage("client", hi.Nonce)),
+		CrewSyncSig:     ed25519.Sign(n.Key, crewSyncCapabilityMessage("client", hi.Nonce)),
 		CrewsSig:        ed25519.Sign(n.Key, crewsMessage("client", hi.Nonce, crews))}); err != nil {
 		return "", err
 	}
@@ -453,8 +475,11 @@ func (n *Node) open(c *conn, want string, now func() time.Time) (string, error) 
 		return "", err
 	}
 
+	// The peer proved its key: from here a frame may be as big as a certified node sends.
+	c.dec.raise()
+
 	c.peer = Peer{Name: hi.Cert.Name, BodyMax: hi.BodyMax, ReportsV1: hi.ReportsV1, ReportsV2: hi.ReportsV2, TellReceipts: hi.TellReceipts,
-		TerminalV2: hi.TerminalV2, Crews: readCrewHealth(hi.Crews)}
+		TerminalV2: hi.TerminalV2, CrewSync: hi.CrewSync, Crews: readCrewHealth(hi.Crews)}
 	c.serverKey = hi.Cert.Key
 
 	return hi.Cert.Name, n.metPeer(*hi.Cert, hi.Peers, c.peer, now())
@@ -576,6 +601,12 @@ func terminalV2CapabilityMessage(side string, nonce []byte) []byte {
 	return []byte(fmt.Sprintf("zmina-terminal-v2-cap\x00%s\x00%x", side, nonce))
 }
 
+// crewSyncCapabilityMessage is what a node signs to say it takes the owner's push of a crew file (crew_sync): the side
+// and the other side's nonce, so the word cannot be replayed on another connection.
+func crewSyncCapabilityMessage(side string, nonce []byte) []byte {
+	return []byte(fmt.Sprintf("zmina-crew-sync-cap\x00%s\x00%x", side, nonce))
+}
+
 // tellReceiptCapabilityMessage is what a node signs to say it sends and takes receipts for plain lines.
 func tellReceiptCapabilityMessage(side string, nonce []byte, max int) []byte {
 	return append([]byte("zmina-tell-receipts-v1\x00"), capabilityMessage(side, nonce, max, true)...)
@@ -597,6 +628,7 @@ func (n *Node) metPeer(cert Cert, told []Peer, caps Peer, now time.Time) error {
 			p.ReportsV2 = caps.ReportsV1 && caps.ReportsV2
 			p.TellReceipts = caps.TellReceipts
 			p.TerminalV2 = caps.TerminalV2
+			p.CrewSync = caps.CrewSync
 			p.Crews, p.CrewsAt = caps.Crews, now
 		})
 		// Only a relay the owner named may carry: a peer's own claim that it reaches a node is not enough.

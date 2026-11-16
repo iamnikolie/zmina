@@ -96,6 +96,10 @@ type Command struct {
 
 // UnmarshalYAML reads a list (argv) or a string (shell).
 func (c *Command) UnmarshalYAML(n *yaml.Node) error {
+	// Whatever was there is replaced, not added to: a node's own notify over the crew's (nodes.<n>.notify) is a string over a
+	// list or a list over a string, and "" or [] says none. A key with nothing under it is null, which leaves the value as it was.
+	*c = Command{}
+
 	if n.Kind == yaml.SequenceNode {
 		return n.Decode(&c.Argv)
 	}

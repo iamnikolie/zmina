@@ -33,6 +33,30 @@ func (l Layout) Tasks() string { return filepath.Join(l.Dir, "tasks") }
 // Later is the parked list's directory (L-<n>.json).
 func (l Layout) Later() string { return filepath.Join(l.Dir, "later") }
 
+// Moves is where a role's move to another node is kept (zmina move): the journal of an open one on the node the role leaves
+// (moves/<role>.json), the receipts of the takes the node made (moves/taken/<id>.json) and, on the owner's node, the record
+// of a move it drives (moves/<role>.drive.json).
+func (l Layout) Moves() string { return filepath.Join(l.Dir, "moves") }
+
+// Move is the journal of the open move of a role off this node. While it is there the ticker and every start refuse the role.
+func (l Layout) Move(role string) string { return filepath.Join(l.Moves(), role+".json") }
+
+// MoveDrive is what the owner's node keeps of a move it drives, so that its ticker takes the move on from where it stopped.
+func (l Layout) MoveDrive(role string) string { return filepath.Join(l.Moves(), role+".drive.json") }
+
+// MoveTaken is the receipt of a take of the move with this id, which makes a repeated take the same answer.
+func (l Layout) MoveTaken(id string) string { return filepath.Join(l.Moves(), "taken", id+".json") }
+
+// MoveTaking is the marker a node keeps of a take of a role's move from before the take's first side effect until it has the receipt:
+// while it is there the take is running or was cut short, and the move is not called off.
+func (l Layout) MoveTaking(role string) string { return filepath.Join(l.Moves(), role+".taking.json") }
+
+// MoveAborted is the tombstone of the move with this id that was called off: a take of it is refused from then on.
+func (l Layout) MoveAborted(id string) string { return filepath.Join(l.Moves(), "aborted", id+".json") }
+
+// MoveLock is the lock file of a role's move on this node: one step of it runs at a time (a poll, a commit, an abort, a take).
+func (l Layout) MoveLock(role string) string { return filepath.Join(l.Moves(), role+".lock") }
+
 // Alarms is the directory of reminders and wake-ups (R-<n>.json).
 func (l Layout) Alarms() string { return filepath.Join(l.Dir, "alarms") }
 

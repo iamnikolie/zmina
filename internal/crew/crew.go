@@ -124,6 +124,9 @@ type Role struct {
 	// Budget is what the role (its copies with it) may spend a day, in API-equivalent dollars, before the ticker
 	// tells the dispatcher; 0: no budget.
 	Budget float64 `yaml:"budget"`
+	// Place is the node that runs the role when the crew file declares nodes: (default: home). The other nodes keep
+	// the role in the file and never start it.
+	Place string `yaml:"place"`
 
 	schedule    *cron.Schedule
 	expiresAt   time.Time
@@ -260,6 +263,12 @@ type Crew struct {
 	// Owner lists the names the owner goes by where a task says whom it waits on (his handle in the tracker, his
 	// first name): a task waiting --on one of them waits on the owner and is on his todo, as one with no name is.
 	Owner []string `yaml:"owner"`
+	// Home is the node that runs the roles with no place, and the dispatcher beside every node that holds a role;
+	// required once nodes: is set.
+	Home string `yaml:"home"`
+	// Nodes are the machines the crew runs on, each with the keys it sets for itself (see NodeKeys). The file is the
+	// same on every node; a role's place says where it runs. Absent: the crew runs on one machine, as always.
+	Nodes map[string]yaml.Node `yaml:"nodes"`
 	// Namespace is the CLAUDE_CONFIG_DIR every role runs with.
 	Namespace string `yaml:"namespace"`
 	// Dir is the default working directory.
@@ -386,6 +395,10 @@ type Crew struct {
 	// and able to answer back (see Plugin). Empty: none, as before; notify keeps working beside them.
 	Plugins []Plugin `yaml:"plugins"`
 
+	// Here is the node this crew was loaded for, "" when the crew file declares no nodes or this machine is none.
+	Here string `yaml:"-"`
+
+	sum       string
 	bootGrace time.Duration
 	renotify  time.Duration
 	morning   time.Duration // past midnight; -1 off
@@ -436,8 +449,21 @@ func ConfigPath(name string) string {
 	return filepath.Join(ExpandHome("~/.zmina"), filepath.Base(name), "crew.yaml")
 }
 
-// Load reads, completes and checks a crew file. A role whose dir is missing loads with DirErr set.
-func Load(path string) (*Crew, error) { return load(path, false) }
+// Load reads, completes and checks a crew file. A role whose dir is missing loads with DirErr set. A file that declares
+// nodes: is read for the node this machine is (ThisNode); LoadFor says which node.
+func Load(path string) (*Crew, error) { return load(path, false, thisNode) }
+
+// LoadFor is Load for the named node ("" for a machine that is none), whoever the machine is: the node whose overlay
+// of nodes: is merged and whose slice PlacedHere answers for.
+func LoadFor(path, node string) (*Crew, error) {
+	return load(path, false, func() (string, string) {
+		if node == "" {
+			return "", "no node was named"
+		}
+
+		return node, ""
+	})
+}
 
 // NoFileError is a crew file that is not there.
 type NoFileError struct{ Path string }
@@ -448,9 +474,11 @@ func (e *NoFileError) Error() string {
 
 // LoadStrict reads a crew file and also refuses a role whose dir is not a directory: for checking an edit before
 // it is written.
-func LoadStrict(path string) (*Crew, error) { return load(path, true) }
+func LoadStrict(path string) (*Crew, error) { return load(path, true, thisNode) }
 
-func load(path string, strict bool) (*Crew, error) {
+// load reads the crew file; node says which node this is, and is asked only of a file that declares nodes:, so a crew
+// that does not reads nothing more than it did.
+func load(path string, strict bool, node func() (name, why string)) (*Crew, error) {
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, &NoFileError{Path: path}
@@ -469,6 +497,17 @@ func load(path string, strict bool) (*Crew, error) {
 	if err != nil {
 		return nil, fmt.Errorf("crew: %s: %w", path, err)
 	}
+
+	here, why := "", ""
+	if len(c.Nodes) > 0 {
+		here, why = node()
+	}
+
+	if err := c.placement(here, why, func(w string) { warnings = append(warnings, w) }); err != nil {
+		return nil, fmt.Errorf("crew: %s: %w", path, err)
+	}
+
+	c.sum = sumOf(raw)
 
 	for name, p := range c.Projects {
 		if p != nil && p.Tint != "" && !tintRe.MatchString(p.Tint) {
