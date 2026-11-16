@@ -86,6 +86,23 @@ func TestResolveWhereAProgramIsLookedFor(t *testing.T) {
 }
 
 // A PATH with a relative entry still gives an absolute path.
+// run is an argv with no shell, so a leading ~ in it is the home of whoever runs zmina: in the first word (a path) and in every argument
+// after it, under the same rule as every other command of the crew file given as a list. The crew's own list is not rewritten.
+func TestResolveExpandsAHomeInTheArgumentsOfRun(t *testing.T) {
+	home, crewDir := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+
+	bin := mkdir(t, home, "bin")
+	program := script(t, bin, "pager", "exit 0\n")
+	run := []string{"~/bin/pager", "~/data", "--dir=~/x", "~bob/y", "a~/b", "~"}
+
+	p, err := Resolve(crew.Plugin{Name: "pager", Run: run}, crewDir)
+	require.NoError(t, err)
+	assert.Equal(t, program, p.Path)
+	assert.Equal(t, []string{filepath.Join(home, "data"), "--dir=~/x", "~bob/y", "a~/b", home}, p.Args)
+	assert.Equal(t, []string{"~/bin/pager", "~/data", "--dir=~/x", "~bob/y", "a~/b", "~"}, run, "the crew's own list is as written")
+}
+
 func TestResolveReturnsAnAbsolutePath(t *testing.T) {
 	crewDir, bin := t.TempDir(), t.TempDir()
 	script(t, bin, "zmina-plugin-rel", "exit 0\n")

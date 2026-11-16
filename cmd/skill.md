@@ -1895,8 +1895,8 @@ word). Nowhere else. It must be a regular executable file, owned by you or root,
 is not is refused (not passed over for another place), not run, and `zmina doctor` says so. Found on PATH it is found on the PATH
 of whoever looks, and the ticker's is the one `zmina ticker install` froze: `plugin ls` shows the absolute path and `(on PATH)`,
 and `doctor` warns; keep it in `plugins/` or give `run` an absolute path. The environment is the caller's less zmina's own secrets
-(`ZMINA_UI_*`), plus `ZMINA_PLUGIN` (its name), `ZMINA_PLUGIN_EVENT` and `ZMINA_CREW` (the crew file); its argv is as configured,
-its directory the crew's `dir`. `ZMINA_PLUGIN*` is dropped from the environment of the tmux server, so no role inherits a
+(`ZMINA_UI_*`), plus `ZMINA_PLUGIN` (its name), `ZMINA_PLUGIN_EVENT` and `ZMINA_CREW` (the crew file); its argv is as configured
+(a leading `~/` in `run` is your home), its directory the crew's `dir`. `ZMINA_PLUGIN*` is dropped from the environment of the tmux server, so no role inherits a
 plugin's name.
 
 **Events.** One JSON object, one line, UTF-8, on stdin; `"v": 1` (fields are added without moving it: ignore what you do

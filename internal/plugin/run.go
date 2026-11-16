@@ -52,8 +52,10 @@ func Resolve(p crew.Plugin, crewDir string) (Program, error) {
 	if len(p.Run) > 0 {
 		word, local = p.Run[0], p.Run[0]
 
+		// The program runs with no shell, so a leading ~ in an argument is the home of whoever runs it, as in the first word and in every
+		// other command of the crew file given as a list (crew.ExpandArgvHome).
 		if len(p.Run) > 1 {
-			args = p.Run[1:]
+			args = crew.ExpandArgvHome(p.Run[1:])
 		}
 
 		if strings.Contains(word, "/") {

@@ -6,7 +6,7 @@ import (
 )
 
 // ExecLine is the command line to start: Line, and for an argv a leading ~ in argv[0] and in every later argument
-// turned into the home directory of the user running zmina (expandArgvHome). An argv runs without a shell, so nothing else
+// turned into the home directory of the user running zmina (ExpandArgvHome). An argv runs without a shell, so nothing else
 // would expand it; a string goes to /bin/sh -c, which does, and is left as it is. It is worked out each time the command
 // starts, never when the file is read, so one crew file serves two machines with different homes. What it returns is a
 // copy: the crew's own argv is not touched.
@@ -16,13 +16,13 @@ func (c Command) ExecLine() []string {
 		return line
 	}
 
-	return expandArgvHome(line)
+	return ExpandArgvHome(line)
 }
 
-// expandArgvHome is a copy of argv in which a ~ that is a whole word or stands before its first slash with nothing between
+// ExpandArgvHome is a copy of argv in which a ~ that is a whole word or stands before its first slash with nothing between
 // ("~", "~/bin/check") is the home directory of the user running it, in every word. ~user, a ~ later in a word (a~/b,
 // --dir=~/x) and the rest of a word stay as they are. Without a home directory to put (none is set) it is argv as it was.
-func expandArgvHome(argv []string) []string {
+func ExpandArgvHome(argv []string) []string {
 	out := make([]string, len(argv))
 	copy(out, argv)
 
