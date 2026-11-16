@@ -134,6 +134,7 @@ func rawRole(t *testing.T, owner *Node, transport Transport, op string, req Term
 	require.NoError(t, err)
 
 	req.To = "worker"
+	req.From, req.NotAfter = owner.Cert.Key, time.Now().Add(requestLife).Unix()
 	sign(key, c, &req)
 	require.NoError(t, c.send(wire{Op: op, Terminal: &req}))
 
@@ -470,7 +471,7 @@ func TestRoleOpsFromACallerThatDidNotSayCrewSyncAreRefusedByTheNode(t *testing.T
 			require.NoError(t, err)
 
 			req := goodStep(op)
-			req.To = "worker"
+			req.To, req.From, req.NotAfter = "worker", owner.Cert.Key, time.Now().Add(requestLife).Unix()
 			req.Sig = ed25519.Sign(key, terminalMessageV2(op, hi.Cert.Key, hi.Nonce, req))
 			require.NoError(t, c.send(wire{Op: op, Terminal: &req}))
 

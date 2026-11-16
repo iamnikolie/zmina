@@ -2,6 +2,7 @@ package mesh
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"regexp"
@@ -115,8 +116,14 @@ func (n *Node) serveRoleOp(c *conn, op string, req *TerminalRequest, s *Terminal
 		return fail(fmt.Errorf("the answer is %d bytes: at most %d", len(data), RoleTakeMax))
 	}
 
-	return c.send(wire{Op: result, Data: data})
+	sum := sha256.Sum256(data)
+
+	return c.send(wire{Op: result, Data: data, ResultSig: n.resultSig(c, result, roleResultStatus, sum[:])})
 }
+
+// roleResultStatus is the status a node signs with a step of a move it answers: the step's answer is the body, which the mesh does
+// not read, so it is the hash of the body that is signed with it.
+const roleResultStatus = "ok"
 
 // RoleMove sends the owner's step of a move to a node and returns its answer: the owner's signature over the whole request, bound to
 // that node and to the session, so that a relay that carries it can neither alter it nor send it again. It is refused before anything
@@ -159,6 +166,12 @@ func (n *Node) roleStep(ctx context.Context, t Transport, node, op, result strin
 
 	if len(w.Data) > RoleTakeMax {
 		return nil, fmt.Errorf("%s: its answer is %d bytes: at most %d", node, len(w.Data), RoleTakeMax)
+	}
+
+	// The answer is the node's own, signed for this session: a relay cannot answer a step it dropped, nor change what the node said of it.
+	sum := sha256.Sum256(w.Data)
+	if err := c.verifyResult(w, roleResultStatus, sum[:]); err != nil {
+		return nil, fmt.Errorf("%s: %w", node, err)
 	}
 
 	return w.Data, nil

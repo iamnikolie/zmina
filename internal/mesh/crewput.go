@@ -2,6 +2,8 @@ package mesh
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,6 +36,39 @@ type CrewPutResult struct {
 	Line     string   `json:"line,omitempty"`
 	Warnings []string `json:"warnings,omitempty"`
 }
+
+// digest is a hash of every field of the answer that is more than its status, which the node signs with the status: a length before each
+// field, so that no field can be read as part of another.
+func (r CrewPutResult) digest() []byte {
+	h := sha256.New()
+
+	field := func(b []byte) {
+		var n [8]byte
+
+		binary.BigEndian.PutUint64(n[:], uint64(len(b)))
+		h.Write(n[:])
+		h.Write(b)
+	}
+
+	field([]byte(r.Sum))
+	field([]byte(r.Was))
+	field(r.Current)
+	field([]byte(r.Line))
+	field([]byte(fmt.Sprint(len(r.Warnings))))
+
+	for _, w := range r.Warnings {
+		field([]byte(w))
+	}
+
+	return h.Sum(nil)
+}
+
+// What a node's answer to a push may carry for the owner's terminal: its line and each warning at most putTextMax bytes, at most
+// putWarningsMax warnings.
+const (
+	putTextMax     = 2000
+	putWarningsMax = 50
+)
 
 // CrewConflict is the error of a push whose base was not the file on the target: Have is the sum of the file there ("" when
 // it has none), Base the sum the push was based on, Current the file there when it was small enough to be sent.
@@ -102,7 +137,48 @@ func (n *Node) serveCrewPut(c *conn, req *TerminalRequest, s *TerminalServices) 
 		return fail(err)
 	}
 
-	return c.send(wire{Op: "crew/put-result", Data: data})
+	// What is signed is the answer as the caller will read it from the JSON, which is not always the bytes it was made of.
+	var sent CrewPutResult
+	if err := json.Unmarshal(data, &sent); err != nil {
+		return fail(err)
+	}
+
+	return c.send(wire{Op: "crew/put-result", Data: data, ResultSig: n.resultSig(c, "crew/put-result", sent.Status, sent.digest())})
+}
+
+// check refuses an answer that is no answer of this protocol, and makes what is told Plain, since it is printed: the statuses are
+// three words, a hash is 64 hex digits or nothing, a line and a warning are text without a control character, and few.
+func (r *CrewPutResult) check() error {
+	switch r.Status {
+	case PutDone, PutSame, PutConflict:
+	default:
+		return fmt.Errorf("status %q", Plain(r.Status))
+	}
+
+	if (r.Sum != "" && !plainSum.MatchString(r.Sum)) || (r.Was != "" && !plainSum.MatchString(r.Was)) {
+		return errors.New("a hash that is none")
+	}
+
+	if len(r.Warnings) > putWarningsMax {
+		r.Warnings = r.Warnings[:putWarningsMax]
+	}
+
+	r.Line = Plain(clip(r.Line, putTextMax))
+
+	for i, w := range r.Warnings {
+		r.Warnings[i] = Plain(clip(w, putTextMax))
+	}
+
+	return nil
+}
+
+// clip is s cut to at most n bytes.
+func clip(s string, n int) string {
+	if len(s) > n {
+		return s[:n]
+	}
+
+	return s
 }
 
 // CrewPut sends the owner's crew file to a peer, in place of the one it has, and returns what the peer says. The request is
@@ -140,6 +216,16 @@ func (n *Node) CrewPut(ctx context.Context, t Transport, node string, req Termin
 
 	var res CrewPutResult
 	if err := json.Unmarshal(w.Data, &res); err != nil {
+		return CrewPutResult{}, fmt.Errorf("%s: its answer to the push does not read: %w", node, err)
+	}
+
+	// The answer is the node's own, signed for this session: a relay that carried the push cannot make up the answer of a push it
+	// dropped, nor a conflict whose file or hash it chose.
+	if err := c.verifyResult(w, res.Status, res.digest()); err != nil {
+		return CrewPutResult{}, fmt.Errorf("%s: %w", node, err)
+	}
+
+	if err := res.check(); err != nil {
 		return CrewPutResult{}, fmt.Errorf("%s: its answer to the push does not read: %w", node, err)
 	}
 

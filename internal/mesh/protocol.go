@@ -70,6 +70,9 @@ type wire struct {
 	// its signature, over the other side's nonce, is CrewSyncSig (in the server's hello, in the client's auth).
 	CrewSync    bool   `json:"crew_sync,omitempty"`
 	CrewSyncSig []byte `json:"crew_sync_sig,omitempty"`
+	// ResultSig is the node's signature over its answer to an op of boundCaller (resultMessage): the session's challenge, the op, the
+	// status and a hash of what it carries, so that a relay cannot answer for the node or alter what it said.
+	ResultSig []byte `json:"result_sig,omitempty"`
 	// Revoked, in a hello, is the highest revocation list the sender holds: the owner's signature is on it, so it
 	// needs no capability word, and an older zmina ignores it.
 	Revoked *Revocations `json:"revoked,omitempty"`
@@ -82,6 +85,8 @@ type conn struct {
 	challenge []byte
 	// serverKey is, on the calling side, the key the far node proved in its hello: what a bound request is addressed to.
 	serverKey ed25519.PublicKey
+	// callerKey is, on the serving side, the key the caller proved in its hello and its auth: the node this session is with.
+	callerKey ed25519.PublicKey
 	// now is the serving side's clock.
 	now func() time.Time
 }
@@ -100,7 +105,8 @@ func (c *conn) expect(op string) (wire, error) {
 	}
 
 	if w.Op == "err" {
-		return w, fmt.Errorf("peer: %s", w.Err)
+		// What a peer says is no line for a terminal to act on.
+		return w, fmt.Errorf("peer: %s", Plain(w.Err))
 	}
 
 	if w.Op != op {
@@ -236,6 +242,7 @@ func (n *Node) ServeTerminals(ctx context.Context, rw io.ReadWriter, deliver Del
 	if len(hi.Crews) > 0 && !ed25519.Verify(hi.Cert.Key, crewsMessage("client", mine, hi.Crews), auth.CrewsSig) {
 		return fail(errors.New("unauthenticated crew health"))
 	}
+	c.callerKey = hi.Cert.Key
 	c.peer = Peer{Name: caller, BodyMax: hi.BodyMax, ReportsV1: hi.ReportsV1, ReportsV2: hi.ReportsV2, TellReceipts: hi.TellReceipts,
 		TerminalV2: hi.TerminalV2, CrewSync: hi.CrewSync, Crews: readCrewHealth(hi.Crews)}
 	if err := n.metPeer(*hi.Cert, hi.Peers, c.peer, now()); err != nil {
@@ -245,6 +252,9 @@ func (n *Node) ServeTerminals(ctx context.Context, rw io.ReadWriter, deliver Del
 	if err := c.send(wire{Op: "ok"}); err != nil {
 		return err
 	}
+
+	// The caller proved its key: from here a frame may be as big as a certified node sends.
+	c.dec.raise()
 
 	for {
 		var w wire
@@ -464,6 +474,9 @@ func (n *Node) open(c *conn, want string, now func() time.Time) (string, error) 
 	if _, err := c.expect("ok"); err != nil {
 		return "", err
 	}
+
+	// The peer proved its key: from here a frame may be as big as a certified node sends.
+	c.dec.raise()
 
 	c.peer = Peer{Name: hi.Cert.Name, BodyMax: hi.BodyMax, ReportsV1: hi.ReportsV1, ReportsV2: hi.ReportsV2, TellReceipts: hi.TellReceipts,
 		TerminalV2: hi.TerminalV2, CrewSync: hi.CrewSync, Crews: readCrewHealth(hi.Crews)}

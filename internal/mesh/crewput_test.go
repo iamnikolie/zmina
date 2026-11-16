@@ -154,7 +154,8 @@ func rawPut(t *testing.T, owner *Node, transport Transport, sign func(key ed2551
 	key, err := readKey(filepath.Join(owner.Dir, "owner.key"))
 	require.NoError(t, err)
 
-	req := TerminalRequest{Crew: "acme", Payload: []byte("home: alpha\n"), To: "worker"}
+	req := TerminalRequest{Crew: "acme", Payload: []byte("home: alpha\n"), To: "worker", From: owner.Cert.Key,
+		NotAfter: time.Now().Add(requestLife).Unix()}
 	sign(key, c, &req)
 	require.NoError(t, c.send(wire{Op: "crew/put", Terminal: &req}))
 
