@@ -94,7 +94,7 @@ func (a *app) setRetired(date, movedTo string) error {
 			how += " --off"
 		}
 
-		e.Note(by(), how)
+		e.Note(s.By, how)
 
 		if err := e.SaveCrewKeys(); err != nil {
 			return err

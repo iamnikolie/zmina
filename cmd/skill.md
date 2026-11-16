@@ -194,7 +194,7 @@ when opening the same thread from the app. Stop the idle role, change its transp
 move that thread to the shared daemon. Do not set `args` in shared mode: use role fields/profile for
 per-thread settings; global server flags belong to the daemon. `down` disconnects this role, not the daemon.
 The daemon's tool processes carry no `$ZMINA_ROLE`; zmina takes a command whose `$CODEX_THREAD_ID` is a seat's live thread as that seat's
-(`task done`: its review, done note and hand-out check; so do `ack`, `note`, `todo`, `lesson`, `watch ack`, `inbox` and the notes of what a role read). A thread no seat runs now
+(`task done`: its review, done note and hand-out check; so do `ack`, `note`, `todo`, `lesson`, `watch ack`, `inbox` and the notes of what a role read; and the name a change of the crew file is kept under in `crew history` and the log: `seat`, `retire`, `crew history --restore`, plus the `retention` and refused-`screen-rules.yaml` events). A thread no seat runs now
 (a child thread, a seat whose record lags, the owner's own Codex) cannot be told from the owner by its environment: in a crew that has a seat
 with `codex_transport: shared` it acts as `codex-thread`, a name of no role, which holds none of the owner's authority (a refusal says to run the
 command from a plain terminal, which carries no thread; `task accept --role` still names the seat it claims); in a crew with no such seat it is the owner's hand, as ever.

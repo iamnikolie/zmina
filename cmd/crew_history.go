@@ -194,13 +194,17 @@ func (a *app) restoreCrewVersion(path string, now []byte, h *crew.History, pick 
 		return err
 	}
 
+	// A Codex seat's tool has no $ZMINA_ROLE: who runs this is told by its thread, as for every other change of the file. A crew file that
+	// does not load tells nothing of it, and the restore is the owner's hand then.
+	who := a.actor()
+
 	l, err := shift.Lock(filepath.Dir(abs))
 	if err != nil {
 		return err
 	}
 	defer l.Release()
 
-	saved, err := crew.Restore(abs, raw, by(), fmt.Sprintf("zmina crew history --restore %d", n))
+	saved, err := crew.Restore(abs, raw, who, fmt.Sprintf("zmina crew history --restore %d", n))
 	if err != nil {
 		return err
 	}

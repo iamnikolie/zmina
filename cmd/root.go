@@ -476,6 +476,15 @@ func (a *app) actor() string {
 	return who
 }
 
+// actorOver is actor for a command still being set up over the crew c it has loaded (a shift is being built, so the state is not
+// read yet): the shift actor's state read builds is built over c, so the crew file is not parsed again and its warnings are not said twice.
+func (a *app) actorOver(c *crew.Crew) string {
+	a.crewOnce = c
+	defer func() { a.crewOnce = nil }()
+
+	return a.actor()
+}
+
 // by is who runs this command: the role a session runs as ($ZMINA_ROLE), else the owner's hand.
 func by() string {
 	if r := os.Getenv("ZMINA_ROLE"); r != "" {

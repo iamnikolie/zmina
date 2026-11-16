@@ -2,12 +2,16 @@ package cmd
 
 import (
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/iamnikolie/zmina/internal/crew"
+	"github.com/iamnikolie/zmina/internal/events"
 	"github.com/iamnikolie/zmina/internal/shift"
 )
 
@@ -127,4 +131,86 @@ func errString(err error) string {
 	}
 
 	return err.Error()
+}
+
+// lastBy is who the newest event of that name in the crew's log says acted, "-" when there is none.
+func lastBy(t *testing.T, file, event string) string {
+	t.Helper()
+
+	evs, err := eventLog(mustCrew(t, file)).Read(events.Filter{})
+	require.NoError(t, err)
+
+	got := "-"
+
+	for _, e := range evs {
+		if e.Event == event {
+			got = e.By
+		}
+	}
+
+	return got
+}
+
+// The commands that were signed by $ZMINA_ROLE alone, so that a Codex seat's tool passed for the owner's hand, sign as who ran them: a
+// seat's own thread is the seat, a thread of no seat in a crew with shared seats is codex-thread, the plain shell is the hand and a role
+// is itself. They are a seat edit, putting a version of the crew file back, a retention pass and a refused screen-rules.yaml. Nothing
+// here is refused to anyone: only the name in the history and the log changes.
+func TestCodexThreadSignsSeatEditsRestoresRetentionAndRefusedScreenRules(t *testing.T) {
+	for _, c := range []struct{ name, role, thread, want string }{
+		{"a seat's own thread", "", "thread-1", "dev"},
+		{"a thread of no seat", "", "thread-child", "codex-thread"},
+		{"the plain shell", "", "", "hand"},
+		{"a role", "dev2", "thread-child", "dev2"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			file := testCrew(t, codexSeats("dev")+"  dev2: {}\nnonsense_key: 1\n") // a file with a warning of its own
+			seats := newCodexSeatCrew(t, file, map[string]string{"dev": "thread-1"})
+
+			_, errOut, err := seats.zm(t, c.role, c.thread, "seat", "set", "dev2", "about=notes")
+			require.NoError(t, err, errOut)
+			assert.Equal(t, c.want, lastBy(t, file, "crew-changed"), "seat set")
+
+			// Something to put back: the file before that edit is version 1.
+			_, errOut, err = seats.zm(t, c.role, c.thread, "crew", "history", "--restore", "1")
+			require.NoError(t, err, errOut)
+			assert.Equal(t, c.want, lastBy(t, file, "crew-changed"), "crew history --restore")
+
+			versions, err := crew.HistoryOf(file).List()
+			require.NoError(t, err)
+			require.NotEmpty(t, versions)
+			assert.Equal(t, c.want, versions[0].By, "the history names who too")
+
+			_, errOut, err = seats.zm(t, c.role, c.thread, "retention")
+			require.NoError(t, err, errOut)
+			assert.Equal(t, c.want, lastBy(t, file, "retention"), "retention")
+
+			require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(file), "screen-rules.yaml"), []byte(badScreenRules), 0o600))
+			asNewProcess()
+
+			_, errOut, err = seats.zm(t, c.role, c.thread, "ls")
+			require.NoError(t, err, errOut)
+			assert.Equal(t, c.want, lastBy(t, file, screenRulesEvent), "a refused screen-rules.yaml")
+			assert.Equal(t, 1, strings.Count(errOut, "is ignored and the embedded screen rules stay in force"), errOut)
+			assert.Equal(t, 1, strings.Count(errOut, `unknown key "nonsense_key"`),
+				"the crew file's own warning is said once: the actor's state read does not load the crew again")
+		})
+	}
+}
+
+// retire marks the crew in its file and stops it, so it is tried with no seat up: a thread is then no seat's, and the rest is as above.
+func TestCodexThreadSignsRetire(t *testing.T) {
+	for _, c := range []struct{ name, role, thread, want string }{
+		{"a thread of no seat", "", "thread-child", "codex-thread"},
+		{"the plain shell", "", "", "hand"},
+		{"a role", "dev2", "thread-child", "dev2"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			file := testCrew(t, codexSeats("dev")+"  dev2: {}\n")
+			seats := newCodexSeatCrew(t, file, nil)
+
+			_, errOut, err := seats.zm(t, c.role, c.thread, "retire")
+			require.NoError(t, err, errOut)
+			assert.Equal(t, c.want, lastBy(t, file, "crew-changed"), "retire")
+		})
+	}
 }

@@ -154,7 +154,7 @@ func (a *app) editSeat(role, detail string, fn func(s *shift.Shift, e *crew.Edit
 			return err
 		}
 
-		e.Note(by(), crewCommandOf(did))
+		e.Note(s.By, crewCommandOf(did))
 
 		if err := e.Save(); err != nil {
 			return err
