@@ -809,6 +809,156 @@ func TestMoveBeatStopsAtItsTimeAndTheNextBeatGoesOn(t *testing.T) {
 	w.assertMoved(branch)
 }
 
+// A step that is longer than the beat gives it is started again from the beginning at every beat, so it never ends that way: the beat
+// counts, in the journal, how many beats in a row stopped it, and says once, at the third, that it takes longer than the beat gives it
+// and that zmina move --resume, which has no such limit, finishes it. It does not say it again for the phase, and a step that fits is no
+// longer counted.
+func TestMoveBeatTellsOnceThatAStepNeverFitsTheBeat(t *testing.T) {
+	w := newMoveWorld(t, "alpha")
+	_, _, branch := w.work(false)
+
+	w.crash("released")
+
+	out, _, err := w.move("dev", "beta")
+	require.ErrorContains(t, err, "the process died here")
+
+	id := w.idOf(out)
+
+	// The remote takes eight seconds to refuse a push, and the beat gives a step much less: the push is stopped, again and again, and
+	// never lands (one that was let through at last would end the step, and the count with it).
+	hook := filepath.Join(w.remote, "hooks", "pre-receive")
+	require.NoError(t, os.MkdirAll(filepath.Dir(hook), 0o700))
+	require.NoError(t, os.WriteFile(hook, []byte("#!/bin/sh\nsleep 8\nexit 1\n"), 0o700))
+
+	keep := moveBeatBudget
+	moveBeatBudget = 600 * time.Millisecond
+
+	t.Cleanup(func() { moveBeatBudget = keep })
+
+	var lines bytes.Buffer
+
+	beat := func() {
+		w.as("alpha", func() {
+			a := w.ownerApp(&lines, io.Discard)
+			a.crew = w.file("alpha")
+			a.moveBeat()
+		})
+	}
+
+	journal := func() (j move.Journal) {
+		w.as("alpha", func() {
+			var jerr error
+
+			j, _, jerr = move.Open(w.layout("alpha"), "dev")
+			require.NoError(t, jerr)
+		})
+
+		return j
+	}
+
+	told := func() int { return strings.Count(lines.String(), "takes longer than the ticker's beat gives a step") }
+
+	for i := 1; i <= 2; i++ {
+		beat()
+		assert.Equal(t, i, journal().Cut, "beat %d stopped the push", i)
+		assert.Zero(t, told(), "not yet: it may be a slow beat")
+	}
+
+	beat()
+	assert.Equal(t, 1, told(), "the third beat in a row says so")
+	assert.Equal(t, move.PhaseReleased, journal().CutTold)
+
+	said := lines.String()
+	assert.Contains(t, said, "move "+id+" of dev: handing the work over to origin takes longer than the ticker's beat gives a step (600ms")
+	assert.Contains(t, said, "zmina move dev beta --resume "+id+" on the owner's node finishes it (it has no such limit)")
+
+	for range 1 {
+		beat()
+	}
+
+	assert.Equal(t, 1, told(), "once for the phase, not every beat")
+	assert.GreaterOrEqual(t, journal().Cut, 3)
+
+	// A step that fits ends the move, and the journal with it.
+	require.NoError(t, os.Remove(hook))
+	moveBeatBudget = 20 * time.Second
+
+	beat()
+	w.assertMoved(branch)
+	assert.Equal(t, 1, told())
+}
+
+// The owner's record of a move it drives counts the same: the take that a beat stops for want of time, beat after beat, is told once at
+// the third, naming the step, and the count is the record's own.
+func TestMoveBeatTellsOnceThatTheTakeNeverFitsTheBeat(t *testing.T) {
+	w := newMoveWorld(t, "alpha")
+	_, _, branch := w.work(false)
+
+	id, _ := w.readyBundle()
+
+	keep := moveBeatBudget
+	moveBeatBudget = 600 * time.Millisecond
+
+	t.Cleanup(func() { moveBeatBudget = keep })
+
+	slow := true
+
+	var lines bytes.Buffer
+
+	beat := func() {
+		w.as("alpha", func() {
+			a := w.ownerApp(&lines, io.Discard)
+			a.crew = w.file("alpha")
+
+			// The owner is slow before it asks beta to take the work: the beat's time is gone by then, and the take is stopped.
+			a.moveFault = func(phase string) error {
+				if phase == "owner-before-take" && slow {
+					time.Sleep(900 * time.Millisecond)
+				}
+
+				return w.hook(phase)
+			}
+
+			a.moveBeat()
+		})
+	}
+
+	drive := func() (d move.Drive) {
+		w.as("alpha", func() {
+			var derr error
+
+			d, _, derr = move.OpenDrive(w.layout("alpha"), "dev")
+			require.NoError(t, derr)
+		})
+
+		return d
+	}
+
+	told := func() int { return strings.Count(lines.String(), "takes longer than the ticker's beat gives a step") }
+
+	for i := 1; i <= 2; i++ {
+		beat()
+		assert.Equal(t, i, drive().Cut, "beat %d stopped the take", i)
+		assert.Zero(t, told())
+	}
+
+	beat()
+	assert.Equal(t, 1, told())
+	assert.Equal(t, "take", drive().CutTold)
+	assert.Contains(t, lines.String(), "move "+id+" of dev: the take on beta takes longer than the ticker's beat gives a step")
+	assert.Contains(t, lines.String(), "zmina move dev beta --resume "+id+" on the owner's node finishes it")
+
+	beat()
+	assert.Equal(t, 1, told(), "once for the step, not every beat")
+
+	// The take fits: the move ends.
+	slow = false
+	moveBeatBudget = 20 * time.Second
+
+	beat()
+	w.assertMoved(branch)
+}
+
 // checkpoint gives dev's T-2 on alpha a checkpoint, which travels with the task.
 func (w *moveWorld) checkpoint() {
 	w.t.Helper()

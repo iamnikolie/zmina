@@ -153,6 +153,8 @@ type Journal struct {
 	Bundle json.RawMessage `json:"bundle,omitempty"`
 	// LastErr is what the last try of the beat said, so that it is told when it changes and not every beat.
 	LastErr string `json:"last_err,omitempty"`
+	// Cuts is how often the beat stopped the step the move is in for want of time (CutLimit of them in a row are told).
+	Cuts
 }
 
 // Open reads the journal of the open move of the role, false when there is none. A journal that does not read is an error: the role
@@ -235,6 +237,8 @@ type Drive struct {
 	Recorded bool `json:"recorded,omitempty"`
 	// LastErr is what the last try of the ticker said, so that it is told when it changes and not every beat.
 	LastErr string `json:"last_err,omitempty"`
+	// Cuts is how often the beat stopped the step the drive is in (the poll of the node the role leaves, or the take) for want of time.
+	Cuts
 }
 
 // OpenDrive reads what the owner's node keeps of the move of a role it drives, false when there is none.

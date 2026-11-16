@@ -30,6 +30,12 @@ const (
 // with less than that left. zmina move itself has no such limit: --resume goes on with what a beat could not finish. Tests change it.
 var moveBeatBudget = 20 * time.Second
 
+// The steps of a move that the owner's node drives, as a beat that stops one for want of time names it.
+const (
+	stepPoll = "poll"
+	stepTake = "take"
+)
+
 // moveEnd is one end of a move as the owner's node reaches it: its own steps when it is this node (the same functions the mesh calls
 // on a node that is asked), a signed request over the mesh when it is another. A move is the same whichever end the owner stands at.
 type moveEnd struct {
@@ -98,6 +104,9 @@ type moveRun struct {
 	// minute later and would say it again).
 	said  string
 	quiet bool
+	// step is the step of the move a call of once is at: the poll of the node the role leaves, then the take, so that a beat that stops one
+	// for want of time can say which (driveBeat).
+	step string
 }
 
 func (r *moveRun) req(action string, payload any) (mesh.TerminalRequest, error) {
@@ -496,6 +505,8 @@ func (r *moveRun) say(text string) {
 
 // once asks the node the role leaves how far the move is and does what follows: the work is ready, so it is taken and the move ended.
 func (r *moveRun) once(ctx context.Context) (bool, error) {
+	r.step = stepPoll
+
 	q, err := r.req("poll", nil)
 	if err != nil {
 		return false, err
@@ -519,6 +530,8 @@ func (r *moveRun) once(ctx context.Context) (bool, error) {
 
 		return false, nil
 	case move.StateReady:
+		r.step = stepTake
+
 		return true, r.finish(ctx, ans.Bundle)
 	}
 
@@ -881,6 +894,11 @@ func (a *app) moveBeat() {
 		first = false
 
 		_, aerr := a.moveAdvance(ctx, role, j.ID)
+
+		// A beat that ran out of time in the middle of this step is no error of the move, but a step that never fits is told (CutLimit beats
+		// in a row), and one that fit is counted as such.
+		a.countMoveBeat(layout, role, j, ctx.Err() != nil)
+
 		if aerr != nil && ctx.Err() != nil {
 			continue
 		}
@@ -918,6 +936,76 @@ func rotate[T any](list []T, turn int) []T {
 	i := turn % len(list)
 
 	return append(append([]T(nil), list[i:]...), list[:i]...)
+}
+
+// countMoveBeat keeps in the journal of the move the beat has just advanced whether the beat stopped its step for want of time, and says so,
+// once for each phase, when it has stopped the same step CutLimit beats in a row: a push to origin that needs longer than the beat gives it
+// is started again from the beginning at every beat, so nothing else would ever tell that it cannot end that way. Only the handing over
+// (phase released) is given a time that ends with the beat's; a beat that stopped no step starts the count again. cut says the beat's time
+// ran out during the advance.
+func (a *app) countMoveBeat(layout crew.Layout, role string, j move.Journal, cut bool) {
+	cur, ok, _ := move.Open(layout, role)
+	if !ok || cur.ID != j.ID {
+		return
+	}
+
+	before := cur.Cuts
+	tell := false
+
+	if cut && cur.Phase == move.PhaseReleased {
+		tell = cur.StepCut(cur.Step(), cur.Phase)
+	} else {
+		cur.StepDone()
+	}
+
+	if cur.Cuts != before {
+		_ = move.Save(layout, cur)
+	}
+
+	if tell {
+		a.printTick([]string{beatCutLine(cur.ID, role, "handing the work over to origin", cur.To)})
+	}
+}
+
+// countDriveBeat is countMoveBeat for the owner's record of a move it drives, whose steps are the poll of the node the role leaves and
+// the take; it returns the line to say, if any.
+func (a *app) countDriveBeat(layout crew.Layout, d move.Drive, step string, cut bool) []string {
+	cur, ok, _ := move.OpenDrive(layout, d.Role)
+	if !ok || cur.ID != d.ID {
+		return nil
+	}
+
+	before := cur.Cuts
+	tell := false
+
+	if cut {
+		tell = cur.StepCut(step, step)
+	} else {
+		cur.StepDone()
+	}
+
+	if cur.Cuts != before {
+		_ = move.SaveDrive(layout, cur)
+	}
+
+	if !tell {
+		return nil
+	}
+
+	what := "a step on " + cur.From
+	if step == stepTake {
+		what = "the take on " + cur.To
+	}
+
+	return []string{beatCutLine(cur.ID, cur.Role, what, cur.To)}
+}
+
+// beatCutLine is what is said when a step of a move takes longer than the ticker's beat gives it: the beat stops it and starts it again at
+// each beat, so it does not end by the beat, and zmina move --resume, which has no such limit, does.
+func beatCutLine(id, role, what, to string) string {
+	return fmt.Sprintf("move %s of %s: %s takes longer than the ticker's beat gives a step (%s, for all the moves of the crew): the beat stops it and "+
+		"starts it again each time, so it will not end that way; zmina move %s %s --resume %s on the owner's node finishes it (it has no such limit)",
+		id, role, what, moveBeatBudget, role, to, id)
 }
 
 // printMoveErr says the error of the beat's advance of a move when it is not the one it said last.
@@ -963,8 +1051,12 @@ func (a *app) driveOnce(ctx context.Context, me *mesh.Node, cr *crew.Crew, key s
 		_, err = r.once(ctx)
 	}
 
-	// The beat's time ran out in the middle of a step: that is no error of the move, and the next beat goes on.
-	if err != nil && ctx.Err() != nil {
+	// The beat's time ran out in the middle of a step: that is no error of the move, and the next beat goes on. It is counted, though: a step
+	// that never fits is told (CutLimit beats in a row), and a beat that stopped none starts the count again.
+	cut := err != nil && ctx.Err() != nil
+	lines = append(lines, a.countDriveBeat(layout, d, r.step, cut)...)
+
+	if cut {
 		a.printTick(lines)
 
 		return
